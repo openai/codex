@@ -1,7 +1,10 @@
+pub mod adapters;
 pub mod auth;
 pub mod common;
+pub mod common_ext;
 pub mod endpoint;
 pub mod error;
+pub mod interceptors;
 pub mod provider;
 pub mod rate_limits;
 pub mod requests;
@@ -10,7 +13,10 @@ pub mod telemetry;
 
 pub use codex_client::RequestTelemetry;
 pub use codex_client::ReqwestTransport;
+pub use codex_client::RetryOn;
+pub use codex_client::RetryPolicy;
 pub use codex_client::TransportError;
+pub use codex_client::backoff;
 
 pub use crate::auth::AuthProvider;
 pub use crate::common::CompactionInput;
@@ -19,6 +25,10 @@ pub use crate::common::ResponseEvent;
 pub use crate::common::ResponseStream;
 pub use crate::common::ResponsesApiRequest;
 pub use crate::common::create_text_param_for_request;
+pub use crate::common_ext::NonStreamingResponse;
+pub use crate::common_ext::filter_incremental_input;
+pub use crate::common_ext::is_llm_generated;
+pub use crate::common_ext::parse_complete_response;
 pub use crate::endpoint::chat::AggregateStreamExt;
 pub use crate::endpoint::chat::ChatClient;
 pub use crate::endpoint::compact::CompactClient;
@@ -34,3 +44,24 @@ pub use crate::requests::ResponsesRequest;
 pub use crate::requests::ResponsesRequestBuilder;
 pub use crate::sse::stream_from_fixture;
 pub use crate::telemetry::SseTelemetry;
+
+// Adapter exports
+pub use crate::adapters::AdapterConfig;
+pub use crate::adapters::GenerateResult;
+pub use crate::adapters::LlmAdapter;
+pub use crate::adapters::ProviderAdapter;
+pub use crate::adapters::genai::GeminiAdapter;
+pub use crate::adapters::generate_result_to_stream;
+pub use crate::adapters::get_adapter;
+pub use crate::adapters::is_openai_provider;
+pub use crate::adapters::list_adapters;
+pub use crate::adapters::register_adapter;
+
+// Interceptor exports
+pub use crate::interceptors::Interceptor;
+pub use crate::interceptors::InterceptorContext;
+pub use crate::interceptors::apply_interceptors;
+pub use crate::interceptors::get_interceptor;
+pub use crate::interceptors::gpt_openapi::GptOpenapiInterceptor;
+pub use crate::interceptors::list_interceptors;
+pub use crate::interceptors::register_interceptor;

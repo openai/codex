@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
-    streaming: StreamingClient<T, A>,
+    pub(crate) streaming: StreamingClient<T, A>,
 }
 
 #[derive(Default)]
@@ -56,7 +56,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         &self,
         request: ResponsesRequest,
     ) -> Result<ResponseStream, ApiError> {
-        self.stream(request.body, request.headers).await
+        self.stream(request.body, request.headers, None).await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -66,6 +66,12 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         prompt: &ApiPrompt,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        // Try adapter routing for non-OpenAI providers (ext)
+        if let Some(stream) = self.try_adapter(model, prompt).await? {
+            return Ok(stream);
+        }
+
+        // Built-in OpenAI format
         let ResponsesOptions {
             reasoning,
             include,
@@ -77,6 +83,12 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             extra_headers,
         } = options;
 
+        // Build interceptor context for this request
+        let ctx = self
+            .streaming
+            .build_interceptor_context(Some(model), conversation_id.as_deref());
+
+        let provider = self.streaming.provider();
         let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
             .tools(&prompt.tools)
             .parallel_tool_calls(prompt.parallel_tool_calls)
@@ -88,12 +100,14 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .session_source(session_source)
             .store_override(store_override)
             .extra_headers(extra_headers)
+            .model_parameters(provider.model_parameters.clone())
+            .stream(provider.streaming)
             .build(self.streaming.provider())?;
 
-        self.stream_request(request).await
+        self.stream(request.body, request.headers, Some(&ctx)).await
     }
 
-    fn path(&self) -> &'static str {
+    pub(crate) fn path(&self) -> &'static str {
         match self.streaming.provider().wire {
             WireApi::Responses | WireApi::Compact => "responses",
             WireApi::Chat => "chat/completions",
@@ -104,9 +118,10 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         &self,
         body: Value,
         extra_headers: HeaderMap,
+        ctx: Option<&crate::interceptors::InterceptorContext>,
     ) -> Result<ResponseStream, ApiError> {
         self.streaming
-            .stream(self.path(), body, extra_headers, spawn_response_stream)
+            .stream(self.path(), body, extra_headers, ctx, spawn_response_stream)
             .await
     }
 }

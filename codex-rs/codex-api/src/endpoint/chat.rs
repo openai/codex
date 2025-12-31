@@ -25,7 +25,7 @@ use std::task::Context;
 use std::task::Poll;
 
 pub struct ChatClient<T: HttpTransport, A: AuthProvider> {
-    streaming: StreamingClient<T, A>,
+    pub(crate) streaming: StreamingClient<T, A>,
 }
 
 impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
@@ -46,7 +46,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
     }
 
     pub async fn stream_request(&self, request: ChatRequest) -> Result<ResponseStream, ApiError> {
-        self.stream(request.body, request.headers).await
+        self.stream(request.body, request.headers, None).await
     }
 
     pub async fn stream_prompt(
@@ -56,15 +56,29 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         conversation_id: Option<String>,
         session_source: Option<SessionSource>,
     ) -> Result<ResponseStream, ApiError> {
+        // Try adapter routing for non-OpenAI providers (ext)
+        if let Some(stream) = self.try_adapter(model, prompt).await? {
+            return Ok(stream);
+        }
+
+        // Build interceptor context for this request
+        let ctx = self
+            .streaming
+            .build_interceptor_context(Some(model), conversation_id.as_deref());
+
+        // Built-in OpenAI format
         use crate::requests::ChatRequestBuilder;
 
+        let provider = self.streaming.provider();
         let request =
             ChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
                 .conversation_id(conversation_id)
                 .session_source(session_source)
-                .build(self.streaming.provider())?;
+                .model_parameters(provider.model_parameters.clone())
+                .streaming(provider.streaming)
+                .build(provider)?;
 
-        self.stream_request(request).await
+        self.stream(request.body, request.headers, Some(&ctx)).await
     }
 
     fn path(&self) -> &'static str {
@@ -78,9 +92,10 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         &self,
         body: Value,
         extra_headers: HeaderMap,
+        ctx: Option<&crate::interceptors::InterceptorContext>,
     ) -> Result<ResponseStream, ApiError> {
         self.streaming
-            .stream(self.path(), body, extra_headers, spawn_chat_stream)
+            .stream(self.path(), body, extra_headers, ctx, spawn_chat_stream)
             .await
     }
 }

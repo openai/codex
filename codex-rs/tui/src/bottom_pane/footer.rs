@@ -22,6 +22,7 @@ pub(crate) struct FooterProps {
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+    pub(crate) is_plan_mode: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,6 +90,13 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 props.context_window_percent,
                 props.context_window_used_tokens,
             );
+
+            // Show plan mode indicator if active
+            if props.is_plan_mode {
+                line.push_span(" · ".dim());
+                line.push_span("⏸ plan mode".cyan());
+            }
+
             line.push_span(" · ".dim());
             line.extend(vec![
                 key_hint::plain(KeyCode::Char('?')).into(),
@@ -166,6 +174,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
+    let mut plan_mode = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -178,6 +187,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
+                ShortcutId::PlanMode => plan_mode = text,
             }
         }
     }
@@ -190,6 +200,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         external_editor,
         edit_previous,
         quit,
+        plan_mode,
         Line::from(""),
         show_transcript,
     ];
@@ -268,6 +279,7 @@ enum ShortcutId {
     EditPrevious,
     Quit,
     ShowTranscript,
+    PlanMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -421,6 +433,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         prefix: "",
         label: " to view transcript",
     },
+    ShortcutDescriptor {
+        id: ShortcutId::PlanMode,
+        bindings: &[ShortcutBinding {
+            key: key_hint::plain(KeyCode::BackTab),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to toggle plan mode",
+    },
 ];
 
 #[cfg(test)]
@@ -453,6 +474,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
 
@@ -465,6 +487,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
 
@@ -477,6 +500,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
 
@@ -489,6 +513,7 @@ mod tests {
                 is_task_running: true,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
 
@@ -501,6 +526,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
 
@@ -513,6 +539,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
 
@@ -525,6 +552,7 @@ mod tests {
                 is_task_running: true,
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
+                is_plan_mode: false,
             },
         );
 
@@ -537,6 +565,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                is_plan_mode: false,
             },
         );
     }

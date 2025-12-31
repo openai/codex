@@ -2,6 +2,7 @@ use crate::auth::AuthProvider;
 use crate::auth::add_auth_headers;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
+use crate::interceptors::InterceptorContext;
 use crate::provider::Provider;
 use crate::telemetry::SseTelemetry;
 use crate::telemetry::run_with_request_telemetry;
@@ -47,11 +48,24 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
         &self.provider
     }
 
+    pub(crate) fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    pub(crate) fn auth(&self) -> &A {
+        &self.auth
+    }
+
+    pub(crate) fn request_telemetry(&self) -> Option<Arc<dyn RequestTelemetry>> {
+        self.request_telemetry.clone()
+    }
+
     pub(crate) async fn stream(
         &self,
         path: &str,
         body: Value,
         extra_headers: HeaderMap,
+        ctx: Option<&InterceptorContext>,
         spawner: fn(StreamResponse, Duration, Option<Arc<dyn SseTelemetry>>) -> ResponseStream,
     ) -> Result<ResponseStream, ApiError> {
         let builder = || {
@@ -62,7 +76,13 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
                 http::HeaderValue::from_static("text/event-stream"),
             );
             req.body = Some(body.clone());
-            add_auth_headers(&self.auth, req)
+            let mut req = add_auth_headers(&self.auth, req);
+
+            // Apply interceptors (ext)
+            if let Some(ctx) = ctx {
+                self.apply_interceptors_to_request(&mut req, ctx);
+            }
+            req
         };
 
         let stream_response = run_with_request_telemetry(

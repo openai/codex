@@ -12,6 +12,7 @@ use http::HeaderMap;
 use serde_json::Value;
 
 /// Assembled request body plus headers for a Responses stream request.
+#[derive(Debug)]
 pub struct ResponsesRequest {
     pub body: Value,
     pub headers: HeaderMap,
@@ -21,7 +22,7 @@ pub struct ResponsesRequest {
 pub struct ResponsesRequestBuilder<'a> {
     model: Option<&'a str>,
     instructions: Option<&'a str>,
-    input: Option<&'a [ResponseItem]>,
+    pub(crate) input: Option<&'a [ResponseItem]>,
     tools: Option<&'a [Value]>,
     parallel_tool_calls: bool,
     reasoning: Option<Reasoning>,
@@ -32,6 +33,12 @@ pub struct ResponsesRequestBuilder<'a> {
     session_source: Option<SessionSource>,
     store_override: Option<bool>,
     headers: HeaderMap,
+    /// Previous response ID for conversation continuity
+    pub(crate) previous_response_id: Option<String>,
+    /// Whether to stream the response (default: true)
+    pub(crate) stream: bool,
+    /// Model parameters (temperature, max_tokens, etc.)
+    pub(crate) model_parameters: Option<Value>,
 }
 
 impl<'a> ResponsesRequestBuilder<'a> {
@@ -40,6 +47,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             model: Some(model),
             instructions: Some(instructions),
             input: Some(input),
+            stream: true, // Default to streaming
             ..Default::default()
         }
     }
@@ -94,6 +102,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
         self
     }
 
+    pub fn model_parameters(mut self, params: Option<Value>) -> Self {
+        self.model_parameters = params;
+        self
+    }
+
     pub fn build(self, provider: &Provider) -> Result<ResponsesRequest, ApiError> {
         let model = self
             .model
@@ -119,10 +132,12 @@ impl<'a> ResponsesRequestBuilder<'a> {
             parallel_tool_calls: self.parallel_tool_calls,
             reasoning: self.reasoning,
             store,
-            stream: true,
+            stream: self.stream,
             include: self.include,
             prompt_cache_key: self.prompt_cache_key,
             text: self.text,
+            previous_response_id: self.previous_response_id,
+            model_parameters: self.model_parameters,
         };
 
         let mut body = serde_json::to_value(&req)
@@ -194,6 +209,11 @@ mod tests {
                 retry_transport: true,
             },
             stream_idle_timeout: Duration::from_secs(5),
+            adapter: None,
+            model_parameters: None,
+            interceptors: Vec::new(),
+            request_timeout: None,
+            streaming: true,
         }
     }
 

@@ -140,15 +140,14 @@ impl UnifiedExecSessionManager {
         };
 
         let transcript = Arc::new(tokio::sync::Mutex::new(CommandTranscript::default()));
-        start_streaming_output(&session, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
-        // For the initial exec_command call, we both stream output to events
-        // (via start_streaming_output above) and collect a snapshot here for
-        // the tool response body.
+        // Collect a snapshot of output for the tool response body. If the
+        // command is still running after the deadline, we'll start streaming
+        // output via start_streaming_output for subsequent deltas.
         let OutputHandles {
             output_buffer,
             output_notify,
@@ -196,6 +195,11 @@ impl UnifiedExecSessionManager {
             // it, and register a background watcher that will emit
             // ExecCommandEnd when the PTY eventually exits (even if no further
             // tool calls are made).
+            //
+            // Only start streaming output for long-lived commands. Short-lived
+            // commands should emit all output in ExecCommandEnd.aggregated_output
+            // without any ExecCommandOutputDelta events.
+            start_streaming_output(&session, context, Arc::clone(&transcript));
             self.store_session(
                 Arc::clone(&session),
                 context,

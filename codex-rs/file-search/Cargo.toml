@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-file-ignore = { workspace = true }
 ignore = { workspace = true }
 nucleo-matcher = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

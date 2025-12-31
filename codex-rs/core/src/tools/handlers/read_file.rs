@@ -96,7 +96,9 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            payload, session, ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -147,8 +149,47 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await?
             }
         };
+
+        let content = collected.join("\n");
+
+        // Track file read for compact context restoration
+        let token_count = crate::compact_v2::TokenCounter::default().approximate(&content);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        crate::state::state_ext::record_file_read(
+            session.conversation_id,
+            file_path.clone(),
+            timestamp,
+            token_count,
+        );
+
+        // Track file read for change detection (system reminders)
+        // Only track if stores exist for this conversation
+        if let Some(stores) = crate::subagent::get_stores(&session.conversation_id) {
+            // Read raw content for change detection (without line number formatting)
+            if let Ok(raw_content) = std::fs::read_to_string(&path) {
+                stores.file_tracker.track_read(
+                    path.clone(),
+                    raw_content,
+                    0, // Turn number not tracked in handler
+                    if offset == 1 {
+                        None
+                    } else {
+                        Some(offset as i32)
+                    },
+                    if limit >= 2000 {
+                        None
+                    } else {
+                        Some(limit as i32)
+                    },
+                );
+            }
+        }
+
         Ok(ToolOutput::Function {
-            content: collected.join("\n"),
+            content,
             content_items: None,
             success: Some(true),
         })

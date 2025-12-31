@@ -27,6 +27,10 @@ pub struct Prompt {
     pub parallel_tool_calls: bool,
     /// Optional output schema used to build the `text.format` controls.
     pub output_schema: Option<Value>,
+    /// Previous response ID for conversation continuity.
+    /// When set, the server uses stored history up to this response,
+    /// and the client only sends new items after the last LLM response.
+    pub previous_response_id: Option<String>,
 }
 
 /// Canonical input payload for the compaction endpoint.
@@ -133,6 +137,11 @@ pub struct ResponsesApiRequest<'a> {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
+    /// Model parameters (temperature, max_tokens, etc.) - flattened into request
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub model_parameters: Option<Value>,
 }
 
 pub fn create_text_param_for_request(

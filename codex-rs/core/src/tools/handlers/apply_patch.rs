@@ -56,6 +56,7 @@ impl ToolHandler for ApplyPatchHandler {
             call_id,
             tool_name,
             payload,
+            ..
         } = invocation;
 
         let patch_input = match payload {

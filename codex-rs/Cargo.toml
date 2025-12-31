@@ -21,14 +21,17 @@ members = [
     "execpolicy-legacy",
     "keyring-store",
     "file-search",
+    "file-ignore",
     "linux-sandbox",
     "lmstudio",
     "login",
+    "lsp",
     "mcp-server",
     "mcp-types",
     "ollama",
     "process-hardening",
     "protocol",
+    "retrieval",
     "rmcp-client",
     "responses-api-proxy",
     "stdio-to-uds",
@@ -46,6 +49,7 @@ members = [
     "utils/string",
     "codex-client",
     "codex-api",
+    "google-genai",
 ]
 resolver = "2"
 
@@ -77,17 +81,20 @@ codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
+codex-file-ignore = { path = "file-ignore" }
 codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-lsp = { path = "lsp" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
+codex-retrieval = { path = "retrieval" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
@@ -103,6 +110,7 @@ codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 exec_server_test_support = { path = "exec-server/tests/common" }
+google-genai = { path = "google-genai" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
@@ -121,6 +129,7 @@ base64 = "0.22.1"
 bytes = "1.10.1"
 chardetng = "0.1.17"
 chrono = "0.4.42"
+dashmap = "6"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
@@ -137,6 +146,9 @@ env_logger = "0.11.5"
 escargot = "0.5"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
+glob = "0.3"
+globset = "0.4"
+html2text = "0.14"
 http = "1.3.1"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"

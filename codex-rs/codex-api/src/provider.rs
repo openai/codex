@@ -54,6 +54,18 @@ pub struct Provider {
     pub headers: HeaderMap,
     pub retry: RetryConfig,
     pub stream_idle_timeout: Duration,
+    /// Adapter name for non-OpenAI providers (e.g., "genai" for Gemini).
+    /// When set, the endpoint layer uses this to look up an adapter.
+    pub adapter: Option<String>,
+    /// Model parameters to pass to the adapter (temperature, max_tokens, etc.).
+    pub model_parameters: Option<serde_json::Value>,
+    /// Request interceptors to apply before sending (e.g., "gpt_openapi").
+    /// Interceptors can modify headers, URL, body, etc.
+    pub interceptors: Vec<String>,
+    /// HTTP request timeout (per-provider override).
+    pub request_timeout: Option<Duration>,
+    /// Whether to use streaming responses (SSE), defaults to true.
+    pub streaming: bool,
 }
 
 impl Provider {
@@ -87,7 +99,7 @@ impl Provider {
             url: self.url_for_path(path),
             headers: self.headers.clone(),
             body: None,
-            timeout: None,
+            timeout: self.request_timeout,
         }
     }
 

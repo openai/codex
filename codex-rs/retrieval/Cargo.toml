@@ -1,0 +1,123 @@
+[package]
+name = "codex-retrieval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_retrieval"
+path = "src/lib.rs"
+
+[[bin]]
+name = "retrieval"
+path = "src/bin/retrieval_cli.rs"
+
+[dependencies]
+# CLI
+clap = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# File watching (notify-debouncer-mini requires notify 7.x)
+notify = "7"
+notify-debouncer-mini = "0.5"
+# Storage
+lancedb = "0.22"
+arrow = "56"
+lance-index = "0.39"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Code chunking - CodeSplitter (tree-sitter based) with TextSplitter fallback
+# tree-sitter 0.25 in text-splitter is compatible with workspace 0.25.10
+text-splitter = { version = "0.28", features = ["code", "tiktoken-rs"] }
+
+# Token counting for chunk validation (must match text-splitter's version for ChunkSizer trait)
+tiktoken-rs = "0.7"
+
+# Tree-sitter for syntax analysis (using workspace version)
+tree-sitter = { workspace = true }
+
+# Tree-sitter tags extraction
+tree-sitter-tags = "0.25"
+
+# Language grammars for tag extraction
+tree-sitter-rust = "0.24"
+tree-sitter-go = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-typescript = "0.23"
+
+# Query preprocessing
+rust-stemmers = "1.2"
+
+# BM25 full-text search (custom implementation with tunable k1/b parameters)
+bm25 = { version = "2.3", features = ["parallelism"] }
+
+# Graph algorithms for PageRank (repo map)
+petgraph = "0.8"
+
+# Async
+tokio = { workspace = true, features = ["full"] }
+tokio-util = "0.7"
+async-trait = { workspace = true }
+async-stream = { workspace = true }
+futures = { workspace = true }
+
+# HTTP client for embeddings
+reqwest = { workspace = true, features = ["json"] }
+
+# Utils
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+regex = { workspace = true }
+once_cell = { workspace = true }
+toml = { workspace = true }
+
+# LRU cache for recently edited files
+lru = "0.12"
+
+# Local neural reranking (optional)
+fastembed = { version = "4", optional = true }
+
+# Internal
+codex-file-ignore = { workspace = true }
+codex-utils-cache = { path = "../utils/cache" }
+dirs = { workspace = true }
+
+# TUI (same tech stack as codex-tui2)
+ratatui = { workspace = true, features = [
+    "scrolling-regions",
+    "unstable-backend-writer",
+    "unstable-rendered-line-info",
+    "unstable-widget-ref",
+] }
+ratatui-macros = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+tree-sitter-highlight = { workspace = true }
+unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }
+textwrap = { workspace = true }
+tokio-stream = { workspace = true }
+itertools = { workspace = true }
+derive_more = { workspace = true, features = ["is_variant"] }
+
+[features]
+default = []
+# Enable local neural reranking with fastembed (ONNX Runtime)
+neural-reranker = ["fastembed"]
+# Enable local embeddings with fastembed (ONNX Runtime)
+local-embeddings = ["fastembed"]
+# Enable all local features (embeddings + reranking)
+local = ["local-embeddings", "neural-reranker"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+pretty_assertions = { workspace = true }
+insta = { workspace = true }
+vt100 = { workspace = true }

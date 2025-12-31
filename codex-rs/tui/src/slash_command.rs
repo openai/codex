@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    OutputStyle,
     Approvals,
     Experimental,
     Skills,
@@ -53,6 +54,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::OutputStyle => "set the output style for responses",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Experimental => "toggle beta features",
             SlashCommand::Mcp => "list configured MCP tools",
@@ -77,6 +79,7 @@ impl SlashCommand {
             | SlashCommand::Compact
             // | SlashCommand::Undo
             | SlashCommand::Model
+            | SlashCommand::OutputStyle
             | SlashCommand::Approvals
             | SlashCommand::Experimental
             | SlashCommand::Review

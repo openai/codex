@@ -10,8 +10,8 @@ use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
-use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::features::all_features;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
@@ -68,6 +68,10 @@ use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol_ext::ExtEventMsg;
+use codex_protocol::protocol_ext::PlanModeEntryRequestEvent;
+use codex_protocol::protocol_ext::PlanModeExitRequestEvent;
+use codex_protocol::protocol_ext::UserQuestionRequestEvent;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -112,6 +116,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
+use crate::output_style::output_style_selection_params;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -358,6 +363,8 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    // Plan mode flag; tracks whether plan mode is active.
+    is_plan_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether to add a final message separator after the last message
@@ -369,6 +376,8 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    // Current output style name
+    current_output_style: String,
 }
 
 struct UserMessage {
@@ -1244,6 +1253,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
+        // TODO: Check permission mode for post-plan auto-approval
+        // If stores.should_auto_approve(tool_name):
+        //   - BypassPermissions: auto-approve all tools
+        //   - AcceptEdits: auto-approve file edit tools
+        //   - Default: show overlay (current behavior)
+        // This requires passing permission mode from core to TUI.
+        // See: stores.should_auto_approve() in subagent/stores.rs
+
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
@@ -1477,12 +1494,14 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
+            is_plan_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            current_output_style: String::from("default"),
         };
 
         widget.prefetch_rate_limits();
@@ -1564,12 +1583,14 @@ impl ChatWidget {
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
+            is_plan_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            current_output_style: String::from("default"),
         };
 
         widget.prefetch_rate_limits();
@@ -1738,6 +1759,9 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::OutputStyle => {
+                self.open_output_style_popup();
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -2123,7 +2147,64 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
+            EventMsg::Ext(ext_msg) => self.on_ext_event(ext_msg),
         }
+    }
+
+    fn on_ext_event(&mut self, ext_msg: ExtEventMsg) {
+        match ext_msg {
+            ExtEventMsg::PlanModeEntryRequest(ev) => {
+                self.on_plan_mode_entry_request(ev);
+            }
+            ExtEventMsg::PlanModeExitRequest(ev) => {
+                self.on_plan_mode_exit_request(ev);
+            }
+            ExtEventMsg::UserQuestionRequest(ev) => {
+                self.on_user_question_request(ev);
+            }
+            ExtEventMsg::PlanModeEntered(_) => {
+                self.is_plan_mode = true;
+                self.bottom_pane.set_plan_mode(true);
+                self.request_redraw();
+            }
+            ExtEventMsg::PlanModeExited(_) => {
+                self.is_plan_mode = false;
+                self.bottom_pane.set_plan_mode(false);
+                self.request_redraw();
+            }
+            // Other extension events (compact, subagent activity) are handled elsewhere or ignored
+            _ => {}
+        }
+    }
+
+    fn on_plan_mode_entry_request(&mut self, _ev: PlanModeEntryRequestEvent) {
+        // Push plan mode entry request to the approval overlay
+        let request = ApprovalRequest::EnterPlanMode;
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    fn on_plan_mode_exit_request(&mut self, ev: PlanModeExitRequestEvent) {
+        // Push plan approval request to the approval overlay
+        let request = ApprovalRequest::Plan {
+            plan_content: ev.plan_content,
+            plan_file_path: ev.plan_file_path,
+        };
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    fn on_user_question_request(&mut self, ev: UserQuestionRequestEvent) {
+        // Push user question request to the approval overlay
+        let request = ApprovalRequest::UserQuestion {
+            tool_call_id: ev.tool_call_id,
+            questions: ev.questions,
+        };
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
     }
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest) {
@@ -2503,6 +2584,23 @@ impl ChatWidget {
         });
     }
 
+    /// Open a popup to choose an output style.
+    pub(crate) fn open_output_style_popup(&mut self) {
+        let params = output_style_selection_params(
+            &self.config.cwd,
+            &self.config.codex_home,
+            &self.current_output_style,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    /// Set the current output style.
+    pub(crate) fn set_output_style(&mut self, style_name: &str) {
+        self.current_output_style = style_name.to_string();
+    }
+
     fn is_auto_model(model: &str) -> bool {
         model.starts_with("codex-auto-")
     }
@@ -2847,8 +2945,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {
-        let features: Vec<BetaFeatureItem> = FEATURES
-            .iter()
+        let features: Vec<BetaFeatureItem> = all_features()
             .filter_map(|spec| {
                 let name = spec.stage.beta_menu_name()?;
                 let description = spec.stage.beta_menu_description()?;
@@ -3519,6 +3616,10 @@ impl ChatWidget {
 
     pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
         self.conversation_id
+    }
+
+    pub(crate) fn is_plan_mode(&self) -> bool {
+        self.is_plan_mode
     }
 
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {

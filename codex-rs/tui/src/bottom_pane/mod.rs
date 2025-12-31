@@ -19,6 +19,7 @@ use ratatui::layout::Rect;
 use std::time::Duration;
 
 mod approval_overlay;
+mod approval_overlay_ext;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 mod bottom_pane_view;
@@ -364,6 +365,10 @@ impl BottomPane {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
         }
+    }
+
+    pub fn set_plan_mode(&mut self, active: bool) {
+        self.composer.set_plan_mode(active);
     }
 
     /// Hide the status indicator while leaving task-running state untouched.

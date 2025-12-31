@@ -293,6 +293,7 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) current_model: String,
+    pub(crate) current_output_style: String,
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
@@ -438,6 +439,7 @@ impl App {
             auth_manager: auth_manager.clone(),
             config,
             current_model: model.clone(),
+            current_output_style: String::from("default"),
             active_profile,
             file_search,
             enhanced_keys_supported,
@@ -811,6 +813,31 @@ impl App {
                     self.launch_external_editor(tui).await;
                 }
             }
+            AppEvent::SetOutputStyle { style_name } => {
+                self.current_output_style = style_name.clone();
+                self.chat_widget.set_output_style(&style_name);
+                self.chat_widget
+                    .add_info_message(format!("Output style set to: {style_name}"), None);
+            }
+            AppEvent::TogglePlanMode => {
+                if self.chat_widget.is_plan_mode() {
+                    // Exit plan mode
+                    self.chat_widget.submit_op(Op::SetPlanMode {
+                        active: false,
+                        plan_file_path: None,
+                    });
+                    self.chat_widget
+                        .add_info_message("Exiting plan mode...".to_string(), None);
+                } else if self.chat_widget.conversation_id().is_some() {
+                    // Enter plan mode
+                    self.chat_widget.submit_op(Op::SetPlanMode {
+                        active: true,
+                        plan_file_path: None,
+                    });
+                    self.chat_widget
+                        .add_info_message("Entering plan mode...".to_string(), None);
+                }
+            }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
@@ -1131,6 +1158,66 @@ impl App {
                         "E L I C I T A T I O N".to_string(),
                     ));
                 }
+                ApprovalRequest::Plan {
+                    plan_content,
+                    plan_file_path,
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = Paragraph::new(vec![
+                        Line::from(vec!["Plan file: ".into(), plan_file_path.bold()]),
+                        Line::from(""),
+                        Line::from(plan_content),
+                    ])
+                    .wrap(Wrap { trim: false });
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "P L A N".to_string(),
+                    ));
+                }
+                ApprovalRequest::EnterPlanMode => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = Paragraph::new(vec![
+                        Line::from("The LLM is requesting to enter plan mode.".bold()),
+                        Line::from(""),
+                        Line::from("In plan mode, the LLM will:"),
+                        Line::from("- Explore the codebase using read-only tools"),
+                        Line::from("- Design an implementation approach"),
+                        Line::from("- Write a plan file for your review"),
+                        Line::from("- Ask for approval before implementing"),
+                    ])
+                    .wrap(Wrap { trim: false });
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "E N T E R   P L A N   M O D E".to_string(),
+                    ));
+                }
+                ApprovalRequest::UserQuestion { questions, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let mut lines: Vec<Line<'static>> = Vec::new();
+                    lines.push(Line::from("The LLM is asking for your input:".bold()));
+                    lines.push(Line::from(""));
+
+                    for (i, q) in questions.iter().enumerate() {
+                        lines.push(Line::from(format!("{}. {}", i + 1, q.question).bold()));
+                        lines.push(Line::from(format!("   [{}]", q.header)));
+                        for opt in &q.options {
+                            lines.push(Line::from(format!(
+                                "   • {} - {}",
+                                opt.label, opt.description
+                            )));
+                        }
+                        if q.multi_select {
+                            lines.push(Line::from("   (Multiple selections allowed)".to_string()));
+                        }
+                        lines.push(Line::from(""));
+                    }
+
+                    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "U S E R   Q U E S T I O N".to_string(),
+                    ));
+                }
             },
         }
         Ok(true)
@@ -1373,6 +1460,7 @@ mod tests {
             auth_manager,
             config,
             current_model,
+            current_output_style: String::from("default"),
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
@@ -1413,6 +1501,7 @@ mod tests {
                 auth_manager,
                 config,
                 current_model,
+                current_output_style: String::from("default"),
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),

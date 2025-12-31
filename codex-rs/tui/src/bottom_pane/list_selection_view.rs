@@ -122,6 +122,13 @@ impl ListSelectionView {
         s
     }
 
+    /// Update items in place and re-apply filter.
+    /// Used for multi-select checkbox toggle updates.
+    pub fn update_items(&mut self, items: Vec<SelectionItem>) {
+        self.items = items;
+        self.apply_filter();
+    }
+
     fn visible_len(&self) -> usize {
         self.filtered_indices.len()
     }

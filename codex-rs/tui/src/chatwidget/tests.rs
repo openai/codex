@@ -402,12 +402,14 @@ async fn make_chatwidget_manual(
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
+        is_plan_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
+        current_output_style: String::new(),
     };
     (widget, rx, op_rx)
 }

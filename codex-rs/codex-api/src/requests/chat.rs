@@ -26,6 +26,8 @@ pub struct ChatRequestBuilder<'a> {
     tools: &'a [Value],
     conversation_id: Option<String>,
     session_source: Option<SessionSource>,
+    model_parameters: Option<Value>,
+    streaming: bool,
 }
 
 impl<'a> ChatRequestBuilder<'a> {
@@ -42,6 +44,8 @@ impl<'a> ChatRequestBuilder<'a> {
             tools,
             conversation_id: None,
             session_source: None,
+            model_parameters: None,
+            streaming: true,
         }
     }
 
@@ -52,6 +56,16 @@ impl<'a> ChatRequestBuilder<'a> {
 
     pub fn session_source(mut self, source: Option<SessionSource>) -> Self {
         self.session_source = source;
+        self
+    }
+
+    pub fn model_parameters(mut self, params: Option<Value>) -> Self {
+        self.model_parameters = params;
+        self
+    }
+
+    pub fn streaming(mut self, enabled: bool) -> Self {
+        self.streaming = enabled;
         self
     }
 
@@ -309,12 +323,23 @@ impl<'a> ChatRequestBuilder<'a> {
             }
         }
 
-        let payload = json!({
+        let mut payload = json!({
             "model": self.model,
             "messages": messages,
-            "stream": true,
+            "stream": self.streaming,
             "tools": self.tools,
         });
+
+        // Merge model_parameters into payload if present
+        if let Some(params) = &self.model_parameters {
+            if let (Some(payload_obj), Some(params_obj)) =
+                (payload.as_object_mut(), params.as_object())
+            {
+                for (key, value) in params_obj {
+                    payload_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
 
         let mut headers = build_conversation_headers(self.conversation_id);
         if let Some(subagent) = subagent_header(&self.session_source) {
@@ -354,6 +379,11 @@ mod tests {
                 retry_transport: true,
             },
             stream_idle_timeout: Duration::from_secs(1),
+            adapter: None,
+            model_parameters: None,
+            interceptors: Vec::new(),
+            request_timeout: None,
+            streaming: true,
         }
     }
 

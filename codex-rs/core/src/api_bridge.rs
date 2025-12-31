@@ -85,6 +85,8 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
             }
         },
         ApiError::RateLimit(msg) => CodexErr::Stream(msg, None),
+        ApiError::PreviousResponseNotFound => CodexErr::PreviousResponseNotFound,
+        ApiError::EncryptedContentInvalid => CodexErr::EncryptedContentInvalid,
     }
 }
 

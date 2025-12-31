@@ -14,6 +14,9 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    /// Last response ID for adapter conversation continuity.
+    /// Stored after each successful response, used to enable tweakcc message sending.
+    pub(crate) last_response_id: Option<String>,
 }
 
 impl SessionState {
@@ -24,6 +27,7 @@ impl SessionState {
             session_configuration,
             history,
             latest_rate_limits: None,
+            last_response_id: None,
         }
     }
 
@@ -80,6 +84,19 @@ impl SessionState {
 
     pub(crate) fn get_total_token_usage(&self) -> i64 {
         self.history.get_total_token_usage()
+    }
+
+    // Response ID helpers for adapter conversation continuity
+    pub(crate) fn get_last_response_id(&self) -> Option<&str> {
+        self.last_response_id.as_deref()
+    }
+
+    pub(crate) fn set_last_response_id(&mut self, id: Option<String>) {
+        self.last_response_id = id;
+    }
+
+    pub(crate) fn clear_last_response_id(&mut self) {
+        self.last_response_id = None;
     }
 }
 

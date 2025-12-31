@@ -3,6 +3,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::subagent::get_or_create_stores;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -104,6 +105,16 @@ pub(crate) async fn handle_update_plan(
     _call_id: String,
 ) -> Result<String, FunctionCallError> {
     let args = parse_update_plan_arguments(&arguments)?;
+
+    // Update plan state for reminder tracking
+    // Use current inject count to track when plan was last updated
+    let stores = get_or_create_stores(session.conversation_id);
+    let current_count = stores.get_inject_count();
+    if let Err(e) = stores.update_plan_state(&args, current_count) {
+        tracing::warn!("failed to update plan state: {e}");
+        // Continue anyway - plan update is not critical for tool to succeed
+    }
+
     session
         .send_event(turn_context, EventMsg::PlanUpdate(args))
         .await;

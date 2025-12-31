@@ -41,6 +41,10 @@ pub struct Prompt {
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
+
+    /// Previous response ID for continuing conversations with context.
+    /// Populated from SessionState when adapter supports it.
+    pub previous_response_id: Option<String>,
 }
 
 impl Prompt {
@@ -349,6 +353,8 @@ mod tests {
                 verbosity: Some(OpenAiVerbosity::Low),
                 format: None,
             }),
+            previous_response_id: None,
+            model_parameters: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
@@ -387,6 +393,8 @@ mod tests {
             include: vec![],
             prompt_cache_key: None,
             text: Some(text_controls),
+            previous_response_id: None,
+            model_parameters: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
@@ -423,6 +431,8 @@ mod tests {
             include: vec![],
             prompt_cache_key: None,
             text: None,
+            previous_response_id: None,
+            model_parameters: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");

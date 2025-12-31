@@ -144,7 +144,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     if let Some(parent) = abs_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let image = ImageBuffer::from_pixel(4096, 1024, Rgba([255u8, 0, 0, 255]));
+    let image = ImageBuffer::from_pixel(1024, 256, Rgba([255u8, 0, 0, 255]));
     image.save(&abs_path)?;
 
     let call_id = "view-image-call";

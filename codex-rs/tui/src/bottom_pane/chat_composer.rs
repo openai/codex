@@ -109,6 +109,7 @@ pub(crate) struct ChatComposer {
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
     is_task_running: bool,
+    is_plan_mode: bool,
     // Non-bracketed paste burst tracker.
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
@@ -159,6 +160,7 @@ impl ChatComposer {
             attached_images: Vec::new(),
             placeholder_text,
             is_task_running: false,
+            is_plan_mode: false,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
@@ -1605,6 +1607,12 @@ impl ChatComposer {
             return false;
         }
 
+        // Handle Shift+Tab (BackTab) for plan mode toggle
+        if matches!(key_event.code, KeyCode::BackTab) {
+            self.app_event_tx.send(AppEvent::TogglePlanMode);
+            return true;
+        }
+
         let toggles = matches!(key_event.code, KeyCode::Char('?'))
             && !has_ctrl_or_alt(key_event.modifiers)
             && self.is_empty()
@@ -1628,6 +1636,7 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            is_plan_mode: self.is_plan_mode,
         }
     }
 
@@ -1856,6 +1865,10 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+    }
+
+    pub fn set_plan_mode(&mut self, active: bool) {
+        self.is_plan_mode = active;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {

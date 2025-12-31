@@ -6,11 +6,15 @@ license.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+base64 = { workspace = true }
 bytes = { workspace = true }
 codex-client = { workspace = true }
 codex-protocol = { workspace = true }
+google-genai = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 futures = { workspace = true }
 http = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

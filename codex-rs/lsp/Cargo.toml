@@ -1,0 +1,47 @@
+[package]
+name = "codex-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LSP client for codex-rs with AI-friendly symbol resolution"
+
+[lib]
+name = "codex_lsp"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "rt", "fs", "macros"] }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# LSP protocol types
+lsp-types = "0.95"
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Binary detection
+which = "7.0"
+
+# Text diffing for incremental sync
+similar = { workspace = true }
+
+# Home directory detection
+dirs = "5.0"
+
+# Internal dependencies
+codex-file-ignore = { path = "../file-ignore" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+pretty_assertions = { workspace = true }

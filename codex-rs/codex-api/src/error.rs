@@ -16,6 +16,10 @@ pub enum ApiError {
     ContextWindowExceeded,
     #[error("quota exceeded")]
     QuotaExceeded,
+    #[error("previous response not found")]
+    PreviousResponseNotFound,
+    #[error("encrypted content could not be verified")]
+    EncryptedContentInvalid,
     #[error("usage not included")]
     UsageNotIncluded,
     #[error("retryable error: {message}")]
