@@ -10,10 +10,12 @@ use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
+use crate::transcript_search::TranscriptSearch;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
@@ -56,6 +58,12 @@ impl Overlay {
         }
     }
 
+    pub(crate) fn activate_search(&mut self, preset_query: Option<&str>, viewport_width: u16) {
+        if let Overlay::Transcript(o) = self {
+            o.activate_search(preset_query, viewport_width);
+        }
+    }
+
     pub(crate) fn is_done(&self) -> bool {
         match self {
             Overlay::Transcript(o) => o.is_done(),
@@ -83,6 +91,10 @@ const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
+const KEY_SLASH: KeyBinding = key_hint::plain(KeyCode::Char('/'));
+const KEY_N: KeyBinding = key_hint::plain(KeyCode::Char('n'));
+const KEY_SHIFT_N: KeyBinding = key_hint::shift(KeyCode::Char('N'));
+const KEY_BACKSPACE: KeyBinding = key_hint::plain(KeyCode::Backspace);
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
@@ -405,36 +417,47 @@ pub(crate) struct TranscriptOverlay {
     cells: Vec<Arc<dyn HistoryCell>>,
     highlight_cell: Option<usize>,
     is_done: bool,
+    /// Search state for finding text within the transcript.
+    search: TranscriptSearch,
+    /// Last known width for search refresh.
+    last_width: u16,
 }
 
 impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells(&transcript_cells, None),
+                Self::render_cells(&transcript_cells, None, None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
             cells: transcript_cells,
             highlight_cell: None,
             is_done: false,
+            search: TranscriptSearch::new(),
+            last_width: 80,
         }
     }
 
     fn render_cells(
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
+        search_highlight_cell: Option<usize>,
     ) -> Vec<Box<dyn Renderable>> {
         cells
             .iter()
             .enumerate()
             .flat_map(|(i, c)| {
                 let mut v: Vec<Box<dyn Renderable>> = Vec::new();
+                // Determine if this cell should be highlighted due to search
+                let is_search_match = search_highlight_cell == Some(i);
                 let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
                         style: if highlight_cell == Some(i) {
                             user_message_style().reversed()
+                        } else if is_search_match {
+                            user_message_style().on_dark_gray()
                         } else {
                             user_message_style()
                         },
@@ -442,7 +465,11 @@ impl TranscriptOverlay {
                 } else {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
-                        style: Style::default(),
+                        style: if is_search_match {
+                            Style::default().on_dark_gray()
+                        } else {
+                            Style::default()
+                        },
                     })) as Box<dyn Renderable>
                 };
                 if !c.is_stream_continuation() && i > 0 {
@@ -460,7 +487,10 @@ impl TranscriptOverlay {
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
         self.cells.push(cell);
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        let search_cell = self.search.current_match_cell();
+        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell, search_cell);
+        // Refresh search to include new cell
+        self.search.refresh(&self.cells, self.last_width);
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -468,19 +498,29 @@ impl TranscriptOverlay {
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        let search_cell = self.search.current_match_cell();
+        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell, search_cell);
         if let Some(idx) = self.highlight_cell {
             self.view.scroll_chunk_into_view(idx);
         }
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
+        // If search is active, show search bar instead of hints
+        if self.search.is_active() {
+            self.search.render_search_bar(area, buf);
+            return;
+        }
+
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
         render_key_hints(line1, buf, PAGER_KEY_HINTS);
 
-        let mut pairs: Vec<(&[KeyBinding], &str)> =
-            vec![(&[KEY_Q], "to quit"), (&[KEY_ESC], "to edit prev")];
+        let mut pairs: Vec<(&[KeyBinding], &str)> = vec![
+            (&[KEY_SLASH], "to search"),
+            (&[KEY_Q], "to quit"),
+            (&[KEY_ESC], "to edit prev"),
+        ];
         if self.highlight_cell.is_some() {
             pairs.push((&[KEY_ENTER], "to edit message"));
         }
@@ -488,24 +528,123 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        self.last_width = area.width;
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
         self.view.render(top, buf);
         self.render_hints(bottom, buf);
     }
+
+    /// Update the renderables to reflect current search highlight.
+    fn update_renderables_for_search(&mut self) {
+        let search_cell = self.search.current_match_cell();
+        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell, search_cell);
+        // Scroll to the matched cell if there's a current match
+        if let Some(cell_idx) = search_cell {
+            self.view.scroll_chunk_into_view(cell_idx);
+        }
+    }
+
+    pub(crate) fn activate_search(&mut self, preset_query: Option<&str>, viewport_width: u16) {
+        self.last_width = viewport_width.max(1);
+        self.search.activate();
+        if let Some(query) = preset_query {
+            self.search.set_query(query, &self.cells, self.last_width);
+        } else {
+            self.search.refresh(&self.cells, self.last_width);
+        }
+        self.update_renderables_for_search();
+    }
+
+    /// Handle a key event while search is active.
+    fn handle_search_key(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
+        match key_event {
+            // Escape closes search mode
+            e if KEY_ESC.is_press(e) => {
+                self.search.deactivate();
+                self.update_renderables_for_search();
+                tui.frame_requester()
+                    .schedule_frame_in(Duration::from_millis(16));
+            }
+            // Enter or n goes to next match
+            e if KEY_ENTER.is_press(e) || KEY_N.is_press(e) => {
+                self.search.next_match();
+                self.update_renderables_for_search();
+                tui.frame_requester()
+                    .schedule_frame_in(Duration::from_millis(16));
+            }
+            // Shift+N goes to previous match
+            e if KEY_SHIFT_N.is_press(e) => {
+                self.search.prev_match();
+                self.update_renderables_for_search();
+                tui.frame_requester()
+                    .schedule_frame_in(Duration::from_millis(16));
+            }
+            // Backspace removes last character
+            e if KEY_BACKSPACE.is_press(e) => {
+                self.search.pop_char(&self.cells, self.last_width);
+                self.update_renderables_for_search();
+                tui.frame_requester()
+                    .schedule_frame_in(Duration::from_millis(16));
+            }
+            // Regular character input
+            KeyEvent {
+                code: KeyCode::Char(c),
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.search.push_char(c, &self.cells, self.last_width);
+                self.update_renderables_for_search();
+                tui.frame_requester()
+                    .schedule_frame_in(Duration::from_millis(16));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
-            TuiEvent::Key(key_event) => match key_event {
-                e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) || KEY_CTRL_T.is_press(e) => {
-                    self.is_done = true;
-                    Ok(())
+            TuiEvent::Key(key_event) => {
+                // If search is active, handle search-specific keys
+                if self.search.is_active() {
+                    return self.handle_search_key(tui, key_event);
                 }
-                other => self.view.handle_key_event(tui, other),
-            },
+
+                match key_event {
+                    // `/` or Ctrl+F activates search
+                    e if KEY_SLASH.is_press(e) || KEY_CTRL_F.is_press(e) => {
+                        self.search.activate();
+                        tui.frame_requester()
+                            .schedule_frame_in(Duration::from_millis(16));
+                        Ok(())
+                    }
+                    // `n` goes to next match (even when search bar is closed)
+                    e if KEY_N.is_press(e) && self.search.match_count() > 0 => {
+                        self.search.next_match();
+                        self.update_renderables_for_search();
+                        tui.frame_requester()
+                            .schedule_frame_in(Duration::from_millis(16));
+                        Ok(())
+                    }
+                    // Shift+N goes to previous match (even when search bar is closed)
+                    e if KEY_SHIFT_N.is_press(e) && self.search.match_count() > 0 => {
+                        self.search.prev_match();
+                        self.update_renderables_for_search();
+                        tui.frame_requester()
+                            .schedule_frame_in(Duration::from_millis(16));
+                        Ok(())
+                    }
+                    e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) || KEY_CTRL_T.is_press(e) => {
+                        self.is_done = true;
+                        Ok(())
+                    }
+                    other => self.view.handle_key_event(tui, other),
+                }
+            }
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
@@ -674,6 +813,25 @@ mod tests {
             s.contains("edit prev"),
             "expected 'edit prev' hint in overlay footer, got: {s:?}"
         );
+    }
+
+    #[test]
+    fn activate_search_prefills_query_and_matches() {
+        let mut overlay = TranscriptOverlay::new(vec![
+            Arc::new(TestCell {
+                lines: vec![Line::from("alpha bravo")],
+            }),
+            Arc::new(TestCell {
+                lines: vec![Line::from("bravo charlie")],
+            }),
+        ]);
+
+        overlay.activate_search(Some("bravo"), 40);
+
+        assert!(overlay.search.is_active());
+        assert_eq!(overlay.search.query(), "bravo");
+        assert_eq!(overlay.search.match_count(), 2);
+        assert_eq!(overlay.search.current_match_cell(), Some(0));
     }
 
     #[test]
@@ -1032,6 +1190,127 @@ mod tests {
         assert!(
             pv.is_scrolled_to_bottom(),
             "expected view to report at bottom after scrolling to end"
+        );
+    }
+
+    #[test]
+    fn transcript_search_activates_and_shows_bar() {
+        let mut overlay = TranscriptOverlay::new(vec![
+            Arc::new(TestCell {
+                lines: vec![Line::from("Hello world")],
+            }),
+            Arc::new(TestCell {
+                lines: vec![Line::from("Goodbye world")],
+            }),
+        ]);
+
+        // Activate search
+        overlay.search.activate();
+        assert!(overlay.search.is_active());
+
+        // Render and check that search bar is shown
+        let area = Rect::new(0, 0, 50, 12);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+        // The search bar should show "/" prefix
+        assert!(
+            s.contains("/"),
+            "expected search bar indicator '/' in overlay footer, got: {s:?}"
+        );
+    }
+
+    #[test]
+    fn transcript_search_finds_matches_and_highlights_cell() {
+        let cells = vec![
+            Arc::new(TestCell {
+                lines: vec![Line::from("First message")],
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell {
+                lines: vec![Line::from("Hello world")],
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell {
+                lines: vec![Line::from("Hello again")],
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        let mut overlay = TranscriptOverlay::new(cells);
+        overlay.search.activate();
+
+        // Type "Hello" to search
+        for c in "Hello".chars() {
+            overlay.search.push_char(c, &overlay.cells, 80);
+        }
+        overlay.update_renderables_for_search();
+
+        assert_eq!(overlay.search.match_count(), 2);
+        assert_eq!(overlay.search.current_match_cell(), Some(1));
+    }
+
+    #[test]
+    fn transcript_search_navigation_cycles_through_matches() {
+        let cells = vec![
+            Arc::new(TestCell {
+                lines: vec![Line::from("test one")],
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell {
+                lines: vec![Line::from("test two")],
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell {
+                lines: vec![Line::from("test three")],
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        let mut overlay = TranscriptOverlay::new(cells);
+        overlay.search.activate();
+
+        for c in "test".chars() {
+            overlay.search.push_char(c, &overlay.cells, 80);
+        }
+
+        assert_eq!(overlay.search.current_match_display(), Some(1));
+
+        overlay.search.next_match();
+        assert_eq!(overlay.search.current_match_display(), Some(2));
+
+        overlay.search.next_match();
+        assert_eq!(overlay.search.current_match_display(), Some(3));
+
+        overlay.search.next_match();
+        assert_eq!(overlay.search.current_match_display(), Some(1)); // wraps
+
+        overlay.search.prev_match();
+        assert_eq!(overlay.search.current_match_display(), Some(3)); // wraps back
+    }
+
+    #[test]
+    fn transcript_search_hint_shows_slash_key() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("content")],
+        })]);
+
+        let area = Rect::new(0, 0, 60, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(
+            s.contains("to search"),
+            "expected 'to search' hint in overlay footer, got: {s:?}"
         );
     }
 }

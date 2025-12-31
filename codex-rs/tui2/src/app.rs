@@ -1902,6 +1902,20 @@ impl App {
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                // Open transcript overlay with search active.
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                if let Some(overlay) = &mut self.overlay {
+                    overlay.activate_search(None, tui.terminal.last_known_screen_size.width);
+                }
+                tui.frame_requester().schedule_frame();
+            }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward
             // Esc so the active UI (e.g. status indicator, modals, popups)

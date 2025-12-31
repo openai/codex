@@ -72,6 +72,10 @@ For more information on how to use AGENTS.md, see the [official AGENTS.md docume
 
 ### Tips & shortcuts
 
+#### Use `/` or Ctrl+F to search the transcript
+
+Press `Ctrl+T` to open the transcript overlay showing the full conversation history. Once in the transcript view, press `/` or `Ctrl+F` to activate search mode. Type your query to find matches in the conversation history—search is case-insensitive. Use `n` to jump to the next match and `N` (Shift+n) to jump to the previous match. Press `Esc` to close the search bar while keeping search results highlighted, or press `q` to exit the transcript view entirely.
+
 #### Use `@` for file search
 
 Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.

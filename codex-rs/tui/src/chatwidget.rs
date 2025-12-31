@@ -3546,6 +3546,7 @@ impl ChatWidget {
             0,
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
         );
+
         RenderableItem::Owned(Box::new(flex))
     }
 }

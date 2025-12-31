@@ -1225,6 +1225,25 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
+        // Enter alternate screen and set viewport to full size.
+        let _ = tui.enter_alt_screen();
+        self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn open_transcript_overlay_with_search(
+        &mut self,
+        tui: &mut tui::Tui,
+        preset_query: Option<&str>,
+    ) {
+        self.open_transcript_overlay(tui);
+        if let Some(overlay) = &mut self.overlay {
+            overlay.activate_search(preset_query, tui.terminal.last_known_screen_size.width);
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -1233,10 +1252,15 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                // Enter alternate screen and set viewport to full size.
-                let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
-                tui.frame_requester().schedule_frame();
+                self.open_transcript_overlay(tui);
+            }
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.open_transcript_overlay_with_search(tui, None);
             }
             KeyEvent {
                 code: KeyCode::Char('g'),

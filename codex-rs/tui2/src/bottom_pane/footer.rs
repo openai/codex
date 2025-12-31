@@ -190,6 +190,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
+    let mut search_transcript = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -201,6 +202,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
+                ShortcutId::SearchTranscript => search_transcript = text,
             }
         }
     }
@@ -214,6 +216,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         quit,
         Line::from(""),
         show_transcript,
+        search_transcript,
     ];
 
     build_columns(ordered)
@@ -289,6 +292,7 @@ enum ShortcutId {
     EditPrevious,
     Quit,
     ShowTranscript,
+    SearchTranscript,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -432,6 +436,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to view transcript",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::SearchTranscript,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('f')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to search transcript",
     },
 ];
 

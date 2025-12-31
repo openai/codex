@@ -39,6 +39,10 @@ Confirm your setup in three steps:
 
 Running Codex directly on Windows may work, but is not officially supported. We recommend using [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install).
 
+### How do I search within the chat history?
+
+Press `Ctrl+T` to open the transcript overlay, then press `/` or `Ctrl+F` to activate search. Type your query to find matches (case-insensitive). Navigate between matches with `n` (next) and `N` (previous). Press `Esc` to close the search bar, or `q` to exit the transcript view.
+
 ### Where should I start after installation?
 
 Follow the quick setup in [Install & build](./install.md) and then jump into [Getting started](./getting-started.md) for interactive usage tips, prompt examples, and AGENTS.md guidance.
