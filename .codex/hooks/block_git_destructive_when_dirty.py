@@ -12,10 +12,11 @@ DESTRUCTIVE_GIT_PATTERNS = [
     r"\bgit\s+reset\s+--hard\b",
     r"\bgit\s+checkout\s+--\b",
     r"\bgit\s+restore\b",
-    r"\bgit\s+clean\s+-[^\n]*\bf\b",
     # Can discard if used incorrectly / without intent (keep it conservative)
     r"\bgit\s+switch\b",
 ]
+
+GIT_CLEAN_FORCE_PATTERN = r"\bgit\s+clean\b"
 
 
 def _extract_command_text(payload: dict[str, Any]) -> str:
@@ -74,12 +75,39 @@ def _is_git_dirty() -> Optional[bool]:
         return None
     return out.strip() != ""
 
+def _git_clean_force_without_dry_run(cmd_text: str) -> bool:
+    if not re.search(GIT_CLEAN_FORCE_PATTERN, cmd_text):
+        return False
+
+    # We only block "forceful" clean variants. Typical forms:
+    # - git clean -f
+    # - git clean -fd
+    # - git clean -f -d
+    # - git clean -ff
+    # We allow dry-run:
+    # - git clean -n -f
+    # - git clean -f -n
+    # - git clean --dry-run -f
+    # - git clean -f --dry-run
+    #
+    # Parse as text because the tool payload may be a shell string.
+    has_force = bool(re.search(r"(?:^|\s)-(?:[^\n]*f[^\n]*)\b", cmd_text)) or "--force" in cmd_text
+    has_dry_run = bool(re.search(r"(?:^|\s)-(?:[^\n]*n[^\n]*)\b", cmd_text)) or "--dry-run" in cmd_text
+    return has_force and not has_dry_run
+
 
 def main() -> int:
     payload = json.load(sys.stdin)
     cmd_text = _extract_command_text(payload)
     if not cmd_text:
         return 0
+
+    # Policy: always block `git clean -f` unless it's a dry-run (`-n` / `--dry-run`).
+    # This is intentionally independent of "dirty" state, because it deletes untracked files.
+    if _git_clean_force_without_dry_run(cmd_text):
+        print("BLOCKED: `git clean -f` is denied (use `git clean -n -f` to preview).", file=sys.stderr)
+        print(f"Attempted: {cmd_text}", file=sys.stderr)
+        return 2
 
     if not any(re.search(p, cmd_text) for p in DESTRUCTIVE_GIT_PATTERNS):
         return 0
