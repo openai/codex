@@ -222,6 +222,7 @@ function main(): void {
   let statusPopoverDetails = "";
   let statusHoverDetails = "";
   let statusPopoverEnabled = false;
+  let statusTextHovering = false;
 
   const hideStatusPopover = (): void => {
     statusPopoverOpen = false;
@@ -247,12 +248,14 @@ function main(): void {
     toggleStatusPopover();
   });
   statusTextEl.addEventListener("mouseenter", () => {
+    statusTextHovering = true;
     if (statusPopoverOpen) return;
     if (!statusHoverDetails) return;
     statusPopoverEl.textContent = statusHoverDetails;
     statusPopoverEl.style.display = "";
   });
   statusTextEl.addEventListener("mouseleave", () => {
+    statusTextHovering = false;
     if (statusPopoverOpen) return;
     hideStatusPopover();
   });
@@ -1899,10 +1902,26 @@ function main(): void {
     );
     statusTextEl.style.maxWidth = `${availablePx}px`;
 
-    hideStatusPopover();
     statusPopoverDetails = fullStatus;
     statusHoverDetails = statusTooltip !== fullStatus ? statusTooltip : "";
     statusPopoverEnabled = false;
+
+    // Do not dismiss the hover popover during refresh. Rate limit updates (and other
+    // streaming refreshes) can arrive frequently; keep the popover visible while
+    // the user is hovering so the tooltip remains readable.
+    if (statusPopoverOpen) {
+      statusPopoverEl.textContent = statusPopoverDetails;
+      statusPopoverEl.style.display = "";
+    } else if (statusTextHovering) {
+      if (statusHoverDetails) {
+        statusPopoverEl.textContent = statusHoverDetails;
+        statusPopoverEl.style.display = "";
+      } else {
+        hideStatusPopover();
+      }
+    } else {
+      hideStatusPopover();
+    }
 
     if (fullStatus && candidates.length > 0) {
       let chosen = candidates[candidates.length - 1]!;
