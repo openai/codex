@@ -8,7 +8,9 @@
 - ステータス: rate limit（例: `5h:11% wk:7%`）にホバーするとリセット時刻を表示
 - Interrupt: 送信直後など turnId 未確定のタイミングでも Stop/Interrupt が取りこぼされないように修正（turn/started 到達後に割り込みを送る）
 - Interrupt: backend を kill/restart する Force Stop を廃止（workspace 単位で backend を共有しており他セッションも停止するため）。turnId 不明時は `thread/resume` で inProgress の turn を探索して `turn/interrupt` を試行
+- Interrupt: `codexMine.interrupt.forceStopAfterMs` 設定を削除（Force Stop 廃止に伴い不要）
 - Backend: backend停止時の streamState クリーンアップ不具合を修正（スレッド単位で削除）
+- Backend: backend が外部要因で終了しても、セッションの `sending`/承認待ち状態が残らないように UI 状態を同期
 - Agents: agents（subagents）の一覧/候補取得をローカル走査（`.codex/agents` / `$CODEX_HOME/agents`）で提供
 
 ## 0.1.12
