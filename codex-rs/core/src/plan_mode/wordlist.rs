@@ -875,10 +875,7 @@ mod tests {
     fn test_total_combinations() {
         let total = ADJECTIVES.len() * ACTIONS.len() * NOUNS.len();
         // Should be ~8.5 million combinations
-        assert!(
-            total > 5_000_000,
-            "Expected >5M combinations, got {total}"
-        );
+        assert!(total > 5_000_000, "Expected >5M combinations, got {total}");
         println!(
             "Total combinations: {} ({} × {} × {})",
             total,

@@ -330,11 +330,9 @@ async fn run_command(
 
     // Commands that need service
     let service = match &cmd {
-        Command::Status | Command::Build { .. } | Command::Watch | Command::Repomap { .. } => {
-            Some(Arc::new(
-                RetrievalService::new(service_config.clone(), hybrid_features()).await?,
-            ))
-        }
+        Command::Status | Command::Build { .. } | Command::Watch | Command::Repomap { .. } => Some(
+            Arc::new(RetrievalService::new(service_config.clone(), hybrid_features()).await?),
+        ),
         _ => None,
     };
 

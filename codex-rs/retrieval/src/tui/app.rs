@@ -1208,11 +1208,7 @@ impl App {
 
         // Show status message if present, otherwise show keybindings
         let status = if let Some(ref msg) = self.status_message {
-            format!(
-                " {} | Elapsed: {:.1}s ",
-                msg,
-                elapsed.as_secs_f64()
-            )
+            format!(" {} | Elapsed: {:.1}s ", msg, elapsed.as_secs_f64())
         } else {
             format!(
                 " Tab/Shift+Tab: navigate | 1-5: switch view | ?: help | q: quit | Elapsed: {:.1}s ",

@@ -1163,12 +1163,10 @@ impl App {
                     plan_file_path,
                 } => {
                     let _ = tui.enter_alt_screen();
-                    let paragraph = Paragraph::new(vec![
-                        Line::from(vec!["Plan file: ".into(), plan_file_path.bold()]),
-                        Line::from(""),
-                        Line::from(plan_content),
-                    ])
-                    .wrap(Wrap { trim: false });
+                    let paragraph = crate::app_ext::build_plan_overlay_paragraph(
+                        &plan_content,
+                        &plan_file_path,
+                    );
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
                         "P L A N".to_string(),
@@ -1176,16 +1174,7 @@ impl App {
                 }
                 ApprovalRequest::EnterPlanMode => {
                     let _ = tui.enter_alt_screen();
-                    let paragraph = Paragraph::new(vec![
-                        Line::from("The LLM is requesting to enter plan mode.".bold()),
-                        Line::from(""),
-                        Line::from("In plan mode, the LLM will:"),
-                        Line::from("- Explore the codebase using read-only tools"),
-                        Line::from("- Design an implementation approach"),
-                        Line::from("- Write a plan file for your review"),
-                        Line::from("- Ask for approval before implementing"),
-                    ])
-                    .wrap(Wrap { trim: false });
+                    let paragraph = crate::app_ext::build_enter_plan_mode_paragraph();
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
                         "E N T E R   P L A N   M O D E".to_string(),
@@ -1193,26 +1182,7 @@ impl App {
                 }
                 ApprovalRequest::UserQuestion { questions, .. } => {
                     let _ = tui.enter_alt_screen();
-                    let mut lines: Vec<Line<'static>> = Vec::new();
-                    lines.push(Line::from("The LLM is asking for your input:".bold()));
-                    lines.push(Line::from(""));
-
-                    for (i, q) in questions.iter().enumerate() {
-                        lines.push(Line::from(format!("{}. {}", i + 1, q.question).bold()));
-                        lines.push(Line::from(format!("   [{}]", q.header)));
-                        for opt in &q.options {
-                            lines.push(Line::from(format!(
-                                "   • {} - {}",
-                                opt.label, opt.description
-                            )));
-                        }
-                        if q.multi_select {
-                            lines.push(Line::from("   (Multiple selections allowed)".to_string()));
-                        }
-                        lines.push(Line::from(""));
-                    }
-
-                    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+                    let paragraph = crate::app_ext::build_user_question_paragraph(&questions);
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
                         "U S E R   Q U E S T I O N".to_string(),

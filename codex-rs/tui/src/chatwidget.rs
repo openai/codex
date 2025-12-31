@@ -2178,30 +2178,21 @@ impl ChatWidget {
     }
 
     fn on_plan_mode_entry_request(&mut self, _ev: PlanModeEntryRequestEvent) {
-        // Push plan mode entry request to the approval overlay
-        let request = ApprovalRequest::EnterPlanMode;
+        let request = crate::chatwidget_ext::build_plan_mode_entry_request();
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
     fn on_plan_mode_exit_request(&mut self, ev: PlanModeExitRequestEvent) {
-        // Push plan approval request to the approval overlay
-        let request = ApprovalRequest::Plan {
-            plan_content: ev.plan_content,
-            plan_file_path: ev.plan_file_path,
-        };
+        let request = crate::chatwidget_ext::build_plan_mode_exit_request(&ev);
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
     fn on_user_question_request(&mut self, ev: UserQuestionRequestEvent) {
-        // Push user question request to the approval overlay
-        let request = ApprovalRequest::UserQuestion {
-            tool_call_id: ev.tool_call_id,
-            questions: ev.questions,
-        };
+        let request = crate::chatwidget_ext::build_user_question_request(&ev);
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.request_redraw();

@@ -1030,19 +1030,20 @@ impl LanceDbStore {
 
         let query = table.query();
         let results = if let Some(n) = limit {
+            query.limit(n as usize).execute().await.map_err(|e| {
+                RetrievalErr::LanceDbQueryFailed {
+                    table: self.table_name.clone(),
+                    cause: e.to_string(),
+                }
+            })?
+        } else {
             query
-                .limit(n as usize)
                 .execute()
                 .await
                 .map_err(|e| RetrievalErr::LanceDbQueryFailed {
                     table: self.table_name.clone(),
                     cause: e.to_string(),
                 })?
-        } else {
-            query.execute().await.map_err(|e| RetrievalErr::LanceDbQueryFailed {
-                table: self.table_name.clone(),
-                cause: e.to_string(),
-            })?
         };
 
         let mut chunks = Vec::new();

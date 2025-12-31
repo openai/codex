@@ -556,7 +556,10 @@ impl HybridSearcher {
 
         event_emitter::emit(RetrievalEvent::Bm25SearchCompleted {
             query_id: query_id.to_string(),
-            results: results.iter().map(|r| ChunkSummary::from(r.clone())).collect(),
+            results: results
+                .iter()
+                .map(|r| ChunkSummary::from(r.clone()))
+                .collect(),
             duration_ms: start.elapsed().as_millis() as i64,
         });
 
@@ -587,7 +590,10 @@ impl HybridSearcher {
             Ok(results) => {
                 event_emitter::emit(RetrievalEvent::VectorSearchCompleted {
                     query_id: query_id.to_string(),
-                    results: results.iter().map(|r| ChunkSummary::from(r.clone())).collect(),
+                    results: results
+                        .iter()
+                        .map(|r| ChunkSummary::from(r.clone()))
+                        .collect(),
                     duration_ms: start.elapsed().as_millis() as i64,
                 });
             }

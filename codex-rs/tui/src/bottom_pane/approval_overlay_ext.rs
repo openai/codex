@@ -14,6 +14,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
+use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::key_hint;
 
 use super::approval_overlay::ApprovalDecision;
@@ -266,4 +267,232 @@ pub fn build_question_header_lines(title: String, question: &UserQuestion) -> Ve
         ));
     }
     lines
+}
+
+// ============================================================================
+// Request Header Builders
+// ============================================================================
+
+/// Build header for Plan approval request (preview first 15 lines).
+pub fn build_plan_request_header(plan_content: &str, plan_file_path: &str) -> Paragraph<'static> {
+    let preview_lines: Vec<&str> = plan_content.lines().take(15).collect();
+    let preview = preview_lines.join("\n");
+    let truncated = if plan_content.lines().count() > 15 {
+        format!("{preview}\n... (truncated)")
+    } else {
+        preview
+    };
+
+    Paragraph::new(vec![
+        Line::from(vec![
+            "Plan file: ".into(),
+            plan_file_path.to_string().bold(),
+        ]),
+        Line::from(""),
+        Line::from(truncated),
+    ])
+    .wrap(Wrap { trim: false })
+}
+
+/// Build header for EnterPlanMode request.
+pub fn build_enter_plan_mode_header() -> Paragraph<'static> {
+    Paragraph::new(vec![
+        Line::from(
+            "The LLM is requesting to enter plan mode."
+                .to_string()
+                .bold(),
+        ),
+        Line::from(""),
+        Line::from("In plan mode, the LLM will:"),
+        Line::from("- Explore the codebase using read-only tools"),
+        Line::from("- Design an implementation approach"),
+        Line::from("- Write a plan file for your review"),
+        Line::from("- Ask for approval before implementing"),
+    ])
+    .wrap(Wrap { trim: false })
+}
+
+// ============================================================================
+// State Initialization
+// ============================================================================
+
+/// Initialize multi-question and multi-select state for UserQuestion requests.
+/// Returns (multi_question_state, multi_select_state).
+pub fn init_user_question_state(
+    tool_call_id: &str,
+    questions: &[UserQuestion],
+) -> (Option<MultiQuestionState>, Option<MultiSelectState>) {
+    let mq_state = if questions.len() > 1 {
+        Some(MultiQuestionState {
+            current_index: 0,
+            collected_answers: HashMap::new(),
+            questions: questions.to_vec(),
+            tool_call_id: tool_call_id.to_string(),
+        })
+    } else {
+        None
+    };
+
+    let current_q = if let Some(ref mq) = mq_state {
+        questions.get(mq.current_index)
+    } else {
+        questions.first()
+    };
+
+    let ms_state = if current_q.is_some_and(|q| q.multi_select) {
+        Some(MultiSelectState::default())
+    } else {
+        None
+    };
+
+    (mq_state, ms_state)
+}
+
+// ============================================================================
+// UserQuestion Flow Actions
+// ============================================================================
+
+/// Action to take after processing a user question answer.
+#[derive(Debug)]
+pub enum UserQuestionFlowAction {
+    /// Toggle multi-select option at given index.
+    ToggleOption(usize),
+    /// Advance to next question (rebuild UI).
+    AdvanceQuestion,
+    /// Complete the flow with final answers.
+    Complete {
+        tool_call_id: String,
+        answers: HashMap<String, String>,
+    },
+}
+
+/// Process a UserQuestionAnswer decision.
+/// Returns the action to take.
+pub fn process_user_question_answer(
+    mq_state: &mut Option<MultiQuestionState>,
+    ms_state: &Option<MultiSelectState>,
+    answers: &HashMap<String, String>,
+    actual_idx: usize,
+    options_len: usize,
+) -> UserQuestionFlowAction {
+    // For multi-select mode: toggle instead of selecting (not "Confirm" or "Other")
+    if ms_state.is_some() && actual_idx < options_len.saturating_sub(2) {
+        return UserQuestionFlowAction::ToggleOption(actual_idx);
+    }
+
+    // For multi-question: collect answer and advance
+    if let Some(mq) = mq_state {
+        for (header, answer) in answers.iter() {
+            mq.collected_answers.insert(header.clone(), answer.clone());
+        }
+        mq.current_index += 1;
+
+        if mq.current_index < mq.questions.len() {
+            UserQuestionFlowAction::AdvanceQuestion
+        } else {
+            let final_answers = mq.collected_answers.clone();
+            let final_tool_call_id = mq.tool_call_id.clone();
+            UserQuestionFlowAction::Complete {
+                tool_call_id: final_tool_call_id,
+                answers: final_answers,
+            }
+        }
+    } else {
+        // Single question: complete immediately
+        // Note: tool_call_id comes from variant, caller fills in
+        UserQuestionFlowAction::Complete {
+            tool_call_id: String::new(),
+            answers: answers.clone(),
+        }
+    }
+}
+
+/// Process a UserQuestionConfirm decision (multi-select confirm).
+/// Returns the action to take.
+pub fn process_user_question_confirm(
+    mq_state: &mut Option<MultiQuestionState>,
+    selected_labels: Vec<String>,
+    header: &str,
+) -> UserQuestionFlowAction {
+    let answer = if selected_labels.is_empty() {
+        "(no selection)".to_string()
+    } else {
+        selected_labels.join(", ")
+    };
+
+    if let Some(mq) = mq_state {
+        mq.collected_answers.insert(header.to_string(), answer);
+        mq.current_index += 1;
+
+        if mq.current_index < mq.questions.len() {
+            UserQuestionFlowAction::AdvanceQuestion
+        } else {
+            let final_answers = mq.collected_answers.clone();
+            let final_tool_call_id = mq.tool_call_id.clone();
+            UserQuestionFlowAction::Complete {
+                tool_call_id: final_tool_call_id,
+                answers: final_answers,
+            }
+        }
+    } else {
+        // Single question multi-select
+        let mut answers = HashMap::new();
+        answers.insert(header.to_string(), answer);
+        UserQuestionFlowAction::Complete {
+            tool_call_id: String::new(),
+            answers,
+        }
+    }
+}
+
+// ============================================================================
+// UI Building Helpers
+// ============================================================================
+
+/// Build SelectionItem list from ApprovalOptions.
+pub fn build_selection_items(options: &[ApprovalOption]) -> Vec<SelectionItem> {
+    options
+        .iter()
+        .map(|opt| SelectionItem {
+            name: opt.label.clone(),
+            display_shortcut: opt
+                .display_shortcut
+                .or_else(|| opt.additional_shortcuts.first().copied()),
+            dismiss_on_select: false,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Build standard footer hint for approval dialogs.
+pub fn build_approval_footer_hint() -> Line<'static> {
+    Line::from(vec![
+        "Press ".into(),
+        key_hint::plain(KeyCode::Enter).into(),
+        " to confirm or ".into(),
+        key_hint::plain(KeyCode::Esc).into(),
+        " to cancel".into(),
+    ])
+}
+
+/// Build next question view components.
+/// Returns (options, header_paragraph).
+pub fn build_next_question_view(
+    mq_state: &MultiQuestionState,
+) -> (Vec<ApprovalOption>, Paragraph<'static>) {
+    let current_q = &mq_state.questions[mq_state.current_index];
+    let tool_call_id = mq_state.tool_call_id.clone();
+
+    let options = single_question_options(tool_call_id, current_q.clone(), current_q.multi_select);
+
+    let title = build_question_title(
+        mq_state.current_index,
+        mq_state.questions.len(),
+        &current_q.header,
+        &current_q.question,
+    );
+    let header_lines = build_question_header_lines(title, current_q);
+    let header = Paragraph::new(header_lines).wrap(Wrap { trim: false });
+
+    (options, header)
 }

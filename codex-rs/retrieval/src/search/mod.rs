@@ -9,9 +9,9 @@ pub mod constants;
 pub mod dedup;
 pub mod fusion;
 pub mod hybrid;
-pub mod snippet_searcher;
 pub mod ranking;
 pub mod recent;
+pub mod snippet_searcher;
 
 pub use bm25::Bm25Searcher;
 pub use dedup::deduplicate_results;
@@ -26,12 +26,12 @@ pub use fusion::has_symbol_syntax;
 pub use fusion::is_identifier_query;
 pub use fusion::recency_score;
 pub use hybrid::HybridSearcher;
-pub use snippet_searcher::SnippetSearcher;
 pub use ranking::apply_jaccard_boost;
 pub use ranking::extract_symbols;
 pub use ranking::jaccard_similarity;
 pub use ranking::rerank_by_jaccard;
 pub use recent::RecentFilesCache;
+pub use snippet_searcher::SnippetSearcher;
 
 pub use bm25_index::Bm25Config;
 pub use bm25_index::Bm25Index;

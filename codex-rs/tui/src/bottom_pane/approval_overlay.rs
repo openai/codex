@@ -4,10 +4,17 @@ use std::path::PathBuf;
 use super::approval_overlay_ext;
 pub use super::approval_overlay_ext::MultiQuestionState;
 pub use super::approval_overlay_ext::MultiSelectState;
-use super::approval_overlay_ext::build_question_header_lines;
-use super::approval_overlay_ext::build_question_title;
+use super::approval_overlay_ext::UserQuestionFlowAction;
+use super::approval_overlay_ext::build_approval_footer_hint;
+use super::approval_overlay_ext::build_enter_plan_mode_header;
+use super::approval_overlay_ext::build_next_question_view;
+use super::approval_overlay_ext::build_plan_request_header;
+use super::approval_overlay_ext::build_selection_items;
 use super::approval_overlay_ext::build_user_question_header;
 use super::approval_overlay_ext::get_selected_labels;
+use super::approval_overlay_ext::init_user_question_state;
+use super::approval_overlay_ext::process_user_question_answer;
+use super::approval_overlay_ext::process_user_question_confirm;
 use super::approval_overlay_ext::toggle_checkbox_label;
 
 use crate::app_event::AppEvent;
@@ -127,35 +134,15 @@ impl ApprovalOverlay {
         self.current_variant = Some(variant.clone());
         self.current_complete = false;
 
-        // Initialize multi-question and multi-select state for UserQuestion requests
+        // Initialize states using ext helper
         if let ApprovalRequest::UserQuestion {
             tool_call_id,
             questions,
         } = request
         {
-            if questions.len() > 1 {
-                // Multi-question: show one question at a time
-                self.multi_question_state = Some(MultiQuestionState {
-                    current_index: 0,
-                    collected_answers: HashMap::new(),
-                    questions: questions.clone(),
-                    tool_call_id: tool_call_id.clone(),
-                });
-            } else {
-                self.multi_question_state = None;
-            }
-
-            // Check if current question has multi_select
-            let current_q = if let Some(ref mq_state) = self.multi_question_state {
-                questions.get(mq_state.current_index)
-            } else {
-                questions.first()
-            };
-            if current_q.is_some_and(|q| q.multi_select) {
-                self.multi_select_state = Some(MultiSelectState::default());
-            } else {
-                self.multi_select_state = None;
-            }
+            let (mq, ms) = init_user_question_state(&tool_call_id, &questions);
+            self.multi_question_state = mq;
+            self.multi_select_state = ms;
         } else {
             self.multi_question_state = None;
             self.multi_select_state = None;
@@ -319,86 +306,70 @@ impl ApprovalOverlay {
                     ApprovalVariant::UserQuestion { tool_call_id, .. },
                     ApprovalDecision::UserQuestionAnswer { answers, .. },
                 ) => {
-                    // For multi-select mode: toggle the option instead of selecting
-                    if self.multi_select_state.is_some() && actual_idx < self.options.len() - 2 {
-                        // Toggle this option (not "Confirm" or "Other")
-                        self.toggle_multi_select_option(actual_idx);
-                        return;
-                    }
-
-                    // For multi-question: collect answer and advance
-                    if let Some(ref mut mq_state) = self.multi_question_state {
-                        // Collect this answer
-                        for (header, answer) in answers.iter() {
-                            mq_state
-                                .collected_answers
-                                .insert(header.clone(), answer.clone());
+                    let action = process_user_question_answer(
+                        &mut self.multi_question_state,
+                        &self.multi_select_state,
+                        answers,
+                        actual_idx,
+                        self.options.len(),
+                    );
+                    match action {
+                        UserQuestionFlowAction::ToggleOption(idx) => {
+                            self.toggle_multi_select_option(idx);
+                            return;
                         }
-
-                        // Advance to next question
-                        mq_state.current_index += 1;
-
-                        if mq_state.current_index < mq_state.questions.len() {
-                            // More questions: rebuild options for next question
+                        UserQuestionFlowAction::AdvanceQuestion => {
                             self.advance_to_next_question();
                             return;
-                        } else {
-                            // All questions answered: send final answers
-                            let final_answers = mq_state.collected_answers.clone();
-                            let final_tool_call_id = mq_state.tool_call_id.clone();
+                        }
+                        UserQuestionFlowAction::Complete {
+                            tool_call_id: tid,
+                            answers: ans,
+                        } => {
+                            let final_id = if tid.is_empty() {
+                                tool_call_id.clone()
+                            } else {
+                                tid
+                            };
                             self.multi_question_state = None;
                             self.multi_select_state = None;
-                            self.handle_user_question_answer(&final_tool_call_id, final_answers);
+                            self.handle_user_question_answer(&final_id, ans);
                             self.current_complete = true;
                             self.advance_queue();
                         }
-                    } else {
-                        // Single question: send immediately
-                        self.handle_user_question_answer(tool_call_id, answers.clone());
-                        self.current_complete = true;
-                        self.advance_queue();
                     }
                 }
                 (
-                    ApprovalVariant::UserQuestion { .. },
-                    ApprovalDecision::UserQuestionConfirm {
-                        tool_call_id,
-                        header,
-                    },
+                    ApprovalVariant::UserQuestion { tool_call_id, .. },
+                    ApprovalDecision::UserQuestionConfirm { header, .. },
                 ) => {
-                    // Multi-select confirm: collect toggled selections and send/advance
                     let selected_labels = self.get_multi_select_labels();
-                    let answer = if selected_labels.is_empty() {
-                        "(no selection)".to_string()
-                    } else {
-                        selected_labels.join(", ")
-                    };
-
-                    if let Some(ref mut mq_state) = self.multi_question_state {
-                        // Multi-question: collect and maybe advance
-                        mq_state.collected_answers.insert(header.clone(), answer);
-                        mq_state.current_index += 1;
-                        self.multi_select_state = None;
-
-                        if mq_state.current_index < mq_state.questions.len() {
+                    let action = process_user_question_confirm(
+                        &mut self.multi_question_state,
+                        selected_labels,
+                        header,
+                    );
+                    self.multi_select_state = None;
+                    match action {
+                        UserQuestionFlowAction::AdvanceQuestion => {
                             self.advance_to_next_question();
                             return;
-                        } else {
-                            let final_answers = mq_state.collected_answers.clone();
-                            let final_tool_call_id = mq_state.tool_call_id.clone();
+                        }
+                        UserQuestionFlowAction::Complete {
+                            tool_call_id: tid,
+                            answers,
+                        } => {
+                            let final_id = if tid.is_empty() {
+                                tool_call_id.clone()
+                            } else {
+                                tid
+                            };
                             self.multi_question_state = None;
-                            self.handle_user_question_answer(&final_tool_call_id, final_answers);
+                            self.handle_user_question_answer(&final_id, answers);
                             self.current_complete = true;
                             self.advance_queue();
                         }
-                    } else {
-                        // Single question multi-select: send immediately
-                        let mut answers = HashMap::new();
-                        answers.insert(header.clone(), answer);
-                        self.multi_select_state = None;
-                        self.handle_user_question_answer(tool_call_id, answers);
-                        self.current_complete = true;
-                        self.advance_queue();
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -439,19 +410,7 @@ impl ApprovalOverlay {
 
     /// Rebuild list items after option labels change (for multi-select toggle).
     fn rebuild_list_items(&mut self) {
-        let items: Vec<SelectionItem> = self
-            .options
-            .iter()
-            .map(|opt| SelectionItem {
-                name: opt.label.clone(),
-                display_shortcut: opt
-                    .display_shortcut
-                    .or_else(|| opt.additional_shortcuts.first().copied()),
-                dismiss_on_select: false,
-                ..Default::default()
-            })
-            .collect();
-        self.list.update_items(items);
+        self.list.update_items(build_selection_items(&self.options));
     }
 
     /// Advance to the next question in multi-question flow.
@@ -460,55 +419,20 @@ impl ApprovalOverlay {
             return;
         };
 
-        let current_q = &mq_state.questions[mq_state.current_index];
-        let tool_call_id = mq_state.tool_call_id.clone();
-
         // Set up multi-select state if needed
+        let current_q = &mq_state.questions[mq_state.current_index];
         if current_q.multi_select {
             self.multi_select_state = Some(MultiSelectState::default());
         } else {
             self.multi_select_state = None;
         }
 
-        // Build new options for current question using ext helper
-        let options = approval_overlay_ext::single_question_options(
-            tool_call_id,
-            current_q.clone(),
-            current_q.multi_select,
-        );
-
-        // Build title and header using ext helpers
-        let title = build_question_title(
-            mq_state.current_index,
-            mq_state.questions.len(),
-            &current_q.header,
-            &current_q.question,
-        );
-        let header_lines = build_question_header_lines(title, current_q);
-        let header = Paragraph::new(header_lines).wrap(Wrap { trim: false });
-
-        // Update items
-        let items: Vec<SelectionItem> = options
-            .iter()
-            .map(|opt| SelectionItem {
-                name: opt.label.clone(),
-                display_shortcut: opt
-                    .display_shortcut
-                    .or_else(|| opt.additional_shortcuts.first().copied()),
-                dismiss_on_select: false,
-                ..Default::default()
-            })
-            .collect();
+        // Build view components using ext
+        let (options, header) = build_next_question_view(mq_state);
 
         let params = SelectionViewParams {
-            footer_hint: Some(Line::from(vec![
-                "Press ".into(),
-                key_hint::plain(KeyCode::Enter).into(),
-                " to confirm or ".into(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to cancel".into(),
-            ])),
-            items,
+            footer_hint: Some(build_approval_footer_hint()),
+            items: build_selection_items(&options),
             header: Box::new(header),
             ..Default::default()
         };
@@ -770,37 +694,14 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 plan_content,
                 plan_file_path,
             } => {
-                // Show plan preview (first 15 lines) and file path
-                let preview_lines: Vec<&str> = plan_content.lines().take(15).collect();
-                let preview = preview_lines.join("\n");
-                let truncated = if plan_content.lines().count() > 15 {
-                    format!("{preview}\n... (truncated)")
-                } else {
-                    preview
-                };
-
-                let header = Paragraph::new(vec![
-                    Line::from(vec!["Plan file: ".into(), plan_file_path.bold()]),
-                    Line::from(""),
-                    Line::from(truncated),
-                ])
-                .wrap(Wrap { trim: false });
+                let header = build_plan_request_header(&plan_content, &plan_file_path);
                 Self {
                     variant: ApprovalVariant::Plan,
                     header: Box::new(header),
                 }
             }
             ApprovalRequest::EnterPlanMode => {
-                let header = Paragraph::new(vec![
-                    Line::from("The LLM is requesting to enter plan mode.".bold()),
-                    Line::from(""),
-                    Line::from("In plan mode, the LLM will:"),
-                    Line::from("- Explore the codebase using read-only tools"),
-                    Line::from("- Design an implementation approach"),
-                    Line::from("- Write a plan file for your review"),
-                    Line::from("- Ask for approval before implementing"),
-                ])
-                .wrap(Wrap { trim: false });
+                let header = build_enter_plan_mode_header();
                 Self {
                     variant: ApprovalVariant::EnterPlanMode,
                     header: Box::new(header),
