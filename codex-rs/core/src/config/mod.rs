@@ -282,6 +282,9 @@ pub struct Config {
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
 
+    /// Ordered list of discovery sources for subagents (`.codex/agents`, `CODEX_HOME/agents`).
+    pub agents_sources: Vec<AgentsSource>,
+
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
@@ -800,6 +803,10 @@ pub struct ConfigToml {
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
+    /// Subagent discovery configuration.
+    #[serde(default)]
+    pub agents: Option<AgentsToml>,
+
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     pub features: Option<FeaturesToml>,
@@ -899,6 +906,18 @@ impl From<ToolsToml> for Tools {
             view_image: tools_toml.view_image,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentsSource {
+    Repo,
+    User,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentsToml {
+    pub sources: Option<Vec<AgentsSource>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -1322,6 +1341,12 @@ impl Config {
             .set(sandbox_policy)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
+        let agents_sources = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.sources.clone())
+            .unwrap_or_else(|| vec![AgentsSource::Repo, AgentsSource::User]);
+
         let config = Self {
             model,
             review_model,
@@ -1365,6 +1390,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             codex_home,
+            agents_sources,
             config_layer_stack,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
@@ -3205,6 +3231,7 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 codex_home: fixture.codex_home(),
+                agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
                 config_layer_stack: Default::default(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
@@ -3289,6 +3316,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
+            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3388,6 +3416,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
+            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3473,6 +3502,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
+            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,

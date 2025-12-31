@@ -354,10 +354,12 @@ pub(crate) struct Session {
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) client: ModelClient,
+    pub(crate) codex_home: PathBuf,
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
+    pub(crate) agents_sources: Vec<crate::config::AgentsSource>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) base_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
@@ -519,7 +521,9 @@ impl Session {
         TurnContext {
             sub_id,
             client,
+            codex_home: per_turn_config.codex_home.clone(),
             cwd: session_configuration.cwd.clone(),
+            agents_sources: per_turn_config.agents_sources.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             base_instructions: session_configuration.base_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
@@ -2145,6 +2149,7 @@ async fn spawn_review_thread(
     let review_turn_context = TurnContext {
         sub_id: sub_id.to_string(),
         client,
+        codex_home: per_turn_config.codex_home.clone(),
         tools_config,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
@@ -2155,6 +2160,7 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
+        agents_sources: per_turn_config.agents_sources.clone(),
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),

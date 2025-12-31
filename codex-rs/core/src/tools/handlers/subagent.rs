@@ -86,9 +86,14 @@ impl ToolHandler for RunSubagentHandler {
 
         let started = Instant::now();
 
-        let definition = crate::subagents::resolve_subagent_definition(&turn.cwd, &name)
-            .await
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let definition = crate::subagents::resolve_subagent_definition_with_sources(
+            &turn.cwd,
+            &turn.codex_home,
+            &turn.agents_sources,
+            &name,
+        )
+        .await
+        .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
 
         session
             .send_event(

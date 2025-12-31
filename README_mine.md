@@ -46,21 +46,23 @@ macOS/Linux 向けに GitHub Releases に prebuilt バイナリ（`codex-<target
 `codex-mine` では「意図しないマージ（notify/MCP/hooks の二重化）を避ける」ため、`config.toml` と `.env` は upstream と読み込み方針が異なる。
 （レイヤ順の実装詳細は `codex-rs/core/src/config_loader/README.md` を参照）
 
+このドキュメントでは、`$CODEX_HOME` 配下を **user** と呼ぶ（例: user（`$CODEX_HOME`）/`config.toml`）。
+
 | 対象                  | 置き場所                                             | 読み込み/優先順位                                                                                                                                                                  | 更新方法                                                                                  | 備考                                                                                                                                                                           |
 | --------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `config.toml`         | `cwd/.codex/config.toml` / `$CODEX_HOME/config.toml` | **`cwd/.codex/config.toml` が存在する場合、`$CODEX_HOME/config.toml` は読み込まない**（Codex-Mine方針）。その上に managed config / CLI overrides が乗る。                          | 手編集                                                                                    | dotenv は `cwd/.codex/.env` があればそれのみ読み込み、無ければ `$CODEX_HOME/.env` を読む（dotenv から `CODEX_` は読まない）。                                                  |
-| `mcp_servers`（MCP）  | `cwd/.codex/config.toml` / `$CODEX_HOME/config.toml` | cwd-local `config.toml` がある場合は **global 側が読み込まれない**ため、cwd-local の `mcp_servers` のみが有効。                                                                    | `codex mcp add/remove` は **常に** `$CODEX_HOME/config.toml` を更新。cwd-local は手編集。 | `codex mcp` は cwd-local には書かない（`-g/--global` フラグもない）。cwd-local `config.toml` がある場合、`codex mcp add/remove` の変更はその作業ディレクトリでは反映されない。 |
-| `prompts`             | `repo/.codex/prompts/` / `$CODEX_HOME/prompts/`      | `<git root>/.codex/prompts` → `$CODEX_HOME/prompts` の順に探索し、同名は repo 側が優先。                                                                                           | 追加/編集/削除（`.md`）                                                                   | `.md` のみ対象。                                                                                                                                                               |
-| `skills`              | `repo/.codex/skills/` / `$CODEX_HOME/skills/`        | **repo-local からの読み込みに対応済み**。git repo 内では `cwd` から repo root までの間で最初に見つかった `.codex/skills` を優先し、次に `$CODEX_HOME/skills`（→ system → admin）。 | 追加/編集/削除（`SKILL.md`）                                                              | 同名 skill は repo が優先で dedupe。                                                                                                                                           |
-| `agents`（subagents） | `<git root>/.codex/agents/` / `$CODEX_HOME/agents/`  | `<git root>/.codex/agents` → `$CODEX_HOME/agents` の順。                                                                                                                           | 追加/編集/削除（`<name>.md`）                                                             | skills と違い、subagents は「最寄り `.codex`」探索はしない。                                                                                                                   |
+| `config.toml`         | `cwd/.codex/config.toml` / user（`$CODEX_HOME`）/`config.toml` | **`cwd/.codex/config.toml` が存在する場合、user（`$CODEX_HOME`）/`config.toml` は読み込まない**（Codex-Mine方針）。その上に managed config / CLI overrides が乗る。                | 手編集                                                                                    | dotenv は `cwd/.codex/.env` があればそれのみ読み込み、無ければ user（`$CODEX_HOME`）/`.env` を読む（dotenv から `CODEX_` は読まない）。                                        |
+| `mcp_servers`（MCP）  | `cwd/.codex/config.toml` / user（`$CODEX_HOME`）/`config.toml` | cwd-local `config.toml` がある場合は **global 側が読み込まれない**ため、cwd-local の `mcp_servers` のみが有効。                                                                    | `codex mcp add/remove` は **常に** user（`$CODEX_HOME`）/`config.toml` を更新。cwd-local は手編集。 | `codex mcp` は cwd-local には書かない（`-g/--global` フラグもない）。cwd-local `config.toml` がある場合、`codex mcp add/remove` の変更はその作業ディレクトリでは反映されない。 |
+| `prompts`             | `repo/.codex/prompts/` / user（`$CODEX_HOME`）/`prompts/`      | `<git root>/.codex/prompts` → user（`$CODEX_HOME`）/`prompts` の順に探索し、同名は repo 側が優先。                                                                                 | 追加/編集/削除（`.md`）                                                                   | `.md` のみ対象。                                                                                                                                                               |
+| `skills`              | `repo/.codex/skills/` / user（`$CODEX_HOME`）/`skills/`        | **repo-local からの読み込みに対応済み**。git repo 内では `cwd` から repo root までの間で最初に見つかった `.codex/skills` を優先し、次に user（`$CODEX_HOME`）/`skills`（→ system → admin）。 | 追加/編集/削除（`SKILL.md`）                                                              | 同名 skill は repo が優先で dedupe。                                                                                                                                           |
+| `agents`（subagents） | `<git root>/.codex/agents/` / user（`$CODEX_HOME`）/`agents/`  | `./.codex/config.toml` の `[agents].sources` で探索順を指定（デフォルトは `["repo", "user"]`）。同名は `sources` 順に **先勝ち**。                                                  | 追加/編集/削除（`<name>.md`）                                                             | skills と違い、subagents は「最寄り `.codex`」探索はしない（repo は `<git root>` 固定）。                                                                                      |
 
 #### `config.toml` / `.env` の upstream との差分（重要）
 
 - upstream（openai/codex）: `$CODEX_HOME/config.toml` を常にレイヤとして読み込み、さらに `cwd` から project root までの間にある複数の `.codex/` を探索して「プロジェクト設定レイヤ」を積む（結果として、親ディレクトリ側の `.codex/` も効きうる）。
-- Codex-Mine: **起動したディレクトリ直下の `./.codex/config.toml` のみ**をプロジェクト設定として読む（親探索しない）。そして `./.codex/config.toml` が存在する場合は **`$CODEX_HOME/config.toml` を読まない**（マージしない）。
+- Codex-Mine: **起動したディレクトリ直下の `./.codex/config.toml` のみ**をプロジェクト設定として読む（親探索しない）。そして `./.codex/config.toml` が存在する場合は **user（`$CODEX_HOME`）/`config.toml` を読まない**（マージしない）。
   - 目的: notify/MCP/hooks などが「global + project」で混ざって二重登録・二重発火する事故を避ける。
 - `.env` も同じ方針:
-  - `./.codex/.env` が存在する場合はそれのみ読み込み、`$CODEX_HOME/.env` は無視する（`codex-rs/arg0/src/lib.rs` の `load_dotenv()`）。
+  - `./.codex/.env` が存在する場合はそれのみ読み込み、user（`$CODEX_HOME`）/`.env` は無視する（`codex-rs/arg0/src/lib.rs` の `load_dotenv()`）。
 
 運用のコツ:
 
@@ -68,14 +70,27 @@ macOS/Linux 向けに GitHub Releases に prebuilt バイナリ（`codex-<target
 
 ### subagents
 
-- `@name <prompt>` 形式の指示を解釈してサブエージェント実行を補助（`.codex/agents` / `$CODEX_HOME/agents` から定義を探索）
+- `@name <prompt>` 形式の指示を解釈してサブエージェント実行を補助（`<git root>/.codex/agents` / user（`$CODEX_HOME`）/`agents` から定義を探索）
+- 入力補完の記号: `$` は skills、`@` は agents（subagents）
 - `run_subagent` 実行時に **親ターンのキャンセルが伝搬**（Ctrl+C / TurnAborted 等でサブエージェントも止まる）
+- VSCode拡張の agents 一覧/候補は、ローカル走査ではなく backend RPC（`agents/list`）から取得する（`[agents].sources` が反映される）
+
+#### `agents` の sources（Codex-Mine）
+
+user（`$CODEX_HOME`）側の agents を読みたくない場合は、repo-local `./.codex/config.toml` に明示する。
+
+```toml
+[agents]
+# repo: <git root>/.codex/agents
+# user: $CODEX_HOME/agents
+sources = ["repo"] # user 側を無効化
+```
 
 ### hooks
 
 Codex-Mine では `config.toml` に `[[hooks]]` を定義して、内部イベント（例: `turn.end`, `web_search.end`, `tool.exec.begin/end`, `tool.call.begin/end`）に応じて外部コマンドを起動できる。
 
-- 設定場所: `cwd/.codex/config.toml`（存在する場合は `$CODEX_HOME/config.toml` は読み込まれないため、hooks も「マージ」されず二重発火しない）
+- 設定場所: `cwd/.codex/config.toml`（存在する場合は user（`$CODEX_HOME`）/`config.toml` は読み込まれないため、hooks も「マージ」されず二重発火しない）
 - スクリプト置き場例: `cwd/.codex/hooks/*.py`（音を鳴らす等の確認用サンプルを置ける）
 - 特徴: observe-only（失敗はログに出るが、エージェントの実行は止めない）
 - 実行cwd: 可能なら git repo root、無ければセッションの `cwd`

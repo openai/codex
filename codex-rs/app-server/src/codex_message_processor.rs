@@ -12,6 +12,8 @@ use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::AgentsListParams;
+use codex_app_server_protocol::AgentsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -370,6 +372,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
+            }
+            ClientRequest::AgentsList { request_id, params } => {
+                self.agents_list(request_id, params).await;
             }
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(request_id, params).await;
@@ -2668,6 +2673,57 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn agents_list(&self, request_id: RequestId, params: AgentsListParams) {
+        let AgentsListParams { cwds, force_reload } = params;
+        let _ = force_reload;
+        let cwds = if cwds.is_empty() {
+            vec![self.config.cwd.clone()]
+        } else {
+            cwds
+        };
+
+        let mut data = Vec::new();
+        for cwd in cwds {
+            let cfg = Config::load_with_cli_overrides_and_harness_overrides(
+                Vec::new(),
+                ConfigOverrides {
+                    cwd: Some(cwd.clone()),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            let entry = match cfg {
+                Ok(cfg) => {
+                    let outcome = codex_core::subagents::list_subagents(
+                        &cwd,
+                        &cfg.codex_home,
+                        &cfg.agents_sources,
+                    )
+                    .await;
+                    codex_app_server_protocol::AgentsListEntry {
+                        cwd,
+                        agents: agents_to_info(&outcome.agents),
+                        errors: agent_errors_to_info(&outcome.errors),
+                    }
+                }
+                Err(err) => codex_app_server_protocol::AgentsListEntry {
+                    cwd: cwd.clone(),
+                    agents: Vec::new(),
+                    errors: vec![codex_app_server_protocol::AgentErrorInfo {
+                        path: cwd,
+                        message: format!("failed to load config: {err}"),
+                    }],
+                },
+            };
+            data.push(entry);
+        }
+
+        self.outgoing
+            .send_response(request_id, AgentsListResponse { data })
+            .await;
+    }
+
     async fn interrupt_conversation(
         &mut self,
         request_id: RequestId,
@@ -3368,6 +3424,40 @@ fn errors_to_info(
     errors
         .iter()
         .map(|err| codex_app_server_protocol::SkillErrorInfo {
+            path: err.path.clone(),
+            message: err.message.clone(),
+        })
+        .collect()
+}
+
+fn agents_to_info(
+    agents: &[codex_core::subagents::SubAgentSummary],
+) -> Vec<codex_app_server_protocol::AgentMetadata> {
+    agents
+        .iter()
+        .map(|agent| codex_app_server_protocol::AgentMetadata {
+            name: agent.name.clone(),
+            description: agent.description.clone(),
+            color: agent.color.clone(),
+            path: agent.path.clone(),
+            scope: match agent.scope {
+                codex_core::subagents::SubAgentScope::Repo => {
+                    codex_app_server_protocol::AgentScope::Repo
+                }
+                codex_core::subagents::SubAgentScope::User => {
+                    codex_app_server_protocol::AgentScope::User
+                }
+            },
+        })
+        .collect()
+}
+
+fn agent_errors_to_info(
+    errors: &[codex_core::subagents::SubAgentError],
+) -> Vec<codex_app_server_protocol::AgentErrorInfo> {
+    errors
+        .iter()
+        .map(|err| codex_app_server_protocol::AgentErrorInfo {
             path: err.path.clone(),
             message: err.message.clone(),
         })
