@@ -58,7 +58,7 @@ timeout_ms = 2000
 [[hooks]]
 id = "dump-tool-call-begin-exec-args"
 when = "tool.call.begin"
-matcher = "^(exec_command|shell|shell_command|local_shell)$"
+matcher = "^(exec_command|shell|shell_command|local_shell|unified_exec)$"
 include_tool_arguments = true
 command = ["python3", ".codex/hooks/dump_payload.py", ".memo/logs/hooks/tool.call.begin.exec.args.jsonl"]
 timeout_ms = 2000
@@ -74,7 +74,7 @@ timeout_ms = 2000
 [[hooks]]
 id = "block-git-destructive-when-dirty"
 when = "tool.call.begin"
-matcher = "^(exec_command|shell|shell_command|local_shell)$"
+matcher = "^(exec_command|shell|shell_command|local_shell|unified_exec)$"
 blocking = true
 include_tool_arguments = true
 command = ["python3", ".codex/hooks/block_git_destructive_when_dirty.py"]
