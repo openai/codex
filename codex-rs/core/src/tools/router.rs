@@ -158,6 +158,7 @@ impl ToolRouter {
             invocation.turn.as_ref(),
             invocation.tool_name.as_str(),
             invocation.call_id.as_str(),
+            &invocation.payload,
         );
 
         if let Err(err) = invocation

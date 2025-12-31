@@ -259,8 +259,17 @@ impl HookRunner {
         turn: &TurnContext,
         tool_name: &str,
         call_id: &str,
+        payload: &ToolPayload,
     ) {
-        self.on_generic_tool_call_event(sess, turn, "tool.call.begin", tool_name, call_id, None);
+        self.on_generic_tool_call_event(
+            sess,
+            turn,
+            "tool.call.begin",
+            tool_name,
+            call_id,
+            Some(payload),
+            None,
+        );
     }
 
     pub(crate) fn on_tool_call_end(
@@ -278,6 +287,7 @@ impl HookRunner {
             "tool.call.end",
             tool_name,
             call_id,
+            None,
             Some((success, error)),
         );
     }
@@ -296,6 +306,7 @@ impl HookRunner {
             "tool.call.end",
             tool_name,
             call_id,
+            None,
             Some((Some(false), Some(error.to_string()))),
         );
     }
@@ -307,6 +318,7 @@ impl HookRunner {
         kind: &'static str,
         tool_name: &str,
         call_id: &str,
+        tool_payload: Option<&ToolPayload>,
         end_fields: Option<(Option<bool>, Option<String>)>,
     ) {
         let thread_id = sess.conversation_id().to_string();
@@ -345,6 +357,16 @@ impl HookRunner {
                     "id": hook.id.as_deref(),
                 }
             });
+
+            if hook.include_tool_arguments
+                && let Some(tool_payload) = tool_payload
+                && let Some(obj) = payload.as_object_mut()
+            {
+                obj.insert(
+                    "tool_input".to_string(),
+                    tool_input_json(tool_payload, 16 * 1024),
+                );
+            }
 
             if let Some((success, error)) = &end_fields
                 && let Some(obj) = payload.as_object_mut()

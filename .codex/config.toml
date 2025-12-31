@@ -56,6 +56,14 @@ command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.b
 timeout_ms = 2000
 
 [[hooks]]
+id = "dump-tool-call-begin-exec-args"
+when = "tool.call.begin"
+matcher = "^(exec_command|shell|shell_command|local_shell)$"
+include_tool_arguments = true
+command = ["python3", ".codex/hooks/dump_payload.py", ".memo/logs/hooks/tool.call.begin.exec.args.jsonl"]
+timeout_ms = 2000
+
+[[hooks]]
 id = "log-tool-call-end"
 when = "tool.call.end"
 command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.end.log"]
