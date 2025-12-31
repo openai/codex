@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { parse as shellParse } from "shell-quote";
 import * as vscode from "vscode";
 import { BackendManager } from "./backend/manager";
+import type { BackendTermination } from "./backend/manager";
 import { listAgentsFromDisk } from "./agents_disk";
 import type { AnyServerNotification } from "./backend/types";
 import type { ContentBlock } from "./generated/ContentBlock";
@@ -259,13 +260,6 @@ const globalRuntime: Pick<SessionRuntime, "blocks" | "blockIndexById"> = {
   blocks: [],
   blockIndexById: new Map<string, number>(),
 };
-type PendingForceStop = {
-  timer: NodeJS.Timeout;
-  requestedAtMs: number;
-  expectedTurnId: string | null;
-  forceStopAfterMs: number;
-};
-const pendingForceStopBySessionId = new Map<string, PendingForceStop>();
 let globalStatusText: string | null = null;
 let globalRateLimitStatusText: string | null = null;
 let globalRateLimitStatusTooltip: string | null = null;
@@ -298,6 +292,8 @@ export function activate(context: vscode.ExtensionContext): void {
   void cleanupLegacyRuntimeCache(context);
 
   backendManager = new BackendManager(output, sessions);
+  backendManager.onBackendTerminated = (backendKey, info) =>
+    handleBackendTerminated(backendKey, info);
   backendManager.onServerEvent = (session, n) => {
     if (session) applyServerNotification(session.id, n);
     else applyGlobalNotification(n);
@@ -678,40 +674,50 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!session) return;
 
       const rt = ensureRuntime(session.id);
-      const turnId =
+      let turnId =
         rt.activeTurnId ?? backendManager.getActiveTurnId(session.threadId);
 
-      if (!rt.sending) return;
-
-      const folder = resolveWorkspaceFolderForSession(session);
-      const cfg = folder
-        ? vscode.workspace.getConfiguration("codexMine", folder.uri)
-        : vscode.workspace.getConfiguration("codexMine");
-      const forceStopAfterMs =
-        cfg.get<number>("interrupt.forceStopAfterMs") ?? 5000;
-
-      const existing = pendingForceStopBySessionId.get(session.id);
-      if (
-        existing &&
-        (existing.expectedTurnId === null ||
-          existing.expectedTurnId === turnId) &&
-        Date.now() - existing.requestedAtMs < existing.forceStopAfterMs
-      ) {
-        output.appendLine(
-          `[turn] Force stop requested (second interrupt): sessionId=${session.id} turnId=${turnId ?? "(unknown)"}`,
-        );
-        void forceStopSession(session, turnId ?? null, "second interrupt");
-        return;
-      }
-
-      if (!turnId) {
+      if (!turnId && rt.sending) {
         rt.pendingInterrupt = true;
         output.appendLine(
           "[turn] Interrupt requested before turnId is known; will interrupt on turn/started.",
         );
         chatView?.refresh();
         schedulePersistRuntime(session.id);
-        scheduleForceStop(session, null, forceStopAfterMs);
+        return;
+      }
+
+      if (!turnId) {
+        output.appendLine(
+          `[turn] Interrupt requested but turnId is unknown; refreshing thread state: threadId=${session.threadId}`,
+        );
+        try {
+          const resumed = await backendManager.resumeSession(session);
+          const inProgress = resumed.thread.turns.find(
+            (t) => t.status === "inProgress",
+          );
+          if (inProgress) {
+            turnId = inProgress.id;
+            rt.activeTurnId = turnId;
+            rt.sending = true;
+          }
+        } catch (err) {
+          output.appendLine(
+            `[turn] Failed to refresh thread state for interrupt: ${String(err)}`,
+          );
+        }
+      }
+
+      if (!turnId) {
+        upsertBlock(session.id, {
+          id: newLocalId("info"),
+          type: "info",
+          title: "Nothing to interrupt",
+          text:
+            "Interrupt was requested, but no in-progress turn was found for this session.",
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
         return;
       }
 
@@ -726,7 +732,6 @@ export function activate(context: vscode.ExtensionContext): void {
         });
         chatView?.refresh();
       });
-      scheduleForceStop(session, turnId, forceStopAfterMs);
     }),
   );
 
@@ -1152,7 +1157,6 @@ export function activate(context: vscode.ExtensionContext): void {
         saveSessions(extensionContext, sessions);
 
         runtimeBySessionId.delete(session.id);
-        clearPendingForceStop(session.id);
         hiddenTabSessionIds.delete(session.id);
         unreadSessionIds.delete(session.id);
         saveHiddenTabSessions(extensionContext);
@@ -1403,6 +1407,88 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
+function handleBackendTerminated(
+  backendKey: string,
+  info: BackendTermination,
+): void {
+  if (!sessions) return;
+
+  const affectedSessions = sessions.list(backendKey);
+  if (affectedSessions.length === 0) return;
+
+  const folderLabel = (() => {
+    try {
+      return vscode.Uri.parse(backendKey).fsPath;
+    } catch {
+      return backendKey;
+    }
+  })();
+
+  outputChannel?.appendLine(
+    `[backend] terminated: cwd=${folderLabel} reason=${info.reason} code=${info.code ?? "null"} signal=${info.signal ?? "null"}`,
+  );
+
+  const backendHash = crypto
+    .createHash("sha1")
+    .update(backendKey)
+    .digest("hex")
+    .slice(0, 10);
+  const title =
+    info.reason === "exit" ? "Backend exited" : "Backend stopped";
+  const detailParts: string[] = [`cwd=${folderLabel}`, `reason=${info.reason}`];
+  if (info.code !== null) detailParts.push(`code=${info.code}`);
+  if (info.signal !== null) detailParts.push(`signal=${info.signal}`);
+  detailParts.push(`at=${new Date().toISOString()}`);
+  upsertGlobal({
+    id: `global:backendTerminated:${backendHash}`,
+    type: info.reason === "exit" ? "error" : "info",
+    title,
+    text: detailParts.join(" • "),
+  });
+
+  for (const s of affectedSessions) {
+    const rt = ensureRuntime(s.id);
+    const wasRunning =
+      rt.sending ||
+      rt.activeTurnId !== null ||
+      rt.streamingAssistantItemIds.size > 0 ||
+      rt.pendingApprovals.size > 0;
+
+    rt.sending = false;
+    rt.lastTurnCompletedAtMs = Date.now();
+    rt.activeTurnId = null;
+    rt.pendingInterrupt = false;
+
+    for (const id of rt.streamingAssistantItemIds) {
+      const idx = rt.blockIndexById.get(id);
+      if (idx === undefined) continue;
+      const b = rt.blocks[idx];
+      if (b && b.type === "assistant") (b as any).streaming = false;
+    }
+    rt.streamingAssistantItemIds.clear();
+
+    // Any approval requests are now stale because the backend process is gone.
+    for (const resolve of rt.approvalResolvers.values()) resolve("cancel");
+    rt.approvalResolvers.clear();
+    rt.pendingApprovals.clear();
+
+    if (wasRunning && info.reason === "exit") {
+      upsertBlock(s.id, {
+        id: newLocalId("error"),
+        type: "error",
+        title: "Backend exited",
+        text:
+          `The backend process for this workspace folder exited. ` +
+          `You may need to restart the backend and resume this session.`,
+      });
+    }
+
+    schedulePersistRuntime(s.id);
+  }
+
+  chatView?.refresh();
+}
+
 export function deactivate(): void {
   backendManager?.dispose();
   backendManager = null;
@@ -1638,7 +1724,6 @@ async function sendUserInput(
 ): Promise<void> {
   if (!backendManager) throw new Error("backendManager is not initialized");
   const rt = ensureRuntime(session.id);
-  clearPendingForceStop(session.id);
   rt.sending = true;
   rt.pendingInterrupt = false;
   const trimmed = text.trim();
@@ -1973,132 +2058,6 @@ function resolveWorkspaceFolderForSession(
 ): vscode.WorkspaceFolder | null {
   const uri = vscode.Uri.parse(session.workspaceFolderUri);
   return vscode.workspace.getWorkspaceFolder(uri) ?? null;
-}
-
-function clearPendingForceStop(sessionId: string): void {
-  const existing = pendingForceStopBySessionId.get(sessionId);
-  if (!existing) return;
-  clearTimeout(existing.timer);
-  pendingForceStopBySessionId.delete(sessionId);
-}
-
-function scheduleForceStop(
-  session: Session,
-  expectedTurnId: string | null,
-  forceStopAfterMs: number | null,
-): void {
-  clearPendingForceStop(session.id);
-
-  if (forceStopAfterMs === null || forceStopAfterMs <= 0) return;
-
-  const timer = setTimeout(() => {
-    void forceStopSession(session, expectedTurnId, "timeout");
-  }, forceStopAfterMs);
-
-  pendingForceStopBySessionId.set(session.id, {
-    timer,
-    requestedAtMs: Date.now(),
-    expectedTurnId,
-    forceStopAfterMs,
-  });
-
-  outputChannel?.appendLine(
-    `[turn] Force stop armed: sessionId=${session.id} turnId=${expectedTurnId ?? "(unknown)"} afterMs=${forceStopAfterMs}`,
-  );
-}
-
-async function forceStopSession(
-  session: Session,
-  expectedTurnId: string | null,
-  reason: "timeout" | "second interrupt",
-): Promise<void> {
-  if (!backendManager) throw new Error("backendManager is not initialized");
-
-  const existing = pendingForceStopBySessionId.get(session.id) ?? null;
-  clearPendingForceStop(session.id);
-
-  const rt = ensureRuntime(session.id);
-  const currentTurnId =
-    rt.activeTurnId ?? backendManager.getActiveTurnId(session.threadId);
-  if (!rt.sending) return;
-  if (expectedTurnId && currentTurnId && expectedTurnId !== currentTurnId) {
-    outputChannel?.appendLine(
-      `[turn] Force stop skipped (turn changed): expected=${expectedTurnId} actual=${currentTurnId}`,
-    );
-    return;
-  }
-
-  const folder = resolveWorkspaceFolderForSession(session);
-  const requestedAtMs = existing?.requestedAtMs ?? Date.now();
-  const elapsedMs = Math.max(0, Date.now() - requestedAtMs);
-
-  outputChannel?.appendLine(
-    `[turn] Force stopping backend: sessionId=${session.id} threadId=${session.threadId} turnId=${currentTurnId ?? "(unknown)"} reason=${reason} elapsedMs=${elapsedMs}`,
-  );
-
-  rt.sending = false;
-  rt.lastTurnCompletedAtMs = Date.now();
-  rt.activeTurnId = null;
-  rt.pendingInterrupt = false;
-  for (const id of rt.streamingAssistantItemIds) {
-    const idx = rt.blockIndexById.get(id);
-    if (idx === undefined) continue;
-    const b = rt.blocks[idx];
-    if (b && b.type === "assistant") (b as any).streaming = false;
-  }
-  rt.streamingAssistantItemIds.clear();
-
-  const afterMs = existing?.forceStopAfterMs ?? null;
-  upsertBlock(session.id, {
-    id: newLocalId("forceStop"),
-    type: "error",
-    title: "Force stopped",
-    text:
-      `Interrupt did not complete${afterMs ? ` within ${afterMs}ms` : ""}. ` +
-      `Restarting backend process... (reason=${reason})`,
-  });
-  chatView?.refresh();
-  schedulePersistRuntime(session.id);
-
-  if (!folder) {
-    upsertBlock(session.id, {
-      id: newLocalId("error"),
-      type: "error",
-      title: "Force stop failed",
-      text: "Workspace folder could not be resolved for this session.",
-    });
-    chatView?.refresh();
-    schedulePersistRuntime(session.id);
-    return;
-  }
-
-  try {
-    await backendManager.forceRestartForWorkspaceFolder(folder);
-    const resumed = await backendManager.resumeSession(
-      session,
-      getSessionModelState(),
-    );
-    void ensureModelsFetched(session);
-    hydrateRuntimeFromThread(session.id, resumed.thread, { force: true });
-    upsertBlock(session.id, {
-      id: newLocalId("info"),
-      type: "info",
-      title: "Backend restarted",
-      text: `Session resumed: ${resumed.thread.id}`,
-    });
-    chatView?.refresh();
-    schedulePersistRuntime(session.id);
-  } catch (err) {
-    outputChannel?.appendLine(`[turn] Force stop failed: ${String(err)}`);
-    upsertBlock(session.id, {
-      id: newLocalId("error"),
-      type: "error",
-      title: "Force stop failed",
-      text: String(err),
-    });
-    chatView?.refresh();
-    schedulePersistRuntime(session.id);
-  }
 }
 
 function formatAsAttachment(
@@ -2851,7 +2810,6 @@ function applyServerNotification(
       rt.lastTurnCompletedAtMs = Date.now();
       rt.activeTurnId = null;
       rt.pendingInterrupt = false;
-      clearPendingForceStop(sessionId);
       for (const id of rt.streamingAssistantItemIds) {
         const idx = rt.blockIndexById.get(id);
         if (idx === undefined) continue;

@@ -44,8 +44,13 @@ type SpawnOptions = {
   output: vscode.OutputChannel;
 };
 
+export type BackendExitInfo = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
 export class BackendProcess implements vscode.Disposable {
-  private readonly exitHandlers = new Set<() => void>();
+  private readonly exitHandlers = new Set<(info: BackendExitInfo) => void>();
   private readonly rpc: RpcClient;
 
   public onNotification: ((n: AnyServerNotification) => void) | null = null;
@@ -69,7 +74,9 @@ export class BackendProcess implements vscode.Disposable {
       "serverRequest",
       (r: ServerRequest) => void this.handleServerRequest(r),
     );
-    this.rpc.on("exit", () => this.exitHandlers.forEach((h) => h()));
+    this.rpc.on("exit", (info: BackendExitInfo) =>
+      this.exitHandlers.forEach((h) => h(info)),
+    );
   }
 
   public static async spawn(opts: SpawnOptions): Promise<BackendProcess> {
@@ -105,6 +112,10 @@ export class BackendProcess implements vscode.Disposable {
   }
 
   public onDidExit(handler: () => void): void {
+    this.exitHandlers.add(() => handler());
+  }
+
+  public onDidExitWithInfo(handler: (info: BackendExitInfo) => void): void {
     this.exitHandlers.add(handler);
   }
 

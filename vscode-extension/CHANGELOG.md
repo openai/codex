@@ -7,8 +7,7 @@
 - Images: MCP image / Image view の表示を安定化（`file+.vscode-resource...` の 401 回避、`blob:` 描画 + CSP、オンデマンド読み込み/オフロード、リサイズ＆圧縮（最大辺 1024px / 目標 350KB）、`globalStorage/images.v2` キャッシュ（件数/容量上限で削除）、Webview Object URL キャッシュ上限（LRU））
 - ステータス: rate limit（例: `5h:11% wk:7%`）にホバーするとリセット時刻を表示
 - Interrupt: 送信直後など turnId 未確定のタイミングでも Stop/Interrupt が取りこぼされないように修正（turn/started 到達後に割り込みを送る）
-- Interrupt: Stop/Interrupt が効かない場合の最終手段として、一定時間で backend を kill & restart する Force Stop を追加（`codexMine.interrupt.forceStopAfterMs`）
-- Interrupt: Force Stop 発動時は `thread/resume` の結果で会話履歴を再hydrationし、表示ズレを防止
+- Interrupt: backend を kill/restart する Force Stop を廃止（workspace 単位で backend を共有しており他セッションも停止するため）。turnId 不明時は `thread/resume` で inProgress の turn を探索して `turn/interrupt` を試行
 - Backend: backend停止時の streamState クリーンアップ不具合を修正（スレッド単位で削除）
 - Agents: agents（subagents）の一覧/候補取得をローカル走査（`.codex/agents` / `$CODEX_HOME/agents`）で提供
 

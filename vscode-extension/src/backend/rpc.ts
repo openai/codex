@@ -46,7 +46,10 @@ export class RpcClient extends EventEmitter implements vscode.Disposable {
       for (const { reject } of this.pending.values())
         reject(new Error("Backend exited"));
       this.pending.clear();
-      this.emit("exit");
+      this.emit("exit", {
+        code: code ?? null,
+        signal: (signal ?? null) as NodeJS.Signals | null,
+      });
     });
     this.child.on("error", (err) => {
       this.output.appendLine(`Backend process error: ${String(err)}`);

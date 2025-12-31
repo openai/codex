@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
-import { BackendProcess } from "./process";
+import { BackendProcess, type BackendExitInfo } from "./process";
 import type { ThreadResumeParams } from "../generated/v2/ThreadResumeParams";
 import type { ThreadStartParams } from "../generated/v2/ThreadStartParams";
 import type { TurnStartParams } from "../generated/v2/TurnStartParams";
@@ -24,6 +24,12 @@ type ModelSettings = {
   model: string | null;
   provider: string | null;
   reasoning: string | null;
+};
+
+export type BackendTermination = {
+  reason: "exit" | "stop";
+  code: number | null;
+  signal: NodeJS.Signals | null;
 };
 
 export class BackendManager implements vscode.Disposable {
@@ -63,6 +69,9 @@ export class BackendManager implements vscode.Disposable {
   public onServerEvent:
     | ((session: Session | null, n: AnyServerNotification) => void)
     | null = null;
+  public onBackendTerminated:
+    | ((backendKey: string, info: BackendTermination) => void)
+    | null = null;
 
   public constructor(
     private readonly output: vscode.OutputChannel,
@@ -80,28 +89,7 @@ export class BackendManager implements vscode.Disposable {
     const proc = this.processes.get(key);
     if (!proc) return;
     this.output.appendLine(`Stopping backend for ${folder.uri.fsPath}`);
-    try {
-      proc.dispose();
-    } finally {
-      this.processes.delete(key);
-      this.modelsByBackendKey.delete(key);
-      this.itemsByThreadId.clear();
-      this.latestDiffByThreadId.clear();
-      for (const s of this.sessions.listAll()) {
-        if (s.backendKey !== key) continue;
-        this.streamState.delete(s.threadId);
-      }
-    }
-  }
-
-  public forceStopForWorkspaceFolder(folder: vscode.WorkspaceFolder): void {
-    const key = folder.uri.toString();
-    const proc = this.processes.get(key);
-    if (!proc) return;
-
-    this.output.appendLine(`Force stopping backend for ${folder.uri.fsPath}`);
-    proc.kill("SIGKILL");
-    this.stopForWorkspaceFolder(folder);
+    this.terminateBackend(key, proc, { reason: "stop", code: null, signal: null });
   }
 
   public getActiveTurnId(threadId: string): string | null {
@@ -112,13 +100,6 @@ export class BackendManager implements vscode.Disposable {
     folder: vscode.WorkspaceFolder,
   ): Promise<void> {
     this.stopForWorkspaceFolder(folder);
-    await this.startForWorkspaceFolder(folder);
-  }
-
-  public async forceRestartForWorkspaceFolder(
-    folder: vscode.WorkspaceFolder,
-  ): Promise<void> {
-    this.forceStopForWorkspaceFolder(folder);
     await this.startForWorkspaceFolder(folder);
   }
 
@@ -185,8 +166,11 @@ export class BackendManager implements vscode.Disposable {
     });
 
     this.processes.set(key, proc);
-    proc.onDidExit(() => {
+    proc.onDidExitWithInfo((info: BackendExitInfo) => {
+      // Backend died unexpectedly (e.g. killed from outside VS Code).
       this.processes.delete(key);
+      this.cleanupBackendCaches(key);
+      this.onBackendTerminated?.(key, { reason: "exit", ...info });
     });
     proc.onNotification = (n) => this.onServerNotification(key, n);
     proc.onApprovalRequest = async (req) => this.handleApprovalRequest(req);
@@ -526,6 +510,33 @@ export class BackendManager implements vscode.Disposable {
       return null;
     }
     return e as ReasoningEffort;
+  }
+
+  private terminateBackend(
+    backendKey: string,
+    proc: BackendProcess,
+    info: BackendTermination,
+  ): void {
+    // Clear cached state first so any UI reading from BackendManager doesn't see stale turns.
+    this.processes.delete(backendKey);
+    this.cleanupBackendCaches(backendKey);
+
+    // Notify after internal cleanup so listeners can read an up-to-date state.
+    this.onBackendTerminated?.(backendKey, info);
+
+    // Finally, dispose the process (this intentionally removes child listeners,
+    // so don't rely on proc.onDidExit for explicit stops).
+    proc.dispose();
+  }
+
+  private cleanupBackendCaches(backendKey: string): void {
+    this.modelsByBackendKey.delete(backendKey);
+    const sessions = this.sessions.list(backendKey);
+    for (const s of sessions) {
+      this.itemsByThreadId.delete(s.threadId);
+      this.latestDiffByThreadId.delete(s.threadId);
+      this.streamState.delete(s.threadId);
+    }
   }
 
   private onServerNotification(
