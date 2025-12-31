@@ -4,6 +4,7 @@ use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
+use crate::command_safety::read_only_commands::is_read_only_subagent_command;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
@@ -17,6 +18,7 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::policy::ShellPolicy;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
@@ -221,6 +223,15 @@ impl ShellHandler {
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
                 policy = turn.approval_policy
+            )));
+        }
+
+        if turn.tool_policy.shell_policy == ShellPolicy::ReadOnly
+            && !is_read_only_subagent_command(&exec_params.command)
+        {
+            let command = exec_params.command.join(" ");
+            return Err(FunctionCallError::RespondToModel(format!(
+                "command is not allowed in read-only mode: {command}"
             )));
         }
 

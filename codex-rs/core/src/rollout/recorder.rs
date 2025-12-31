@@ -56,6 +56,12 @@ pub enum RolloutRecorderParams {
         instructions: Option<String>,
         source: SessionSource,
     },
+    CreateAtPath {
+        path: PathBuf,
+        conversation_id: ConversationId,
+        instructions: Option<String>,
+        source: SessionSource,
+    },
     Resume {
         path: PathBuf,
     },
@@ -79,6 +85,20 @@ impl RolloutRecorderParams {
         source: SessionSource,
     ) -> Self {
         Self::Create {
+            conversation_id,
+            instructions,
+            source,
+        }
+    }
+
+    pub fn create_at_path(
+        path: PathBuf,
+        conversation_id: ConversationId,
+        instructions: Option<String>,
+        source: SessionSource,
+    ) -> Self {
+        Self::CreateAtPath {
+            path,
             conversation_id,
             instructions,
             source,
@@ -128,13 +148,37 @@ impl RolloutRecorder {
                     timestamp,
                 } = create_log_file(config, conversation_id)?;
 
-                let timestamp_format: &[FormatItem] = format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-                );
-                let timestamp = timestamp
-                    .to_offset(time::UtcOffset::UTC)
-                    .format(timestamp_format)
-                    .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
+                let timestamp = format_rollout_timestamp(timestamp)?;
+
+                (
+                    tokio::fs::File::from_std(file),
+                    path,
+                    Some(SessionMeta {
+                        id: session_id,
+                        timestamp,
+                        cwd: config.cwd.clone(),
+                        originator: originator().value.clone(),
+                        cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                        instructions,
+                        source,
+                        model_provider: Some(config.model_provider_id.clone()),
+                    }),
+                )
+            }
+            RolloutRecorderParams::CreateAtPath {
+                path,
+                conversation_id,
+                instructions,
+                source,
+            } => {
+                let LogFileInfo {
+                    file,
+                    path,
+                    conversation_id: session_id,
+                    timestamp,
+                } = create_log_file_at_path(conversation_id, path)?;
+
+                let timestamp = format_rollout_timestamp(timestamp)?;
 
                 (
                     tokio::fs::File::from_std(file),
@@ -308,6 +352,15 @@ struct LogFileInfo {
     timestamp: OffsetDateTime,
 }
 
+fn format_rollout_timestamp(timestamp: OffsetDateTime) -> std::io::Result<String> {
+    let timestamp_format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+    timestamp
+        .to_offset(time::UtcOffset::UTC)
+        .format(timestamp_format)
+        .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))
+}
+
 fn create_log_file(
     config: &Config,
     conversation_id: ConversationId,
@@ -336,6 +389,28 @@ fn create_log_file(
     let file = std::fs::OpenOptions::new()
         .append(true)
         .create(true)
+        .open(&path)?;
+
+    Ok(LogFileInfo {
+        file,
+        path,
+        conversation_id,
+        timestamp,
+    })
+}
+
+fn create_log_file_at_path(
+    conversation_id: ConversationId,
+    path: PathBuf,
+) -> std::io::Result<LogFileInfo> {
+    let timestamp = OffsetDateTime::now_local()
+        .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .append(true)
         .open(&path)?;
 
     Ok(LogFileInfo {

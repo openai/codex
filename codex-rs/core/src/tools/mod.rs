@@ -3,6 +3,7 @@ pub mod events;
 pub(crate) mod handlers;
 pub mod orchestrator;
 pub mod parallel;
+pub mod policy;
 pub mod registry;
 pub mod router;
 pub mod runtimes;

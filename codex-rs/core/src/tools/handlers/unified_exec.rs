@@ -1,3 +1,4 @@
+use crate::command_safety::read_only_commands::is_read_only_subagent_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
@@ -13,6 +14,7 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::policy::ShellPolicy;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -151,6 +153,16 @@ impl ToolHandler for UnifiedExecHandler {
                     )));
                 }
 
+                if context.turn.tool_policy.shell_policy == ShellPolicy::ReadOnly
+                    && !is_read_only_subagent_command(&command)
+                {
+                    manager.release_process_id(&process_id).await;
+                    let command = command.join(" ");
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "command is not allowed in read-only mode: {command}"
+                    )));
+                }
+
                 let workdir = workdir.filter(|value| !value.is_empty());
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
@@ -205,6 +217,11 @@ impl ToolHandler for UnifiedExecHandler {
                     })?
             }
             "write_stdin" => {
+                if context.turn.tool_policy.shell_policy == ShellPolicy::ReadOnly {
+                    return Err(FunctionCallError::RespondToModel(
+                        "write_stdin is not allowed in read-only mode".to_string(),
+                    ));
+                }
                 let args: WriteStdinArgs = serde_json::from_str(&arguments).map_err(|err| {
                     FunctionCallError::RespondToModel(format!(
                         "failed to parse write_stdin arguments: {err:?}"

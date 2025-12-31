@@ -43,6 +43,7 @@ encoding_rs = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
+globset = { workspace = true }
 http = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
@@ -89,6 +90,7 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
+walkdir = { workspace = true }
 
 [features]
 deterministic_process_ids = []
@@ -135,7 +137,6 @@ serial_test = { workspace = true }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
-walkdir = { workspace = true }
 wiremock = { workspace = true }
 
 [package.metadata.cargo-shear]

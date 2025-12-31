@@ -478,6 +478,41 @@ fn create_test_sync_tool() -> ToolSpec {
     })
 }
 
+fn create_glob_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "pattern".to_string(),
+        JsonSchema::String {
+            description: Some("Glob pattern to match (e.g. \"**/*.rs\").".to_string()),
+        },
+    );
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Directory to search. Defaults to the session's working directory.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some("Maximum number of matches to return (defaults to 100).".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "glob".to_string(),
+        description: "Finds files that match a glob pattern within a directory.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["pattern".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_grep_files_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -666,6 +701,144 @@ fn create_list_dir_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["dir_path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn subagent_task_schema() -> JsonSchema {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some("Task prompt for the subagent.".to_string()),
+        },
+    );
+    properties.insert(
+        "type".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Subagent type: \"explore\", \"plan\", or \"general\" (default \"explore\")."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "thoroughness".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Exploration depth for explore/plan: \"quick\", \"medium\", or \"thorough\" \
+                 (default \"medium\")."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "resume".to_string(),
+        JsonSchema::String {
+            description: Some("Optional agentId to resume a prior subagent run.".to_string()),
+        },
+    );
+    JsonSchema::Object {
+        properties,
+        required: Some(vec!["prompt".to_string()]),
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_spawn_subagents_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "tasks".to_string(),
+        JsonSchema::Array {
+            items: Box::new(subagent_task_schema()),
+            description: Some("Subagent tasks to run in parallel.".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_subagents".to_string(),
+        description: "Runs multiple subagents in parallel and waits for all results.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["tasks".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_chain_subagents_tool() -> ToolSpec {
+    let mut step_properties = BTreeMap::new();
+    step_properties.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Step prompt. You can reference {{previous_output}} from the prior step."
+                    .to_string(),
+            ),
+        },
+    );
+    step_properties.insert(
+        "type".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Subagent type: \"explore\", \"plan\", or \"general\" (default \"explore\")."
+                    .to_string(),
+            ),
+        },
+    );
+    step_properties.insert(
+        "thoroughness".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Exploration depth for explore/plan: \"quick\", \"medium\", or \"thorough\" \
+                 (default \"medium\")."
+                    .to_string(),
+            ),
+        },
+    );
+    step_properties.insert(
+        "resume".to_string(),
+        JsonSchema::String {
+            description: Some("Optional agentId to resume a prior subagent run.".to_string()),
+        },
+    );
+    step_properties.insert(
+        "parallel".to_string(),
+        JsonSchema::Array {
+            items: Box::new(subagent_task_schema()),
+            description: Some(
+                "Run multiple subagents in parallel for this step. When set, the outputs are \
+                 combined into {{previous_output}} for the next step."
+                    .to_string(),
+            ),
+        },
+    );
+
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "steps".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::Object {
+                properties: step_properties,
+                required: None,
+                additional_properties: Some(false.into()),
+            }),
+            description: Some(
+                "Sequential steps. Provide either prompt or parallel for each step.".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "chain_subagents".to_string(),
+        description: "Runs subagents sequentially, feeding each step the previous output."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["steps".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -975,12 +1148,26 @@ fn sanitize_json_schema(value: &mut JsonValue) {
     }
 }
 
+fn tool_enabled(
+    name: &str,
+    config: &ToolsConfig,
+    extra_tools: Option<&std::collections::HashSet<String>>,
+) -> bool {
+    config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == name)
+        || extra_tools.is_some_and(|tools| tools.contains(name))
+}
+
 /// Builds the tool registry builder while collecting tool specs for later serialization.
 pub(crate) fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
+    extra_tools: Option<&std::collections::HashSet<String>>,
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::GlobHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -989,6 +1176,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::SubagentsHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
@@ -999,8 +1187,10 @@ pub(crate) fn build_specs(
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
+    let subagents_handler = Arc::new(SubagentsHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
+    let glob_handler = Arc::new(GlobHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
@@ -1043,6 +1233,10 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+    builder.push_spec(create_spawn_subagents_tool());
+    builder.register_handler("spawn_subagents", subagents_handler.clone());
+    builder.push_spec(create_chain_subagents_tool());
+    builder.register_handler("chain_subagents", subagents_handler);
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1056,38 +1250,30 @@ pub(crate) fn build_specs(
         builder.register_handler("apply_patch", apply_patch_handler);
     }
 
-    if config
-        .experimental_supported_tools
-        .contains(&"grep_files".to_string())
-    {
+    if tool_enabled("glob", config, extra_tools) {
+        builder.push_spec_with_parallel_support(create_glob_tool(), true);
+        builder.register_handler("glob", glob_handler);
+    }
+
+    if tool_enabled("grep_files", config, extra_tools) {
         let grep_files_handler = Arc::new(GrepFilesHandler);
         builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
         builder.register_handler("grep_files", grep_files_handler);
     }
 
-    if config
-        .experimental_supported_tools
-        .contains(&"read_file".to_string())
-    {
+    if tool_enabled("read_file", config, extra_tools) {
         let read_file_handler = Arc::new(ReadFileHandler);
         builder.push_spec_with_parallel_support(create_read_file_tool(), true);
         builder.register_handler("read_file", read_file_handler);
     }
 
-    if config
-        .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "list_dir")
-    {
+    if tool_enabled("list_dir", config, extra_tools) {
         let list_dir_handler = Arc::new(ListDirHandler);
         builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
         builder.register_handler("list_dir", list_dir_handler);
     }
 
-    if config
-        .experimental_supported_tools
-        .contains(&"test_sync_tool".to_string())
-    {
+    if tool_enabled("test_sync_tool", config, extra_tools) {
         let test_sync_handler = Arc::new(TestSyncHandler);
         builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
         builder.register_handler("test_sync_tool", test_sync_handler);
@@ -1231,7 +1417,7 @@ mod tests {
             model_family: &model_family,
             features: &features,
         });
-        let (tools, _) = build_specs(&config, None).build();
+        let (tools, _) = build_specs(&config, None, None).build();
 
         // Build actual map name -> spec
         use std::collections::BTreeMap;
@@ -1258,6 +1444,8 @@ mod tests {
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
+            create_spawn_subagents_tool(),
+            create_chain_subagents_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
@@ -1287,7 +1475,7 @@ mod tests {
             model_family: &model_family,
             features,
         });
-        let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
         assert_eq!(&tool_names, &expected_tools,);
     }
@@ -1303,6 +1491,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "apply_patch",
                 "view_image",
             ],
@@ -1320,6 +1510,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "apply_patch",
                 "view_image",
             ],
@@ -1340,6 +1532,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1361,6 +1555,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1379,6 +1575,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "view_image",
             ],
         );
@@ -1395,6 +1593,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "apply_patch",
                 "view_image",
             ],
@@ -1412,6 +1612,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "view_image",
             ],
         );
@@ -1428,6 +1630,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "apply_patch",
                 "view_image",
             ],
@@ -1446,6 +1650,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "apply_patch",
                 "view_image",
             ],
@@ -1466,6 +1672,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "spawn_subagents",
+                "chain_subagents",
                 "web_search",
                 "view_image",
             ],
@@ -1483,7 +1691,7 @@ mod tests {
             model_family: &model_family,
             features: &features,
         });
-        let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None).build();
 
         // Only check the shell variant and a couple of core tools.
         let mut subset = vec!["exec_command", "write_stdin", "update_plan"];
@@ -1505,7 +1713,7 @@ mod tests {
             model_family: &model_family,
             features: &features,
         });
-        let (tools, _) = build_specs(&tools_config, None).build();
+        let (tools, _) = build_specs(&tools_config, None, None).build();
 
         assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
@@ -1525,7 +1733,7 @@ mod tests {
             model_family: &model_family,
             features: &features,
         });
-        let (tools, _) = build_specs(&tools_config, None).build();
+        let (tools, _) = build_specs(&tools_config, None, None).build();
 
         assert!(
             tools
@@ -1592,6 +1800,7 @@ mod tests {
                     description: Some("Do something cool".to_string()),
                 },
             )])),
+            None,
         )
         .build();
 
@@ -1700,7 +1909,7 @@ mod tests {
             ),
         ]);
 
-        let (tools, _) = build_specs(&tools_config, Some(tools_map)).build();
+        let (tools, _) = build_specs(&tools_config, Some(tools_map), None).build();
 
         // Only assert that the MCP tools themselves are sorted by fully-qualified name.
         let mcp_names: Vec<_> = tools
@@ -1749,6 +1958,7 @@ mod tests {
                     description: Some("Search docs".to_string()),
                 },
             )])),
+            None,
         )
         .build();
 
@@ -1804,6 +2014,7 @@ mod tests {
                     description: Some("Pagination".to_string()),
                 },
             )])),
+            None,
         )
         .build();
 
@@ -1858,6 +2069,7 @@ mod tests {
                     description: Some("Tags".to_string()),
                 },
             )])),
+            None,
         )
         .build();
 
@@ -1914,6 +2126,7 @@ mod tests {
                     description: Some("AnyOf Value".to_string()),
                 },
             )])),
+            None,
         )
         .build();
 
@@ -2051,6 +2264,7 @@ Examples of valid command strings:
                     description: Some("Do something cool".to_string()),
                 },
             )])),
+            None,
         )
         .build();
 

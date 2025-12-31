@@ -138,6 +138,7 @@ use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::policy::ToolPolicy;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
@@ -174,6 +175,12 @@ pub struct Codex {
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub conversation_id: ConversationId,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct SessionSpawnOverrides {
+    pub(crate) tool_policy: ToolPolicy,
+    pub(crate) rollout_path_override: Option<PathBuf>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -214,6 +221,27 @@ impl Codex {
         conversation_history: InitialHistory,
         session_source: SessionSource,
     ) -> CodexResult<CodexSpawnOk> {
+        Self::spawn_with_overrides(
+            config,
+            auth_manager,
+            models_manager,
+            skills_manager,
+            conversation_history,
+            session_source,
+            SessionSpawnOverrides::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn spawn_with_overrides(
+        config: Config,
+        auth_manager: Arc<AuthManager>,
+        models_manager: Arc<ModelsManager>,
+        skills_manager: Arc<SkillsManager>,
+        conversation_history: InitialHistory,
+        session_source: SessionSource,
+        overrides: SessionSpawnOverrides,
+    ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -251,6 +279,10 @@ impl Codex {
             error!("failed to refresh available models: {err:?}");
         }
         let model = models_manager.get_model(&config.model, &config).await;
+        let SessionSpawnOverrides {
+            tool_policy,
+            rollout_path_override,
+        } = overrides;
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             model: model.clone(),
@@ -265,6 +297,8 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source,
+            tool_policy,
+            rollout_path_override,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -365,6 +399,7 @@ pub(crate) struct TurnContext {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
+    pub(crate) tool_policy: ToolPolicy,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
@@ -427,6 +462,12 @@ pub(crate) struct SessionConfiguration {
     original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+
+    /// Tool allow/deny policy applied per turn.
+    tool_policy: ToolPolicy,
+
+    /// Override for rollout persistence path when starting a new session.
+    rollout_path_override: Option<PathBuf>,
 }
 
 impl SessionConfiguration {
@@ -523,6 +564,7 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
+            tool_policy: session_configuration.tool_policy.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
@@ -560,14 +602,22 @@ impl Session {
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
                 let conversation_id = ConversationId::default();
-                (
-                    conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        session_configuration.user_instructions.clone(),
-                        session_source,
-                    ),
-                )
+                let rollout_params =
+                    if let Some(path) = session_configuration.rollout_path_override.as_ref() {
+                        RolloutRecorderParams::create_at_path(
+                            path.clone(),
+                            conversation_id,
+                            session_configuration.user_instructions.clone(),
+                            session_source,
+                        )
+                    } else {
+                        RolloutRecorderParams::new(
+                            conversation_id,
+                            session_configuration.user_instructions.clone(),
+                            session_source,
+                        )
+                    };
+                (conversation_id, rollout_params)
             }
             InitialHistory::Resumed(resumed_history) => (
                 resumed_history.conversation_id,
@@ -2116,6 +2166,10 @@ async fn spawn_review_thread(
         config.review_model.as_str(),
         review_model_family.slug.as_str(),
     );
+    let mut tool_policy = ToolPolicy::default();
+    tool_policy
+        .denied_tools
+        .extend(["spawn_subagents".to_string(), "chain_subagents".to_string()]);
 
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
@@ -2147,6 +2201,7 @@ async fn spawn_review_thread(
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
+        tool_policy,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2377,14 +2432,19 @@ async fn run_turn(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
-    let router = Arc::new(ToolRouter::from_config(
+    let mcp_tools = turn_context
+        .tool_policy
+        .allow_mcp_tools
+        .then_some(mcp_tools);
+    let router = Arc::new(ToolRouter::from_config_with_overrides(
         &turn_context.tools_config,
-        Some(
-            mcp_tools
+        mcp_tools.map(|tools| {
+            tools
                 .into_iter()
                 .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
+                .collect()
+        }),
+        &turn_context.tool_policy.extra_tools,
     ));
 
     let model_supports_parallel = turn_context
@@ -2394,7 +2454,7 @@ async fn run_turn(
 
     let prompt = Prompt {
         input,
-        tools: router.specs(),
+        tools: router.specs_for_turn(&turn_context),
         parallel_tool_calls: model_supports_parallel && sess.enabled(Feature::ParallelToolCalls),
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
@@ -2840,6 +2900,8 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
+            tool_policy: ToolPolicy::default(),
+            rollout_path_override: None,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -2906,6 +2968,8 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
+            tool_policy: ToolPolicy::default(),
+            rollout_path_override: None,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -3113,6 +3177,8 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
+            tool_policy: ToolPolicy::default(),
+            rollout_path_override: None,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_family = ModelsManager::construct_model_family_offline(
@@ -3200,6 +3266,8 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
+            tool_policy: ToolPolicy::default(),
+            rollout_path_override: None,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_family = ModelsManager::construct_model_family_offline(

@@ -22,6 +22,7 @@ use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::SUBMISSION_CHANNEL_CAPACITY;
 use crate::codex::Session;
+use crate::codex::SessionSpawnOverrides;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -42,16 +43,48 @@ pub(crate) async fn run_codex_conversation_interactive(
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
+    run_codex_conversation_interactive_with_overrides(
+        config,
+        auth_manager,
+        models_manager,
+        parent_session,
+        parent_ctx,
+        cancel_token,
+        initial_history,
+        SessionSource::SubAgent(SubAgentSource::Review),
+        review_spawn_overrides(),
+    )
+    .await
+}
+
+/// Start an interactive sub-Codex conversation and return IO channels.
+///
+/// The returned `events_rx` yields non-approval events emitted by the sub-agent.
+/// Approval requests are handled via `parent_session` and are not surfaced.
+/// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_codex_conversation_interactive_with_overrides(
+    config: Config,
+    auth_manager: Arc<AuthManager>,
+    models_manager: Arc<ModelsManager>,
+    parent_session: Arc<Session>,
+    parent_ctx: Arc<TurnContext>,
+    cancel_token: CancellationToken,
+    initial_history: Option<InitialHistory>,
+    session_source: SessionSource,
+    spawn_overrides: SessionSpawnOverrides,
+) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
+    let CodexSpawnOk { codex, .. } = Codex::spawn_with_overrides(
         config,
         auth_manager,
         models_manager,
         Arc::clone(&parent_session.services.skills_manager),
         initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(SubAgentSource::Review),
+        session_source,
+        spawn_overrides,
     )
     .await?;
     let codex = Arc::new(codex);
@@ -103,10 +136,41 @@ pub(crate) async fn run_codex_conversation_one_shot(
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
+    run_codex_conversation_one_shot_with_overrides(
+        config,
+        auth_manager,
+        models_manager,
+        input,
+        parent_session,
+        parent_ctx,
+        cancel_token,
+        initial_history,
+        SessionSource::SubAgent(SubAgentSource::Review),
+        review_spawn_overrides(),
+    )
+    .await
+}
+
+/// Convenience wrapper for one-time use with an initial prompt.
+///
+/// Internally calls the interactive variant, then immediately submits the provided input.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_codex_conversation_one_shot_with_overrides(
+    config: Config,
+    auth_manager: Arc<AuthManager>,
+    models_manager: Arc<ModelsManager>,
+    input: Vec<UserInput>,
+    parent_session: Arc<Session>,
+    parent_ctx: Arc<TurnContext>,
+    cancel_token: CancellationToken,
+    initial_history: Option<InitialHistory>,
+    session_source: SessionSource,
+    spawn_overrides: SessionSpawnOverrides,
+) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
-    let io = run_codex_conversation_interactive(
+    let io = run_codex_conversation_interactive_with_overrides(
         config,
         auth_manager,
         models_manager,
@@ -114,6 +178,8 @@ pub(crate) async fn run_codex_conversation_one_shot(
         parent_ctx,
         child_cancel.clone(),
         initial_history,
+        session_source,
+        spawn_overrides,
     )
     .await?;
 
@@ -155,6 +221,15 @@ pub(crate) async fn run_codex_conversation_one_shot(
         rx_event: rx_bridge,
         tx_sub: tx_closed,
     })
+}
+
+fn review_spawn_overrides() -> SessionSpawnOverrides {
+    let mut overrides = SessionSpawnOverrides::default();
+    overrides
+        .tool_policy
+        .denied_tools
+        .extend(["spawn_subagents".to_string(), "chain_subagents".to_string()]);
+    overrides
 }
 
 async fn forward_events(

@@ -6,6 +6,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::policy::ToolPolicy;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
@@ -15,6 +16,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::instrument;
 
@@ -28,6 +30,7 @@ pub struct ToolCall {
 pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
+    mcp_tool_names: HashSet<String>,
 }
 
 impl ToolRouter {
@@ -35,15 +38,57 @@ impl ToolRouter {
         config: &ToolsConfig,
         mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
     ) -> Self {
-        let builder = build_specs(config, mcp_tools);
+        Self::from_config_with_overrides(config, mcp_tools, &HashSet::new())
+    }
+
+    pub fn from_config_with_overrides(
+        config: &ToolsConfig,
+        mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
+        extra_tools: &HashSet<String>,
+    ) -> Self {
+        let mcp_tool_names = mcp_tools
+            .as_ref()
+            .map(|tools| tools.keys().cloned().collect())
+            .unwrap_or_default();
+        let builder = build_specs(config, mcp_tools, Some(extra_tools));
         let (specs, registry) = builder.build();
 
-        Self { registry, specs }
+        Self {
+            registry,
+            specs,
+            mcp_tool_names,
+        }
     }
 
     pub fn specs(&self) -> Vec<ToolSpec> {
         self.specs
             .iter()
+            .map(|config| config.spec.clone())
+            .collect()
+    }
+
+    pub fn specs_for_turn(&self, turn: &TurnContext) -> Vec<ToolSpec> {
+        let ToolPolicy {
+            allowed_tools,
+            denied_tools,
+            allow_mcp_tools,
+            ..
+        } = &turn.tool_policy;
+        self.specs
+            .iter()
+            .filter(|spec| {
+                let name = spec.spec.name();
+                if denied_tools.contains(name) {
+                    return false;
+                }
+                if !allow_mcp_tools && self.mcp_tool_names.contains(name) {
+                    return false;
+                }
+                match allowed_tools {
+                    Some(allowed) => allowed.contains(name),
+                    None => true,
+                }
+            })
             .map(|config| config.spec.clone())
             .collect()
     }
@@ -139,6 +184,16 @@ impl ToolRouter {
             call_id,
             payload,
         } = call;
+        if !turn.tool_policy.allow_mcp_tools && matches!(payload, ToolPayload::Mcp { .. }) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "tool {tool_name} is not available in this session"
+            )));
+        }
+        if !turn.tool_policy.allows_tool(&tool_name) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "tool {tool_name} is not available in this session"
+            )));
+        }
         let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
         let failure_call_id = call_id.clone();
 
