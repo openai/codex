@@ -33,6 +33,11 @@ type ChatBlock =
       type: "image";
       title: string;
       src: string;
+      // Offloaded images omit `src` and use `imageKey` to request data on-demand.
+      imageKey?: string;
+      mimeType?: string;
+      byteLength?: number;
+      autoLoad?: boolean;
       alt: string;
       caption: string | null;
       role: "user" | "assistant" | "tool" | "system";
@@ -129,7 +134,7 @@ type SuggestItem = {
   insert: string;
   label: string;
   detail?: string;
-  kind: "slash" | "at" | "file" | "dir" | "agent";
+  kind: "slash" | "at" | "file" | "dir" | "agent" | "skill";
 };
 
 function main(): void {
@@ -733,6 +738,177 @@ function main(): void {
   const tabElBySessionId = new Map<string, HTMLDivElement>();
   let isComposing = false;
 
+  type ImageLoadResult =
+    | { ok: true; imageKey: string; mimeType: string; base64: string }
+    | { ok: false; imageKey: string; error: string };
+  const pendingImageRequestsById = new Map<
+    string,
+    { imageKey: string; resolve: (r: ImageLoadResult) => void }
+  >();
+  const imageObjectUrlByKey = new Map<
+    string,
+    { url: string; byteLength: number; lastUsedAt: number }
+  >();
+  const IMAGE_OBJECT_URL_CACHE_MAX_ITEMS = 24;
+  const IMAGE_OBJECT_URL_CACHE_MAX_TOTAL_BYTES = 12_000_000;
+  const IMAGE_RENDER_MAX_EDGE_PX = 1024;
+  const IMAGE_RENDER_MAX_BYTES = 350_000;
+
+  function pruneImageObjectUrls(): void {
+    const entries = Array.from(imageObjectUrlByKey.entries());
+    let total = entries.reduce((sum, [, v]) => sum + (v.byteLength || 0), 0);
+    if (
+      entries.length <= IMAGE_OBJECT_URL_CACHE_MAX_ITEMS &&
+      total <= IMAGE_OBJECT_URL_CACHE_MAX_TOTAL_BYTES
+    )
+      return;
+    entries.sort((a, b) => (a[1].lastUsedAt || 0) - (b[1].lastUsedAt || 0));
+    for (const [key, v] of entries) {
+      if (
+        imageObjectUrlByKey.size <= IMAGE_OBJECT_URL_CACHE_MAX_ITEMS &&
+        total <= IMAGE_OBJECT_URL_CACHE_MAX_TOTAL_BYTES
+      )
+        break;
+      URL.revokeObjectURL(v.url);
+      imageObjectUrlByKey.delete(key);
+      total -= v.byteLength || 0;
+    }
+  }
+
+  async function decodeBase64ToBytes(base64: string): Promise<Uint8Array> {
+    try {
+      const binary = atob(base64);
+      const out = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+      return out;
+    } catch (err) {
+      throw new Error(`Failed to decode base64: ${String(err)}`);
+    }
+  }
+
+  async function resizeImageBlob(
+    blob: Blob,
+  ): Promise<{ blob: Blob; byteLength: number }> {
+    const bitmap = await createImageBitmap(blob);
+    try {
+      const w = bitmap.width;
+      const h = bitmap.height;
+      if (!w || !h) return { blob, byteLength: blob.size };
+      const scale = Math.min(
+        1,
+        IMAGE_RENDER_MAX_EDGE_PX / Math.max(w, h),
+      );
+      const tw = Math.max(1, Math.round(w * scale));
+      const th = Math.max(1, Math.round(h * scale));
+
+      const canvas = document.createElement("canvas");
+      canvas.width = tw;
+      canvas.height = th;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return { blob, byteLength: blob.size };
+      ctx.drawImage(bitmap, 0, 0, tw, th);
+
+      const toBlob = (quality: number): Promise<Blob | null> =>
+        new Promise((resolve) =>
+          canvas.toBlob((b) => resolve(b), "image/jpeg", quality),
+        );
+      const candidates = [0.85, 0.75, 0.65, 0.55];
+      let best: Blob | null = null;
+      for (const q of candidates) {
+        const b = await toBlob(q);
+        if (!b) continue;
+        best = b;
+        if (b.size <= IMAGE_RENDER_MAX_BYTES) break;
+      }
+      if (!best) return { blob, byteLength: blob.size };
+      return { blob: best, byteLength: best.size };
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  function requestImageData(imageKey: string): Promise<ImageLoadResult> {
+    const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    return new Promise((resolve) => {
+      pendingImageRequestsById.set(requestId, { imageKey, resolve });
+      vscode.postMessage({ type: "loadImage", imageKey, requestId });
+    });
+  }
+
+  async function ensureImageRendered(
+    block: Extract<ChatBlock, { type: "image" }>,
+    imgEl: HTMLImageElement,
+    captionEl: HTMLDivElement,
+  ): Promise<void> {
+    const imageKey = typeof block.imageKey === "string" ? block.imageKey : "";
+    if (!imageKey) {
+      if (block.src && imgEl.src !== block.src) imgEl.src = block.src;
+      return;
+    }
+
+    const cached = imageObjectUrlByKey.get(imageKey);
+    if (cached) {
+      cached.lastUsedAt = Date.now();
+      if (imgEl.src !== cached.url) imgEl.src = cached.url;
+      return;
+    }
+
+    if (!block.autoLoad) {
+      imgEl.removeAttribute("src");
+      imgEl.style.cursor = "pointer";
+      const caption = (block.caption || "").trim();
+      captionEl.textContent = caption || "画像はオフロードされています（クリックで読み込み）";
+      captionEl.style.display = "";
+      imgEl.addEventListener(
+        "click",
+        () => {
+          (block as any).autoLoad = true;
+          void ensureImageRendered(block, imgEl, captionEl);
+        },
+        { once: true },
+      );
+      return;
+    }
+
+    captionEl.textContent = "画像を読み込み中…";
+    captionEl.style.display = "";
+
+    const res = await requestImageData(imageKey);
+    if (!res.ok) {
+      captionEl.textContent = `画像の読み込みに失敗: ${res.error}`;
+      captionEl.style.display = "";
+      return;
+    }
+
+    const bytes = await decodeBase64ToBytes(res.base64);
+    const mimeType =
+      res.mimeType || (block.mimeType ? String(block.mimeType) : "");
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const rawBlob = new Blob([copy.buffer as ArrayBuffer], {
+      type: mimeType || "application/octet-stream",
+    });
+    const resized = await resizeImageBlob(rawBlob);
+    const url = URL.createObjectURL(resized.blob);
+    imageObjectUrlByKey.set(imageKey, {
+      url,
+      byteLength: resized.byteLength,
+      lastUsedAt: Date.now(),
+    });
+    pruneImageObjectUrls();
+
+    imgEl.style.cursor = "";
+    if (imgEl.src !== url) imgEl.src = url;
+    const caption = (block.caption || "").trim();
+    captionEl.textContent = caption;
+    captionEl.style.display = caption ? "" : "none";
+  }
+
+  window.addEventListener("unload", () => {
+    for (const v of imageObjectUrlByKey.values()) URL.revokeObjectURL(v.url);
+    imageObjectUrlByKey.clear();
+  });
+
   let detailsState = persistedWebviewState.detailsState ?? {};
 
   function saveDetailsState(key: string, open: boolean): void {
@@ -830,6 +1006,16 @@ function main(): void {
   let agentIndex: string[] | null = null;
   let agentIndexForSessionId: string | null = null;
   let agentIndexRequestedForSessionId: string | null = null;
+  let skillIndex:
+    | Array<{
+        name: string;
+        description: string | null;
+        scope: string;
+        path: string;
+      }>
+    | null = null;
+  let skillIndexForSessionId: string | null = null;
+  let skillIndexRequestedForSessionId: string | null = null;
   let activeReplace: null | {
     from: number;
     to: number;
@@ -1362,6 +1548,8 @@ function main(): void {
           ? "/" + label.slice("/prompts:".length)
           : label.startsWith("@")
             ? label.slice(1)
+            : label.startsWith("$")
+              ? label.slice(1)
             : label;
         const useAlt = !q.includes("prompts:");
         const hay = useAlt ? altLabel : label;
@@ -1497,6 +1685,65 @@ function main(): void {
 
       const ranked = query ? rankByPrefix(items, query) : items;
       const nextReplace = { from: atTok.start, to: atTok.end, inserted: "" };
+      suggestItems = ranked;
+      activeReplace = nextReplace;
+      if (
+        prevReplace &&
+        prevReplace.from === nextReplace.from &&
+        prevReplace.to === nextReplace.to &&
+        isSameSuggestList(prevItems, ranked)
+      ) {
+        suggestIndex = Math.min(ranked.length - 1, Math.max(0, prevIndex));
+      } else {
+        suggestIndex = 0;
+      }
+      renderSuggest();
+      return;
+    }
+
+    const dollarTok = currentPrefixedToken("$");
+    if (dollarTok) {
+      const query = dollarTok.token.slice(1);
+      const sessionId = state.activeSession.id;
+
+      if (
+        (!skillIndex || skillIndexForSessionId !== sessionId) &&
+        skillIndexRequestedForSessionId !== sessionId
+      ) {
+        skillIndexRequestedForSessionId = sessionId;
+        vscode.postMessage({ type: "requestSkillIndex", sessionId });
+      }
+
+      if (!skillIndex || skillIndexForSessionId !== sessionId) {
+        suggestItems = [];
+        activeReplace = null;
+        renderSuggest();
+        return;
+      }
+
+      const q = query.toLowerCase();
+      const filtered = query
+        ? skillIndex.filter((s) => {
+            const name = (s.name || "").toLowerCase();
+            if (name.includes(q)) return true;
+            const desc = (s.description || "").toLowerCase();
+            return desc.includes(q);
+          })
+        : skillIndex;
+
+      const items = filtered.slice(0, 50).map((s) => ({
+        insert: `$${s.name} `,
+        label: `$${s.name}`,
+        detail: s.description ? truncateOneLine(s.description, 60) : "",
+        kind: "skill" as const,
+      }));
+
+      const ranked = query ? rankByPrefix(items, query) : items;
+      const nextReplace = {
+        from: dollarTok.start,
+        to: dollarTok.end,
+        inserted: "",
+      };
       suggestItems = ranked;
       activeReplace = nextReplace;
       if (
@@ -1949,10 +2196,8 @@ function main(): void {
             div.appendChild(i);
             return i;
           })();
-        if (img.src !== block.src) img.src = block.src;
         img.alt = block.alt || "image";
 
-        const captionText = (block.caption || "").trim();
         const captionEl =
           (div.querySelector(
             'div[data-k="caption"]',
@@ -1964,8 +2209,10 @@ function main(): void {
             div.appendChild(c);
             return c;
           })();
-        captionEl.textContent = captionText;
-        captionEl.style.display = captionText ? "" : "none";
+        void ensureImageRendered(block, img, captionEl).catch((err) => {
+          captionEl.textContent = `画像の描画に失敗: ${String(err)}`;
+          captionEl.style.display = "";
+        });
         continue;
       }
 
@@ -2551,6 +2798,12 @@ function main(): void {
   inputEl.addEventListener("compositionend", () => {
     isComposing = false;
   });
+  // NOTE: On some platforms/IME flows, `compositionend` may not fire if the
+  // textarea loses focus mid-composition. If we keep `isComposing=true`, Enter
+  // will never send. Reset on blur to avoid a stuck composer.
+  inputEl.addEventListener("blur", () => {
+    isComposing = false;
+  });
 
   inputEl.addEventListener("keydown", (e) => {
     if (
@@ -2659,8 +2912,37 @@ function main(): void {
       sessionId?: unknown;
       query?: unknown;
       agents?: unknown;
+      skills?: unknown;
       text?: unknown;
+      requestId?: unknown;
+      ok?: unknown;
+      mimeType?: unknown;
+      base64?: unknown;
+      error?: unknown;
     };
+    if (anyMsg.type === "imageData") {
+      const requestId =
+        typeof anyMsg.requestId === "string" ? anyMsg.requestId : null;
+      if (!requestId) return;
+      const pending = pendingImageRequestsById.get(requestId);
+      if (!pending) return;
+      pendingImageRequestsById.delete(requestId);
+      if (anyMsg.ok) {
+        pending.resolve({
+          ok: true,
+          imageKey: pending.imageKey,
+          mimeType: typeof anyMsg.mimeType === "string" ? anyMsg.mimeType : "",
+          base64: typeof anyMsg.base64 === "string" ? anyMsg.base64 : "",
+        });
+      } else {
+        pending.resolve({
+          ok: false,
+          imageKey: pending.imageKey,
+          error: typeof anyMsg.error === "string" ? anyMsg.error : "Unknown error",
+        });
+      }
+      return;
+    }
     if (anyMsg.type === "state") {
       receivedState = true;
       state = anyMsg.state as ChatViewState;
@@ -2706,6 +2988,38 @@ function main(): void {
         agentIndexForSessionId = null;
       }
       renderSuggest();
+      return;
+    }
+    if (anyMsg.type === "skillIndex") {
+      const sessionId =
+        typeof anyMsg.sessionId === "string" ? anyMsg.sessionId : null;
+      const rawSkills = Array.isArray(anyMsg.skills) ? anyMsg.skills : [];
+      if (!sessionId) return;
+      if (!state.activeSession) return;
+      if (state.activeSession.id !== sessionId) return;
+
+      const skills = rawSkills
+        .map((s): null | {
+          name: string;
+          description: string | null;
+          scope: string;
+          path: string;
+        } => {
+          if (!s || typeof s !== "object") return null;
+          const o = s as Record<string, unknown>;
+          const name = typeof o.name === "string" ? o.name : "";
+          const scope = typeof o.scope === "string" ? o.scope : "";
+          const path = typeof o.path === "string" ? o.path : "";
+          const description =
+            typeof o.description === "string" ? o.description : null;
+          if (!name || !scope || !path) return null;
+          return { name, description, scope, path };
+        })
+        .filter((v): v is NonNullable<typeof v> => v !== null);
+
+      skillIndex = skills;
+      skillIndexForSessionId = sessionId;
+      updateSuggestions();
       return;
     }
     if (anyMsg.type === "insertText") {

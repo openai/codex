@@ -3,7 +3,6 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import type { Session } from "../sessions";
-import { listAgentsFromDisk } from "../agents_disk";
 
 export type ChatBlock =
   | { id: string; type: "user"; text: string }
@@ -163,6 +162,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       query: string,
       cancellationToken: string,
     ) => Promise<string[]>,
+    private readonly onListAgents: (sessionId: string) => Promise<string[]>,
+    private readonly onListSkills: (sessionId: string) => Promise<
+      Array<{
+        name: string;
+        description: string | null;
+        scope: string;
+        path: string;
+      }>
+    >,
+    private readonly onLoadImage: (
+      imageKey: string,
+    ) => Promise<{ mimeType: string; base64: string }>,
     private readonly onOpenLatestDiff: () => Promise<void>,
     private readonly onUiError: (message: string) => void,
   ) {}
@@ -237,6 +248,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const message = anyMsg["message"];
       if (typeof message !== "string") return;
       this.onUiError(message);
+      return;
+    }
+
+    if (type === "loadImage") {
+      const imageKey = anyMsg["imageKey"];
+      const requestId = anyMsg["requestId"];
+      if (typeof imageKey !== "string") return;
+      if (typeof requestId !== "string") return;
+      if (!this.view) return;
+
+      try {
+        const { mimeType, base64 } = await this.onLoadImage(imageKey);
+        await this.view.webview.postMessage({
+          type: "imageData",
+          requestId,
+          ok: true,
+          mimeType,
+          base64,
+        });
+      } catch (err) {
+        await this.view.webview.postMessage({
+          type: "imageData",
+          requestId,
+          ok: false,
+          error: String(err),
+        });
+      }
       return;
     }
 
@@ -499,17 +537,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      const folderUri = vscode.Uri.parse(active.workspaceFolderUri);
-      const folder = vscode.workspace.getWorkspaceFolder(folderUri);
-      if (!folder) {
-        this.view?.webview.postMessage({ type: "agentIndex", agents: [] });
+      let agents: string[] = [];
+      try {
+        agents = await this.onListAgents(sessionId);
+      } catch (err) {
+        console.error("[codex-mine] agents list failed:", err);
+        agents = [];
+      }
+
+      this.view?.webview.postMessage({ type: "agentIndex", agents });
+      return;
+    }
+
+    if (type === "requestSkillIndex") {
+      const sessionId = anyMsg["sessionId"];
+      if (typeof sessionId !== "string") return;
+      const st = this.getState();
+      const active = st.activeSession;
+      if (!active || active.id !== sessionId) {
+        this.postState();
         return;
       }
 
-      const { agents } = await listAgentsFromDisk(folder.uri.fsPath);
+      let skills: Array<{
+        name: string;
+        description: string | null;
+        scope: string;
+        path: string;
+      }> = [];
+      try {
+        skills = await this.onListSkills(sessionId);
+      } catch (err) {
+        console.error("[codex-mine] skills list failed:", err);
+        skills = [];
+      }
+
       this.view?.webview.postMessage({
-        type: "agentIndex",
-        agents: agents.map((a) => a.name),
+        type: "skillIndex",
+        sessionId,
+        skills,
       });
       return;
     }
@@ -538,12 +604,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // CSP nonce must match the CSP nonce grammar (base64 charset).
     // NOTE: UUID contains '-' which is not valid for CSP nonces and will block scripts.
     const nonce = crypto.randomBytes(16).toString("base64");
-    const csp = [
-      "default-src 'none'",
-      "img-src " + webview.cspSource + " data:",
-      "style-src 'unsafe-inline'",
-      `script-src ${webview.cspSource} 'nonce-${nonce}'`,
-    ].join("; ");
+	    const csp = [
+	      "default-src 'none'",
+	      "img-src " + webview.cspSource + " data: blob:",
+	      "style-src 'unsafe-inline'",
+	      `script-src ${webview.cspSource} 'nonce-${nonce}'`,
+	    ].join("; ");
 
     const clientScriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(

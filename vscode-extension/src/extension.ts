@@ -43,6 +43,172 @@ let selectSessionRequestSeq = 0;
 let extensionContext: vscode.ExtensionContext | null = null;
 let outputChannel: vscode.OutputChannel | null = null;
 
+type CachedImageMeta = {
+  mimeType: string;
+  byteLength: number;
+  createdAtMs: number;
+};
+
+const IMAGE_CACHE_DIRNAME = "images.v2";
+const IMAGE_CACHE_MAX_ITEMS = 500;
+const IMAGE_CACHE_MAX_TOTAL_BYTES = 250_000_000;
+const SESSION_IMAGE_AUTOLOAD_RECENT = 24;
+
+function requireExtensionContext(): vscode.ExtensionContext {
+  if (!extensionContext) throw new Error("extensionContext is not initialized");
+  return extensionContext;
+}
+
+function imageCacheDirFsPath(context: vscode.ExtensionContext): string {
+  const base = context.globalStorageUri?.fsPath;
+  if (!base) throw new Error("globalStorageUri is not available");
+  return path.join(base, IMAGE_CACHE_DIRNAME);
+}
+
+function imageCachePaths(
+  context: vscode.ExtensionContext,
+  imageKey: string,
+): { metaPath: string; dataPath: string } {
+  const dir = imageCacheDirFsPath(context);
+  return {
+    metaPath: path.join(dir, `${imageKey}.json`),
+    dataPath: path.join(dir, `${imageKey}.bin`),
+  };
+}
+
+async function ensureImageCacheDir(
+  context: vscode.ExtensionContext,
+): Promise<string> {
+  const dir = imageCacheDirFsPath(context);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+function sanitizeImageKey(key: string): string {
+  return key.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 160) || "img";
+}
+
+async function pruneImageCache(context: vscode.ExtensionContext): Promise<void> {
+  const dir = imageCacheDirFsPath(context);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch (err) {
+    // Directory may not exist yet; do not create it during prune.
+    return;
+  }
+
+  const metas = entries.filter((n) => n.endsWith(".json"));
+  const items: Array<{
+    imageKey: string;
+    metaPath: string;
+    dataPath: string;
+    createdAtMs: number;
+    byteLength: number;
+  }> = [];
+
+  for (const metaName of metas) {
+    const imageKey = metaName.slice(0, -".json".length);
+    const { metaPath, dataPath } = imageCachePaths(context, imageKey);
+    try {
+      const metaRaw = await fs.readFile(metaPath, "utf8");
+      const meta = JSON.parse(metaRaw) as CachedImageMeta;
+      if (
+        !meta ||
+        typeof meta.mimeType !== "string" ||
+        typeof meta.byteLength !== "number" ||
+        typeof meta.createdAtMs !== "number"
+      ) {
+        throw new Error(`Invalid meta: ${metaPath}`);
+      }
+      items.push({
+        imageKey,
+        metaPath,
+        dataPath,
+        createdAtMs: meta.createdAtMs,
+        byteLength: meta.byteLength,
+      });
+    } catch (err) {
+      // Corrupted meta: remove both files so it doesn't linger indefinitely.
+      outputChannel?.appendLine(
+        `[images] Corrupted meta '${metaName}', removing: ${String(err)}`,
+      );
+      await fs.rm(metaPath, { force: true }).catch(() => null);
+      await fs.rm(dataPath, { force: true }).catch(() => null);
+    }
+  }
+
+  items.sort((a, b) => b.createdAtMs - a.createdAtMs);
+  let totalBytes = items.reduce((sum, it) => sum + it.byteLength, 0);
+
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]!;
+    const keepByCount = i < IMAGE_CACHE_MAX_ITEMS;
+    const keepByBytes = totalBytes <= IMAGE_CACHE_MAX_TOTAL_BYTES;
+    if (keepByCount && keepByBytes) continue;
+    totalBytes -= it.byteLength;
+    await fs.rm(it.metaPath, { force: true }).catch(() => null);
+    await fs.rm(it.dataPath, { force: true }).catch(() => null);
+  }
+}
+
+async function cacheImageBytes(args: {
+  imageKey?: string;
+  prefix: string;
+  mimeType: string;
+  bytes: Buffer;
+}): Promise<{ imageKey: string; mimeType: string; byteLength: number }> {
+  const context = requireExtensionContext();
+  await ensureImageCacheDir(context);
+  const imageKey =
+    typeof args.imageKey === "string" && args.imageKey
+      ? sanitizeImageKey(args.imageKey)
+      : sanitizeImageKey(`${args.prefix}-${crypto.randomUUID()}`);
+  const { metaPath, dataPath } = imageCachePaths(context, imageKey);
+  const meta: CachedImageMeta = {
+    mimeType: args.mimeType,
+    byteLength: args.bytes.byteLength,
+    createdAtMs: Date.now(),
+  };
+  await fs.writeFile(dataPath, args.bytes);
+  await fs.writeFile(metaPath, JSON.stringify(meta));
+  void pruneImageCache(context);
+  return { imageKey, mimeType: args.mimeType, byteLength: args.bytes.byteLength };
+}
+
+function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
+  const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+  if (!m) throw new Error("Unsupported image URL (expected data:...;base64,...)");
+  const mimeType = m[1] || "";
+  const base64 = m[2] || "";
+  if (!mimeType || !base64) throw new Error("Invalid data URL");
+  return { mimeType, base64 };
+}
+
+async function cacheImageDataUrl(args: {
+  prefix: string;
+  dataUrl: string;
+}): Promise<{ imageKey: string; mimeType: string; byteLength: number }> {
+  const { mimeType, base64 } = parseDataUrl(args.dataUrl);
+  const bytes = Buffer.from(base64, "base64");
+  return await cacheImageBytes({ prefix: args.prefix, mimeType, bytes });
+}
+
+async function loadCachedImageBase64(imageKey: string): Promise<{
+  mimeType: string;
+  base64: string;
+}> {
+  const context = requireExtensionContext();
+  const { metaPath, dataPath } = imageCachePaths(context, imageKey);
+  const metaRaw = await fs.readFile(metaPath, "utf8");
+  const meta = JSON.parse(metaRaw) as CachedImageMeta;
+  if (!meta || typeof meta.mimeType !== "string") {
+    throw new Error(`Invalid cached image meta: ${imageKey}`);
+  }
+  const data = await fs.readFile(dataPath);
+  return { mimeType: meta.mimeType, base64: data.toString("base64") };
+}
+
 const HIDDEN_TAB_SESSIONS_KEY = "codexMine.hiddenTabSessions.v1";
 const LEGACY_RUNTIMES_KEY = "codexMine.sessionRuntime.v1";
 const hiddenTabSessionIds = new Set<string>();
@@ -233,9 +399,44 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       return res.files.map((f) => String(f.path || "").replace(/\\\\/g, "/"));
     },
-    async () => {
+    async (sessionId) => {
       if (!sessions) throw new Error("sessions is not initialized");
-      const session = activeSessionId
+      const session = sessions.getById(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
+      const folder = resolveWorkspaceFolderForSession(session);
+      if (!folder)
+        throw new Error(`WorkspaceFolder not found for session: ${sessionId}`);
+
+      const v = cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
+      if (v !== "codex-mine") return [];
+
+      const { agents } = await listAgentsFromDisk(folder.uri.fsPath);
+      return agents
+        .map((a) => String(a.name || "").trim())
+        .filter((name) => name.length > 0);
+    },
+    async (sessionId) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+      const session = sessions.getById(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+      const entries = await backendManager.listSkillsForSession(session);
+      const entry = entries[0] ?? null;
+      const skills = entry?.skills ?? [];
+      return skills.map((s) => ({
+        name: s.name,
+        description: s.description,
+        scope: s.scope,
+        path: s.path,
+      }));
+	    },
+	    async (imageKey) => {
+	      return await loadCachedImageBase64(imageKey);
+	    },
+	    async () => {
+	      if (!sessions) throw new Error("sessions is not initialized");
+	      const session = activeSessionId
         ? sessions.getById(activeSessionId)
         : null;
       if (!session) {
@@ -719,8 +920,6 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        await ensureBackendMatchesConfiguredCli(folder, "agents");
-
         const v = cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
         if (v !== "codex-mine") {
           void vscode.window.showInformationMessage(
@@ -729,21 +928,28 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        const { agents, errors, gitRoot } = await listAgentsFromDisk(
-          folder.uri.fsPath,
-        );
+        const { agents, errors } = await listAgentsFromDisk(folder.uri.fsPath);
         if (errors.length > 0) {
-          output.appendLine(
-            `[agents] scanned cwd=${folder.uri.fsPath} gitRoot=${gitRoot ?? "(none)"}`,
-          );
+          output.appendLine(`[agents] cwd=${folder.uri.fsPath}`);
           for (const e of errors) output.appendLine(`[agents] ${e}`);
+        }
+
+        try {
+          // Ensure the backend is configured as codex-mine (purely for UX; listing is from disk).
+          await ensureBackendMatchesConfiguredCli(folder, "agents");
+        } catch (err) {
+          output.appendLine(
+            `[agents] Backend configuration check failed: ${String(err)}`,
+          );
+          void vscode.window.showErrorMessage("Failed to list agents.");
+          return;
         }
 
         if (agents.length === 0) {
           const msg =
             errors.length > 0
               ? "No agents found (some agent files failed to load)."
-              : "No agents found. Add <git root>/.codex/agents/<name>.md or $CODEX_HOME/agents/<name>.md.";
+              : "No agents found. Add <git root>/.codex/agents/<name>.md or $CODEX_HOME/agents/<name>.md, and ensure [agents].sources includes the desired locations.";
           void vscode.window.showInformationMessage(msg);
           return;
         }
@@ -2986,7 +3192,7 @@ function applyItemLifecycle(
           block.detail += `\nerror: ${JSON.stringify(item.error)}\n`;
       }
       if (completed && item.result?.content) {
-        appendMcpImageBlocks(
+        void appendMcpImageBlocks(
           rt,
           sessionId,
           item.id,
@@ -3230,28 +3436,64 @@ async function loadLocalImageDataUrl(
   }
 }
 
-function appendMcpImageBlocks(
+function enforceSessionImageAutoloadLimit(rt: SessionRuntime): void {
+  const keep = SESSION_IMAGE_AUTOLOAD_RECENT;
+  if (keep <= 0) return;
+  let kept = 0;
+  for (let i = rt.blocks.length - 1; i >= 0; i--) {
+    const b = rt.blocks[i];
+    if (!b || b.type !== "image") continue;
+    const hasKey = typeof (b as any).imageKey === "string" && (b as any).imageKey;
+    if (!hasKey) continue;
+    if (kept < keep) {
+      (b as any).autoLoad = true;
+      kept += 1;
+    } else {
+      (b as any).autoLoad = false;
+      // Ensure we don't keep a large inline src around for offloaded images.
+      if (typeof (b as any).src === "string") (b as any).src = "";
+    }
+  }
+}
+
+async function appendMcpImageBlocks(
   rt: SessionRuntime,
   sessionId: string,
   itemId: string,
   server: string,
   tool: string,
   content: ContentBlock[],
-): void {
+): Promise<void> {
   const images = content.filter(isImageContent);
   if (images.length === 0) return;
-  images.forEach((img, index) => {
-    const src = `data:${img.mimeType};base64,${img.data}`;
+  const cached: Array<{ imageKey: string; mimeType: string; byteLength: number }> =
+    [];
+  for (let index = 0; index < images.length; index++) {
+    const img = images[index]!;
+    const bytes = Buffer.from(img.data, "base64");
+    const saved = await cacheImageBytes({
+      imageKey: `mcp-${sessionId}-${itemId}-${index}`,
+      prefix: `mcp-${server}-${tool}`,
+      mimeType: img.mimeType,
+      bytes,
+    });
+    cached.push(saved);
     upsertBlock(rt, {
       id: `mcp-image:${itemId}:${index}`,
       type: "image",
       title: `MCP image (${server}.${tool})`,
-      src,
+      src: "",
+      imageKey: saved.imageKey,
+      mimeType: saved.mimeType,
+      byteLength: saved.byteLength,
+      autoLoad: true,
       alt: `mcp-image-${index + 1}`,
       caption: img.mimeType || null,
       role: "tool",
-    });
-  });
+    } as any);
+  }
+  void cached;
+  enforceSessionImageAutoloadLimit(rt);
   schedulePersistRuntime(sessionId);
 }
 
@@ -3262,23 +3504,47 @@ async function upsertImageViewBlock(
   imagePath: string,
   statusText: string,
 ): Promise<void> {
-  const result = await loadLocalImageDataUrl(imagePath);
-  if ("error" in result) {
+  const mimeType = imageMimeFromPath(imagePath);
+  if (!mimeType) {
     upsertBlock(rt, {
       id: `imageView:${itemId}`,
       type: "error",
       title: `Image view (${statusText})`,
-      text: result.error,
+      text: `Unsupported image extension: ${imagePath}`,
     });
-  } else {
+    chatView?.refresh();
+    schedulePersistRuntime(sessionId);
+    return;
+  }
+
+  try {
+    const data = await fs.readFile(imagePath);
+    const saved = await cacheImageBytes({
+      imageKey: `imageView-${sessionId}-${itemId}`,
+      prefix: `imageView-${itemId}`,
+      mimeType,
+      bytes: Buffer.from(data),
+    });
     upsertBlock(rt, {
       id: `imageView:${itemId}`,
       type: "image",
       title: `Image view (${statusText})`,
-      src: result.url,
+      src: "",
+      imageKey: saved.imageKey,
+      mimeType: saved.mimeType,
+      byteLength: saved.byteLength,
+      autoLoad: true,
       alt: path.basename(imagePath) || "image",
       caption: imagePath,
       role: "system",
+    } as any);
+    enforceSessionImageAutoloadLimit(rt);
+  } catch (err) {
+    upsertBlock(rt, {
+      id: `imageView:${itemId}`,
+      type: "error",
+      title: `Image view (${statusText})`,
+      text: `Failed to read image ${imagePath}: ${String(err)}`,
     });
   }
   chatView?.refresh();
