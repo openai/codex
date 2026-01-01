@@ -1000,6 +1000,7 @@ dependencies = [
  "codex-backend-client",
  "codex-common",
  "codex-core",
+ "codex-eval-case",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -1348,6 +1349,19 @@ dependencies = [
  "which",
  "wildmatch",
  "wiremock",
+]
+
+[[package]]
+name = "codex-eval-case"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "uuid",
 ]
 
 [[package]]
@@ -1724,6 +1738,7 @@ dependencies = [
  "codex-backend-client",
  "codex-common",
  "codex-core",
+ "codex-eval-case",
  "codex-feedback",
  "codex-file-search",
  "codex-login",

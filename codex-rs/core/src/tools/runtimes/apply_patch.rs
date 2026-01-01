@@ -23,6 +23,7 @@ use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub struct ApplyPatchRequest {
@@ -143,6 +144,48 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
+        // When there is no sandbox in play (DangerFullAccess / bypassed sandbox), apply the patch
+        // in-process. This avoids relying on the current executable implementing the arg0/argv1
+        // dispatch behavior (which is not true for unit/integration test binaries).
+        if attempt.sandbox == crate::exec::SandboxType::None {
+            let started = Instant::now();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            // Apply the patch relative to `req.cwd` without mutating the process CWD.
+            let exit_code = match codex_apply_patch::parse_patch(&req.patch) {
+                Ok(args) => {
+                    match codex_apply_patch::apply_hunks_in_dir(
+                        &args.hunks,
+                        &req.cwd,
+                        &mut stdout,
+                        &mut stderr,
+                    ) {
+                        Ok(()) => 0,
+                        Err(_) => 1,
+                    }
+                }
+                // Reuse codex-apply-patch's error formatting for parse errors.
+                Err(_) => {
+                    match codex_apply_patch::apply_patch(&req.patch, &mut stdout, &mut stderr) {
+                        Ok(()) => 0,
+                        Err(_) => 1,
+                    }
+                }
+            };
+            let stdout = String::from_utf8_lossy(&stdout).to_string();
+            let stderr = String::from_utf8_lossy(&stderr).to_string();
+            let aggregated_output = format!("{stdout}{stderr}");
+            return Ok(ExecToolCallOutput {
+                exit_code,
+                stdout: crate::exec::StreamOutput::new(stdout),
+                stderr: crate::exec::StreamOutput::new(stderr),
+                aggregated_output: crate::exec::StreamOutput::new(aggregated_output),
+                duration: started.elapsed(),
+                timed_out: false,
+            });
+        }
+
         let spec = Self::build_command_spec(req)?;
         let env = attempt
             .env_for(spec)

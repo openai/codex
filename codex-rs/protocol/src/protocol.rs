@@ -141,6 +141,11 @@ pub enum Op {
         summary: Option<ReasoningSummaryConfig>,
     },
 
+    /// Enable or disable repository snapshots (ghost commits) for the remainder of the session.
+    ///
+    /// When enabled, Codex will capture per-turn git snapshots and record them in the rollout.
+    SetRepoSnapshotting { enabled: bool },
+
     /// Approve a command execution
     ExecApproval {
         /// The id of the submission we are approving

@@ -174,6 +174,11 @@ client_request_definitions! {
         response: v2::FeedbackUploadResponse,
     },
 
+    EvalCaseCreate => "evalCase/create" {
+        params: v2::EvalCaseCreateParams,
+        response: v2::EvalCaseCreateResponse,
+    },
+
     /// Execute a command (argv vector) under the server's sandbox.
     OneOffCommandExec => "command/exec" {
         params: v2::CommandExecParams,

@@ -343,6 +343,7 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
+    repo_snapshotting_enabled: AtomicBool,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -673,6 +674,7 @@ impl Session {
             tx_event: tx_event.clone(),
             state: Mutex::new(state),
             features: config.features.clone(),
+            repo_snapshotting_enabled: AtomicBool::new(false),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -1439,7 +1441,9 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
-        if !self.enabled(Feature::GhostCommit) {
+        if !self.enabled(Feature::GhostCommit)
+            && !self.repo_snapshotting_enabled.load(Ordering::Relaxed)
+        {
             return;
         }
         let token = match turn_context.tool_call_gate.subscribe().await {
@@ -1609,6 +1613,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 )
                 .await;
             }
+            Op::SetRepoSnapshotting { enabled } => {
+                handlers::set_repo_snapshotting(&sess, enabled).await;
+            }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
@@ -1707,6 +1714,7 @@ mod handlers {
     use mcp_types::RequestId;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use tracing::info;
     use tracing::warn;
 
@@ -1729,6 +1737,11 @@ mod handlers {
             })
             .await;
         }
+    }
+
+    pub async fn set_repo_snapshotting(sess: &Session, enabled: bool) {
+        sess.repo_snapshotting_enabled
+            .store(enabled, Ordering::Relaxed);
     }
 
     pub async fn user_input_or_turn(
@@ -3161,6 +3174,7 @@ mod tests {
             tx_event,
             state: Mutex::new(state),
             features: config.features.clone(),
+            repo_snapshotting_enabled: AtomicBool::new(false),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -3248,6 +3262,7 @@ mod tests {
             tx_event,
             state: Mutex::new(state),
             features: config.features.clone(),
+            repo_snapshotting_enabled: AtomicBool::new(false),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),

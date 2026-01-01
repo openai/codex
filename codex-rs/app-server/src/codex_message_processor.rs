@@ -25,6 +25,8 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
+use codex_app_server_protocol::EvalCaseCreateParams;
+use codex_app_server_protocol::EvalCaseCreateResponse;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
@@ -511,6 +513,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(request_id, params).await;
+            }
+            ClientRequest::EvalCaseCreate { request_id, params } => {
+                self.eval_case_create(request_id, params).await;
             }
         }
     }
@@ -3301,6 +3306,170 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn eval_case_create(&self, request_id: RequestId, params: EvalCaseCreateParams) {
+        let EvalCaseCreateParams {
+            thread_id,
+            start,
+            what_went_wrong,
+            what_good_looks_like,
+            include_logs,
+        } = params;
+
+        if !include_logs {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "eval case bundles always include codex-logs.log; set include_logs=true"
+                    .to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let conversation_id = match ConversationId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let Some(rollout_path) = self.resolve_rollout_path(conversation_id).await else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "could not resolve rollout path for thread".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        let rollout_text = match std::fs::read_to_string(&rollout_path) {
+            Ok(text) => text,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to read rollout file {}: {err}",
+                        rollout_path.display()
+                    ),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let start_marker = match (&start.kind, &start.value) {
+            (
+                codex_app_server_protocol::EvalCaseStartMarkerKind::RolloutLineTimestamp,
+                codex_app_server_protocol::EvalCaseStartMarkerValue::Timestamp(value),
+            ) => codex_eval_case::StartMarker {
+                kind: codex_eval_case::StartMarkerKind::RolloutLineTimestamp,
+                value: codex_eval_case::StartMarkerValue::Timestamp(value.clone()),
+                display: start.display.clone(),
+            },
+            (
+                codex_app_server_protocol::EvalCaseStartMarkerKind::RolloutLineIndex,
+                codex_app_server_protocol::EvalCaseStartMarkerValue::LineIndex(value),
+            ) => codex_eval_case::StartMarker {
+                kind: codex_eval_case::StartMarkerKind::RolloutLineIndex,
+                value: codex_eval_case::StartMarkerValue::LineIndex(*value),
+                display: start.display.clone(),
+            },
+            _ => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "start marker kind/value mismatch".to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let last_line_index = rollout_text.lines().count().saturating_sub(1);
+        let requested_start_is_now = start.display == "Start now"
+            || matches!((&start.kind, &start.value),
+                (codex_app_server_protocol::EvalCaseStartMarkerKind::RolloutLineIndex,
+                    codex_app_server_protocol::EvalCaseStartMarkerValue::LineIndex(index))
+                    if usize::try_from(*index).ok() == Some(last_line_index)
+            );
+
+        let repo_snapshot = repo_snapshot_from_rollout(&rollout_text, &start_marker);
+        if repo_snapshot.is_none() && !requested_start_is_now {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "no repo snapshot available for requested start marker".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let logs_bytes = include_logs.then(|| {
+            self.feedback
+                .snapshot(Some(conversation_id))
+                .as_bytes()
+                .to_vec()
+        });
+
+        let args = codex_eval_case::CreateEvalCaseArgs {
+            codex_home: self.config.codex_home.clone(),
+            conversation_id: thread_id.clone(),
+            rollout_path,
+            start: start_marker,
+            repo_cwd: self.config.cwd.clone(),
+            repo_snapshot,
+            notes: codex_eval_case::Notes {
+                what_went_wrong,
+                what_good_looks_like,
+            },
+            include_logs,
+            logs_bytes,
+        };
+
+        let result =
+            tokio::task::spawn_blocking(move || codex_eval_case::create_eval_case_bundle(&args))
+                .await;
+
+        let result = match result {
+            Ok(outcome) => outcome,
+            Err(join_err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to create eval case bundle: {join_err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match result {
+            Ok(outcome) => {
+                let response = EvalCaseCreateResponse {
+                    case_id: outcome.case_id,
+                    path: outcome.path.display().to_string(),
+                };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to create eval case bundle: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
     async fn resolve_rollout_path(&self, conversation_id: ConversationId) -> Option<PathBuf> {
         match self
             .conversation_manager
@@ -3311,6 +3480,56 @@ impl CodexMessageProcessor {
             Err(_) => None,
         }
     }
+}
+
+fn repo_snapshot_from_rollout(
+    rollout_text: &str,
+    start_marker: &codex_eval_case::StartMarker,
+) -> Option<codex_eval_case::RepoSnapshot> {
+    match &start_marker.value {
+        codex_eval_case::StartMarkerValue::LineIndex(index) => {
+            let index = usize::try_from(*index).ok()?;
+            repo_snapshot_from_rollout_line_index(rollout_text, index)
+        }
+        codex_eval_case::StartMarkerValue::Timestamp(timestamp) => {
+            repo_snapshot_from_rollout_timestamp(rollout_text, timestamp)
+        }
+    }
+}
+
+fn repo_snapshot_from_rollout_timestamp(
+    rollout_text: &str,
+    timestamp: &str,
+) -> Option<codex_eval_case::RepoSnapshot> {
+    let start_index = rollout_text.lines().enumerate().find_map(|(idx, line)| {
+        let rollout_line =
+            serde_json::from_str::<codex_protocol::protocol::RolloutLine>(line).ok()?;
+        (rollout_line.timestamp == timestamp).then_some(idx)
+    })?;
+    repo_snapshot_from_rollout_line_index(rollout_text, start_index)
+}
+
+fn repo_snapshot_from_rollout_line_index(
+    rollout_text: &str,
+    start_index: usize,
+) -> Option<codex_eval_case::RepoSnapshot> {
+    rollout_text
+        .lines()
+        .enumerate()
+        .skip(start_index.saturating_add(1))
+        .find_map(|(_idx, line)| {
+            let rollout_line =
+                serde_json::from_str::<codex_protocol::protocol::RolloutLine>(line).ok()?;
+            match rollout_line.item {
+                codex_protocol::protocol::RolloutItem::ResponseItem(
+                    codex_protocol::models::ResponseItem::GhostSnapshot { ghost_commit },
+                ) => Some(codex_eval_case::RepoSnapshot {
+                    base_sha: ghost_commit.parent()?.to_string(),
+                    commit_sha: ghost_commit.id().to_string(),
+                }),
+                _ => None,
+            }
+        })
 }
 
 fn skills_to_info(
@@ -3617,6 +3836,60 @@ mod tests {
         };
 
         assert_eq!(summary, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn repo_snapshot_from_rollout_line_index_finds_next_ghost_snapshot() -> Result<()> {
+        use serde_json::json;
+
+        let user_line = json!({
+            "timestamp": "2025-09-05T16:53:11.850Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "hi",
+                }],
+            },
+        });
+
+        let ghost_line = json!({
+            "timestamp": "2025-09-05T16:53:12.000Z",
+            "type": "response_item",
+            "payload": {
+                "type": "ghost_snapshot",
+                "ghost_commit": {
+                    "id": "ghost-sha",
+                    "parent": "base-sha",
+                    "preexisting_untracked_files": [],
+                    "preexisting_untracked_dirs": [],
+                },
+            },
+        });
+
+        let rollout_text = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&user_line)?,
+            serde_json::to_string(&ghost_line)?
+        );
+
+        let start = codex_eval_case::StartMarker {
+            kind: codex_eval_case::StartMarkerKind::RolloutLineIndex,
+            value: codex_eval_case::StartMarkerValue::LineIndex(0),
+            display: "From: hi".to_string(),
+        };
+
+        let snapshot = repo_snapshot_from_rollout(&rollout_text, &start).expect("snapshot");
+        assert_eq!(
+            snapshot,
+            codex_eval_case::RepoSnapshot {
+                base_sha: "base-sha".to_string(),
+                commit_sha: "ghost-sha".to_string(),
+            }
+        );
         Ok(())
     }
 }

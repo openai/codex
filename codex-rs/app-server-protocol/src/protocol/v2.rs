@@ -931,6 +931,50 @@ pub struct FeedbackUploadResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum EvalCaseStartMarkerKind {
+    RolloutLineTimestamp,
+    RolloutLineIndex,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum EvalCaseStartMarkerValue {
+    Timestamp(String),
+    LineIndex(u64),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EvalCaseStartMarker {
+    pub kind: EvalCaseStartMarkerKind,
+    pub value: EvalCaseStartMarkerValue,
+    pub display: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EvalCaseCreateParams {
+    pub thread_id: String,
+    pub start: EvalCaseStartMarker,
+    pub what_went_wrong: String,
+    pub what_good_looks_like: String,
+    pub include_logs: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EvalCaseCreateResponse {
+    pub case_id: String,
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecParams {

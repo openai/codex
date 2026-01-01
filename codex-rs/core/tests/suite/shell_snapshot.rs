@@ -8,6 +8,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -277,7 +278,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(harness.server(), responses).await;
+    let requests = mount_sse_sequence(harness.server(), responses).await;
 
     let model = test.session_configured.model.clone();
     codex
@@ -297,7 +298,14 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    assert_eq!(fs::read_to_string(&target).await?, "hello from snapshot\n");
+    let tool_output = extract_call_output_text(&requests.requests(), call_id);
+    let target_contents = fs::read_to_string(&target).await.unwrap_or_else(|err| {
+        panic!(
+            "expected patch to create {}: {err}; tool output={tool_output:?}",
+            target.display()
+        )
+    });
+    assert_eq!(target_contents, "hello from snapshot\n");
 
     let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
     let snapshot_path = entries
@@ -309,6 +317,35 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     assert_posix_snapshot_sections(&snapshot_content);
 
     Ok(())
+}
+
+fn extract_call_output_text(requests: &[ResponsesRequest], call_id: &str) -> String {
+    for req in requests {
+        let input = req.input();
+        let item = input.iter().find(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+        });
+        let Some(item) = item else {
+            continue;
+        };
+
+        let output = item
+            .get("output")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        match output {
+            serde_json::Value::String(text) => return text,
+            serde_json::Value::Object(obj) => {
+                if let Some(text) = obj.get("content").and_then(serde_json::Value::as_str) {
+                    return text.to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    "<missing tool output>".to_string()
 }
 
 #[cfg_attr(target_os = "windows", ignore)]

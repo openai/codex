@@ -155,8 +155,28 @@ pub struct CodexLogSnapshot {
     pub thread_id: String,
 }
 
+pub struct FeedbackAttachment {
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+impl FeedbackAttachment {
+    pub fn new(filename: String, content_type: Option<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            filename,
+            content_type,
+            bytes,
+        }
+    }
+}
+
 impl CodexLogSnapshot {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn from_bytes(thread_id: String, bytes: Vec<u8>) -> Self {
+        Self { bytes, thread_id }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
@@ -176,6 +196,25 @@ impl CodexLogSnapshot {
         include_logs: bool,
         rollout_path: Option<&std::path::Path>,
         session_source: Option<SessionSource>,
+    ) -> Result<()> {
+        self.upload_feedback_with_attachments(
+            classification,
+            reason,
+            include_logs,
+            rollout_path,
+            session_source,
+            Vec::new(),
+        )
+    }
+
+    pub fn upload_feedback_with_attachments(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        include_logs: bool,
+        rollout_path: Option<&std::path::Path>,
+        session_source: Option<SessionSource>,
+        extra_attachments: Vec<FeedbackAttachment>,
     ) -> Result<()> {
         use std::collections::BTreeMap;
         use std::fs;
@@ -261,6 +300,15 @@ impl CodexLogSnapshot {
                 buffer: data,
                 filename: fname,
                 content_type: Some(content_type),
+                ty: None,
+            }));
+        }
+
+        for attachment in extra_attachments {
+            envelope.add_item(EnvelopeItem::Attachment(Attachment {
+                buffer: attachment.bytes,
+                filename: attachment.filename,
+                content_type: attachment.content_type,
                 ty: None,
             }));
         }

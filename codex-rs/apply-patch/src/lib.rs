@@ -209,34 +209,19 @@ pub fn apply_hunks(
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
 ) -> Result<(), ApplyPatchError> {
-    let _existing_paths: Vec<&Path> = hunks
-        .iter()
-        .filter_map(|hunk| match hunk {
-            Hunk::AddFile { .. } => {
-                // The file is being added, so it doesn't exist yet.
-                None
-            }
-            Hunk::DeleteFile { path } => Some(path.as_path()),
-            Hunk::UpdateFile {
-                path, move_path, ..
-            } => match move_path {
-                Some(move_path) => {
-                    if std::fs::metadata(move_path)
-                        .map(|m| m.is_file())
-                        .unwrap_or(false)
-                    {
-                        Some(move_path.as_path())
-                    } else {
-                        None
-                    }
-                }
-                None => Some(path.as_path()),
-            },
-        })
-        .collect::<Vec<&Path>>();
+    apply_hunks_in_dir(hunks, Path::new("."), stdout, stderr)
+}
 
+/// Applies hunks relative to `cwd` (without mutating the process working directory) and writes the
+/// same stdout/stderr output as `apply_hunks`.
+pub fn apply_hunks_in_dir(
+    hunks: &[Hunk],
+    cwd: &Path,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+) -> Result<(), ApplyPatchError> {
     // Delegate to a helper that applies each hunk to the filesystem.
-    match apply_hunks_to_files(hunks) {
+    match apply_hunks_to_files_in_dir(hunks, cwd) {
         Ok(affected) => {
             print_summary(&affected, stdout).map_err(ApplyPatchError::from)?;
             Ok(())
@@ -267,7 +252,7 @@ pub struct AffectedPaths {
 
 /// Apply the hunks to the filesystem, returning which files were added, modified, or deleted.
 /// Returns an error if the patch could not be applied.
-fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
+fn apply_hunks_to_files_in_dir(hunks: &[Hunk], cwd: &Path) -> anyhow::Result<AffectedPaths> {
     if hunks.is_empty() {
         anyhow::bail!("No files were modified.");
     }
@@ -278,19 +263,29 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
     for hunk in hunks {
         match hunk {
             Hunk::AddFile { path, contents } => {
-                if let Some(parent) = path.parent()
+                let target_path = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    cwd.join(path)
+                };
+                if let Some(parent) = target_path.parent()
                     && !parent.as_os_str().is_empty()
                 {
                     std::fs::create_dir_all(parent).with_context(|| {
                         format!("Failed to create parent directories for {}", path.display())
                     })?;
                 }
-                std::fs::write(path, contents)
+                std::fs::write(&target_path, contents)
                     .with_context(|| format!("Failed to write file {}", path.display()))?;
                 added.push(path.clone());
             }
             Hunk::DeleteFile { path } => {
-                std::fs::remove_file(path)
+                let target_path = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    cwd.join(path)
+                };
+                std::fs::remove_file(&target_path)
                     .with_context(|| format!("Failed to delete file {}", path.display()))?;
                 deleted.push(path.clone());
             }
@@ -300,22 +295,38 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 chunks,
             } => {
                 let AppliedPatch { new_contents, .. } =
-                    derive_new_contents_from_chunks(path, chunks)?;
+                    derive_new_contents_from_chunks_in_dir(path, chunks, cwd)?;
                 if let Some(dest) = move_path {
-                    if let Some(parent) = dest.parent()
+                    let dest_path = if dest.is_absolute() {
+                        dest.clone()
+                    } else {
+                        cwd.join(dest)
+                    };
+                    if let Some(parent) = dest_path.parent()
                         && !parent.as_os_str().is_empty()
                     {
                         std::fs::create_dir_all(parent).with_context(|| {
                             format!("Failed to create parent directories for {}", dest.display())
                         })?;
                     }
-                    std::fs::write(dest, new_contents)
+                    std::fs::write(&dest_path, new_contents)
                         .with_context(|| format!("Failed to write file {}", dest.display()))?;
-                    std::fs::remove_file(path)
+
+                    let src_path = if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        cwd.join(path)
+                    };
+                    std::fs::remove_file(&src_path)
                         .with_context(|| format!("Failed to remove original {}", path.display()))?;
                     modified.push(dest.clone());
                 } else {
-                    std::fs::write(path, new_contents)
+                    let target_path = if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        cwd.join(path)
+                    };
+                    std::fs::write(&target_path, new_contents)
                         .with_context(|| format!("Failed to write file {}", path.display()))?;
                     modified.push(path.clone());
                 }
@@ -340,7 +351,21 @@ fn derive_new_contents_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = match std::fs::read_to_string(path) {
+    derive_new_contents_from_chunks_in_dir(path, chunks, Path::new("."))
+}
+
+fn derive_new_contents_from_chunks_in_dir(
+    path: &Path,
+    chunks: &[UpdateFileChunk],
+    cwd: &Path,
+) -> std::result::Result<AppliedPatch, ApplyPatchError> {
+    let target_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+
+    let original_contents = match std::fs::read_to_string(&target_path) {
         Ok(contents) => contents,
         Err(err) => {
             return Err(ApplyPatchError::IoError(IoError {
