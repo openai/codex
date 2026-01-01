@@ -368,7 +368,7 @@ impl Renderable for EvalCaptureNotesView {
 impl EvalCaptureNotesView {
     fn header_lines(&self, width: u16) -> Vec<Line<'static>> {
         let title = "What went wrong with this interaction, and what should have happened for this to be a correct, delightful response?";
-        let subtitle = "Please be specific, and can refer to any model behavior, including tool calls, code changes, or messages.";
+        let subtitle = "Please be specific, and can refer to any aspect of model behavior, including tool calls, code changes, or messages.";
         let usable_width = width.saturating_sub(2).max(1) as usize;
         let mut lines = Vec::new();
         lines.push(Line::from(title.bold()));
