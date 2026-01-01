@@ -96,3 +96,7 @@ impl Default for RetrievalConfigToml {
         }
     }
 }
+
+// Note: Hooks configuration has been moved to separate hooks.json file.
+// See codex_hooks::config::HooksJsonConfig for the new format.
+// Load hooks using codex_hooks::loader::load_hooks_config(cwd)

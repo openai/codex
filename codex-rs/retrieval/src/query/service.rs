@@ -36,9 +36,12 @@ impl QueryRewriteService {
     /// Create a new query rewrite service.
     pub async fn new(config: QueryRewriteConfig, db: Option<Arc<SqliteStore>>) -> Result<Self> {
         // Initialize cache if enabled and DB is available
+        // Include LLM config hash to invalidate cache when model changes
+        let llm_config_hash =
+            RewriteCache::compute_llm_config_hash(&config.llm.provider, &config.llm.model);
         let cache = if config.cache.enabled {
             if let Some(db) = db {
-                Some(RewriteCache::new(db, config.cache.clone()).await?)
+                Some(RewriteCache::new(db, config.cache.clone(), &llm_config_hash).await?)
             } else {
                 None
             }
@@ -89,9 +92,12 @@ impl QueryRewriteService {
         provider: Arc<dyn LlmProvider>,
         db: Option<Arc<SqliteStore>>,
     ) -> Result<Self> {
+        // Include LLM config hash to invalidate cache when model changes
+        let llm_config_hash =
+            RewriteCache::compute_llm_config_hash(&config.llm.provider, &config.llm.model);
         let cache = if config.cache.enabled {
             if let Some(db) = db {
-                Some(RewriteCache::new(db, config.cache.clone()).await?)
+                Some(RewriteCache::new(db, config.cache.clone(), &llm_config_hash).await?)
             } else {
                 None
             }

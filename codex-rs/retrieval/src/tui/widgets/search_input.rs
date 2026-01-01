@@ -19,9 +19,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::events::SearchMode;
-
-/// Maximum number of history entries to keep.
-const MAX_HISTORY: usize = 50;
+use crate::tui::constants::MAX_HISTORY_ENTRIES;
 
 /// Search input widget state.
 #[derive(Debug, Clone, Default)]
@@ -152,7 +150,7 @@ impl SearchInputState {
         self.history.push_back(query);
 
         // Limit history size
-        while self.history.len() > MAX_HISTORY {
+        while self.history.len() > MAX_HISTORY_ENTRIES {
             self.history.pop_front();
         }
 
@@ -256,23 +254,29 @@ impl<'a> SearchInput<'a> {
             .enumerate()
             .flat_map(|(i, (mode, name))| {
                 let is_selected = *mode == self.state.mode;
-                let style = if is_selected {
-                    Style::default().add_modifier(Modifier::BOLD).cyan()
+
+                // Use ● for selected, ○ for unselected
+                let indicator = if is_selected { "●" } else { "○" };
+                let indicator_style = if is_selected {
+                    Style::default().cyan().add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().dim()
                 };
 
-                let prefix = if is_selected { "[" } else { " " };
-                let suffix = if is_selected { "]" } else { " " };
+                let name_style = if is_selected {
+                    Style::default().cyan().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().dim()
+                };
 
                 let mut result = vec![
-                    Span::styled(prefix, style),
-                    Span::styled(*name, style),
-                    Span::styled(suffix, style),
+                    Span::styled(indicator, indicator_style),
+                    Span::raw(" "),
+                    Span::styled(*name, name_style),
                 ];
 
                 if i < modes.len() - 1 {
-                    result.push(Span::raw(" "));
+                    result.push(Span::raw("  ")); // Double space between modes
                 }
 
                 result

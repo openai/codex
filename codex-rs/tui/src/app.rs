@@ -38,6 +38,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::thinking::ThinkingState;
 use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -322,6 +323,9 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    /// Session-level thinking state for ultrathink toggle.
+    pub(crate) thinking_state: ThinkingState,
 }
 
 impl App {
@@ -453,6 +457,7 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            thinking_state: ThinkingState::default(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -837,6 +842,15 @@ impl App {
                     self.chat_widget
                         .add_info_message("Entering plan mode...".to_string(), None);
                 }
+            }
+            AppEvent::ToggleUltrathink => {
+                let new_state = self.thinking_state.toggle();
+                let msg = if new_state {
+                    "Ultrathink: ON"
+                } else {
+                    "Ultrathink: OFF"
+                };
+                self.chat_widget.add_info_message(msg.to_string(), None);
             }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
@@ -1444,6 +1458,7 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            thinking_state: ThinkingState::default(),
         }
     }
 
@@ -1485,6 +1500,7 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
+                thinking_state: ThinkingState::default(),
             },
             rx,
             op_rx,

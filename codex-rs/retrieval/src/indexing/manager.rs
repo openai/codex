@@ -214,6 +214,7 @@ impl IndexManager {
                     None
                 },
                 bm25_searcher.as_ref(),
+                RebuildMode::Incremental, // index_workspace always uses incremental mode
             )
             .await;
 
@@ -250,6 +251,8 @@ impl IndexManager {
         cache_info: Option<(&Path, &str)>, // (cache_path, artifact_id)
         // Optional BM25 searcher for custom BM25 indexing
         bm25_searcher: Option<&Arc<Bm25Searcher>>,
+        // Rebuild mode for statistics
+        rebuild_mode: RebuildMode,
     ) -> Result<()> {
         // Create cache if embedding mode is enabled
         let cache = if let Some((cache_path, artifact_id)) = cache_info {
@@ -261,10 +264,14 @@ impl IndexManager {
         let index_start = Instant::now();
 
         // Emit index build started event
+        let mode_info = match rebuild_mode {
+            RebuildMode::Incremental => RebuildModeInfo::Incremental,
+            RebuildMode::Clean => RebuildModeInfo::Clean,
+        };
         event_emitter::emit(RetrievalEvent::IndexBuildStarted {
             workspace: workspace.to_string(),
-            mode: RebuildModeInfo::Incremental, // TODO: pass mode through
-            estimated_files: 0,                 // Will update after scan
+            mode: mode_info,
+            estimated_files: 0, // Will update after scan
         });
 
         // Phase 1: Walk files
@@ -381,6 +388,7 @@ impl IndexManager {
 
         let mut tag_extractor = TagExtractor::new();
         let mut processed = 0;
+        let mut total_chunks: i64 = 0;
         let mut failed_files: Vec<String> = Vec::new();
 
         // Time-based lock refresh (every 15 seconds, lock timeout is 30 seconds)
@@ -459,6 +467,12 @@ impl IndexManager {
                             "Failed to delete old chunks from LanceDB"
                         );
                     }
+
+                    // Note: We don't delete from embedding cache here because:
+                    // 1. Cache is content-hash based - only matching hashes are retrieved
+                    // 2. Old entries are orphaned but harmless
+                    // 3. Deleting would break cache hits when re-indexing unchanged content
+                    // Cache cleanup can be done separately via a maintenance task
 
                     // 2. Check cache and collect chunks needing embedding
                     let mut chunks_with_emb: Vec<CodeChunk> = Vec::new();
@@ -572,6 +586,9 @@ impl IndexManager {
                     )
                     .await?;
 
+                // Track total chunks for statistics
+                total_chunks += chunk_spans.len() as i64;
+
                 // Emit file processed event
                 event_emitter::emit(RetrievalEvent::IndexFileProcessed {
                     workspace: workspace.to_string(),
@@ -673,7 +690,7 @@ impl IndexManager {
             workspace: workspace.to_string(),
             stats: IndexStatsSummary {
                 file_count: processed as i32,
-                chunk_count: 0, // TODO: track total chunks
+                chunk_count: total_chunks as i32,
                 symbol_count: 0,
                 index_size_bytes: 0,
                 languages: Vec::new(),

@@ -192,6 +192,9 @@ pub(crate) enum AppEvent {
 
     /// Toggle plan mode on/off via keyboard shortcut (Shift+Tab).
     TogglePlanMode,
+
+    /// Toggle ultrathink mode on/off via keyboard shortcut (Tab).
+    ToggleUltrathink,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

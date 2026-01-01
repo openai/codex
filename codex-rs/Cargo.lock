@@ -2277,6 +2277,7 @@ dependencies = [
  "codex-file-ignore",
  "codex-file-search",
  "codex-git",
+ "codex-hooks",
  "codex-keyring-store",
  "codex-lsp",
  "codex-otel",
@@ -2500,6 +2501,27 @@ dependencies = [
  "thiserror 2.0.17",
  "ts-rs",
  "walkdir",
+]
+
+[[package]]
+name = "codex-hooks"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-protocol",
+ "dashmap",
+ "dirs 6.0.0",
+ "futures",
+ "once_cell",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

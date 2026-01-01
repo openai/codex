@@ -14,10 +14,94 @@ use ratatui::widgets::Borders;
 use ratatui::widgets::List;
 use ratatui::widgets::ListItem;
 use ratatui::widgets::ListState;
+use ratatui::widgets::Scrollbar;
+use ratatui::widgets::ScrollbarOrientation;
+use ratatui::widgets::ScrollbarState;
 use ratatui::widgets::StatefulWidget;
 use ratatui::widgets::Widget;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::events::SearchResultSummary;
+
+/// Truncate a file path to fit within max_width (display columns), preserving the filename.
+/// Uses "…" (ellipsis) to indicate truncation.
+///
+/// Examples:
+/// - "very/long/path/to/file.rs" -> "…/nested/file.rs"
+/// - "short.rs" -> "short.rs" (no truncation)
+fn truncate_path(path: &str, max_width: usize) -> String {
+    let path_width = UnicodeWidthStr::width(path);
+    if path_width <= max_width || max_width < 4 {
+        return path.to_string();
+    }
+
+    // Split by path separator
+    let sep = if path.contains('\\') { '\\' } else { '/' };
+    let parts: Vec<&str> = path.split(sep).collect();
+
+    if parts.len() <= 1 {
+        // No separator, just truncate from the start
+        // "…" takes 1 display column
+        let target_width = max_width.saturating_sub(1);
+        let mut result = String::new();
+        let mut current_width = 0;
+        for c in path.chars().rev() {
+            let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if current_width + char_width > target_width {
+                break;
+            }
+            result.insert(0, c);
+            current_width += char_width;
+        }
+        return format!("…{result}");
+    }
+
+    // Always keep the filename (last part)
+    let filename = parts.last().unwrap_or(&"");
+    let filename_width = UnicodeWidthStr::width(*filename);
+
+    // If filename alone is too wide, truncate it
+    if filename_width + 2 >= max_width {
+        // "…" + separator = 2 display columns
+        let target_width = max_width.saturating_sub(1);
+        let mut result = String::new();
+        let mut current_width = 0;
+        for c in filename.chars().rev() {
+            let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if current_width + char_width > target_width {
+                break;
+            }
+            result.insert(0, c);
+            current_width += char_width;
+        }
+        return format!("…{result}");
+    }
+
+    // Build path from right to left, tracking display width
+    let mut result = filename.to_string();
+    let mut result_width = filename_width;
+    let ellipsis_width = 2; // "…/" or "…\"
+
+    for part in parts.iter().rev().skip(1) {
+        let part_width = UnicodeWidthStr::width(*part);
+        let new_width = result_width + 1 + part_width; // +1 for separator
+
+        if new_width + ellipsis_width <= max_width {
+            result = format!("{part}{sep}{result}");
+            result_width = new_width;
+        } else {
+            break;
+        }
+    }
+
+    // If we didn't include all parts, add ellipsis
+    if result_width < path_width {
+        format!("…{sep}{result}")
+    } else {
+        result
+    }
+}
 
 /// Result list widget state.
 #[derive(Debug, Clone, Default)]
@@ -180,15 +264,29 @@ impl<'a> ResultList<'a> {
         Self { state }
     }
 
-    fn format_result_item(&self, index: usize, result: &SearchResultSummary) -> ListItem<'static> {
+    fn format_result_item(
+        &self,
+        index: usize,
+        result: &SearchResultSummary,
+        available_width: u16,
+    ) -> ListItem<'static> {
         let is_selected = self.state.list_state.selected() == Some(index);
 
         // Format: "1. path/to/file.rs:10-20  [Type]  0.912 ⚠"
         let num = format!("{:>3}. ", index + 1);
-        let path = format!(
-            "{}:{}-{}",
-            result.filepath, result.start_line, result.end_line
-        );
+
+        // Calculate overhead: num(5) + separators(4) + type(8) + score(5) + lang(8) + staleness(2) + line_nums(~12)
+        // Plus borders(2) + highlight(2) = ~48 chars overhead
+        let overhead = 48;
+        let path_max_width = (available_width as usize).saturating_sub(overhead);
+
+        // Format line numbers suffix
+        let line_suffix = format!(":{}-{}", result.start_line, result.end_line);
+        let filepath_max = path_max_width.saturating_sub(line_suffix.len());
+
+        // Truncate filepath if needed
+        let truncated_filepath = truncate_path(&result.filepath, filepath_max);
+        let path = format!("{}{}", truncated_filepath, line_suffix);
         let score_type_str = format!("[{}]", result.score_type);
         let score = format!("{:.3}", result.score);
 
@@ -302,13 +400,13 @@ impl StatefulWidget for ResultList<'_> {
             let para = ratatui::widgets::Paragraph::new(msg_line);
             para.render(inner, buf);
         } else {
-            // Build list items
+            // Build list items with width-aware truncation
             let items: Vec<ListItem> = self
                 .state
                 .results
                 .iter()
                 .enumerate()
-                .map(|(i, r)| self.format_result_item(i, r))
+                .map(|(i, r)| self.format_result_item(i, r, area.width))
                 .collect();
 
             let list = List::new(items)
@@ -323,6 +421,31 @@ impl StatefulWidget for ResultList<'_> {
             // Copy state for rendering
             *state = self.state.list_state.clone();
             StatefulWidget::render(list, area, buf, state);
+
+            // Add scrollbar if there are more items than visible
+            let total_items = self.state.results.len();
+            if total_items > visible_height && visible_height > 0 {
+                let current_index = self.state.list_state.selected().unwrap_or(0);
+
+                let mut scrollbar_state = ScrollbarState::new(total_items)
+                    .position(current_index)
+                    .viewport_content_length(visible_height);
+
+                let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(Some("▲"))
+                    .end_symbol(Some("▼"))
+                    .track_symbol(Some("│"))
+                    .thumb_symbol("█");
+
+                // Render scrollbar in the inner area (inside borders)
+                let scrollbar_area = ratatui::layout::Rect {
+                    x: area.x + area.width.saturating_sub(1),
+                    y: area.y + 1,
+                    width: 1,
+                    height: area.height.saturating_sub(2),
+                };
+                StatefulWidget::render(scrollbar, scrollbar_area, buf, &mut scrollbar_state);
+            }
         }
     }
 }
@@ -428,5 +551,41 @@ mod tests {
         assert!(state.duration_ms.is_none());
         assert!(state.searching);
         assert!(state.selected_index().is_none());
+    }
+
+    #[test]
+    fn test_truncate_path_no_truncation() {
+        // Short path should not be truncated
+        assert_eq!(truncate_path("short.rs", 20), "short.rs");
+        assert_eq!(truncate_path("a/b/c.rs", 20), "a/b/c.rs");
+    }
+
+    #[test]
+    fn test_truncate_path_with_truncation() {
+        // Long path should be truncated with ellipsis
+        let long_path = "very/long/path/to/deeply/nested/file.rs";
+        let truncated = truncate_path(long_path, 25);
+        assert!(truncated.starts_with('…'));
+        assert!(truncated.ends_with("file.rs"));
+        // Check display width, not byte length
+        let display_width = UnicodeWidthStr::width(truncated.as_str());
+        assert!(display_width <= 25);
+    }
+
+    #[test]
+    fn test_truncate_path_preserves_filename() {
+        // Filename should always be preserved when possible
+        let path = "a/b/c/d/e/f/g/h/i/very_long_filename.rs";
+        let truncated = truncate_path(path, 30);
+        assert!(truncated.contains("very_long_filename.rs"));
+    }
+
+    #[test]
+    fn test_truncate_path_small_width() {
+        // Very small width should still work
+        let path = "path/to/file.rs";
+        let truncated = truncate_path(path, 3);
+        // With max_width < 4, return original
+        assert_eq!(truncated, path);
     }
 }

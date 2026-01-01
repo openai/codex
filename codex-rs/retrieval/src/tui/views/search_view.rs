@@ -45,7 +45,7 @@ impl Widget for SearchView<'_> {
                 Constraint::Length(4),  // Query input (mode selector + input)
                 Constraint::Length(10), // Search pipeline
                 Constraint::Min(5),     // Results
-                Constraint::Length(6),  // Event log
+                Constraint::Length(8),  // Event log (increased from 6)
             ])
             .split(area);
 

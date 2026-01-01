@@ -13,6 +13,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "codex-hooks",
     "common",
     "core",
     "exec",
@@ -83,6 +84,7 @@ codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-file-ignore = { path = "file-ignore" }
 codex-git = { path = "utils/git" }
+codex-hooks = { path = "codex-hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }

@@ -21,7 +21,11 @@
 //! ```
 
 use std::cmp::Ordering;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering as AtomicOrdering;
 use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -36,6 +40,70 @@ use crate::types::SearchResult;
 use super::Reranker;
 use super::RerankerCapabilities;
 
+/// Circuit breaker state for remote API protection.
+///
+/// Opens after `failure_threshold` consecutive failures, preventing further
+/// API calls until `reset_timeout_secs` has elapsed. This protects against
+/// quota exhaustion and improves responsiveness when the API is unavailable.
+#[derive(Debug)]
+struct CircuitBreaker {
+    /// Number of consecutive failures
+    failures: AtomicI32,
+    /// Timestamp (seconds since UNIX epoch) of last failure
+    last_failure_secs: AtomicU64,
+    /// Threshold before circuit opens
+    failure_threshold: i32,
+    /// Seconds to wait before attempting recovery
+    reset_timeout_secs: i32,
+    /// Start time for elapsed calculation
+    start_instant: Instant,
+}
+
+impl CircuitBreaker {
+    fn new(failure_threshold: i32, reset_timeout_secs: i32) -> Self {
+        Self {
+            failures: AtomicI32::new(0),
+            last_failure_secs: AtomicU64::new(0),
+            failure_threshold,
+            reset_timeout_secs,
+            start_instant: Instant::now(),
+        }
+    }
+
+    /// Check if the circuit is open (blocking requests).
+    fn is_open(&self) -> bool {
+        let failures = self.failures.load(AtomicOrdering::SeqCst);
+        if failures < self.failure_threshold {
+            return false;
+        }
+
+        // Check if enough time has passed to attempt recovery
+        let last_failure = self.last_failure_secs.load(AtomicOrdering::SeqCst);
+        let now_secs = self.start_instant.elapsed().as_secs();
+        let elapsed = now_secs.saturating_sub(last_failure);
+
+        elapsed < self.reset_timeout_secs as u64
+    }
+
+    /// Record a successful request (resets failure count).
+    fn record_success(&self) {
+        self.failures.store(0, AtomicOrdering::SeqCst);
+    }
+
+    /// Record a failed request.
+    fn record_failure(&self) {
+        self.failures.fetch_add(1, AtomicOrdering::SeqCst);
+        let now_secs = self.start_instant.elapsed().as_secs();
+        self.last_failure_secs
+            .store(now_secs, AtomicOrdering::SeqCst);
+    }
+
+    /// Get current failure count for logging.
+    fn failure_count(&self) -> i32 {
+        self.failures.load(AtomicOrdering::SeqCst)
+    }
+}
+
 /// Remote API-based reranker.
 #[derive(Debug)]
 pub struct RemoteReranker {
@@ -45,11 +113,18 @@ pub struct RemoteReranker {
     base_url: Option<String>,
     #[allow(dead_code)] // Reserved for retry configuration
     timeout_secs: i32,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Stored for potential future use
     max_retries: i32,
     top_n: Option<i32>,
     client: reqwest::Client,
+    /// Circuit breaker for API protection
+    circuit_breaker: CircuitBreaker,
 }
+
+/// Default circuit breaker failure threshold
+const DEFAULT_FAILURE_THRESHOLD: i32 = 5;
+/// Default circuit breaker reset timeout in seconds
+const DEFAULT_RESET_TIMEOUT_SECS: i32 = 60;
 
 impl RemoteReranker {
     /// Create a new remote reranker from config.
@@ -62,6 +137,10 @@ impl RemoteReranker {
                 cause: format!("Failed to create HTTP client: {}", e),
             })?;
 
+        // Circuit breaker: open after 5 failures, reset after 60 seconds
+        let circuit_breaker =
+            CircuitBreaker::new(DEFAULT_FAILURE_THRESHOLD, DEFAULT_RESET_TIMEOUT_SECS);
+
         Ok(Self {
             provider: config.provider.clone(),
             model: config.model.clone(),
@@ -71,6 +150,7 @@ impl RemoteReranker {
             max_retries: config.max_retries,
             top_n: config.top_n,
             client,
+            circuit_breaker,
         })
     }
 
@@ -222,16 +302,48 @@ impl Reranker for RemoteReranker {
             return Ok(());
         }
 
+        // Check circuit breaker before making API call
+        if self.circuit_breaker.is_open() {
+            tracing::warn!(
+                provider = ?self.provider,
+                failures = self.circuit_breaker.failure_count(),
+                "Remote reranker circuit breaker is open, skipping rerank"
+            );
+            // Return without reranking - results keep their original scores
+            return Ok(());
+        }
+
         // Extract document contents
         let documents: Vec<&str> = results.iter().map(|r| r.chunk.content.as_str()).collect();
 
-        // Call appropriate provider API
-        let scores = match self.provider {
-            RerankerProvider::Cohere => self.rerank_cohere(query, &documents).await?,
-            RerankerProvider::VoyageAi => self.rerank_voyage(query, &documents).await?,
+        // Call appropriate provider API with circuit breaker tracking
+        let scores_result = match self.provider {
+            RerankerProvider::Cohere => self.rerank_cohere(query, &documents).await,
+            RerankerProvider::VoyageAi => self.rerank_voyage(query, &documents).await,
             RerankerProvider::Custom => {
                 // Default to Cohere-compatible API for custom endpoints
-                self.rerank_cohere(query, &documents).await?
+                self.rerank_cohere(query, &documents).await
+            }
+        };
+
+        // Handle result with circuit breaker
+        let scores = match scores_result {
+            Ok(s) => {
+                self.circuit_breaker.record_success();
+                s
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure();
+                let failures = self.circuit_breaker.failure_count();
+                tracing::warn!(
+                    provider = ?self.provider,
+                    error = %e,
+                    failures = failures,
+                    threshold = DEFAULT_FAILURE_THRESHOLD,
+                    "Remote reranker API call failed"
+                );
+                // Return without reranking on error
+                return Err(e);
             }
         };
 

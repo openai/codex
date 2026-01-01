@@ -23,13 +23,16 @@ use crate::tools::handlers::ext::lsp::get_lsp_diagnostics_store;
 /// Clean up session-scoped resources when conversation ends.
 ///
 /// Called from `handlers::shutdown()` in `codex.rs` to ensure proper cleanup
-/// of subagent stores (AgentRegistry, BackgroundTaskStore, TranscriptStore)
-/// and background shells.
+/// of subagent stores (AgentRegistry, BackgroundTaskStore, TranscriptStore),
+/// background shells, and session-scoped hooks.
 ///
 /// This prevents memory leaks in long-running server deployments where
 /// conversations accumulate without cleanup.
 pub fn cleanup_session_resources(conversation_id: &ConversationId) {
     cleanup_stores(conversation_id);
+
+    // Clean up session-scoped hooks for this conversation
+    crate::hooks_ext::clear_session_hooks(&conversation_id.to_string());
 
     // Clean up background shells for this conversation
     // This kills running shells and removes all shells associated with this session

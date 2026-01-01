@@ -56,6 +56,7 @@ use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::thinking::detect_ultrathink;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1610,6 +1611,16 @@ impl ChatComposer {
         // Handle Shift+Tab (BackTab) for plan mode toggle
         if matches!(key_event.code, KeyCode::BackTab) {
             self.app_event_tx.send(AppEvent::TogglePlanMode);
+            return true;
+        }
+
+        // Handle Tab for ultrathink toggle (when no popup active and no keyword in text)
+        if matches!(key_event.code, KeyCode::Tab)
+            && !has_ctrl_or_alt(key_event.modifiers)
+            && matches!(self.active_popup, ActivePopup::None)
+            && !detect_ultrathink(&self.current_text())
+        {
+            self.app_event_tx.send(AppEvent::ToggleUltrathink);
             return true;
         }
 

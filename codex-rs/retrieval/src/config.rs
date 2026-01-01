@@ -1163,6 +1163,27 @@ impl RetrievalConfig {
 
         warnings
     }
+
+    /// Validate configuration with optional indexed dimension check.
+    ///
+    /// If `indexed_dimension` is provided and differs from the configured
+    /// dimension, adds a `DimensionMismatch` warning. This helps users
+    /// detect when they've changed embedding models without rebuilding.
+    pub fn validate_with_index(&self, indexed_dimension: Option<i32>) -> Vec<ConfigWarning> {
+        let mut warnings = self.validate();
+
+        // Check for dimension mismatch with existing index
+        if let (Some(embedding), Some(indexed)) = (&self.embedding, indexed_dimension) {
+            if embedding.dimension != indexed && indexed > 0 {
+                warnings.push(ConfigWarning::DimensionMismatch {
+                    configured: embedding.dimension,
+                    indexed,
+                });
+            }
+        }
+
+        warnings
+    }
 }
 
 /// Configuration warning.

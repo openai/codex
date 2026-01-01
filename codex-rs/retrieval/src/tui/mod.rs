@@ -30,6 +30,9 @@
 pub mod app;
 pub mod app_event;
 pub mod app_state;
+pub mod constants;
+mod handlers;
+mod render;
 pub mod terminal;
 
 // View modules

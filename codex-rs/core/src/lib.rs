@@ -11,6 +11,7 @@ pub mod auth;
 pub mod bash;
 mod client;
 mod client_common;
+mod client_ultrathink_ext;
 pub mod codex;
 mod codex_conversation;
 mod compact_remote;
@@ -47,6 +48,7 @@ pub mod powershell;
 pub mod sandboxing;
 mod stream_events_utils;
 mod text_encoding;
+pub mod thinking;
 pub mod token_data;
 mod truncate;
 mod unified_exec;
@@ -140,6 +142,7 @@ pub mod subagent;
 
 // Extension modules for lifecycle management
 pub mod codex_ext;
+pub mod hooks_ext;
 
 // System reminder module
 pub mod system_reminder;

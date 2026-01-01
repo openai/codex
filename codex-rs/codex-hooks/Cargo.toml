@@ -1,0 +1,38 @@
+[package]
+name = "codex-hooks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hook system for Codex - aligned with Claude Code's hook architecture"
+
+[dependencies]
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Async
+tokio = { workspace = true, features = ["process", "time", "io-util", "sync", "macros"] }
+tokio-util = { workspace = true }
+futures = { workspace = true, features = ["std"] }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+regex = { workspace = true }
+once_cell = { workspace = true }
+dashmap = { workspace = true }
+dirs = { workspace = true }
+
+# Protocol types
+codex-protocol = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

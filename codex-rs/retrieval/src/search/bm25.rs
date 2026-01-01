@@ -167,7 +167,8 @@ impl Bm25Searcher {
         if attempts >= MAX_RETRIES {
             tracing::warn!(
                 attempts = attempts,
-                "Max BM25 load retries reached, using empty index"
+                "Max BM25 load retries reached, using empty index. \
+                Search will use LanceDB FTS fallback which may have lower quality."
             );
             self.loaded.store(true, Ordering::SeqCst);
             return Ok(());
@@ -306,6 +307,10 @@ impl Bm25Searcher {
 
         if results.is_empty() {
             // Fall back to LanceDB FTS if no results from custom index
+            tracing::debug!(
+                query = %query.text,
+                "BM25 index returned no results, falling back to LanceDB FTS"
+            );
             return self.search_fallback(query).await;
         }
 

@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::models_manager::model_family::ModelFamily;
 use crate::models_manager::model_family::find_family_for_model;
+use crate::thinking::UltrathinkConfig;
 
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -46,6 +47,13 @@ pub struct ModelProviderInfoExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_parameters: Option<ModelParameters>,
 
+    /// Optional: Ultrathink configuration for this provider
+    ///
+    /// Configures the reasoning effort and budget when ultrathink mode is
+    /// activated via Tab toggle or "ultrathink" keyword in message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ultrathink_config: Option<UltrathinkConfig>,
+
     /// HTTP request total timeout in milliseconds (per-provider override).
     ///
     /// Overrides the global `http_request_timeout_ms` setting for this provider.
@@ -73,6 +81,7 @@ impl Default for ModelProviderInfoExt {
             interceptors: Vec::new(),
             model_name: None,
             model_parameters: None,
+            ultrathink_config: None,
             request_timeout_ms: None,
             model_family: None,
         }

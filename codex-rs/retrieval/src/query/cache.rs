@@ -14,19 +14,52 @@ use crate::storage::SqliteStore;
 /// Query rewrite cache.
 ///
 /// Stores rewritten query results in SQLite with TTL support.
+/// Includes a config hash in the cache key to invalidate cache
+/// when rewrite settings (LLM model, provider) change.
 pub struct RewriteCache {
     db: Arc<SqliteStore>,
     config: RewriteCacheConfig,
+    /// Hash of LLM config to invalidate cache on config change
+    config_hash: String,
 }
 
 impl RewriteCache {
     /// Create a new rewrite cache.
     ///
     /// Note: This is async because schema initialization requires async DB access.
-    pub async fn new(db: Arc<SqliteStore>, config: RewriteCacheConfig) -> Result<Self> {
-        let cache = Self { db, config };
+    ///
+    /// # Arguments
+    /// * `db` - SQLite store for persistence
+    /// * `config` - Cache configuration (TTL, max entries, etc.)
+    /// * `llm_config_hash` - Hash of LLM config (provider + model) to invalidate
+    ///   cache when rewrite settings change
+    pub async fn new(
+        db: Arc<SqliteStore>,
+        config: RewriteCacheConfig,
+        llm_config_hash: &str,
+    ) -> Result<Self> {
+        let cache = Self {
+            db,
+            config,
+            config_hash: llm_config_hash.to_string(),
+        };
         cache.init_schema().await?;
         Ok(cache)
+    }
+
+    /// Compute a hash from LLM configuration for cache key versioning.
+    ///
+    /// Use this to generate the `llm_config_hash` parameter for `new()`.
+    pub fn compute_llm_config_hash(provider: &str, model: &str) -> String {
+        use sha2::Digest;
+        use sha2::Sha256;
+
+        let config_str = format!("{provider}:{model}");
+        let mut hasher = Sha256::new();
+        hasher.update(config_str.as_bytes());
+        let result = hasher.finalize();
+        // Use first 8 bytes for compact key
+        hex::encode(&result[..8])
     }
 
     /// Initialize the cache schema.
@@ -45,7 +78,7 @@ impl RewriteCache {
             return Ok(None);
         }
 
-        let cache_key = compute_cache_key(query);
+        let cache_key = compute_cache_key(query, &self.config_hash);
         let now = chrono::Utc::now().timestamp();
 
         let db = self.db.clone();
@@ -83,7 +116,7 @@ impl RewriteCache {
             return Ok(());
         }
 
-        let cache_key = compute_cache_key(query);
+        let cache_key = compute_cache_key(query, &self.config_hash);
         let now = chrono::Utc::now().timestamp();
         let expires_at = now + self.config.ttl_secs;
         let original = query.to_string();
@@ -203,12 +236,17 @@ pub struct CacheStats {
 /// Uses SHA-256 (truncated to 128 bits) for better collision resistance
 /// compared to DefaultHasher. This provides ~2^64 collision resistance
 /// via birthday paradox, sufficient for millions of cached queries.
-fn compute_cache_key(query: &str) -> String {
+///
+/// Includes the config hash to invalidate cache when LLM settings change.
+fn compute_cache_key(query: &str, config_hash: &str) -> String {
     use sha2::Digest;
     use sha2::Sha256;
 
     let normalized = query.trim().to_lowercase();
     let mut hasher = Sha256::new();
+    // Include config hash to invalidate on config change
+    hasher.update(config_hash.as_bytes());
+    hasher.update(b":");
     hasher.update(normalized.as_bytes());
     let result = hasher.finalize();
     // Use first 16 bytes (128 bits) for key - sufficient for cache
@@ -248,7 +286,8 @@ mod tests {
             max_entries: 100,
         };
 
-        let cache = RewriteCache::new(db, config).await.unwrap();
+        let config_hash = RewriteCache::compute_llm_config_hash("openai", "gpt-4o-mini");
+        let cache = RewriteCache::new(db, config, &config_hash).await.unwrap();
         (cache, dir)
     }
 
@@ -292,7 +331,8 @@ mod tests {
             max_entries: 100,
         };
 
-        let cache = RewriteCache::new(db, config).await.unwrap();
+        let config_hash = RewriteCache::compute_llm_config_hash("openai", "gpt-4o-mini");
+        let cache = RewriteCache::new(db, config, &config_hash).await.unwrap();
 
         let result = RewrittenQuery::unchanged("test");
         cache.put("test", &result).await.unwrap();
