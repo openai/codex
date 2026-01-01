@@ -2239,14 +2239,14 @@ impl ChatWidget {
 
     pub(crate) fn add_status_output(&mut self) {
         let default_usage = TokenUsage::default();
-        let total_usage = if let Some(ti) = &self.token_info {
-            &ti.total_token_usage
-        } else {
-            &default_usage
-        };
+        let token_info = self.token_info.as_ref();
+        let total_usage = token_info
+            .map(|ti| &ti.total_token_usage)
+            .unwrap_or(&default_usage);
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
+            token_info,
             total_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
