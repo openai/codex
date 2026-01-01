@@ -208,3 +208,9 @@ If a new user on Apple silicon can clone the repo, run one command, and observe 
 Begin by modifying the repository structure, then implement the LMU engine, then wire it into Codex commands.
 
 End of prompt.
+
+If you want, next I can:
+
+- tailor this prompt to your exact codex fork layout
+- split this into staged Codex tasks
+- generate AGENTS.md + execpolicy rules aligned with this prompt
