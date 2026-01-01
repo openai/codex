@@ -313,9 +313,9 @@ async fn run_subagent(
     let mut sub_agent_config = (*config).clone();
     sub_agent_config.model = Some(SUBAGENT_MODEL.to_string());
     sub_agent_config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
-    sub_agent_config.base_instructions = Some(build_base_instructions(&task));
     sub_agent_config.user_instructions = None;
-    sub_agent_config.developer_instructions = None;
+    sub_agent_config.developer_instructions = Some(build_subagent_instructions(&task));
+    sub_agent_config.base_instructions = None;
     sub_agent_config.project_doc_max_bytes = 0;
     sub_agent_config.project_doc_fallback_filenames = Vec::new();
     sub_agent_config.features.disable(Feature::Skills);
@@ -481,7 +481,7 @@ fn new_agent_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-fn build_base_instructions(task: &SubagentTask) -> String {
+fn build_subagent_instructions(task: &SubagentTask) -> String {
     let base = match task.agent_type {
         SubagentType::Explore => EXPLORE_PROMPT,
         SubagentType::Plan => PLAN_PROMPT,
