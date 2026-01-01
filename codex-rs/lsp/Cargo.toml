@@ -9,12 +9,21 @@ description = "LSP client for codex-rs with AI-friendly symbol resolution"
 name = "codex_lsp"
 path = "src/lib.rs"
 
+[[bin]]
+name = "lsp-tui"
+path = "src/tui/main.rs"
+required-features = ["tui"]
+
+[features]
+default = []
+tui = ["dep:ratatui", "dep:crossterm", "dep:clap", "dep:anyhow", "dep:tracing-subscriber"]
+
 [lints]
 workspace = true
 
 [dependencies]
 # Async runtime
-tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "rt", "fs", "macros"] }
+tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "rt", "rt-multi-thread", "fs", "macros"] }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
@@ -40,6 +49,13 @@ dirs = "5.0"
 
 # Internal dependencies
 codex-file-ignore = { path = "../file-ignore" }
+
+# TUI dependencies (optional, for lsp-tui binary)
+ratatui = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }
+clap = { workspace = true, features = ["derive"], optional = true }
+anyhow = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"], optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

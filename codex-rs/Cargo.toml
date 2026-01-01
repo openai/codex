@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "anthropic-sdk",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -35,6 +36,7 @@ members = [
     "retrieval",
     "rmcp-client",
     "responses-api-proxy",
+    "sdk-protocol",
     "stdio-to-uds",
     "otel",
     "tui",
@@ -65,6 +67,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
+anthropic-sdk = { path = "anthropic-sdk" }
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
@@ -98,6 +101,7 @@ codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-retrieval = { path = "retrieval" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-sdk-protocol = { path = "sdk-protocol" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-tui2 = { path = "tui2" }

@@ -1,0 +1,22 @@
+[package]
+name = "codex-sdk-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Protocol types for Codex SDK - single source of truth for multi-language SDKs"
+
+[dependencies]
+mcp-types = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+ts-rs = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[build-dependencies]
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

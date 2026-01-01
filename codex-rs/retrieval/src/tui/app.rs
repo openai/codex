@@ -508,7 +508,8 @@ impl App {
                     self.search.results.searching = false;
                     self.search.pipeline.error = Some(error.clone());
                     self.search.pipeline.stage = SearchStage::Error;
-                    self.error_banner = Some(format!("Search failed: {}. Press Enter to retry.", error));
+                    self.error_banner =
+                        Some(format!("Search failed: {}. Press Enter to retry.", error));
                     self.status_message = None;
                     self.search_start_time = None;
                     // Remove the search cancellation token
@@ -674,5 +675,4 @@ impl App {
             self.render_help_overlay(area, buf);
         }
     }
-
 }

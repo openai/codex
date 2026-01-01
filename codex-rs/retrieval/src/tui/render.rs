@@ -60,8 +60,7 @@ impl AppRenderer for App {
     fn render_error_banner(&self, area: Rect, buf: &mut Buffer) {
         if let Some(ref error) = self.error_banner {
             let error_text = format!(" Error: {} ", error);
-            let banner =
-                Paragraph::new(error_text).style(Style::default().red().bold().reversed());
+            let banner = Paragraph::new(error_text).style(Style::default().red().bold().reversed());
             banner.render(area, buf);
         }
     }

@@ -17,6 +17,7 @@
 //!       └── other → get_adapter(name) → adapter.generate()
 //! ```
 
+pub mod anthropic;
 pub mod genai;
 
 use crate::common::Prompt;
@@ -140,6 +141,7 @@ static ADAPTER_REGISTRY: LazyLock<AdapterRegistry> = LazyLock::new(|| {
 
     // Register built-in adapters
     registry.register(Arc::new(genai::GeminiAdapter::new()));
+    registry.register(Arc::new(anthropic::AnthropicAdapter::new()));
 
     registry
 });
@@ -211,12 +213,18 @@ mod tests {
         let adapter = get_adapter("genai");
         assert!(adapter.is_some());
         assert_eq!(adapter.unwrap().name(), "genai");
+
+        // AnthropicAdapter should be pre-registered
+        let adapter = get_adapter("anthropic");
+        assert!(adapter.is_some());
+        assert_eq!(adapter.unwrap().name(), "anthropic");
     }
 
     #[test]
     fn test_list_adapters() {
         let adapters = list_adapters();
         assert!(adapters.contains(&"genai".to_string()));
+        assert!(adapters.contains(&"anthropic".to_string()));
     }
 
     #[test]

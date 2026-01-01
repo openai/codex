@@ -355,6 +355,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "anthropic-sdk"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1956,6 +1969,7 @@ dependencies = [
 name = "codex-api"
 version = "0.0.0"
 dependencies = [
+ "anthropic-sdk",
  "anyhow",
  "assert_matches",
  "async-trait",
@@ -2366,6 +2380,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-protocol",
+ "codex-sdk-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "core_test_support",
@@ -2379,6 +2394,7 @@ dependencies = [
  "shlex",
  "supports-color 3.0.2",
  "tempfile",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2587,10 +2603,14 @@ dependencies = [
 name = "codex-lsp"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "clap",
  "codex-file-ignore",
+ "crossterm",
  "dirs 5.0.1",
  "lsp-types 0.95.1",
  "pretty_assertions",
+ "ratatui",
  "serde",
  "serde_json",
  "similar",
@@ -2599,6 +2619,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "tracing-subscriber",
  "which 7.0.3",
 ]
 
@@ -2813,6 +2834,18 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 6.0.3",
+]
+
+[[package]]
+name = "codex-sdk-protocol"
+version = "0.0.0"
+dependencies = [
+ "mcp-types",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]

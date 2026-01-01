@@ -9,6 +9,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
+pub mod sdk_v2;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -68,6 +69,11 @@ enum InitialOperation {
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    // Check SDK mode FIRST, before any other initialization
+    if sdk_v2::is_sdk_mode() {
+        return sdk_v2::run_sdk_mode(cli).await;
+    }
+
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }

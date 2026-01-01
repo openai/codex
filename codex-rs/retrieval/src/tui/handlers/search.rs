@@ -203,9 +203,7 @@ impl App {
                         service.search_with_limit(&query, Some(limit)).await
                     }
                     crate::events::SearchMode::Bm25 => service.search_bm25(&query, limit).await,
-                    crate::events::SearchMode::Vector => {
-                        service.search_vector(&query, limit).await
-                    }
+                    crate::events::SearchMode::Vector => service.search_vector(&query, limit).await,
                 }
             };
 

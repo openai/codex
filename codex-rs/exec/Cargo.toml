@@ -19,6 +19,7 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-arg0 = { workspace = true }
+codex-sdk-protocol = { path = "../sdk-protocol" }
 codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
@@ -33,6 +34,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
 supports-color = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -47,6 +49,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
+uuid = { workspace = true, features = ["v4"] }
 
 
 [dev-dependencies]

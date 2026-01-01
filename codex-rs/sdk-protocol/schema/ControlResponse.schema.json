@@ -1,0 +1,351 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ControlResponseEnvelope",
+  "description": "Envelope for control responses.",
+  "type": "object",
+  "required": [
+    "request_id",
+    "response"
+  ],
+  "properties": {
+    "request_id": {
+      "description": "Request ID this response correlates to.",
+      "type": "string"
+    },
+    "response": {
+      "description": "The actual response payload.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ControlResponse"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "ControlResponse": {
+      "description": "Unified control response (both directions).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OutboundControlResponse"
+        },
+        {
+          "$ref": "#/definitions/InboundControlResponse"
+        }
+      ]
+    },
+    "HookEvent": {
+      "description": "Hook event types.",
+      "oneOf": [
+        {
+          "description": "Before a tool is used.",
+          "type": "string",
+          "enum": [
+            "PreToolUse"
+          ]
+        },
+        {
+          "description": "After a tool is used.",
+          "type": "string",
+          "enum": [
+            "PostToolUse"
+          ]
+        },
+        {
+          "description": "When user submits a prompt.",
+          "type": "string",
+          "enum": [
+            "UserPromptSubmit"
+          ]
+        },
+        {
+          "description": "When the agent is about to stop.",
+          "type": "string",
+          "enum": [
+            "Stop"
+          ]
+        },
+        {
+          "description": "When a subagent is about to stop.",
+          "type": "string",
+          "enum": [
+            "SubagentStop"
+          ]
+        },
+        {
+          "description": "Before compacting conversation history.",
+          "type": "string",
+          "enum": [
+            "PreCompact"
+          ]
+        }
+      ]
+    },
+    "HookPermissionDecision": {
+      "description": "Hook permission decision.",
+      "oneOf": [
+        {
+          "description": "Block the operation.",
+          "type": "string",
+          "enum": [
+            "block"
+          ]
+        }
+      ]
+    },
+    "HookSpecificOutput": {
+      "description": "Hook-specific output data.",
+      "type": "object",
+      "required": [
+        "hook_event_name"
+      ],
+      "properties": {
+        "hook_event_name": {
+          "description": "Hook event name.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookEvent"
+            }
+          ]
+        },
+        "modified_tool_input": {
+          "description": "Modified tool input (for PreToolUse)."
+        },
+        "modified_tool_output": {
+          "description": "Modified tool output (for PostToolUse)."
+        },
+        "permission_decision": {
+          "description": "Permission decision (for PreToolUse).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_decision_reason": {
+          "description": "Reason for the permission decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "InboundControlResponse": {
+      "description": "Responses to inbound control requests.",
+      "oneOf": [
+        {
+          "description": "Response to can_use_tool.",
+          "type": "object",
+          "required": [
+            "behavior",
+            "subtype"
+          ],
+          "properties": {
+            "behavior": {
+              "description": "The permission decision.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/PermissionBehavior"
+                }
+              ]
+            },
+            "message": {
+              "description": "Optional message to display.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "can_use_tool_response"
+              ]
+            },
+            "tool_use_id": {
+              "description": "Tool use ID this response is for.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Response to hook_callback.",
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "continue": {
+              "description": "Whether to continue execution.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "decision": {
+              "description": "Permission decision (for PreToolUse).",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HookPermissionDecision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hook_specific_output": {
+              "description": "Hook-specific output.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HookSpecificOutput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "description": "Reason for the decision.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "stop_reason": {
+              "description": "Reason for stopping (if stopping).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "hook_callback_response"
+              ]
+            },
+            "suppress_output": {
+              "description": "Whether to suppress output.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "system_message": {
+              "description": "System message to inject.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Response to mcp_message.",
+          "type": "object",
+          "required": [
+            "mcp_response",
+            "subtype"
+          ],
+          "properties": {
+            "mcp_response": {
+              "description": "MCP protocol response."
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "mcp_message_response"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Error response.",
+          "type": "object",
+          "required": [
+            "message",
+            "subtype"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "OutboundControlResponse": {
+      "description": "Response to outbound control requests.",
+      "oneOf": [
+        {
+          "description": "Success response.",
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "success"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Error response.",
+          "type": "object",
+          "required": [
+            "message",
+            "subtype"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "PermissionBehavior": {
+      "description": "Permission behavior decision.",
+      "oneOf": [
+        {
+          "description": "Allow the tool invocation.",
+          "type": "string",
+          "enum": [
+            "allow"
+          ]
+        },
+        {
+          "description": "Deny the tool invocation.",
+          "type": "string",
+          "enum": [
+            "deny"
+          ]
+        },
+        {
+          "description": "Prompt the user (for interactive mode).",
+          "type": "string",
+          "enum": [
+            "prompt"
+          ]
+        }
+      ]
+    }
+  }
+}
