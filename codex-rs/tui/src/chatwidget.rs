@@ -578,6 +578,9 @@ impl ChatWidget {
                     let Some(message) = extract_user_message_text(&content) else {
                         continue;
                     };
+                    if !should_show_eval_capture_start_message(&message) {
+                        continue;
+                    }
                     options.push(crate::app_event::EvalCaptureStartMarker::RolloutLineIndex {
                         index: idx,
                         timestamp: rollout_line.timestamp.clone(),
@@ -4188,6 +4191,19 @@ fn extract_user_message_text(content: &[codex_protocol::models::ContentItem]) ->
         // Keep the picker readable even for very long user messages.
         Some(truncate_text(trimmed, 800))
     }
+}
+
+fn should_show_eval_capture_start_message(message: &str) -> bool {
+    // The rollout includes a few synthetic "user" messages (environment context,
+    // AGENTS instructions) that should not be presented back to the user as start markers.
+    let trimmed = message.trim_start();
+    if trimmed.starts_with("<environment_context>") {
+        return false;
+    }
+    if trimmed.starts_with("# AGENTS.md instructions") {
+        return false;
+    }
+    true
 }
 
 fn parse_rollout_timestamp_utc(timestamp: &str) -> Option<DateTime<Utc>> {

@@ -75,6 +75,45 @@ impl Default for SelectionViewParams {
     }
 }
 
+struct WrappedText {
+    text: String,
+    dim: bool,
+}
+
+impl WrappedText {
+    fn dim(text: String) -> Self {
+        Self { text, dim: true }
+    }
+
+    fn wrapped_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let usable_width = width.max(1) as usize;
+        textwrap::wrap(&self.text, usable_width)
+            .into_iter()
+            .map(|line| {
+                let span = Span::from(line.into_owned());
+                if self.dim {
+                    Line::from(span.dim())
+                } else {
+                    Line::from(span)
+                }
+            })
+            .collect()
+    }
+}
+
+impl Renderable for WrappedText {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(self.wrapped_lines(area.width)).render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.wrapped_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
+}
+
 pub(crate) struct ListSelectionView {
     footer_hint: Option<Line<'static>>,
     items: Vec<SelectionItem>,
@@ -96,7 +135,7 @@ impl ListSelectionView {
         let mut header = params.header;
         if params.title.is_some() || params.subtitle.is_some() {
             let title = params.title.map(|title| Line::from(title.bold()));
-            let subtitle = params.subtitle.map(|subtitle| Line::from(subtitle.dim()));
+            let subtitle = params.subtitle.map(WrappedText::dim);
             header = Box::new(ColumnRenderable::with([
                 header,
                 Box::new(title),

@@ -189,10 +189,13 @@ pub(crate) fn eval_capture_start_picker_params(
     super::SelectionViewParams {
         footer_hint: Some(standard_popup_hint_line()),
         title: Some("Pick the start message".to_string()),
-        subtitle: Some("Default is your last message; scroll for earlier messages.".to_string()),
+        subtitle: Some(
+            "Pick the first instruction for the specific code change or interaction you wanted to give feedback on."
+                .to_string(),
+        ),
         items,
         initial_selected_idx,
-        show_numbers: false,
+        show_numbers: true,
         ..Default::default()
     }
 }
@@ -213,55 +216,34 @@ fn marker_has_repo_snapshot(marker: &EvalCaptureStartMarker) -> bool {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EvalCaptureNotesStage {
-    WhatWentWrong,
-    WhatGoodLooksLike,
-}
-
 pub(crate) struct EvalCaptureNotesView {
-    stage: EvalCaptureNotesStage,
     start_marker: EvalCaptureStartMarker,
     app_event_tx: AppEventSender,
 
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
-    what_went_wrong: String,
     complete: bool,
 }
 
 impl EvalCaptureNotesView {
     pub(crate) fn new(start_marker: EvalCaptureStartMarker, app_event_tx: AppEventSender) -> Self {
         Self {
-            stage: EvalCaptureNotesStage::WhatWentWrong,
             start_marker,
             app_event_tx,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
-            what_went_wrong: String::new(),
             complete: false,
         }
     }
 
     fn submit(&mut self) {
-        let text = self.textarea.text().trim().to_string();
-        match self.stage {
-            EvalCaptureNotesStage::WhatWentWrong => {
-                self.what_went_wrong = text;
-                self.textarea.set_text("");
-                *self.textarea_state.borrow_mut() = TextAreaState::default();
-                self.stage = EvalCaptureNotesStage::WhatGoodLooksLike;
-            }
-            EvalCaptureNotesStage::WhatGoodLooksLike => {
-                let what_good_looks_like = text;
-                self.app_event_tx.send(AppEvent::CreateEvalCaptureBundle {
-                    start_marker: self.start_marker.clone(),
-                    what_went_wrong: std::mem::take(&mut self.what_went_wrong),
-                    what_good_looks_like,
-                });
-                self.complete = true;
-            }
-        }
+        let what_went_wrong = self.textarea.text().trim().to_string();
+        self.app_event_tx.send(AppEvent::CreateEvalCaptureBundle {
+            start_marker: self.start_marker.clone(),
+            what_went_wrong,
+            what_good_looks_like: String::new(),
+        });
+        self.complete = true;
     }
 }
 
@@ -306,8 +288,7 @@ impl BottomPaneView for EvalCaptureNotesView {
 
 impl Renderable for EvalCaptureNotesView {
     fn desired_height(&self, width: u16) -> u16 {
-        // 2 title lines + input + (blank spacer + hint)
-        2u16 + self.input_height(width) + 2u16
+        self.header_lines(width).len() as u16 + self.input_height(width) + 2u16
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -318,7 +299,7 @@ impl Renderable for EvalCaptureNotesView {
         if text_area_height == 0 {
             return None;
         }
-        let top_line_count = 2u16; // title + subtitle
+        let top_line_count = self.header_lines(area.width).len() as u16;
         let textarea_rect = Rect {
             x: area.x.saturating_add(2),
             y: area.y.saturating_add(top_line_count).saturating_add(1),
@@ -334,38 +315,28 @@ impl Renderable for EvalCaptureNotesView {
             return;
         }
 
-        let (title, subtitle, placeholder) = match self.stage {
-            EvalCaptureNotesStage::WhatWentWrong => (
-                "What was wrong about this rollout?",
-                "Please be specific.",
-                "Type here.",
-            ),
-            EvalCaptureNotesStage::WhatGoodLooksLike => (
-                "With respect to that issue, what would the ideal behavior be?",
-                "Again, please be specific.",
-                "Type here.",
-            ),
-        };
+        let placeholder = "Type here.";
 
         let input_height = self.input_height(area.width);
+        let header_lines = self.header_lines(area.width);
+        let header_height = header_lines.len() as u16;
 
         let title_area = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
-            height: 2,
+            height: header_height,
         };
         let input_area = Rect {
             x: area.x,
-            y: area.y.saturating_add(2),
+            y: area.y.saturating_add(header_height),
             width: area.width,
             height: input_height,
         };
 
         Clear.render(area, buf);
 
-        Paragraph::new(vec![Line::from(title.bold()), Line::from(subtitle.dim())])
-            .render(title_area, buf);
+        Paragraph::new(header_lines).render(title_area, buf);
 
         let textarea_rect = Rect {
             x: input_area.x.saturating_add(2),
@@ -383,7 +354,7 @@ impl Renderable for EvalCaptureNotesView {
             x: area.x,
             y: area
                 .y
-                .saturating_add(2)
+                .saturating_add(header_height)
                 .saturating_add(input_height)
                 .saturating_add(1),
             width: area.width,
@@ -395,6 +366,18 @@ impl Renderable for EvalCaptureNotesView {
 }
 
 impl EvalCaptureNotesView {
+    fn header_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let title = "What went wrong with this interaction, and what should have happened for this to be a correct, delightful response?";
+        let subtitle = "Please be specific, and can refer to any model behavior, including tool calls, code changes, or messages.";
+        let usable_width = width.saturating_sub(2).max(1) as usize;
+        let mut lines = Vec::new();
+        lines.push(Line::from(title.bold()));
+        for line in textwrap::wrap(subtitle, usable_width) {
+            lines.push(Line::from(line.into_owned().dim()));
+        }
+        lines
+    }
+
     fn input_height(&self, width: u16) -> u16 {
         let usable_width = width.saturating_sub(2);
         let text_height = self.textarea.desired_height(usable_width).clamp(1, 8);
