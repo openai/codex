@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 2253
+expression: popup
+---
+  Pick the start message
+  Default is your last message; scroll for earlier messages.
+
+› [0s ago] Please help me fix the build errors
+
+  Press enter to confirm or esc to go back

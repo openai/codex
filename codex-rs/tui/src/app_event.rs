@@ -182,6 +182,39 @@ pub(crate) enum AppEvent {
         category: FeedbackCategory,
     },
 
+    /// Open the bad-result fork chooser ("quick feedback" vs "capture eval sample").
+    OpenFeedbackBadResultFork,
+
+    /// Start the "capture eval sample" flow from /feedback.
+    OpenEvalCaptureIntro,
+
+    /// Dismiss the eval capture intro screen and continue to the start picker.
+    EvalCaptureIntroContinue,
+
+    /// Open the freeform notes entry for eval capture.
+    OpenEvalCaptureNotes {
+        start_marker: EvalCaptureStartMarker,
+    },
+
+    /// Create the eval bundle and report the output path/id in history.
+    CreateEvalCaptureBundle {
+        start_marker: EvalCaptureStartMarker,
+        what_went_wrong: String,
+        what_good_looks_like: String,
+    },
+
+    /// Upload the previously captured eval case bundle to the team.
+    EvalCaptureUpload {
+        case_id: String,
+        path: String,
+    },
+
+    /// Skip uploading the previously captured eval case bundle.
+    EvalCaptureUploadSkipped {
+        case_id: String,
+        path: String,
+    },
+
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
 }
@@ -192,4 +225,28 @@ pub(crate) enum FeedbackCategory {
     GoodResult,
     Bug,
     Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EvalCaptureRepoSnapshot {
+    pub(crate) ghost_commit: String,
+    pub(crate) base_sha: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EvalCaptureStartMarker {
+    RolloutLineIndex {
+        index: usize,
+        timestamp: String,
+        display: String,
+        message: String,
+        repo_snapshot: Option<EvalCaptureRepoSnapshot>,
+    },
+    #[allow(dead_code)]
+    RolloutLineTimestamp {
+        timestamp: String,
+        display: String,
+        message: String,
+        repo_snapshot: Option<EvalCaptureRepoSnapshot>,
+    },
 }

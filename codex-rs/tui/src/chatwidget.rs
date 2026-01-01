@@ -132,7 +132,9 @@ use self::session_header::SessionHeader;
 use crate::streaming::controller::StreamController;
 use std::path::Path;
 
+use chrono::DateTime;
 use chrono::Local;
+use chrono::Utc;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
@@ -438,6 +440,9 @@ impl ChatWidget {
         self.set_skills(None);
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
+        // Repo snapshots are stored locally and are required for capturing eval cases
+        // from arbitrary earlier user messages.
+        self.submit_op(Op::SetRepoSnapshotting { enabled: true });
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -503,6 +508,465 @@ impl ChatWidget {
             self.current_rollout_path.clone(),
         );
         self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_feedback_bad_result_fork(&mut self) {
+        let params = crate::bottom_pane::feedback_bad_result_fork_params(self.app_event_tx.clone());
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_eval_capture_intro(&mut self) {
+        if !crate::eval_capture_state::should_show_eval_capture_intro(&self.config.codex_home) {
+            self.open_eval_capture_start_picker();
+            return;
+        }
+
+        let params = crate::bottom_pane::eval_capture_intro_params(self.app_event_tx.clone());
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_eval_capture_intro_continue(&mut self) {
+        if let Err(err) =
+            crate::eval_capture_state::persist_eval_capture_intro_dismissed(&self.config.codex_home)
+        {
+            self.add_error_message(format!("Failed to persist eval capture preference: {err}"));
+        }
+
+        self.open_eval_capture_start_picker();
+    }
+
+    fn open_eval_capture_start_picker(&mut self) {
+        let Some(rollout_path) = self.current_rollout_path.as_ref() else {
+            self.add_error_message(
+                "No rollout file for this session; cannot capture eval sample.".to_string(),
+            );
+            return;
+        };
+
+        let text = match std::fs::read_to_string(rollout_path) {
+            Ok(text) => text,
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to read rollout file {}: {err}",
+                    rollout_path.display()
+                ));
+                return;
+            }
+        };
+        // List every user message as a candidate start point, and attach the next
+        // ghost snapshot to the most recent user message. Markers without snapshots
+        // will be disabled in the picker.
+        let mut options = Vec::new();
+        let mut last_user_marker_idx: Option<usize> = None;
+        let mut max_timestamp: Option<DateTime<Utc>> = None;
+        for (idx, line) in text.lines().enumerate() {
+            let Ok(rollout_line) =
+                serde_json::from_str::<codex_protocol::protocol::RolloutLine>(line)
+            else {
+                continue;
+            };
+            if let Some(ts) = parse_rollout_timestamp_utc(&rollout_line.timestamp) {
+                max_timestamp = Some(max_timestamp.map_or(ts, |cur| cur.max(ts)));
+            }
+            match rollout_line.item {
+                codex_protocol::protocol::RolloutItem::ResponseItem(
+                    codex_protocol::models::ResponseItem::Message { role, content, .. },
+                ) if role == "user" => {
+                    let Some(message) = extract_user_message_text(&content) else {
+                        continue;
+                    };
+                    options.push(crate::app_event::EvalCaptureStartMarker::RolloutLineIndex {
+                        index: idx,
+                        timestamp: rollout_line.timestamp.clone(),
+                        // Filled in below once we know the latest timestamp in the rollout.
+                        display: String::new(),
+                        message,
+                        repo_snapshot: None,
+                    });
+                    last_user_marker_idx = Some(options.len().saturating_sub(1));
+                }
+                codex_protocol::protocol::RolloutItem::ResponseItem(
+                    codex_protocol::models::ResponseItem::GhostSnapshot { ghost_commit },
+                ) => {
+                    if let Some(marker_idx) = last_user_marker_idx
+                        && let Some(base_sha) = ghost_commit.parent()
+                    {
+                        if let Some(crate::app_event::EvalCaptureStartMarker::RolloutLineIndex {
+                            repo_snapshot,
+                            ..
+                        }) = options.get_mut(marker_idx)
+                        {
+                            *repo_snapshot = Some(crate::app_event::EvalCaptureRepoSnapshot {
+                                ghost_commit: ghost_commit.id().to_string(),
+                                base_sha: Some(base_sha.to_string()),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(now) = max_timestamp {
+            for marker in &mut options {
+                match marker {
+                    crate::app_event::EvalCaptureStartMarker::RolloutLineIndex {
+                        timestamp,
+                        display,
+                        message,
+                        ..
+                    }
+                    | crate::app_event::EvalCaptureStartMarker::RolloutLineTimestamp {
+                        timestamp,
+                        display,
+                        message,
+                        ..
+                    } => {
+                        let Some(then) = parse_rollout_timestamp_utc(timestamp) else {
+                            *display = message.clone();
+                            continue;
+                        };
+                        let delta = format_relative_time_ago(now, then);
+                        *display = format!("[{delta}] {message}");
+                    }
+                }
+            }
+        } else {
+            for marker in &mut options {
+                match marker {
+                    crate::app_event::EvalCaptureStartMarker::RolloutLineIndex {
+                        display,
+                        message,
+                        ..
+                    }
+                    | crate::app_event::EvalCaptureStartMarker::RolloutLineTimestamp {
+                        display,
+                        message,
+                        ..
+                    } => {
+                        *display = message.clone();
+                    }
+                }
+            }
+        }
+
+        options.sort_by(|a, b| match (a, b) {
+            (
+                crate::app_event::EvalCaptureStartMarker::RolloutLineIndex { index: a, .. },
+                crate::app_event::EvalCaptureStartMarker::RolloutLineIndex { index: b, .. },
+            ) => b.cmp(a),
+            _ => std::cmp::Ordering::Equal,
+        });
+
+        if !options.iter().any(|marker| match marker {
+            crate::app_event::EvalCaptureStartMarker::RolloutLineIndex {
+                repo_snapshot, ..
+            }
+            | crate::app_event::EvalCaptureStartMarker::RolloutLineTimestamp {
+                repo_snapshot,
+                ..
+            } => repo_snapshot.is_some(),
+        }) {
+            self.add_error_message(
+                "No repo snapshots are available yet in this session. Try again after another message/turn (or in a new session)."
+                    .to_string(),
+            );
+            self.open_feedback_consent(crate::app_event::FeedbackCategory::BadResult);
+            return;
+        }
+
+        let initial_selected_idx = options.iter().position(|marker| match marker {
+            crate::app_event::EvalCaptureStartMarker::RolloutLineIndex {
+                repo_snapshot, ..
+            }
+            | crate::app_event::EvalCaptureStartMarker::RolloutLineTimestamp {
+                repo_snapshot,
+                ..
+            } => repo_snapshot.is_some(),
+        });
+        let params = crate::bottom_pane::eval_capture_start_picker_params(
+            self.app_event_tx.clone(),
+            options,
+            initial_selected_idx,
+        );
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_eval_capture_notes(
+        &mut self,
+        start_marker: crate::app_event::EvalCaptureStartMarker,
+    ) {
+        let view =
+            crate::bottom_pane::EvalCaptureNotesView::new(start_marker, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn create_eval_capture_bundle(
+        &mut self,
+        start_marker: crate::app_event::EvalCaptureStartMarker,
+        what_went_wrong: String,
+        what_good_looks_like: String,
+    ) {
+        let Some(conversation_id) = self.conversation_id else {
+            self.add_error_message(
+                "No active conversation; cannot capture eval sample.".to_string(),
+            );
+            return;
+        };
+        let Some(rollout_path) = self.current_rollout_path.clone() else {
+            self.add_error_message(
+                "No rollout file for this session; cannot capture eval sample.".to_string(),
+            );
+            return;
+        };
+
+        let (start, repo_snapshot) = match start_marker {
+            crate::app_event::EvalCaptureStartMarker::RolloutLineIndex {
+                index,
+                timestamp: _,
+                display,
+                message: _,
+                repo_snapshot,
+            } => {
+                let Some(snapshot) = repo_snapshot else {
+                    self.add_error_message(
+                        "No repo snapshot available for the selected start marker; cannot capture eval sample."
+                            .to_string(),
+                    );
+                    return;
+                };
+                let Some(base_sha) = snapshot.base_sha else {
+                    self.add_error_message(
+                        "No base sha for selected repo snapshot; cannot capture eval sample."
+                            .to_string(),
+                    );
+                    return;
+                };
+                let repo_snapshot = Some(codex_eval_case::RepoSnapshot {
+                    base_sha,
+                    commit_sha: snapshot.ghost_commit,
+                });
+                (
+                    codex_eval_case::StartMarker {
+                        kind: codex_eval_case::StartMarkerKind::RolloutLineIndex,
+                        value: codex_eval_case::StartMarkerValue::LineIndex(index as u64),
+                        display,
+                    },
+                    repo_snapshot,
+                )
+            }
+            crate::app_event::EvalCaptureStartMarker::RolloutLineTimestamp {
+                timestamp,
+                display,
+                message: _,
+                repo_snapshot,
+            } => {
+                let Some(snapshot) = repo_snapshot else {
+                    self.add_error_message(
+                        "No repo snapshot available for the selected start marker; cannot capture eval sample."
+                            .to_string(),
+                    );
+                    return;
+                };
+                let Some(base_sha) = snapshot.base_sha else {
+                    self.add_error_message(
+                        "No base sha for selected repo snapshot; cannot capture eval sample."
+                            .to_string(),
+                    );
+                    return;
+                };
+                let repo_snapshot = Some(codex_eval_case::RepoSnapshot {
+                    base_sha,
+                    commit_sha: snapshot.ghost_commit,
+                });
+                (
+                    codex_eval_case::StartMarker {
+                        kind: codex_eval_case::StartMarkerKind::RolloutLineTimestamp,
+                        value: codex_eval_case::StartMarkerValue::Timestamp(timestamp),
+                        display,
+                    },
+                    repo_snapshot,
+                )
+            }
+        };
+
+        let logs_bytes = Some(
+            self.feedback
+                .snapshot(Some(conversation_id))
+                .as_bytes()
+                .to_vec(),
+        );
+
+        let args = codex_eval_case::CreateEvalCaseArgs {
+            codex_home: self.config.codex_home.clone(),
+            conversation_id: conversation_id.to_string(),
+            rollout_path,
+            start,
+            repo_cwd: self.config.cwd.clone(),
+            repo_snapshot,
+            notes: codex_eval_case::Notes {
+                what_went_wrong,
+                what_good_looks_like,
+            },
+            include_logs: true,
+            logs_bytes,
+        };
+
+        match codex_eval_case::create_eval_case_bundle(&args) {
+            Ok(result) => {
+                use ratatui::style::Stylize as _;
+                use ratatui::text::Line;
+
+                let case_id = result.case_id;
+                let path = result.path.display().to_string();
+                let lines = vec![
+                    Line::from("• Eval sample captured (local only).".to_string()),
+                    "".into(),
+                    Line::from(vec!["  Case ID: ".into(), case_id.clone().bold()]),
+                    Line::from(vec!["  Path: ".into(), path.clone().cyan().underlined()]),
+                ];
+                self.app_event_tx
+                    .send(crate::app_event::AppEvent::InsertHistoryCell(Box::new(
+                        crate::history_cell::PlainHistoryCell::new(lines),
+                    )));
+
+                let params = crate::bottom_pane::eval_capture_upload_consent_params(
+                    self.app_event_tx.clone(),
+                    case_id,
+                    path,
+                );
+                self.bottom_pane.show_selection_view(params);
+                self.request_redraw();
+            }
+            Err(err) => {
+                self.app_event_tx
+                    .send(crate::app_event::AppEvent::InsertHistoryCell(Box::new(
+                        crate::history_cell::new_error_event(format!(
+                            "Failed to create eval sample bundle: {err}"
+                        )),
+                    )));
+            }
+        }
+    }
+
+    pub(crate) fn upload_eval_capture_bundle(&mut self, case_id: String, path: String) {
+        let Some(conversation_id) = self.conversation_id else {
+            self.add_error_message(
+                "No active conversation; cannot upload eval sample.".to_string(),
+            );
+            return;
+        };
+
+        let bundle_dir = std::path::PathBuf::from(&path);
+        let manifest_path = bundle_dir.join("manifest.json");
+        let rollout_path = bundle_dir.join("rollout.jsonl");
+        let repo_patch_path = bundle_dir.join("repo.patch");
+        let logs_path = bundle_dir.join("codex-logs.log");
+
+        let read_bytes = |p: &std::path::Path| std::fs::read(p).map_err(anyhow::Error::from);
+
+        let logs_bytes = match read_bytes(&logs_path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to read eval sample logs {}: {err}",
+                    logs_path.display()
+                ));
+                return;
+            }
+        };
+
+        let snapshot = self.feedback.snapshot(Some(conversation_id));
+        let snapshot =
+            codex_feedback::CodexLogSnapshot::from_bytes(snapshot.thread_id.clone(), logs_bytes);
+
+        let extra_attachments = match (read_bytes(&manifest_path), read_bytes(&repo_patch_path)) {
+            (Ok(manifest_bytes), Ok(repo_patch_bytes)) => vec![
+                codex_feedback::FeedbackAttachment::new(
+                    "manifest.json".to_string(),
+                    Some("application/json".to_string()),
+                    manifest_bytes,
+                ),
+                codex_feedback::FeedbackAttachment::new(
+                    "repo.patch".to_string(),
+                    Some("text/plain".to_string()),
+                    repo_patch_bytes,
+                ),
+            ],
+            (manifest_err, repo_err) => {
+                if let Err(err) = manifest_err {
+                    self.add_error_message(format!(
+                        "Failed to read eval sample manifest {}: {err}",
+                        manifest_path.display()
+                    ));
+                }
+                if let Err(err) = repo_err {
+                    self.add_error_message(format!(
+                        "Failed to read eval sample repo.patch {}: {err}",
+                        repo_patch_path.display()
+                    ));
+                }
+                return;
+            }
+        };
+
+        let reason = format!("Eval sample {case_id}");
+        let result = snapshot.upload_feedback_with_attachments(
+            "bad_result",
+            Some(reason.as_str()),
+            true,
+            Some(rollout_path.as_path()),
+            Some(codex_core::protocol::SessionSource::Cli),
+            extra_attachments,
+        );
+
+        match result {
+            Ok(()) => {
+                use ratatui::style::Stylize as _;
+                use ratatui::text::Line;
+
+                let lines = vec![
+                    Line::from("• Eval sample uploaded.".to_string()),
+                    "".into(),
+                    Line::from(vec![
+                        "  Thread ID: ".into(),
+                        snapshot.thread_id.clone().bold(),
+                    ]),
+                ];
+                self.app_event_tx
+                    .send(crate::app_event::AppEvent::InsertHistoryCell(Box::new(
+                        crate::history_cell::PlainHistoryCell::new(lines),
+                    )));
+            }
+            Err(err) => {
+                self.app_event_tx
+                    .send(crate::app_event::AppEvent::InsertHistoryCell(Box::new(
+                        crate::history_cell::new_error_event(format!(
+                            "Failed to upload eval sample: {err}"
+                        )),
+                    )));
+            }
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn eval_capture_upload_skipped(&mut self, case_id: String, path: String) {
+        let _ = (case_id, path);
+        use ratatui::text::Line;
+
+        // The "captured" message already prints the case id/path. Avoid duplicating it here.
+        let lines = vec![Line::from(
+            "• Eval sample saved locally (not uploaded).".to_string(),
+        )];
+        self.app_event_tx
+            .send(crate::app_event::AppEvent::InsertHistoryCell(Box::new(
+                crate::history_cell::PlainHistoryCell::new(lines),
+            )));
         self.request_redraw();
     }
 
@@ -3693,6 +4157,60 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimi
             None
         }
     }
+}
+
+fn extract_user_message_text(content: &[codex_protocol::models::ContentItem]) -> Option<String> {
+    let mut combined = String::new();
+    for item in content {
+        let text = match item {
+            codex_protocol::models::ContentItem::InputText { text }
+            | codex_protocol::models::ContentItem::OutputText { text } => text.as_str(),
+            codex_protocol::models::ContentItem::InputImage { .. } => continue,
+        };
+        if !combined.is_empty() {
+            combined.push(' ');
+        }
+        combined.push_str(text);
+    }
+
+    let mut normalized = String::new();
+    for part in combined.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(part);
+    }
+
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        // Keep the picker readable even for very long user messages.
+        Some(truncate_text(trimmed, 800))
+    }
+}
+
+fn parse_rollout_timestamp_utc(timestamp: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(timestamp)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn format_relative_time_ago(now: DateTime<Utc>, then: DateTime<Utc>) -> String {
+    let secs = now.signed_duration_since(then).num_seconds().max(0);
+    if secs < 60 {
+        return format!("{secs}s ago");
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{mins}m ago");
+    }
+    let hours = mins / 60;
+    if hours < 24 {
+        return format!("{hours}h ago");
+    }
+    let days = hours / 24;
+    format!("{days}d ago")
 }
 
 #[cfg(test)]

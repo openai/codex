@@ -45,6 +45,7 @@ mod clipboard_paste;
 mod color;
 pub mod custom_terminal;
 mod diff_render;
+mod eval_capture_state;
 mod exec_cell;
 mod exec_command;
 mod external_editor;

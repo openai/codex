@@ -806,6 +806,35 @@ impl App {
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
             }
+            AppEvent::OpenFeedbackBadResultFork => {
+                self.chat_widget.open_feedback_bad_result_fork();
+            }
+            AppEvent::OpenEvalCaptureIntro => {
+                self.chat_widget.open_eval_capture_intro();
+            }
+            AppEvent::EvalCaptureIntroContinue => {
+                self.chat_widget.on_eval_capture_intro_continue();
+            }
+            AppEvent::OpenEvalCaptureNotes { start_marker } => {
+                self.chat_widget.open_eval_capture_notes(start_marker);
+            }
+            AppEvent::CreateEvalCaptureBundle {
+                start_marker,
+                what_went_wrong,
+                what_good_looks_like,
+            } => {
+                self.chat_widget.create_eval_capture_bundle(
+                    start_marker,
+                    what_went_wrong,
+                    what_good_looks_like,
+                );
+            }
+            AppEvent::EvalCaptureUpload { case_id, path } => {
+                self.chat_widget.upload_eval_capture_bundle(case_id, path);
+            }
+            AppEvent::EvalCaptureUploadSkipped { case_id, path } => {
+                self.chat_widget.eval_capture_upload_skipped(case_id, path);
+            }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
                     self.launch_external_editor(tui).await;

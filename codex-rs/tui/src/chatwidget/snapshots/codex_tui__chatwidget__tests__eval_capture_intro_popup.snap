@@ -1,0 +1,21 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 2190
+expression: popup
+---
+  Capture eval sample
+
+  Here's everything we capture as an eval sample.
+  It's stored locally on your computer:
+    • manifest.json
+    • rollout.jsonl
+    • repo.patch
+    • codex-logs.log
+
+  Next, you can optionally upload this bundle to the team.
+
+› 1. Continue                     Create an eval sample bundle locally.
+  2. Send basic feedback instead  Skip eval capture and send basic feedback to
+                                  the team.
+
+  Press enter to confirm or esc to go back

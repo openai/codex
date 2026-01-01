@@ -387,13 +387,63 @@ fn make_feedback_item(
     category: FeedbackCategory,
 ) -> super::SelectionItem {
     let action: super::SelectionAction = Box::new(move |_sender: &AppEventSender| {
-        app_event_tx.send(AppEvent::OpenFeedbackConsent { category });
+        if category == FeedbackCategory::BadResult {
+            app_event_tx.send(AppEvent::OpenFeedbackBadResultFork);
+        } else {
+            app_event_tx.send(AppEvent::OpenFeedbackConsent { category });
+        }
     });
     super::SelectionItem {
         name: name.to_string(),
         description: Some(description.to_string()),
         actions: vec![action],
         dismiss_on_select: true,
+        ..Default::default()
+    }
+}
+
+pub(crate) fn feedback_bad_result_fork_params(
+    app_event_tx: AppEventSender,
+) -> super::SelectionViewParams {
+    let quick_action: super::SelectionAction = Box::new({
+        let tx = app_event_tx.clone();
+        move |_sender: &AppEventSender| {
+            tx.send(AppEvent::OpenFeedbackConsent {
+                category: FeedbackCategory::BadResult,
+            });
+        }
+    });
+
+    let capture_action: super::SelectionAction = Box::new({
+        let tx = app_event_tx;
+        move |_sender: &AppEventSender| {
+            tx.send(AppEvent::OpenEvalCaptureIntro);
+        }
+    });
+
+    super::SelectionViewParams {
+        title: Some("Bad result".to_string()),
+        subtitle: Some("Choose the fastest way to help us improve.".to_string()),
+        items: vec![
+            super::SelectionItem {
+                name: "Quick feedback".to_string(),
+                description: Some(
+                    "Send a short note (and optionally logs) to maintainers.".to_string(),
+                ),
+                actions: vec![quick_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            super::SelectionItem {
+                name: "Capture eval sample".to_string(),
+                description: Some(
+                    "Create a local bundle you can rerun as an eval case later.".to_string(),
+                ),
+                actions: vec![capture_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ],
         ..Default::default()
     }
 }

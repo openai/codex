@@ -2168,6 +2168,92 @@ async fn feedback_upload_consent_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn feedback_bad_result_fork_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_feedback_bad_result_fork();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_bad_result_fork_popup", popup);
+}
+
+#[tokio::test]
+async fn eval_capture_intro_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Ensure host state doesn't leak into snapshots.
+    let _ = std::fs::remove_file(chat.config.codex_home.join("eval_capture.json"));
+
+    chat.open_eval_capture_intro();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("eval_capture_intro_popup", popup);
+}
+
+#[tokio::test]
+async fn eval_capture_upload_consent_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let params = crate::bottom_pane::eval_capture_upload_consent_params(
+        chat.app_event_tx.clone(),
+        "case-2026-01-01T00-00-00-repo-000001".to_string(),
+        "/tmp/eval-case/case-2026-01-01T00-00-00-repo-000001".to_string(),
+    );
+    chat.bottom_pane.show_selection_view(params);
+    chat.request_redraw();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("eval_capture_upload_consent_popup", popup);
+}
+
+#[tokio::test]
+async fn eval_capture_start_picker_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let rollout_file = NamedTempFile::new().unwrap();
+    let user_line = serde_json::json!({
+        "timestamp": "2025-09-05T16:53:11.850Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "Please help me fix the build errors",
+            }],
+        },
+    });
+    let ghost_line = serde_json::json!({
+        "timestamp": "2025-09-05T16:53:12.000Z",
+        "type": "response_item",
+        "payload": {
+            "type": "ghost_snapshot",
+            "ghost_commit": {
+                "id": "ghost-sha",
+                "parent": "base-sha",
+                "preexisting_untracked_files": [],
+                "preexisting_untracked_dirs": [],
+            },
+        },
+    });
+    std::fs::write(
+        rollout_file.path(),
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&user_line).unwrap(),
+            serde_json::to_string(&ghost_line).unwrap()
+        ),
+    )
+    .unwrap();
+    chat.current_rollout_path = Some(rollout_file.path().to_path_buf());
+
+    chat.open_eval_capture_start_picker();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("eval_capture_start_picker_popup", popup);
+}
+
+#[tokio::test]
 async fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.open_model_popup();

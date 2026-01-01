@@ -1,0 +1,21 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 2206
+expression: popup
+---
+  Upload eval sample?
+
+  If you choose Yes, it will upload the full bundle
+  to the team:
+    • manifest.json
+    • rollout.jsonl
+    • repo.patch
+    • codex-logs.log
+
+  This may include file paths, code snippets, and tool outputs.
+
+› 1. Yes  Upload the full bundle to the team for troubleshooting and model
+          improvement.
+  2. No   Keep it local only.
+
+  Press enter to confirm or esc to go back

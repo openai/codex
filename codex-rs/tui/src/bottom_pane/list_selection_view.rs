@@ -54,6 +54,7 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
+    pub show_numbers: bool,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
 }
@@ -67,6 +68,7 @@ impl Default for SelectionViewParams {
             items: Vec::new(),
             is_searchable: false,
             search_placeholder: None,
+            show_numbers: true,
             header: Box::new(()),
             initial_selected_idx: None,
         }
@@ -80,6 +82,7 @@ pub(crate) struct ListSelectionView {
     complete: bool,
     app_event_tx: AppEventSender,
     is_searchable: bool,
+    show_numbers: bool,
     search_query: String,
     search_placeholder: Option<String>,
     filtered_indices: Vec<usize>,
@@ -107,6 +110,7 @@ impl ListSelectionView {
             complete: false,
             app_event_tx,
             is_searchable: params.is_searchable,
+            show_numbers: params.show_numbers,
             search_query: String::new(),
             search_placeholder: if params.is_searchable {
                 params.search_placeholder
@@ -198,13 +202,9 @@ impl ListSelectionView {
                     };
                     let name_with_marker = format!("{name}{marker}");
                     let n = visible_idx + 1;
-                    let wrap_prefix = if self.is_searchable {
-                        // The number keys don't work when search is enabled (since we let the
-                        // numbers be used for the search query).
-                        format!("{prefix} ")
-                    } else {
-                        format!("{prefix} {n}. ")
-                    };
+                    let wrap_prefix = (self.show_numbers && !self.is_searchable)
+                        .then(|| format!("{prefix} {n}. "))
+                        .unwrap_or_else(|| format!("{prefix} "));
                     let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
                     let display_name = format!("{wrap_prefix}{name_with_marker}");
                     let description = is_selected
@@ -386,6 +386,7 @@ impl BottomPaneView for ListSelectionView {
                     .to_digit(10)
                     .map(|d| d as usize)
                     .and_then(|d| d.checked_sub(1))
+                    .filter(|_| self.show_numbers)
                     && idx < self.items.len()
                     && self
                         .items

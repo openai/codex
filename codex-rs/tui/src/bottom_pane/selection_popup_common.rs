@@ -110,7 +110,10 @@ fn compute_desc_col(
     let max_name_width = rows_all
         .iter()
         .enumerate()
-        .filter(|(i, _)| visible_range.contains(i))
+        .filter(|(i, row)| {
+            visible_range.contains(i)
+                && (row.description.is_some() || row.disabled_reason.is_some())
+        })
         .map(|(_, r)| {
             let mut spans: Vec<Span> = vec![r.name.clone().into()];
             if r.disabled_reason.is_some() {

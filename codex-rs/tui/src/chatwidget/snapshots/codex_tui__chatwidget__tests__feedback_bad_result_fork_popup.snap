@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Bad result
+  Choose the fastest way to help us improve.
+
+› 1. Quick feedback       Send a short note (and optionally logs) to
+                          maintainers.
+  2. Capture eval sample  Create a local bundle you can rerun as an eval case
+                          later.
