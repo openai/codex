@@ -247,7 +247,7 @@ impl Codex {
         let config = Arc::new(config);
         if config.features.enabled(Feature::RemoteModels)
             && let Err(err) = models_manager
-                .attempt_refresh_available_models(&config)
+                .refresh_available_models_with_cache(&config)
                 .await
         {
             error!("failed to refresh available models: {err:?}");
@@ -2615,10 +2615,7 @@ async fn try_run_turn(
             }
             ResponseEvent::ModelsEtag(etag) => {
                 // Update internal state with latest models etag
-                sess.services
-                    .models_manager
-                    .handle_new_models_etag(etag)
-                    .await;
+                sess.services.models_manager.refresh_if_new_etag(etag).await;
             }
             ResponseEvent::Completed {
                 response_id: _,

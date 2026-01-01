@@ -324,7 +324,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     );
 
     manager
-        .attempt_refresh_available_models(&config)
+        .refresh_available_models_with_cache(&config)
         .await
         .expect("refresh succeeds");
 

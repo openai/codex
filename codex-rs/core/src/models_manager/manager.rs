@@ -77,7 +77,7 @@ impl ModelsManager {
     }
 
     /// Fetch the latest remote models, using the on-disk cache when still fresh.
-    pub async fn attempt_refresh_available_models(&self, config: &Config) -> CoreResult<()> {
+    pub async fn refresh_available_models_with_cache(&self, config: &Config) -> CoreResult<()> {
         if !config.features.enabled(Feature::RemoteModels)
             || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey)
         {
@@ -86,10 +86,10 @@ impl ModelsManager {
         if self.try_load_cache().await {
             return Ok(());
         }
-        self.refresh_available_models().await
+        self.refresh_available_models_no_cache().await
     }
 
-    pub(crate) async fn refresh_available_models(&self) -> CoreResult<()> {
+    pub(crate) async fn refresh_available_models_no_cache(&self) -> CoreResult<()> {
         if self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
             return Ok(());
         }
@@ -112,7 +112,7 @@ impl ModelsManager {
     }
 
     pub async fn list_models(&self, config: &Config) -> Vec<ModelPreset> {
-        if let Err(err) = self.attempt_refresh_available_models(config).await {
+        if let Err(err) = self.refresh_available_models_with_cache(config).await {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.remote_models(config).await;
@@ -139,7 +139,7 @@ impl ModelsManager {
         if let Some(model) = model.as_ref() {
             return model.to_string();
         }
-        if let Err(err) = self.attempt_refresh_available_models(config).await {
+        if let Err(err) = self.refresh_available_models_with_cache(config).await {
             error!("failed to refresh available models: {err}");
         }
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
@@ -157,12 +157,12 @@ impl ModelsManager {
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
     }
-    pub async fn handle_new_models_etag(&self, etag: String) {
+    pub async fn refresh_if_new_etag(&self, etag: String) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             return;
         }
-        if let Err(err) = self.refresh_available_models().await {
+        if let Err(err) = self.refresh_available_models_no_cache().await {
             error!("failed to refresh available models: {err}");
         }
     }
@@ -411,7 +411,7 @@ mod tests {
         let manager = ModelsManager::with_provider(auth_manager, provider);
 
         manager
-            .attempt_refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("refresh succeeds");
         let cached_remote = manager.remote_models(&config).await;
@@ -470,7 +470,7 @@ mod tests {
         let manager = ModelsManager::with_provider(auth_manager, provider);
 
         manager
-            .attempt_refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("first refresh succeeds");
         assert_eq!(
@@ -481,7 +481,7 @@ mod tests {
 
         // Second call should read from cache and avoid the network.
         manager
-            .attempt_refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("cached refresh succeeds");
         assert_eq!(
@@ -524,7 +524,7 @@ mod tests {
         let manager = ModelsManager::with_provider(auth_manager, provider);
 
         manager
-            .attempt_refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("initial refresh succeeds");
 
@@ -549,7 +549,7 @@ mod tests {
         .await;
 
         manager
-            .attempt_refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("second refresh succeeds");
         assert_eq!(
@@ -595,7 +595,7 @@ mod tests {
         manager.cache_ttl = Duration::ZERO;
 
         manager
-            .attempt_refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("initial refresh succeeds");
 
@@ -610,7 +610,7 @@ mod tests {
         .await;
 
         manager
-            .attempt_refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("second refresh succeeds");
 
