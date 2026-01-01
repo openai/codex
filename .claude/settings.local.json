@@ -1,0 +1,56 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:cookbook.openai.com)",
+      "WebFetch(domain:community.openai.com)",
+      "WebFetch(domain:code.claude.com)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:blog.lancedb.com)",
+      "WebFetch(domain:lancedb.com)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:www.reddit.com)",
+      "WebFetch(domain:news.ycombinator.com)",
+      "WebFetch(domain:devtalk.com)",
+      "WebFetch(domain:microsoft.github.io)",
+
+      "Bash(cargo:*)",
+      "Bash(just:*)",
+      "Bash(rustc:*)",
+
+      "Bash(git:*)",
+
+      "Bash(ls:*)",
+      "Bash(tree:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(comm:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(xargs:*)",
+      "Bash(perl:*)",
+      "Bash(tee:*)",
+      "Bash(echo:*)",
+      "Bash(env)",
+      "Bash(jobs:*)",
+      "Bash(wait)",
+      "Bash(chmod:*)",
+      "Bash(mkdir:*)",
+      "Bash(pkill:*)",
+      "Bash(brew list:*)",
+
+      "Bash(python3:*)",
+      "Bash(python -m pytest:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
