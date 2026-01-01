@@ -83,37 +83,25 @@ pub(crate) fn eval_capture_intro_params(
     }
 }
 
-pub(crate) fn eval_capture_upload_consent_params(
+pub(crate) fn eval_capture_send_consent_params(
     app_event_tx: AppEventSender,
-    case_id: String,
-    path: String,
 ) -> super::SelectionViewParams {
     let upload_action: super::SelectionAction = Box::new({
         let tx = app_event_tx.clone();
-        let case_id = case_id.clone();
-        let path = path.clone();
         move |_sender: &AppEventSender| {
-            tx.send(AppEvent::EvalCaptureUpload {
-                case_id: case_id.clone(),
-                path: path.clone(),
-            });
+            tx.send(AppEvent::EvalCaptureSendConsent { upload: true });
         }
     });
 
     let skip_action: super::SelectionAction = Box::new({
         let tx = app_event_tx;
-        let case_id = case_id.clone();
-        let path = path.clone();
         move |_sender: &AppEventSender| {
-            tx.send(AppEvent::EvalCaptureUploadSkipped {
-                case_id: case_id.clone(),
-                path: path.clone(),
-            });
+            tx.send(AppEvent::EvalCaptureSendConsent { upload: false });
         }
     });
 
     let header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
-        Line::from("Upload eval sample?".bold()).into(),
+        Line::from("Send eval sample to the codex team?".bold()).into(),
         Line::from("").into(),
         Line::from("If you choose Yes, it will upload the full bundle".dim()).into(),
         Line::from("to the team:".dim()).into(),
@@ -360,7 +348,7 @@ impl Renderable for EvalCaptureNotesView {
             width: area.width,
             height: 1,
         };
-        Paragraph::new(Line::from("Enter to continue • Esc to cancel".dim()))
+        Paragraph::new(Line::from("Enter to continue • Esc to go back".dim()))
             .render(hint_area, buf);
     }
 }
@@ -371,7 +359,9 @@ impl EvalCaptureNotesView {
         let subtitle = "Please be specific, and can refer to any aspect of model behavior, including tool calls, code changes, or messages.";
         let usable_width = width.saturating_sub(2).max(1) as usize;
         let mut lines = Vec::new();
-        lines.push(Line::from(title.bold()));
+        for line in textwrap::wrap(title, usable_width) {
+            lines.push(Line::from(line.into_owned().bold()));
+        }
         for line in textwrap::wrap(subtitle, usable_width) {
             lines.push(Line::from(line.into_owned().dim()));
         }

@@ -370,6 +370,9 @@ pub(crate) struct ChatWidget {
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    // Whether the user consented to upload the captured eval sample to the team.
+    // This is captured before the start picker so the flow is consented up front.
+    eval_capture_send_to_team: Option<bool>,
     external_editor_state: ExternalEditorState,
 }
 
@@ -518,8 +521,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_eval_capture_intro(&mut self) {
+        self.eval_capture_send_to_team = None;
         if !crate::eval_capture_state::should_show_eval_capture_intro(&self.config.codex_home) {
-            self.open_eval_capture_start_picker();
+            self.open_eval_capture_send_consent();
             return;
         }
 
@@ -535,6 +539,18 @@ impl ChatWidget {
             self.add_error_message(format!("Failed to persist eval capture preference: {err}"));
         }
 
+        self.open_eval_capture_send_consent();
+    }
+
+    fn open_eval_capture_send_consent(&mut self) {
+        let params =
+            crate::bottom_pane::eval_capture_send_consent_params(self.app_event_tx.clone());
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_eval_capture_send_consent(&mut self, upload: bool) {
+        self.eval_capture_send_to_team = Some(upload);
         self.open_eval_capture_start_picker();
     }
 
@@ -838,13 +854,11 @@ impl ChatWidget {
                         crate::history_cell::PlainHistoryCell::new(lines),
                     )));
 
-                let params = crate::bottom_pane::eval_capture_upload_consent_params(
-                    self.app_event_tx.clone(),
-                    case_id,
-                    path,
-                );
-                self.bottom_pane.show_selection_view(params);
-                self.request_redraw();
+                if self.eval_capture_send_to_team.unwrap_or(false) {
+                    self.upload_eval_capture_bundle(case_id, path);
+                } else {
+                    self.eval_capture_upload_skipped(case_id, path);
+                }
             }
             Err(err) => {
                 self.app_event_tx
@@ -1949,6 +1963,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            eval_capture_send_to_team: None,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -2036,6 +2051,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            eval_capture_send_to_team: None,
             external_editor_state: ExternalEditorState::Closed,
         };
 

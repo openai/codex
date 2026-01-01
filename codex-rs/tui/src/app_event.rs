@@ -191,6 +191,12 @@ pub(crate) enum AppEvent {
     /// Dismiss the eval capture intro screen and continue to the start picker.
     EvalCaptureIntroContinue,
 
+    /// Record whether the user consented to upload the eval sample bundle once captured.
+    /// This happens before the start message picker so the full flow is consented up front.
+    EvalCaptureSendConsent {
+        upload: bool,
+    },
+
     /// Open the freeform notes entry for eval capture.
     OpenEvalCaptureNotes {
         start_marker: EvalCaptureStartMarker,
@@ -201,18 +207,6 @@ pub(crate) enum AppEvent {
         start_marker: EvalCaptureStartMarker,
         what_went_wrong: String,
         what_good_looks_like: String,
-    },
-
-    /// Upload the previously captured eval case bundle to the team.
-    EvalCaptureUpload {
-        case_id: String,
-        path: String,
-    },
-
-    /// Skip uploading the previously captured eval case bundle.
-    EvalCaptureUploadSkipped {
-        case_id: String,
-        path: String,
     },
 
     /// Launch the external editor after a normal draw has completed.

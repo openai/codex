@@ -1,9 +1,8 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 2206
 expression: popup
 ---
-  Upload eval sample?
+  Send eval sample to the codex team?
 
   If you choose Yes, it will upload the full bundle
   to the team:

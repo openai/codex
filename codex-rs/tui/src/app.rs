@@ -815,6 +815,9 @@ impl App {
             AppEvent::EvalCaptureIntroContinue => {
                 self.chat_widget.on_eval_capture_intro_continue();
             }
+            AppEvent::EvalCaptureSendConsent { upload } => {
+                self.chat_widget.on_eval_capture_send_consent(upload);
+            }
             AppEvent::OpenEvalCaptureNotes { start_marker } => {
                 self.chat_widget.open_eval_capture_notes(start_marker);
             }
@@ -828,12 +831,6 @@ impl App {
                     what_went_wrong,
                     what_good_looks_like,
                 );
-            }
-            AppEvent::EvalCaptureUpload { case_id, path } => {
-                self.chat_widget.upload_eval_capture_bundle(case_id, path);
-            }
-            AppEvent::EvalCaptureUploadSkipped { case_id, path } => {
-                self.chat_widget.eval_capture_upload_skipped(case_id, path);
             }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {

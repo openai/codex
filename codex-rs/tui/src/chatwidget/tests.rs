@@ -407,6 +407,7 @@ async fn make_chatwidget_manual(
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
+        eval_capture_send_to_team: None,
         external_editor_state: ExternalEditorState::Closed,
     };
     (widget, rx, op_rx)
@@ -2194,11 +2195,7 @@ async fn eval_capture_intro_popup_snapshot() {
 async fn eval_capture_upload_consent_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    let params = crate::bottom_pane::eval_capture_upload_consent_params(
-        chat.app_event_tx.clone(),
-        "case-2026-01-01T00-00-00-repo-000001".to_string(),
-        "/tmp/eval-case/case-2026-01-01T00-00-00-repo-000001".to_string(),
-    );
+    let params = crate::bottom_pane::eval_capture_send_consent_params(chat.app_event_tx.clone());
     chat.bottom_pane.show_selection_view(params);
     chat.request_redraw();
 
