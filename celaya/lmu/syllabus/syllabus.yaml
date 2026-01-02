@@ -1,0 +1,152 @@
+# LMU Curriculum Syllabus
+# Organization: Celaya Solutions
+# Project: LMU Curriculum Runtime
+# Version: 0.1.0
+# Generated: 2026-01-02T18:54:00Z
+# Purpose: Define lesson sequence, dependencies, and weights
+# Status: Experimental
+
+version: "0.1.0"
+name: "LMU Fundamentals"
+description: "Fault-tolerant inference curriculum treating model output as untrusted input"
+
+# Lesson sequence with explicit dependencies
+lessons:
+  - id: "0.1"
+    name: "Introduction to LMU Execution Model"
+    description: "Map LMU concepts to CUDA equivalents, understand inference as kernel execution"
+    phase: "foundations"
+    dependencies: []
+    weight: 1.0
+    estimated_duration_ms: 2000
+    cuda_analogy: "LMU operation → CUDA kernel"
+    artifacts:
+      - spec.md
+      - tasks.json
+      - expected_artifacts.json
+      - run.sh
+      - grader.md
+      - receipts.jsonl
+      - summary.json
+
+  - id: "0.2"
+    name: "Defensive JSON Extraction"
+    description: "Parse model output without crashes, handle truncation and malformed JSON"
+    phase: "foundations"
+    dependencies: ["0.1"]
+    weight: 1.5
+    estimated_duration_ms: 3000
+    cuda_analogy: "Defensive parsing → Error checking after kernel launch"
+    artifacts:
+      - spec.md
+      - tasks.json
+      - expected_artifacts.json
+      - run.py
+      - grader.md
+      - receipts.jsonl
+      - summary.json
+
+  - id: "1.0"
+    name: "Receipt-Driven Observability"
+    description: "Emit JSONL events for every operation, build profiler-like receipts"
+    phase: "runtime"
+    dependencies: ["0.2"]
+    weight: 2.0
+    estimated_duration_ms: 5000
+    cuda_analogy: "Receipts → nvprof profiling output"
+    artifacts:
+      - spec.md
+      - tasks.json
+      - expected_artifacts.json
+      - run.py
+      - grader.md
+      - receipts.jsonl
+      - summary.json
+
+  - id: "1.1"
+    name: "Retry with Constraint Tightening"
+    description: "Implement retry logic that modifies constraints, not just repeats prompts"
+    phase: "runtime"
+    dependencies: ["1.0"]
+    weight: 2.0
+    estimated_duration_ms: 6000
+    cuda_analogy: "Retry logic → Kernel re-launch with different parameters"
+    artifacts:
+      - spec.md
+      - tasks.json
+      - expected_artifacts.json
+      - run.py
+      - grader.md
+      - receipts.jsonl
+      - summary.json
+
+  - id: "2.0"
+    name: "Partial Credit Grading"
+    description: "Score artifacts with weights, allow partial success"
+    phase: "evaluation"
+    dependencies: ["1.1"]
+    weight: 2.5
+    estimated_duration_ms: 4000
+    cuda_analogy: "Grading → Performance metrics (throughput, latency)"
+    artifacts:
+      - spec.md
+      - tasks.json
+      - expected_artifacts.json
+      - run.py
+      - grader.md
+      - receipts.jsonl
+      - summary.json
+
+  - id: "advanced.1"
+    name: "Parallel Lesson Execution"
+    description: "Run independent lessons concurrently, manage resource contention"
+    phase: "optimization"
+    dependencies: ["2.0"]
+    weight: 3.0
+    estimated_duration_ms: 8000
+    cuda_analogy: "Parallel execution → CUDA streams, concurrent kernels"
+    artifacts:
+      - spec.md
+      - tasks.json
+      - expected_artifacts.json
+      - run.py
+      - grader.md
+      - receipts.jsonl
+      - summary.json
+
+# Phase definitions
+phases:
+  - name: "foundations"
+    order: 1
+    description: "Core concepts and execution model understanding"
+
+  - name: "runtime"
+    order: 2
+    description: "Operational patterns for reliable inference"
+
+  - name: "evaluation"
+    order: 3
+    description: "Grading and success measurement"
+
+  - name: "optimization"
+    order: 4
+    description: "Performance and parallelism"
+
+# Global configuration
+config:
+  default_model: "llama2:latest"
+  max_retries: 3
+  timeout_ms: 30000
+  receipts_file: "celaya/lmu/artifacts/receipts.jsonl"
+  summary_file: "celaya/lmu/artifacts/generation_summary.json"
+  artifact_dir: "celaya/lmu/artifacts"
+  require_cuda_analogy: true
+  allow_partial_success: true
+  fail_fast: false
+
+# Success criteria
+success_criteria:
+  min_pass_rate: 0.7
+  min_artifacts_per_lesson: 5
+  require_receipts: true
+  require_summary: true
