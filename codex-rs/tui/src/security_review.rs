@@ -38,6 +38,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SubAgentSource;
 use codex_core::protocol::TokenUsage;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -119,7 +120,7 @@ const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
 const FILE_TRIAGE_MODEL: &str = "gpt-5-codex-mini";
-const SPEC_GENERATION_MODEL: &str = "gpt-5-codex";
+const SPEC_GENERATION_MODEL: &str = "gpt-5.2";
 const THREAT_MODEL_MODEL: &str = "gpt-5-codex";
 const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
 // prompts moved to `security_prompts.rs`
@@ -8164,6 +8165,7 @@ async fn run_spec_agent(
 
     let mut spec_config = config.clone();
     spec_config.model = Some(SPEC_GENERATION_MODEL.to_string());
+    spec_config.model_reasoning_effort = Some(ReasoningEffort::High);
     spec_config.model_provider = provider.clone();
     spec_config.base_instructions = Some(SPEC_SYSTEM_PROMPT.to_string());
     spec_config.user_instructions = None;
