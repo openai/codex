@@ -82,6 +82,7 @@ mod transcript_copy_ui;
 mod transcript_multi_click;
 mod transcript_render;
 mod transcript_selection;
+mod transcript_view_cache;
 mod tui;
 mod ui_consts;
 pub mod update_action;

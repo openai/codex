@@ -22,6 +22,7 @@ use crate::transcript_multi_click::TranscriptMultiClick;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
+use crate::transcript_view_cache::TranscriptViewCache;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::tui::scrolling::MouseScrollState;
@@ -29,7 +30,6 @@ use crate::tui::scrolling::ScrollConfig;
 use crate::tui::scrolling::ScrollConfigOverrides;
 use crate::tui::scrolling::ScrollDirection;
 use crate::tui::scrolling::ScrollUpdate;
-use crate::tui::scrolling::TranscriptLineMeta;
 use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
@@ -326,6 +326,7 @@ pub(crate) struct App {
     pub(crate) file_search: FileSearchManager,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    transcript_view_cache: TranscriptViewCache,
 
     #[allow(dead_code)]
     transcript_scroll: TranscriptScroll,
@@ -492,6 +493,7 @@ impl App {
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
+            transcript_view_cache: TranscriptViewCache::new(),
             transcript_scroll: TranscriptScroll::default(),
             transcript_selection: TranscriptSelection::default(),
             transcript_multi_click: TranscriptMultiClick::default(),
@@ -707,10 +709,10 @@ impl App {
             height: max_transcript_height,
         };
 
-        let transcript =
-            crate::transcript_render::build_wrapped_transcript_lines(cells, transcript_area.width);
-        let (lines, line_meta) = (transcript.lines, transcript.meta);
-        if lines.is_empty() {
+        self.transcript_view_cache
+            .ensure_wrapped(cells, transcript_area.width);
+        let total_lines = self.transcript_view_cache.lines().len();
+        if total_lines == 0 {
             Clear.render_ref(transcript_area, frame.buffer);
             self.transcript_scroll = TranscriptScroll::default();
             self.transcript_view_top = 0;
@@ -718,17 +720,14 @@ impl App {
             return area.y;
         }
 
-        let is_user_cell: Vec<bool> = cells
-            .iter()
-            .map(|c| c.as_any().is::<UserHistoryCell>())
-            .collect();
-
-        let total_lines = lines.len();
         self.transcript_total_lines = total_lines;
         let max_visible = std::cmp::min(max_transcript_height as usize, total_lines);
         let max_start = total_lines.saturating_sub(max_visible);
 
-        let (scroll_state, top_offset) = self.transcript_scroll.resolve_top(&line_meta, max_start);
+        let (scroll_state, top_offset) = {
+            let line_meta = self.transcript_view_cache.line_meta();
+            self.transcript_scroll.resolve_top(line_meta, max_start)
+        };
         self.transcript_scroll = scroll_state;
         self.transcript_view_top = top_offset;
 
@@ -762,6 +761,11 @@ impl App {
             height: transcript_visible_height,
         };
 
+        // Cache a few viewports worth of rasterized rows so redraws during streaming can cheaply
+        // copy already-rendered `Cell`s instead of re-running grapheme segmentation.
+        self.transcript_view_cache
+            .set_raster_capacity(max_visible.saturating_mul(4).max(256));
+
         for (row_index, line_index) in (top_offset..total_lines).enumerate() {
             if row_index >= max_visible {
                 break;
@@ -775,21 +779,8 @@ impl App {
                 height: 1,
             };
 
-            let is_user_row = line_meta
-                .get(line_index)
-                .and_then(TranscriptLineMeta::cell_index)
-                .map(|cell_index| is_user_cell.get(cell_index).copied().unwrap_or(false))
-                .unwrap_or(false);
-            if is_user_row {
-                let base_style = crate::style::user_message_style();
-                for x in row_area.x..row_area.right() {
-                    let cell = &mut frame.buffer[(x, y)];
-                    let style = cell.style().patch(base_style);
-                    cell.set_style(style);
-                }
-            }
-
-            lines[line_index].render_ref(row_area, frame.buffer);
+            self.transcript_view_cache
+                .render_row_index_into(line_index, row_area, frame.buffer);
         }
 
         self.apply_transcript_selection(transcript_area, frame.buffer);
@@ -1102,12 +1093,12 @@ impl App {
             return;
         }
 
-        let transcript =
-            crate::transcript_render::build_wrapped_transcript_lines(&self.transcript_cells, width);
-        let line_meta = transcript.meta;
+        self.transcript_view_cache
+            .ensure_wrapped(&self.transcript_cells, width);
+        let line_meta = self.transcript_view_cache.line_meta();
         self.transcript_scroll =
             self.transcript_scroll
-                .scrolled_by(delta_lines, &line_meta, visible_lines);
+                .scrolled_by(delta_lines, line_meta, visible_lines);
 
         if schedule_frame {
             // Request a redraw; the frame scheduler coalesces bursts and clamps to 60fps.
@@ -1127,9 +1118,10 @@ impl App {
             return;
         }
 
-        let transcript =
-            crate::transcript_render::build_wrapped_transcript_lines(&self.transcript_cells, width);
-        let (lines, line_meta) = (transcript.lines, transcript.meta);
+        self.transcript_view_cache
+            .ensure_wrapped(&self.transcript_cells, width);
+        let lines = self.transcript_view_cache.lines();
+        let line_meta = self.transcript_view_cache.line_meta();
         if lines.is_empty() || line_meta.is_empty() {
             return;
         }
@@ -1149,7 +1141,7 @@ impl App {
             }
         };
 
-        if let Some(scroll_state) = TranscriptScroll::anchor_for(&line_meta, top_offset) {
+        if let Some(scroll_state) = TranscriptScroll::anchor_for(line_meta, top_offset) {
             self.transcript_scroll = scroll_state;
         }
     }
@@ -2053,6 +2045,7 @@ mod tests {
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
     use crate::transcript_copy_ui::CopySelectionShortcut;
+    use crate::tui::scrolling::TranscriptLineMeta;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
@@ -2090,6 +2083,7 @@ mod tests {
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
+            transcript_view_cache: TranscriptViewCache::new(),
             transcript_scroll: TranscriptScroll::default(),
             transcript_selection: TranscriptSelection::default(),
             transcript_multi_click: TranscriptMultiClick::default(),
@@ -2140,6 +2134,7 @@ mod tests {
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),
+                transcript_view_cache: TranscriptViewCache::new(),
                 transcript_scroll: TranscriptScroll::default(),
                 transcript_selection: TranscriptSelection::default(),
                 transcript_multi_click: TranscriptMultiClick::default(),
