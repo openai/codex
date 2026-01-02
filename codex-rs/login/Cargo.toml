@@ -14,6 +14,7 @@ codex-core = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
+rustls-pki-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -32,6 +33,8 @@ webbrowser = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+assert_cmd = { workspace = true }
 core_test_support = { workspace = true }
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 wiremock = { workspace = true }
