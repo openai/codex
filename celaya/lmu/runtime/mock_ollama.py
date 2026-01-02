@@ -22,23 +22,23 @@ class MockOllamaRunner:
 
         prompt_lower = prompt.lower()
 
-        # Plan lesson
-        if "plan" in prompt_lower and "lesson" in prompt_lower:
-            return json.dumps({
-                "objective": "Map LMU concepts to CUDA equivalents",
-                "constraints": ["No speculative claims", "Testable criteria only"],
-                "success_criteria": ["Map 6 concepts correctly", "Generate valid spec.md"],
-                "cuda_analogy_explanation": "LMU operations map to CUDA kernel launches with deterministic execution"
-            })
-
-        # Generate tasks.json (check before spec)
-        elif "tasks.json" in prompt_lower or "tasks" in prompt_lower:
+        # Generate tasks.json (check FIRST - most specific)
+        if "tasks.json" in prompt_lower or ("generate" in prompt_lower and "tasks" in prompt_lower):
             return json.dumps({
                 "tasks": [
                     {"id": "task1", "description": "Map LMU to CUDA concepts", "weight": 0.4},
                     {"id": "task2", "description": "Generate spec.md with analogy", "weight": 0.35},
                     {"id": "task3", "description": "Validate output against schema", "weight": 0.25}
                 ]
+            })
+
+        # Plan lesson
+        elif "plan" in prompt_lower and "lesson" in prompt_lower:
+            return json.dumps({
+                "objective": "Map LMU concepts to CUDA equivalents",
+                "constraints": ["No speculative claims", "Testable criteria only"],
+                "success_criteria": ["Map 6 concepts correctly", "Generate valid spec.md"],
+                "cuda_analogy_explanation": "LMU operations map to CUDA kernel launches with deterministic execution"
             })
 
         # Generate spec.md
