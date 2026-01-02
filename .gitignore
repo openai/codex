@@ -1,92 +1,49 @@
-# deps
-# Node.js dependencies
-node_modules
-.pnpm-store
-.pnpm-debug.log
-
-# Keep pnpm-lock.yaml
-!pnpm-lock.yaml
-
-# build
-dist/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
-out/
-storybook-static/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# ignore README for publishing
-codex-cli/README.md
+# Virtual environments
+venv/
+ENV/
+env/
 
-# ignore Nix derivation results
-result
-
-# editor
+# IDE
 .vscode/
 .idea/
-.history/
-.zed/
 *.swp
+*.swo
 *~
 
-# cli tools
-CLAUDE.md
-.claude/
-AGENTS.override.md
-
-# caches
-.cache/
-.turbo/
-.parcel-cache/
-.eslintcache
-.nyc_output/
-.jest/
-*.tsbuildinfo
-
-# logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# env
-.env*
-!.env.example
-
-# package
-*.tgz
-
-# ci
-.vercel/
-.netlify/
-
-# patches
-apply_patch/
-
-# coverage
-coverage/
-
-# personal files
-personal/
-
-# os
+# OS
 .DS_Store
 Thumbs.db
-Icon?
-.Spotlight-V100/
 
-# Unwanted package managers
-.yarn/
-yarn.lock
+# LMU artifacts
+celaya/lmu/artifacts/*.jsonl
+celaya/lmu/artifacts/*.json
+celaya/lmu/artifacts/lessons/
+!celaya/lmu/artifacts/.gitkeep
 
-# release
-package.json-e
-session.ts-e
-CHANGELOG.ignore.md
+# Ollama cache
+.ollama/
 
-# nix related
-.direnv
-.envrc
-
-# Python bytecode files
-__pycache__/
-*.pyc
-
+# Test files
+test_receipts.jsonl
