@@ -12,11 +12,13 @@ Usage:
     python run.py --check            # Verify Ollama connectivity
     python run.py --lessons 0.1,0.2  # Generate specific lessons
     python run.py --phase foundations # Generate specific phase
+    python run.py --mock             # Use mock Ollama (no server needed)
 """
 
 import sys
 import argparse
 import json
+import os
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -208,7 +210,17 @@ Examples:
         help="Maximum retry attempts (default: 3)"
     )
 
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use mock Ollama (no server needed)"
+    )
+
     args = parser.parse_args()
+
+    # Set mock mode via env var
+    if args.mock:
+        os.environ['LMU_MOCK_OLLAMA'] = '1'
 
     # Check Ollama connectivity
     if args.check:

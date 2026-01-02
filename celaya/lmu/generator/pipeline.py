@@ -62,8 +62,17 @@ class LessonPipeline:
         # Create artifact directory
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize Ollama
-        self.ollama = OllamaRunner(model=ollama_model)
+        # Initialize Ollama (check mock mode)
+        import os
+        import sys
+        if os.getenv('LMU_MOCK_OLLAMA'):
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from runtime.mock_ollama import MockOllamaRunner
+            self.ollama = MockOllamaRunner(model=ollama_model)
+        else:
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from runtime.runner import OllamaRunner
+            self.ollama = OllamaRunner(model=ollama_model)
 
     def load_lesson_config(self, lesson_id: str) -> Optional[Dict[str, Any]]:
         """
