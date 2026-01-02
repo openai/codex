@@ -212,6 +212,7 @@ pub(crate) enum AppEvent {
         linear_issue: Option<String>,
         force_new: bool,
         resume_from: Option<PathBuf>,
+        rebuild_completed_review: bool,
     },
 
     /// Prepare required connectors for the security review.

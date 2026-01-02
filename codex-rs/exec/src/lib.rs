@@ -318,29 +318,51 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             }
         }
 
-        let (output_root, include_paths, scope_display_paths, mode, resume_checkpoint) =
-            if review_args.resume {
-                if let Some(candidate) = latest_running_review_candidate(&default_cwd) {
-                    (
-                        candidate.output_root.clone(),
-                        Vec::new(),
-                        Vec::new(),
-                        review_args.mode,
-                        Some(candidate.checkpoint),
-                    )
-                } else {
-                    eprintln!("No in-progress security review found to resume.");
-                    std::process::exit(1);
-                }
-            } else {
+        let (
+            output_root,
+            include_paths,
+            scope_display_paths,
+            mode,
+            resume_checkpoint,
+            rebuild_completed_review,
+        ) = if review_args.rebuild {
+            if let Some(candidate) = codex_tui::latest_completed_review_candidate(&default_cwd) {
                 (
-                    prepare_security_review_output_root(&default_cwd)?,
-                    review_args.include_paths,
-                    review_args.scope_display_paths,
+                    candidate.output_root.clone(),
+                    Vec::new(),
+                    Vec::new(),
                     review_args.mode,
-                    None,
+                    Some(candidate.checkpoint),
+                    true,
                 )
-            };
+            } else {
+                eprintln!("No completed security review found to rebuild.");
+                std::process::exit(1);
+            }
+        } else if review_args.resume {
+            if let Some(candidate) = latest_running_review_candidate(&default_cwd) {
+                (
+                    candidate.output_root.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                    review_args.mode,
+                    Some(candidate.checkpoint),
+                    false,
+                )
+            } else {
+                eprintln!("No in-progress security review found to resume.");
+                std::process::exit(1);
+            }
+        } else {
+            (
+                prepare_security_review_output_root(&default_cwd)?,
+                review_args.include_paths,
+                review_args.scope_display_paths,
+                review_args.mode,
+                None,
+                false,
+            )
+        };
         let log_callback: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|line| eprintln!("{line}"));
         let log_sink = match codex_tui::SecurityReviewLogSink::with_path_and_callback(
             &output_root.join("sec-review.log"),
@@ -379,6 +401,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             skip_auto_scope_confirmation: true,
             auto_scope_prompt: review_args.auto_scope_prompt,
             resume_checkpoint,
+            rebuild_completed_review,
             linear_issue: None,
         };
 
@@ -605,6 +628,7 @@ struct SecurityReviewCliArgs {
     auto_scope_prompt: Option<String>,
     setup: bool,
     resume: bool,
+    rebuild: bool,
 }
 
 fn parse_security_review_command(
@@ -626,6 +650,7 @@ fn parse_security_review_command(
     let mut auto_scope_prompt: Option<String> = None;
     let mut setup = false;
     let mut resume = false;
+    let mut rebuild = false;
 
     let mut iter = tokens.into_iter();
     // Skip the command token.
@@ -670,6 +695,9 @@ fn parse_security_review_command(
             "setup" | "--setup" => {
                 setup = true;
             }
+            "rebuild" | "--rebuild" => {
+                rebuild = true;
+            }
             other if other.starts_with("--") => {
                 return Err(anyhow::anyhow!(
                     "Unknown flag `{other}` for /secreview command."
@@ -697,6 +725,7 @@ fn parse_security_review_command(
         auto_scope_prompt,
         setup,
         resume,
+        rebuild,
     }))
 }
 

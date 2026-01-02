@@ -114,6 +114,7 @@ pub use security_review::SecurityReviewMode;
 pub use security_review::SecurityReviewRequest;
 pub use security_review::SecurityReviewResult;
 pub use security_review::SecurityReviewSetupResult;
+pub use security_review::latest_completed_review_candidate;
 pub use security_review::latest_running_review_candidate;
 pub use security_review::prepare_security_review_output_root;
 pub use security_review::run_security_review;

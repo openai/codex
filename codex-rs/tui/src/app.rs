@@ -1253,7 +1253,7 @@ impl App {
                 linear_issue,
                 force_new,
                 resume_from,
-                ..
+                rebuild_completed_review,
             } => {
                 self.chat_widget.start_security_review(
                     mode,
@@ -1262,6 +1262,7 @@ impl App {
                     linear_issue,
                     force_new,
                     resume_from,
+                    rebuild_completed_review,
                 );
             }
             AppEvent::StartSecurityReviewSetup => {

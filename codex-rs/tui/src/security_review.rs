@@ -110,6 +110,8 @@ const MAX_FILE_SEARCH_RESULTS: usize = 40;
 // Not related to per-file search/tool attempts. Defaults to 3.
 const BUG_FINDING_PASSES: usize = 1;
 const BUG_POLISH_CONCURRENCY: usize = 8;
+const BUG_DEDUP_CONFIDENCE_THRESHOLD: f32 = 0.85;
+const BUG_DEDUP_PROMPT_MAX_CHARS: usize = 120_000;
 const COMMAND_PREVIEW_MAX_LINES: usize = 2;
 const COMMAND_PREVIEW_MAX_GRAPHEMES: usize = 96;
 const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
@@ -391,6 +393,48 @@ pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecuri
     })
 }
 
+pub fn latest_completed_review_candidate(
+    repo_path: &Path,
+) -> Option<RunningSecurityReviewCandidate> {
+    let storage_root = security_review_storage_root(repo_path);
+    let entries = fs::read_dir(storage_root).ok()?;
+    let mut candidates: Vec<(String, PathBuf, SecurityReviewCheckpoint)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(checkpoint) = load_checkpoint(&path) else {
+            continue;
+        };
+        if checkpoint.status != SecurityReviewCheckpointStatus::Complete {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .to_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            });
+        candidates.push((name, path, checkpoint));
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    let (_, path, checkpoint) = candidates.into_iter().next()?;
+    Some(RunningSecurityReviewCandidate {
+        output_root: path,
+        checkpoint,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SecurityReviewMode {
     #[default]
@@ -437,6 +481,8 @@ pub struct SecurityReviewRequest {
     pub skip_auto_scope_confirmation: bool,
     pub auto_scope_prompt: Option<String>,
     pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
+    // When true, rebuild artifacts even if the checkpoint is already complete.
+    pub rebuild_completed_review: bool,
     // Optional Linear issue reference to sync status and create child tickets.
     pub linear_issue: Option<String>,
 }
@@ -2488,6 +2534,48 @@ fn snapshot_bugs(snapshot: &SecurityReviewSnapshot) -> Vec<SecurityReviewBug> {
         .collect()
 }
 
+fn snapshot_summaries_and_details(
+    snapshot: &SecurityReviewSnapshot,
+) -> (Vec<BugSummary>, Vec<BugDetail>) {
+    let mut summaries: Vec<BugSummary> = Vec::with_capacity(snapshot.bugs.len());
+    let mut details: Vec<BugDetail> = Vec::with_capacity(snapshot.bugs.len());
+
+    for entry in &snapshot.bugs {
+        let bug = entry.bug.clone();
+        let markdown = entry.original_markdown.clone();
+        let vulnerability_tag = bug.vulnerability_tag.clone().or_else(|| {
+            extract_vulnerability_tag_from_bug_markdown(entry.original_markdown.as_str())
+        });
+
+        summaries.push(BugSummary {
+            id: bug.summary_id,
+            title: bug.title,
+            file: bug.file,
+            severity: bug.severity,
+            impact: bug.impact,
+            likelihood: bug.likelihood,
+            recommendation: bug.recommendation,
+            blame: bug.blame,
+            risk_score: bug.risk_score,
+            risk_rank: bug.risk_rank,
+            risk_reason: bug.risk_reason,
+            verification_types: bug.verification_types,
+            vulnerability_tag,
+            validation: bug.validation,
+            source_path: PathBuf::new(),
+            markdown: markdown.clone(),
+            author_github: bug.assignee_github,
+        });
+
+        details.push(BugDetail {
+            summary_id: bug.summary_id,
+            original_markdown: markdown,
+        });
+    }
+
+    (summaries, details)
+}
+
 fn extract_vulnerability_tag_from_bug_markdown(markdown: &str) -> Option<String> {
     markdown
         .lines()
@@ -3249,6 +3337,7 @@ pub async fn run_security_review(
     let resuming = checkpoint.is_some();
     if let Some(checkpoint) = checkpoint.as_ref()
         && checkpoint.status == SecurityReviewCheckpointStatus::Complete
+        && !request.rebuild_completed_review
     {
         return resume_completed_review_from_checkpoint(
             checkpoint.clone(),
@@ -4228,7 +4317,49 @@ pub async fn run_security_review(
                         ),
                     );
 
-                    let removed = dedupe_security_review_snapshot(&mut loaded);
+                    let mut removed = dedupe_security_review_snapshot(&mut loaded);
+                    if loaded.bugs.len() > 1 {
+                        let dedupe_model = if request.triage_model.trim().is_empty() {
+                            FILE_TRIAGE_MODEL
+                        } else {
+                            request.triage_model.as_str()
+                        };
+                        let (summaries, details) = snapshot_summaries_and_details(&loaded);
+                        let llm_outcome = llm_dedupe_bug_summaries(
+                            &model_client,
+                            &request.provider,
+                            &request.auth,
+                            dedupe_model,
+                            summaries,
+                            details,
+                            progress_sender.clone(),
+                            metrics.clone(),
+                        )
+                        .await;
+                        for line in llm_outcome.logs {
+                            record(&mut logs, line);
+                        }
+                        if llm_outcome.removed > 0 {
+                            let llm_removed = llm_outcome.removed;
+                            record(
+                                &mut logs,
+                                format!(
+                                    "Deduplicated {llm_removed} additional finding{} via LLM while resuming from snapshot.",
+                                    if llm_removed == 1 { "" } else { "s" }
+                                ),
+                            );
+                            let mut summaries = llm_outcome.summaries;
+                            let mut details = llm_outcome.details;
+                            normalize_bug_identifiers(&mut summaries, &mut details);
+                            let (_bugs, snapshots) = build_bug_records(summaries, details);
+                            loaded.bugs = snapshots;
+                            loaded.findings_summary = format_findings_summary(
+                                loaded.bugs.len(),
+                                count_files_with_findings_from_snapshots(&loaded.bugs),
+                            );
+                            removed = removed.saturating_add(llm_removed);
+                        }
+                    }
                     if removed > 0 {
                         record(
                             &mut logs,
@@ -4570,6 +4701,42 @@ pub async fn run_security_review(
             if removed > 0 {
                 let msg = format!(
                     "Deduplicated {removed} duplicated finding{} by grouping titles/tags.",
+                    if removed == 1 { "" } else { "s" }
+                );
+                record(&mut logs, msg.clone());
+                aggregated_logs.push(msg);
+            }
+        }
+
+        if all_summaries.len() > 1 {
+            let dedupe_model = if request.triage_model.trim().is_empty() {
+                FILE_TRIAGE_MODEL
+            } else {
+                request.triage_model.as_str()
+            };
+            let llm_outcome = llm_dedupe_bug_summaries(
+                &model_client,
+                &request.provider,
+                &request.auth,
+                dedupe_model,
+                all_summaries,
+                all_details,
+                progress_sender.clone(),
+                metrics.clone(),
+            )
+            .await;
+
+            all_summaries = llm_outcome.summaries;
+            all_details = llm_outcome.details;
+
+            for line in llm_outcome.logs {
+                record(&mut logs, line.clone());
+                aggregated_logs.push(line);
+            }
+            if llm_outcome.removed > 0 {
+                let removed = llm_outcome.removed;
+                let msg = format!(
+                    "Deduplicated {removed} additional finding{} via LLM clustering.",
                     if removed == 1 { "" } else { "s" }
                 );
                 record(&mut logs, msg.clone());
@@ -10765,6 +10932,344 @@ fn rewrite_bug_markdown_location(markdown: &str, new_location: &str) -> Option<S
         return Some(out.join("\n"));
     }
     Some(lines.join("\n"))
+}
+
+#[derive(Debug, Deserialize)]
+struct BugDedupeDecision {
+    id: usize,
+    canonical_id: usize,
+    #[serde(default)]
+    confidence: Option<f32>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+struct BugLlmDedupeOutcome {
+    summaries: Vec<BugSummary>,
+    details: Vec<BugDetail>,
+    removed: usize,
+    logs: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn llm_dedupe_bug_summaries(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    model: &str,
+    mut summaries: Vec<BugSummary>,
+    details: Vec<BugDetail>,
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+) -> BugLlmDedupeOutcome {
+    let mut logs: Vec<String> = Vec::new();
+
+    if summaries.len() < 2 {
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs,
+        };
+    }
+
+    let mut ordered: Vec<&BugSummary> = summaries.iter().collect();
+    ordered.sort_by_key(|summary| summary.id);
+
+    let listing = ordered
+        .into_iter()
+        .map(|summary| {
+            let mut files = extract_file_locations_for_dedupe(&summary.file);
+            if files.len() > 6 {
+                let overflow = files.len().saturating_sub(6);
+                files.truncate(6);
+                files.push(format!("...(+{overflow})"));
+            }
+
+            json!({
+                "id": summary.id,
+                "title": truncate_text(&summary.title, 160),
+                "severity": summary.severity,
+                "vulnerability_tag": summary.vulnerability_tag,
+                "files": files,
+                "recommendation": truncate_text(&summary.recommendation, 200),
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = BUG_DEDUP_PROMPT_TEMPLATE.replace("{findings}", listing.as_str());
+    if prompt.len() > BUG_DEDUP_PROMPT_MAX_CHARS {
+        logs.push(format!(
+            "Skipping LLM dedupe: prompt too large ({} chars).",
+            prompt.len()
+        ));
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs,
+        };
+    }
+
+    let response = await_with_heartbeat(
+        progress_sender,
+        "running LLM dedupe",
+        Some(&format!("{} finding(s)", summaries.len())),
+        call_model(
+            client,
+            provider,
+            auth,
+            model,
+            BUG_DEDUP_SYSTEM_PROMPT,
+            &prompt,
+            metrics.clone(),
+            0.0,
+        ),
+    )
+    .await;
+
+    let response_output = match response {
+        Ok(output) => output,
+        Err(err) => {
+            logs.push(format!("LLM dedupe model request failed: {err}"));
+            return BugLlmDedupeOutcome {
+                summaries,
+                details,
+                removed: 0,
+                logs,
+            };
+        }
+    };
+
+    if let Some(reasoning) = response_output.reasoning.as_ref() {
+        let none_sender: Option<AppEventSender> = None;
+        let none_sink: Option<Arc<SecurityReviewLogSink>> = None;
+        log_model_reasoning(reasoning, &none_sender, &none_sink, &mut logs);
+    }
+
+    let mut decisions: Vec<BugDedupeDecision> = Vec::new();
+    for raw_line in response_output.text.lines() {
+        let trimmed = raw_line.trim().trim_matches('`');
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<BugDedupeDecision>(trimmed) {
+            Ok(entry) => decisions.push(entry),
+            Err(_) => continue,
+        }
+    }
+
+    if decisions.is_empty() {
+        logs.push("LLM dedupe returned no parseable JSON Lines; skipping.".to_string());
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs,
+        };
+    }
+
+    #[derive(Clone)]
+    struct UnionFind {
+        parent: Vec<usize>,
+        rank: Vec<u8>,
+    }
+
+    impl UnionFind {
+        fn new(len: usize) -> Self {
+            Self {
+                parent: (0..len).collect(),
+                rank: vec![0; len],
+            }
+        }
+
+        fn find(&mut self, mut x: usize) -> usize {
+            let mut root = x;
+            while self.parent[root] != root {
+                root = self.parent[root];
+            }
+            while self.parent[x] != x {
+                let parent = self.parent[x];
+                self.parent[x] = root;
+                x = parent;
+            }
+            root
+        }
+
+        fn union(&mut self, a: usize, b: usize) {
+            let ra = self.find(a);
+            let rb = self.find(b);
+            if ra == rb {
+                return;
+            }
+
+            let rank_a = self.rank[ra];
+            let rank_b = self.rank[rb];
+            if rank_a < rank_b {
+                self.parent[ra] = rb;
+            } else if rank_b < rank_a {
+                self.parent[rb] = ra;
+            } else {
+                self.parent[rb] = ra;
+                self.rank[ra] = rank_a.saturating_add(1);
+            }
+        }
+    }
+
+    let id_to_index: HashMap<usize, usize> = summaries
+        .iter()
+        .enumerate()
+        .map(|(idx, summary)| (summary.id, idx))
+        .collect();
+
+    let mut uf = UnionFind::new(summaries.len());
+    let mut proposed_merges = 0usize;
+    let mut accepted_merges = 0usize;
+    for decision in decisions {
+        if decision.id == decision.canonical_id {
+            continue;
+        }
+        proposed_merges += 1;
+        let confidence = decision.confidence.unwrap_or(0.0);
+        if confidence < BUG_DEDUP_CONFIDENCE_THRESHOLD {
+            continue;
+        }
+        let Some(&a) = id_to_index.get(&decision.id) else {
+            continue;
+        };
+        let Some(&b) = id_to_index.get(&decision.canonical_id) else {
+            continue;
+        };
+        uf.union(a, b);
+        accepted_merges += 1;
+    }
+
+    #[derive(Clone)]
+    struct GroupAgg {
+        rep_index: usize,
+        file_set: Vec<String>,
+        members: Vec<usize>,
+    }
+
+    let mut root_to_group: HashMap<usize, GroupAgg> = HashMap::new();
+    for (idx, summary) in summaries.iter().enumerate() {
+        let root = uf.find(idx);
+        let entry = root_to_group.entry(root).or_insert_with(|| GroupAgg {
+            rep_index: idx,
+            file_set: Vec::new(),
+            members: Vec::new(),
+        });
+
+        let rep = &summaries[entry.rep_index];
+        let rep_risk = rep.risk_rank.unwrap_or(usize::MAX);
+        let cur_risk = summary.risk_rank.unwrap_or(usize::MAX);
+        if cur_risk < rep_risk
+            || (cur_risk == rep_risk
+                && (severity_rank(&summary.severity) < severity_rank(&rep.severity)
+                    || (severity_rank(&summary.severity) == severity_rank(&rep.severity)
+                        && summary.id < rep.id)))
+        {
+            entry.rep_index = idx;
+        }
+
+        for loc in extract_file_locations_for_dedupe(&summary.file) {
+            if !entry.file_set.iter().any(|existing| existing == &loc) {
+                entry.file_set.push(loc);
+            }
+        }
+        entry.members.push(summary.id);
+    }
+
+    if root_to_group.len() == summaries.len() {
+        logs.push(format!(
+            "LLM dedupe proposed {proposed_merges} merge(s); accepted {accepted_merges}; no groups formed."
+        ));
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs,
+        };
+    }
+
+    logs.push(format!(
+        "LLM dedupe proposed {proposed_merges} merge(s); accepted {accepted_merges}."
+    ));
+
+    let mut detail_by_id: HashMap<usize, String> = HashMap::new();
+    for detail in &details {
+        detail_by_id.insert(detail.summary_id, detail.original_markdown.clone());
+    }
+
+    let mut keep_ids: HashSet<usize> = HashSet::new();
+    let id_to_index: HashMap<usize, usize> = summaries
+        .iter()
+        .enumerate()
+        .map(|(idx, summary)| (summary.id, idx))
+        .collect();
+    for agg in root_to_group.values() {
+        let rep_id = summaries[agg.rep_index].id;
+        let location_joined = if agg.file_set.is_empty() {
+            summaries[agg.rep_index].file.clone()
+        } else {
+            agg.file_set.join(", ")
+        };
+
+        let mut types: Vec<String> = Vec::new();
+        for m_id in &agg.members {
+            if let Some(&idx) = id_to_index.get(m_id) {
+                for entry in &summaries[idx].verification_types {
+                    if !types
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(entry))
+                    {
+                        types.push(entry.clone());
+                    }
+                }
+            }
+        }
+
+        let mut best_severity = summaries[agg.rep_index].severity.clone();
+        for m_id in &agg.members {
+            if let Some(&idx) = id_to_index.get(m_id)
+                && severity_rank(&summaries[idx].severity) < severity_rank(&best_severity)
+            {
+                best_severity = summaries[idx].severity.clone();
+            }
+        }
+
+        let rep_mut = &mut summaries[agg.rep_index];
+        rep_mut.file = location_joined.clone();
+        rep_mut.severity = best_severity;
+        rep_mut.verification_types = types;
+        if let Some(updated) = rewrite_bug_markdown_location(&rep_mut.markdown, &location_joined) {
+            rep_mut.markdown = updated.clone();
+            detail_by_id.insert(rep_id, updated);
+        }
+        keep_ids.insert(rep_id);
+    }
+
+    summaries.retain(|summary| keep_ids.contains(&summary.id));
+
+    let mut new_details: Vec<BugDetail> = Vec::with_capacity(keep_ids.len());
+    for id in &keep_ids {
+        if let Some(markdown) = detail_by_id.get(id) {
+            new_details.push(BugDetail {
+                summary_id: *id,
+                original_markdown: markdown.clone(),
+            });
+        }
+    }
+
+    let removed = details.len().saturating_sub(new_details.len());
+    BugLlmDedupeOutcome {
+        summaries,
+        details: new_details,
+        removed,
+        logs,
+    }
 }
 
 fn dedupe_bug_summaries(
