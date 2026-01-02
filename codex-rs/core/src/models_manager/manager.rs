@@ -94,7 +94,7 @@ impl ModelsManager {
         &self,
         remote_models_feature: bool,
     ) -> CoreResult<()> {
-        if !remote_models_feature && self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
+        if !remote_models_feature || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
             return Ok(());
         }
         let auth = self.auth_manager.auth();
