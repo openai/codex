@@ -1236,10 +1236,27 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
 
     let limit = 200_000;
     let over_limit_tokens = 250_000;
+    let remote_summary = "REMOTE_COMPACT_SUMMARY";
+
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: remote_summary.to_string(),
+            }],
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
 
     let mut builder = test_codex().with_config(move |config| {
         set_test_compact_prompt(config);
         config.model_auto_compact_token_limit = Some(limit);
+        config.features.enable(Feature::RemoteCompaction);
     });
     let initial = builder.build(&server).await.unwrap();
     let home = initial.home.clone();
@@ -1256,17 +1273,15 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     .await;
     initial.submit_turn("OVER_LIMIT_TURN").await.unwrap();
 
-    let requests = get_responses_requests(&server).await;
-    assert_eq!(requests.len(), 1, "expected only the initial request");
-    let initial_body = std::str::from_utf8(&requests[0].body).unwrap_or("");
     assert!(
-        !body_contains_text(initial_body, SUMMARIZATION_PROMPT),
-        "initial over-limit turn should not auto compact"
+        compact_mock.requests().is_empty(),
+        "remote compaction should not run before the next user message"
     );
 
     let mut resume_builder = test_codex().with_config(move |config| {
         set_test_compact_prompt(config);
         config.model_auto_compact_token_limit = Some(limit);
+        config.features.enable(Feature::RemoteCompaction);
     });
     let resumed = resume_builder
         .resume(&server, home, rollout_path)
@@ -1274,48 +1289,29 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         .unwrap();
 
     let follow_up_user = "AFTER_RESUME_USER";
-    let sse_compact = sse(vec![
-        ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
-        ev_completed_with_tokens("r2", 10),
-    ]);
     let sse_follow_up = sse(vec![
-        ev_assistant_message("m3", FINAL_REPLY),
-        ev_completed("r3"),
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed("r2"),
     ]);
-
-    let compact_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, compact_matcher, sse_compact).await;
 
     let follow_up_matcher = move |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(follow_up_user)
-            && body_contains_text(body, AUTO_SUMMARY_TEXT)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
+        body.contains(follow_up_user) && body.contains(remote_summary)
     };
     mount_sse_once_match(&server, follow_up_matcher, sse_follow_up).await;
 
     resumed.submit_turn(follow_up_user).await.unwrap();
 
-    let requests = get_responses_requests(&server).await;
+    let compact_requests = compact_mock.requests();
     assert_eq!(
-        requests.len(),
-        3,
-        "expected initial request, auto compact request, and follow-up request"
+        compact_requests.len(),
+        1,
+        "remote compaction should run once after resume"
     );
-    let request_bodies: Vec<String> = requests
-        .into_iter()
-        .map(|request| String::from_utf8(request.body).unwrap_or_default())
-        .collect();
-    let auto_compact_index = request_bodies
-        .iter()
-        .position(|body| body_contains_text(body, SUMMARIZATION_PROMPT))
-        .expect("auto compact request missing after resume");
     assert_eq!(
-        auto_compact_index, 1,
-        "auto compact should run first after resume"
+        compact_requests[0].path(),
+        "/v1/responses/compact",
+        "remote compaction should hit the compact endpoint"
     );
 }
 
