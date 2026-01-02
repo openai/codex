@@ -974,6 +974,7 @@ impl ChatWidget {
             if let Some(cell) = cell {
                 self.bottom_pane.hide_status_indicator();
                 self.add_boxed_history(cell);
+                self.request_redraw();
             }
             if is_idle {
                 self.app_event_tx.send(AppEvent::StopCommitAnimation);
@@ -1015,6 +1016,7 @@ impl ChatWidget {
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
+        let mut needs_redraw = self.active_cell.is_some();
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
@@ -1025,6 +1027,7 @@ impl ChatWidget {
                     .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
                 self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
                 self.needs_final_message_separator = false;
+                needs_redraw = true;
             }
             self.stream_controller = Some(StreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
@@ -1035,7 +1038,9 @@ impl ChatWidget {
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
-        self.request_redraw();
+        if needs_redraw {
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
