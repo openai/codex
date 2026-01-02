@@ -61,6 +61,7 @@ use std::time::Duration;
 fn event(id: &str, msg: EventMsg) -> Event {
     Event {
         id: id.to_string(),
+        agent_id: None,
         msg,
     }
 }

@@ -40,7 +40,7 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
-    let mut history = sess.clone_history().await;
+    let mut history = sess.clone_history(&turn_context.agent_id).await;
     let prompt = Prompt {
         input: history.get_history_for_prompt(),
         tools: vec![],
@@ -64,15 +64,19 @@ async fn run_remote_compact_task_inner_impl(
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }
-    sess.replace_history(new_history.clone()).await;
+    sess.replace_history(&turn_context.agent_id, new_history.clone())
+        .await;
     sess.recompute_token_usage(turn_context).await;
 
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history),
     };
-    sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
-        .await;
+    sess.persist_rollout_items(
+        &turn_context.agent_id,
+        &[RolloutItem::Compacted(compacted_item)],
+    )
+    .await;
 
     let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
     sess.send_event(turn_context, event).await;

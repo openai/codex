@@ -582,6 +582,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     let conversation_id = ConversationId::from_string(&uuid.to_string())?;
     let meta_line = RolloutLine {
         timestamp: ts.to_string(),
+        agent_id: None,
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
                 id: conversation_id,
@@ -600,6 +601,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
 
     let user_event_line = RolloutLine {
         timestamp: ts.to_string(),
+        agent_id: None,
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "hello".into(),
             images: None,
@@ -611,6 +613,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     for idx in 0..total_messages {
         let response_line = RolloutLine {
             timestamp: format!("{ts}-{idx:02}"),
+            agent_id: None,
             item: RolloutItem::ResponseItem(ResponseItem::Message {
                 id: None,
                 role: "assistant".into(),

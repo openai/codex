@@ -8,14 +8,6 @@ mod user_shell;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use tokio::select;
-use tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::AbortOnDropHandle;
-use tracing::trace;
-use tracing::warn;
-
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -27,7 +19,15 @@ use crate::protocol::TurnAbortedEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use async_trait::async_trait;
+use codex_protocol::protocol::AgentId;
 use codex_protocol::user_input::UserInput;
+use tokio::select;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
+use tracing::trace;
+use tracing::warn;
 
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
