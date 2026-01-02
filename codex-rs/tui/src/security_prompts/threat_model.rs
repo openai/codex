@@ -20,7 +20,7 @@ Some architecture details may already be present in the specification above. Do 
 - Start with a short paragraph summarising the most important threat themes and high-risk areas.
 - Include the following sections (keep them short and derived from the spec; 4–8 bullets each where applicable):
   - `## Primary components` (e.g., API gateway/auth/rate limiting, native preprocessing library, model runner/sandboxing, logging & metrics)
-  - `## Trust boundaries` (use arrow notation such as `Internet → API Gateway`, `Gateway → Native library`, etc.)
+  - `## Trust Boundaries & Message Channels` (use arrow notation such as `Internet → API Gateway`, `Gateway → Native library`, etc. For each boundary, note the key data types crossing it, the message channel/protocol, the transport/security guarantees (origin checks, auth, encryption, rate limits), and any validation or schema enforcement applied.)
   - `## Components & Trust Boundary Diagram` containing exactly one `mermaid flowchart TD` (or `flowchart LR`) diagram that shows the primary components and highlights trust boundaries (for example, with `subgraph` zones or annotations). Keep it compact (no more than ~12 nodes), label edges with the action/payload, and include a `title <descriptive label>` line inside the mermaid block.
   - `## Assets` as a 2-column table: `Asset` | `Why it matters`
   - `## Attacker model` with two sublists: `Capabilities` and `Non-capabilities`. Prefer realistic remote attacker assumptions; unless the spec indicates a shared-host or insider threat context, treat direct host filesystem tampering outside the application's own write surfaces as a non-capability.
