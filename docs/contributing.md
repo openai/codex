@@ -2,9 +2,11 @@
 
 This project is under active development and the code will likely change pretty significantly.
 
-**At the moment, we only plan to prioritize reviewing external contributions for bugs or security fixes.**
+**At the moment, we are generally accepting external contributions only for bugs fixes.**
 
-If you want to add a new feature or change the behavior of an existing one, please open an issue proposing the feature and get approval from an OpenAI team member before spending time building it.
+If you want to add a new feature or change the behavior of an existing one, please open an issue proposing the feature or upvote an existing enhancement request. We will generally prioritize new features based on community feedback. New features must compose well with existing and upcoming features and fit into our roadmap. They must also be implemented consistently across all Codex surfaces (CLI, IDE extension, web, etc.).
+
+If you want to contribute a bug fix, please open a bug report first - or verify that there is an existing bug report that discusses the issue. All bug fix PRs should include a link to a bug report.
 
 **New contributions that don't go through this process may be closed** if they aren't aligned with our current roadmap or conflict with other priorities/upcoming features.
 
@@ -17,8 +19,8 @@ If you want to add a new feature or change the behavior of an existing one, plea
 ### Writing high-impact code changes
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
-2. **Add or update tests.** Every new feature or bug-fix should come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
-3. **Document behaviour.** If your change affects user-facing behaviour, update the README, inline help (`codex --help`), or relevant example projects.
+2. **Add or update tests.** A bug fix should generally come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
+3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`codex --help`), or relevant example projects.
 4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
 ### Opening a pull request
@@ -32,8 +34,8 @@ If you want to add a new feature or change the behavior of an existing one, plea
 ### Review process
 
 1. One maintainer will be assigned as a primary reviewer.
-2. If your PR adds a new feature that was not previously discussed and approved, we may choose to close your PR (see [Contributing](#contributing)).
-3. We may ask for changes - please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
+2. If your PR adds a new feature that was not previously discussed and approved, we may close your PR (see [Contributing](#contributing)).
+3. We may ask for changes. Please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
 4. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
 
 ### Community values
@@ -44,7 +46,7 @@ If you want to add a new feature or change the behavior of an existing one, plea
 
 ### Getting help
 
-If you run into problems setting up the project, would like feedback on an idea, or just want to say _hi_ - please open a Discussion or jump into the relevant issue. We are happy to help.
+If you run into problems setting up the project, would like feedback on an idea, or just want to say _hi_ - please open a Discussion topic or jump into the relevant issue. We are happy to help.
 
 Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
 
@@ -62,14 +64,6 @@ All contributors **must** accept the CLA. The process is lightweight:
 3. The CLA-Assistant bot records your signature in the repo and marks the status check as passed.
 
 No special Git commands, email attachments, or commit footers required.
-
-#### Quick fixes
-
-| Scenario          | Command                                          |
-| ----------------- | ------------------------------------------------ |
-| Amend last commit | `git commit --amend -s --no-edit && git push -f` |
-
-The **DCO check** blocks merges until every commit in the PR carries the footer (with squash this is just the one).
 
 ### Security & responsible AI
 

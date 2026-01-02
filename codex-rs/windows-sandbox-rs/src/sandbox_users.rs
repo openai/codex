@@ -1,0 +1,306 @@
+#![cfg(target_os = "windows")]
+
+use anyhow::Result;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use rand::rngs::SmallRng;
+use rand::RngCore;
+use rand::SeedableRng;
+use serde::Serialize;
+use std::ffi::c_void;
+use std::ffi::OsStr;
+use std::fs::File;
+use std::path::Path;
+use std::path::PathBuf;
+use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
+use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAdd;
+use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAddMembers;
+use windows_sys::Win32::NetworkManagement::NetManagement::NetUserAdd;
+use windows_sys::Win32::NetworkManagement::NetManagement::NetUserSetInfo;
+use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
+use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
+use windows_sys::Win32::NetworkManagement::NetManagement::UF_DONT_EXPIRE_PASSWD;
+use windows_sys::Win32::NetworkManagement::NetManagement::UF_SCRIPT;
+use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1;
+use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1003;
+use windows_sys::Win32::NetworkManagement::NetManagement::USER_PRIV_USER;
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+use windows_sys::Win32::Security::LookupAccountNameW;
+use windows_sys::Win32::Security::SID_NAME_USE;
+
+use codex_windows_sandbox::dpapi_protect;
+use codex_windows_sandbox::sandbox_dir;
+use codex_windows_sandbox::string_from_sid_bytes;
+use codex_windows_sandbox::to_wide;
+use codex_windows_sandbox::SETUP_VERSION;
+
+pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
+const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
+
+pub fn ensure_sandbox_users_group(log: &mut File) -> Result<()> {
+    ensure_local_group(SANDBOX_USERS_GROUP, SANDBOX_USERS_GROUP_COMMENT, log)
+}
+
+pub fn resolve_sandbox_users_group_sid() -> Result<Vec<u8>> {
+    resolve_sid(SANDBOX_USERS_GROUP)
+}
+
+pub fn provision_sandbox_users(
+    codex_home: &Path,
+    offline_username: &str,
+    online_username: &str,
+    log: &mut File,
+) -> Result<()> {
+    ensure_sandbox_users_group(log)?;
+    super::log_line(
+        log,
+        &format!("ensuring sandbox users offline={offline_username} online={online_username}"),
+    )?;
+    let offline_password = random_password();
+    let online_password = random_password();
+    ensure_sandbox_user(offline_username, &offline_password, log)?;
+    ensure_sandbox_user(online_username, &online_password, log)?;
+    write_secrets(
+        codex_home,
+        offline_username,
+        &offline_password,
+        online_username,
+        &online_password,
+    )?;
+    Ok(())
+}
+
+pub fn ensure_sandbox_user(username: &str, password: &str, log: &mut File) -> Result<()> {
+    ensure_local_user(username, password, log)?;
+    ensure_local_group_member(SANDBOX_USERS_GROUP, username)?;
+    Ok(())
+}
+
+pub fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<()> {
+    let name_w = to_wide(OsStr::new(name));
+    let pwd_w = to_wide(OsStr::new(password));
+    unsafe {
+        let info = USER_INFO_1 {
+            usri1_name: name_w.as_ptr() as *mut u16,
+            usri1_password: pwd_w.as_ptr() as *mut u16,
+            usri1_password_age: 0,
+            usri1_priv: USER_PRIV_USER,
+            usri1_home_dir: std::ptr::null_mut(),
+            usri1_comment: std::ptr::null_mut(),
+            usri1_flags: UF_SCRIPT | UF_DONT_EXPIRE_PASSWD,
+            usri1_script_path: std::ptr::null_mut(),
+        };
+        let status = NetUserAdd(
+            std::ptr::null(),
+            1,
+            &info as *const _ as *mut u8,
+            std::ptr::null_mut(),
+        );
+        if status != NERR_Success {
+            // Try update password via level 1003.
+            let pw_info = USER_INFO_1003 {
+                usri1003_password: pwd_w.as_ptr() as *mut u16,
+            };
+            let upd = NetUserSetInfo(
+                std::ptr::null(),
+                name_w.as_ptr(),
+                1003,
+                &pw_info as *const _ as *mut u8,
+                std::ptr::null_mut(),
+            );
+            if upd != NERR_Success {
+                super::log_line(log, &format!("NetUserSetInfo failed for {name} code {upd}"))?;
+                return Err(anyhow::anyhow!(
+                    "failed to create/update user {name}, code {status}/{upd}"
+                ));
+            }
+        }
+
+        // Ensure the principal is a regular local user account.
+        let group = to_wide(OsStr::new("Users"));
+        let member = LOCALGROUP_MEMBERS_INFO_3 {
+            lgrmi3_domainandname: name_w.as_ptr() as *mut u16,
+        };
+        let _ = NetLocalGroupAddMembers(
+            std::ptr::null(),
+            group.as_ptr(),
+            3,
+            &member as *const _ as *mut u8,
+            1,
+        );
+    }
+    Ok(())
+}
+
+pub fn ensure_local_group(name: &str, comment: &str, log: &mut File) -> Result<()> {
+    const ERROR_ALIAS_EXISTS: u32 = 1379;
+    const NERR_GROUP_EXISTS: u32 = 2223;
+
+    let name_w = to_wide(OsStr::new(name));
+    let comment_w = to_wide(OsStr::new(comment));
+    unsafe {
+        let info = LOCALGROUP_INFO_1 {
+            lgrpi1_name: name_w.as_ptr() as *mut u16,
+            lgrpi1_comment: comment_w.as_ptr() as *mut u16,
+        };
+        let mut parm_err: u32 = 0;
+        let status = NetLocalGroupAdd(
+            std::ptr::null(),
+            1,
+            &info as *const _ as *mut u8,
+            &mut parm_err as *mut _,
+        );
+        if status != NERR_Success && status != ERROR_ALIAS_EXISTS && status != NERR_GROUP_EXISTS {
+            super::log_line(
+                log,
+                &format!("NetLocalGroupAdd failed for {name} code {status} parm_err={parm_err}"),
+            )?;
+            anyhow::bail!("failed to create local group {name}, code {status}");
+        }
+    }
+    Ok(())
+}
+
+pub fn ensure_local_group_member(group_name: &str, member_name: &str) -> Result<()> {
+    // If the member is already in the group, NetLocalGroupAddMembers may
+    // return an error code. We don't care.
+    let group_w = to_wide(OsStr::new(group_name));
+    let member_w = to_wide(OsStr::new(member_name));
+    unsafe {
+        let member = LOCALGROUP_MEMBERS_INFO_3 {
+            lgrmi3_domainandname: member_w.as_ptr() as *mut u16,
+        };
+        let _ = NetLocalGroupAddMembers(
+            std::ptr::null(),
+            group_w.as_ptr(),
+            3,
+            &member as *const _ as *mut u8,
+            1,
+        );
+    }
+    Ok(())
+}
+
+pub fn resolve_sid(name: &str) -> Result<Vec<u8>> {
+    let name_w = to_wide(OsStr::new(name));
+    let mut sid_buffer = vec![0u8; 68];
+    let mut sid_len: u32 = sid_buffer.len() as u32;
+    let mut domain: Vec<u16> = Vec::new();
+    let mut domain_len: u32 = 0;
+    let mut use_type: SID_NAME_USE = 0;
+    loop {
+        let ok = unsafe {
+            LookupAccountNameW(
+                std::ptr::null(),
+                name_w.as_ptr(),
+                sid_buffer.as_mut_ptr() as *mut c_void,
+                &mut sid_len,
+                domain.as_mut_ptr(),
+                &mut domain_len,
+                &mut use_type,
+            )
+        };
+        if ok != 0 {
+            sid_buffer.truncate(sid_len as usize);
+            return Ok(sid_buffer);
+        }
+        let err = unsafe { GetLastError() };
+        if err == ERROR_INSUFFICIENT_BUFFER {
+            sid_buffer.resize(sid_len as usize, 0);
+            domain.resize(domain_len as usize, 0);
+            continue;
+        }
+        return Err(anyhow::anyhow!(
+            "LookupAccountNameW failed for {name}: {err}"
+        ));
+    }
+}
+
+pub fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
+    let sid_str = string_from_sid_bytes(sid).map_err(anyhow::Error::msg)?;
+    let sid_w = to_wide(OsStr::new(&sid_str));
+    let mut psid: *mut c_void = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) } == 0 {
+        return Err(anyhow::anyhow!(
+            "ConvertStringSidToSidW failed: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    Ok(psid)
+}
+
+fn random_password() -> String {
+    const CHARS: &[u8] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+    let mut rng = SmallRng::from_entropy();
+    let mut buf = [0u8; 24];
+    rng.fill_bytes(&mut buf);
+    buf.iter()
+        .map(|b| {
+            let idx = (*b as usize) % CHARS.len();
+            CHARS[idx] as char
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct SandboxUserRecord {
+    username: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+struct SandboxUsersFile {
+    version: u32,
+    offline: SandboxUserRecord,
+    online: SandboxUserRecord,
+}
+
+#[derive(Serialize)]
+struct SetupMarker {
+    version: u32,
+    offline_username: String,
+    online_username: String,
+    created_at: String,
+    read_roots: Vec<PathBuf>,
+    write_roots: Vec<PathBuf>,
+}
+
+fn write_secrets(
+    codex_home: &Path,
+    offline_user: &str,
+    offline_pwd: &str,
+    online_user: &str,
+    online_pwd: &str,
+) -> Result<()> {
+    let sandbox_dir = sandbox_dir(codex_home);
+    std::fs::create_dir_all(&sandbox_dir)?;
+    let offline_blob = dpapi_protect(offline_pwd.as_bytes())?;
+    let online_blob = dpapi_protect(online_pwd.as_bytes())?;
+    let users = SandboxUsersFile {
+        version: SETUP_VERSION,
+        offline: SandboxUserRecord {
+            username: offline_user.to_string(),
+            password: BASE64.encode(offline_blob),
+        },
+        online: SandboxUserRecord {
+            username: online_user.to_string(),
+            password: BASE64.encode(online_blob),
+        },
+    };
+    let marker = SetupMarker {
+        version: SETUP_VERSION,
+        offline_username: offline_user.to_string(),
+        online_username: online_user.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+    };
+    let users_path = sandbox_dir.join("sandbox_users.json");
+    let marker_path = sandbox_dir.join("setup_marker.json");
+    std::fs::write(users_path, serde_json::to_vec_pretty(&users)?)?;
+    std::fs::write(marker_path, serde_json::to_vec_pretty(&marker)?)?;
+    Ok(())
+}
