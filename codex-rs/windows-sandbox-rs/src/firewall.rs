@@ -49,7 +49,7 @@ pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Resul
                 &rules,
                 OFFLINE_BLOCK_RULE_NAME,
                 OFFLINE_BLOCK_RULE_FRIENDLY,
-                NET_FW_IP_PROTOCOL_ANY.0 as i32,
+                NET_FW_IP_PROTOCOL_ANY.0,
                 &local_user_spec,
                 offline_sid,
                 log,
