@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y musl-tools zstd
-          cargo build --manifest-path codex-rs/Cargo.toml --target x86_64-unknown-linux-musl --release -p codex --bin codex
+          cargo build --manifest-path codex-rs/Cargo.toml --target x86_64-unknown-linux-musl --release -p codex-cli --bin codex
           OVERLAY_DIR="${RUNNER_TEMP}/codex-npm-overlay/vendor/x86_64-unknown-linux-musl/codex"
           mkdir -p "$OVERLAY_DIR"
           cp codex-rs/target/x86_64-unknown-linux-musl/release/codex "$OVERLAY_DIR/codex"
