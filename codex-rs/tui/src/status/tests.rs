@@ -799,7 +799,7 @@ async fn status_context_window_uses_last_usage() {
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
     let token_info = TokenUsageInfo {
         total_token_usage: total_usage.clone(),
-        last_token_usage: last_usage.clone(),
+        last_token_usage: last_usage,
         model_context_window: config.model_context_window,
     };
     let composite = new_status_output(
