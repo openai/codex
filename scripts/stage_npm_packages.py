@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         help="Directory where npm tarballs should be written (default: dist/npm).",
     )
     parser.add_argument(
+        "--overlay-vendor-src",
+        type=Path,
+        help="Optional vendor directory to overlay onto downloaded native artifacts.",
+    )
+    parser.add_argument(
         "--keep-staging-dirs",
         action="store_true",
         help="Retain temporary staging directories instead of deleting them.",
@@ -120,6 +125,23 @@ def run_command(cmd: list[str]) -> None:
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
 
+def overlay_vendor_dir(src: Path, dest: Path) -> None:
+    src = src.resolve()
+    if not src.exists():
+        raise RuntimeError(f"Overlay vendor source not found: {src}")
+
+    for path in src.rglob("*"):
+        rel_path = path.relative_to(src)
+        dest_path = dest / rel_path
+        if path.is_dir():
+            dest_path.mkdir(parents=True, exist_ok=True)
+            continue
+        if dest_path.exists():
+            dest_path.unlink()
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, dest_path)
+
+
 def main() -> int:
     args = parse_args()
 
@@ -134,6 +156,7 @@ def main() -> int:
     vendor_temp_root: Path | None = None
     vendor_src: Path | None = None
     resolved_head_sha: str | None = None
+    overlay_vendor_src = args.overlay_vendor_src.resolve() if args.overlay_vendor_src else None
 
     final_messsages = []
 
@@ -145,6 +168,12 @@ def main() -> int:
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
             install_native_components(workflow_url, native_components, vendor_temp_root)
             vendor_src = vendor_temp_root / "vendor"
+
+        if overlay_vendor_src is not None:
+            if vendor_src is None:
+                vendor_src = overlay_vendor_src
+            else:
+                overlay_vendor_dir(overlay_vendor_src, vendor_src)
 
         if resolved_head_sha:
             print(f"should `git checkout {resolved_head_sha}`")

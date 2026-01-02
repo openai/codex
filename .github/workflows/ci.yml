@@ -30,6 +30,20 @@ jobs:
       # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@v2
 
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Build Linux native binary for npm staging
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y musl-tools zstd
+          cargo build --manifest-path codex-rs/Cargo.toml --target x86_64-unknown-linux-musl --release -p codex --bin codex
+          OVERLAY_DIR="${RUNNER_TEMP}/codex-npm-overlay/vendor/x86_64-unknown-linux-musl/codex"
+          mkdir -p "$OVERLAY_DIR"
+          cp codex-rs/target/x86_64-unknown-linux-musl/release/codex "$OVERLAY_DIR/codex"
+
       - name: Stage npm package
         id: stage_npm_package
         env:
@@ -42,6 +56,7 @@ jobs:
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
             --package codex \
+            --overlay-vendor-src "${RUNNER_TEMP}/codex-npm-overlay/vendor" \
             --output-dir "$OUTPUT_DIR"
           PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
