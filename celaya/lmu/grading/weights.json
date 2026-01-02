@@ -1,0 +1,54 @@
+{
+  "_comment": "Artifact weights per lesson - Organization: Celaya Solutions",
+  "_version": "0.1.0",
+  "_generated": "2026-01-02T18:54:00Z",
+  "_purpose": "Define grading weights for lesson artifacts",
+
+  "default_weights": {
+    "spec.md": 0.25,
+    "tasks.json": 0.20,
+    "expected_artifacts.json": 0.10,
+    "run.sh_or_run.py": 0.15,
+    "grader.md": 0.10,
+    "receipts.jsonl": 0.10,
+    "summary.json": 0.10
+  },
+
+  "lesson_overrides": {
+    "0.1": {
+      "spec.md": 0.35,
+      "tasks.json": 0.25,
+      "expected_artifacts.json": 0.10,
+      "run.sh_or_run.py": 0.10,
+      "grader.md": 0.10,
+      "receipts.jsonl": 0.05,
+      "summary.json": 0.05
+    },
+    "1.0": {
+      "spec.md": 0.20,
+      "tasks.json": 0.15,
+      "expected_artifacts.json": 0.10,
+      "run.sh_or_run.py": 0.15,
+      "grader.md": 0.10,
+      "receipts.jsonl": 0.20,
+      "summary.json": 0.10
+    },
+    "2.0": {
+      "spec.md": 0.20,
+      "tasks.json": 0.15,
+      "expected_artifacts.json": 0.10,
+      "run.sh_or_run.py": 0.15,
+      "grader.md": 0.20,
+      "receipts.jsonl": 0.10,
+      "summary.json": 0.10
+    }
+  },
+
+  "passing_threshold": 0.70,
+
+  "bonus_criteria": {
+    "all_artifacts_present": 0.05,
+    "no_retries_needed": 0.05,
+    "execution_under_estimated_time": 0.05
+  }
+}
