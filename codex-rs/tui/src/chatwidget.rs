@@ -2428,7 +2428,11 @@ impl ChatWidget {
 
                 let provider = self.config.model_provider.clone();
                 let auth = self.auth_manager.auth();
-                let model = self.config.model.clone();
+                let model = self
+                    .config
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| self.model_family.get_model_slug().to_string());
                 let tx = self.app_event_tx.clone();
                 let repo_path = self.config.cwd.clone();
                 tokio::spawn(async move {
@@ -4574,7 +4578,7 @@ impl ChatWidget {
             model: resume_checkpoint
                 .as_ref()
                 .map(|cp| cp.model.clone())
-                .unwrap_or_else(|| self.config.model.clone()),
+                .unwrap_or_else(|| self.model_family.get_model_slug().to_string()),
             provider_name: resume_checkpoint
                 .as_ref()
                 .map(|cp| cp.provider_name.clone())
@@ -4604,7 +4608,11 @@ impl ChatWidget {
             mode,
             include_spec_in_bug_analysis: true,
             triage_model: self.config.review_model.clone(),
-            model: self.config.model.clone(),
+            model: self
+                .config
+                .model
+                .clone()
+                .unwrap_or_else(|| self.model_family.get_model_slug().to_string()),
             provider: self.config.model_provider.clone(),
             auth: self.auth_manager.auth(),
             config: self.config.clone(),
@@ -5008,7 +5016,7 @@ impl ChatWidget {
                     Vec::new(),
                     PathBuf::new(),
                     self.config.cwd.clone(),
-                    self.config.model.clone(),
+                    self.model_family.get_model_slug().to_string(),
                     self.config.model_provider.name.clone(),
                     Instant::now(),
                     None,

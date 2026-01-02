@@ -231,9 +231,8 @@ impl Renderable for StatusIndicatorWidget {
         let inner_width = width.max(1) as usize;
         let mut total: u16 = 1; // status line
 
-        total = total.saturating_add(
-            u16::try_from(self.wrapped_details_lines(width).len()).unwrap_or(0),
-        );
+        total = total
+            .saturating_add(u16::try_from(self.wrapped_details_lines(width).len()).unwrap_or(0));
 
         // Additional thinking/tool call lines beyond the latest one shown inline.
         let extra_thinking = self

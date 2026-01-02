@@ -354,6 +354,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 ))
             }
         };
+        let conversation_manager =
+            ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
+        let model = conversation_manager
+            .get_models_manager()
+            .get_model(&config.model, &config)
+            .await;
         let request = SecurityReviewRequest {
             repo_path: default_cwd.clone(),
             include_paths,
@@ -362,7 +368,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             mode,
             include_spec_in_bug_analysis: true,
             triage_model: config.review_model.clone(),
-            model: config.model.clone(),
+            model,
             provider: config.model_provider.clone(),
             auth: auth_manager.auth(),
             config: config.clone(),
@@ -610,8 +616,8 @@ fn parse_security_review_command(
         return Ok(None);
     }
 
-    let tokens =
-        split(trimmed).ok_or_else(|| anyhow::anyhow!("Failed to parse /secreview arguments."))?;
+    let tokens = shlex::split(trimmed)
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse /secreview arguments."))?;
     if tokens.is_empty() {
         return Ok(None);
     }

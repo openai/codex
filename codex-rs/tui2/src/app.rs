@@ -101,6 +101,7 @@ impl From<AppExitInfo> for codex_tui::AppExitInfo {
             token_usage: info.token_usage,
             conversation_id: info.conversation_id,
             update_action: info.update_action.map(Into::into),
+            total_duration_ms: 0,
         }
     }
 }

@@ -12,6 +12,7 @@ use crate::security_report_viewer::build_report_html;
 use crate::status_indicator_widget::fmt_elapsed_compact;
 use crate::text_formatting::truncate_text;
 use base64::Engine;
+use codex_client::CodexHttpClient;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
@@ -22,7 +23,6 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::default_client::CodexHttpClient;
 use codex_core::default_client::CodexRequestBuilder;
 use codex_core::default_client::create_client;
 use codex_core::default_retry_backoff;
@@ -279,7 +279,7 @@ pub(crate) fn extract_linear_issue_ref(input: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
         Regex::new(r"(?i)linear\.app/[^\s]+/issue/([A-Z0-9]+-[0-9]+)|\b([A-Z][A-Z0-9]+-[0-9]+)\b")
-            .expect("linear regex compiles")
+            .unwrap_or_else(|error| panic!("failed to compile Linear issue regex: {error}"))
     });
     re.captures_iter(input)
         .find_map(|caps| caps.get(1).or_else(|| caps.get(2)))
@@ -3110,8 +3110,10 @@ pub async fn run_security_review(
             while let Some(event) = rx.recv().await {
                 match event {
                     AppEvent::SecurityReviewLog(message) => {
-                        eprintln!("{message}");
                         write_log_sink(&log_sink_for_task, message.as_str());
+                        if log_sink_for_task.is_none() {
+                            tracing::info!("{message}");
+                        }
                     }
                     AppEvent::SecurityReviewCommandStatus {
                         summary,
@@ -3125,15 +3127,17 @@ pub async fn run_security_review(
                             SecurityReviewCommandState::NoMatches => "no matches",
                             SecurityReviewCommandState::Error => "error",
                         };
-                        eprintln!("Command [{state_label}]: {summary}");
-                        write_log_sink(
-                            &log_sink_for_task,
-                            format!("Command [{state_label}]: {summary}").as_str(),
-                        );
+                        let command_message = format!("Command [{state_label}]: {summary}");
+                        write_log_sink(&log_sink_for_task, command_message.as_str());
+                        if log_sink_for_task.is_none() {
+                            tracing::info!("{command_message}");
+                        }
                         for line in preview {
                             if !line.trim().is_empty() {
-                                eprintln!("{line}");
                                 write_log_sink(&log_sink_for_task, line.as_str());
+                                if log_sink_for_task.is_none() {
+                                    tracing::info!("{line}");
+                                }
                             }
                         }
                     }
@@ -5040,7 +5044,7 @@ async fn fetch_linear_context_for_auto_scope(
 ) -> Result<(String, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
     let mut lin_config = config.clone();
-    lin_config.model = "gpt-5.1".to_string();
+    lin_config.model = Some("gpt-5.1".to_string());
     lin_config.model_provider = provider.clone();
     lin_config.base_instructions = Some(LINEAR_SCOPE_CONTEXT_SYSTEM_PROMPT.to_string());
     lin_config.user_instructions = None;
@@ -5051,9 +5055,7 @@ async fn fetch_linear_context_for_auto_scope(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
-    lin_config.use_experimental_use_rmcp_client = false;
+        .disable(Feature::ViewImageTool);
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -5362,7 +5364,7 @@ async fn run_linear_status_agent(
 ) -> Result<(), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
     let mut lin_config = config.clone();
-    lin_config.model = "gpt-5.1".to_string();
+    lin_config.model = Some("gpt-5.1".to_string());
     lin_config.model_provider = provider.clone();
     lin_config.base_instructions = Some(
         "Use Linear, Notion, and Google Workspace via MCP tools. Prefer MCP tools for reading/updating issues and documents. When an issue key is provided, open it directly with Linear MCP `get_issue` before any searches; avoid enumerating teams/projects/resources unless direct lookup fails. Keep repositories under ~/code; if a repository is missing under ~/code, use GitHub CLI to clone a shallow copy (depth=1), e.g., `gh repo clone owner/repo ~/code/repo -- --depth=1`."
@@ -5377,9 +5379,7 @@ async fn run_linear_status_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
-    lin_config.use_experimental_use_rmcp_client = false;
+        .disable(Feature::ViewImageTool);
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -7041,7 +7041,7 @@ async fn run_auto_scope_agent(
     let mut logs: Vec<String> = Vec::new();
 
     let mut auto_config = config.clone();
-    auto_config.model = model.to_string();
+    auto_config.model = Some(model.to_string());
     auto_config.model_provider = provider.clone();
     auto_config.base_instructions = Some(AUTO_SCOPE_SYSTEM_PROMPT.to_string());
     auto_config.user_instructions = None;
@@ -7052,10 +7052,8 @@ async fn run_auto_scope_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
+        .disable(Feature::ViewImageTool);
     auto_config.mcp_servers.clear();
-    auto_config.use_experimental_use_rmcp_client = false;
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -7691,7 +7689,7 @@ async fn run_spec_agent(
     let mut logs: Vec<String> = Vec::new();
 
     let mut spec_config = config.clone();
-    spec_config.model = SPEC_GENERATION_MODEL.to_string();
+    spec_config.model = Some(SPEC_GENERATION_MODEL.to_string());
     spec_config.model_provider = provider.clone();
     spec_config.base_instructions = Some(SPEC_SYSTEM_PROMPT.to_string());
     spec_config.user_instructions = None;
@@ -7702,10 +7700,8 @@ async fn run_spec_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
+        .disable(Feature::ViewImageTool);
     spec_config.mcp_servers.clear();
-    spec_config.use_experimental_use_rmcp_client = false;
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -7823,7 +7819,7 @@ async fn run_bug_agent(
     let mut logs: Vec<String> = Vec::new();
 
     let mut bug_config = config.clone();
-    bug_config.model = model.to_string();
+    bug_config.model = Some(model.to_string());
     bug_config.model_provider = provider.clone();
     bug_config.base_instructions = Some(BUGS_SYSTEM_PROMPT.to_string());
     bug_config.user_instructions = None;
@@ -7834,10 +7830,8 @@ async fn run_bug_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
+        .disable(Feature::ViewImageTool);
     bug_config.mcp_servers.clear();
-    bug_config.use_experimental_use_rmcp_client = false;
 
     let manager = ConversationManager::new(
         auth_manager,

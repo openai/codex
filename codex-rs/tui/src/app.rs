@@ -456,20 +456,15 @@ impl App {
             model = updated_model;
         }
 
-        let skills_outcome = load_skills(&config);
-        if !skills_outcome.errors.is_empty() {
-            match run_skill_error_prompt(tui, &skills_outcome.errors).await {
-                SkillErrorPromptOutcome::Exit => {
-                    return Ok(AppExitInfo {
-                        token_usage: TokenUsage::default(),
-                        conversation_id: None,
-                        update_action: None,
-                        total_duration_ms: 0,
-                    });
-                }
-                SkillErrorPromptOutcome::Continue => {}
-            }
-        }
+        let skills_errors: Vec<SkillErrorInfo> = load_skills(&config)
+            .errors
+            .into_iter()
+            .map(|error| SkillErrorInfo {
+                path: error.path,
+                message: error.message,
+            })
+            .collect();
+        emit_skill_load_warnings(&app_event_tx, &skills_errors);
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let model_family = conversation_manager
