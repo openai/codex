@@ -747,6 +747,13 @@ impl Session {
                         .await;
                 }
 
+                // Restore the latest persisted token usage info so resumed sessions continue
+                // accumulating totals across runs instead of resetting to zero.
+                if let Some(info) = Self::latest_token_info_from_rollout(&rollout_items) {
+                    let mut state = self.state.lock().await;
+                    state.set_token_info(Some(info));
+                }
+
                 // If persisting, persist all rollout items as-is (recorder filters)
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
@@ -755,6 +762,13 @@ impl Session {
                 self.flush_rollout().await;
             }
         }
+    }
+
+    fn latest_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
+        rollout_items.iter().rev().find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
+            _ => None,
+        })
     }
 
     pub(crate) async fn update_settings(&self, updates: SessionSettingsUpdate) {

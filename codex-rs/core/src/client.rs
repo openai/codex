@@ -203,9 +203,13 @@ impl ModelClient {
         let instructions = prompt.get_full_instructions(&model_family).into_owned();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
+        let effort = normalize_reasoning_effort_for_model(
+            &self.config.model,
+            self.effort.or(model_family.default_reasoning_effort),
+        );
         let reasoning = if model_family.supports_reasoning_summaries {
             Some(Reasoning {
-                effort: self.effort.or(model_family.default_reasoning_effort),
+                effort,
                 summary: Some(self.summary),
             })
         } else {
@@ -362,6 +366,16 @@ impl ModelClient {
             .await
             .map_err(map_api_error)
     }
+}
+
+fn normalize_reasoning_effort_for_model(
+    model: &str,
+    effort: Option<ReasoningEffortConfig>,
+) -> Option<ReasoningEffortConfig> {
+    if model.starts_with("gpt-5-codex") && effort == Some(ReasoningEffortConfig::XHigh) {
+        return Some(ReasoningEffortConfig::High);
+    }
+    effort
 }
 
 impl ModelClient {
@@ -530,5 +544,37 @@ impl SseTelemetry for ApiTelemetry {
         duration: Duration,
     ) {
         self.otel_event_manager.log_sse_event(result, duration);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn gpt5_codex_downgrades_xhigh_to_high() {
+        assert_eq!(
+            normalize_reasoning_effort_for_model("gpt-5-codex", Some(ReasoningEffortConfig::XHigh)),
+            Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(
+            normalize_reasoning_effort_for_model(
+                "gpt-5-codex-mini",
+                Some(ReasoningEffortConfig::XHigh)
+            ),
+            Some(ReasoningEffortConfig::High)
+        );
+    }
+
+    #[test]
+    fn other_models_keep_xhigh() {
+        assert_eq!(
+            normalize_reasoning_effort_for_model(
+                "gpt-5.1-codex-max",
+                Some(ReasoningEffortConfig::XHigh)
+            ),
+            Some(ReasoningEffortConfig::XHigh)
+        );
     }
 }

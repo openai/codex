@@ -34,6 +34,7 @@ use codex_core::protocol::FinalOutput;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_core::skills::load_skills;
 use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ConversationId;
@@ -55,6 +56,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -69,28 +71,44 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
     pub update_action: Option<UpdateAction>,
+    pub total_duration_ms: i64,
 }
 
 fn session_summary(
     token_usage: TokenUsage,
+    duration_ms: i64,
     conversation_id: Option<ConversationId>,
 ) -> Option<SessionSummary> {
-    if token_usage.is_zero() {
+    if token_usage.is_zero() && duration_ms <= 0 {
         return None;
     }
 
-    let usage_line = FinalOutput::from(token_usage).to_string();
+    let usage_line = if token_usage.is_zero() {
+        None
+    } else {
+        Some(FinalOutput::from(token_usage).to_string())
+    };
+    let duration_line = if duration_ms > 0 {
+        Some(format!(
+            "Session duration: {}",
+            crate::session_totals::format_duration_ms(duration_ms)
+        ))
+    } else {
+        None
+    };
     let resume_command =
         conversation_id.map(|conversation_id| format!("codex resume {conversation_id}"));
     Some(SessionSummary {
         usage_line,
+        duration_line,
         resume_command,
     })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
-    usage_line: String,
+    usage_line: Option<String>,
+    duration_line: Option<String>,
     resume_command: Option<String>,
 }
 
@@ -192,6 +210,7 @@ async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    total_duration_ms: 0,
                 });
             }
         }
@@ -237,6 +256,71 @@ pub(crate) struct App {
     skip_world_writable_scan_once: bool,
 
     pub(crate) skills: Option<Vec<SkillMetadata>>,
+    session_totals_tracker: SessionTotalsTracker,
+}
+
+#[derive(Debug, Clone)]
+struct SessionTotalsTracker {
+    codex_home: PathBuf,
+    conversation_id: Option<ConversationId>,
+    run_started_at: Option<Instant>,
+    total_duration_ms: i64,
+}
+
+impl SessionTotalsTracker {
+    fn new(codex_home: PathBuf) -> Self {
+        Self {
+            codex_home,
+            conversation_id: None,
+            run_started_at: None,
+            total_duration_ms: 0,
+        }
+    }
+
+    fn on_session_configured(&mut self, conversation_id: ConversationId) {
+        if self.conversation_id.is_some_and(|id| id == conversation_id) {
+            return;
+        }
+
+        self.conversation_id = Some(conversation_id);
+        self.run_started_at = Some(Instant::now());
+        self.total_duration_ms = crate::session_totals::load(&self.codex_home, conversation_id)
+            .map(|totals| totals.total_duration_ms)
+            .unwrap_or(0);
+    }
+
+    fn current_total_duration_ms(&self) -> i64 {
+        let run_ms = self
+            .run_started_at
+            .map(|start| start.elapsed().as_millis() as i64)
+            .unwrap_or(0);
+        self.total_duration_ms.saturating_add(run_ms)
+    }
+
+    fn persist_current_session(&mut self, token_usage: TokenUsage) {
+        let Some(conversation_id) = self.conversation_id else {
+            return;
+        };
+
+        let elapsed_ms = self
+            .run_started_at
+            .take()
+            .map(|start| start.elapsed().as_millis() as i64)
+            .unwrap_or(0);
+
+        let previous =
+            crate::session_totals::load(&self.codex_home, conversation_id).unwrap_or_default();
+        let totals = crate::session_totals::SessionTotals {
+            token_usage: crate::session_totals::prefer_higher_token_usage(
+                previous.token_usage,
+                token_usage,
+            ),
+            total_duration_ms: previous.total_duration_ms.saturating_add(elapsed_ms),
+        };
+        let _ = crate::session_totals::store(&self.codex_home, conversation_id, &totals);
+        self.total_duration_ms = totals.total_duration_ms;
+        self.conversation_id = None;
+    }
 }
 
 impl App {
@@ -289,6 +373,7 @@ impl App {
                         token_usage: TokenUsage::default(),
                         conversation_id: None,
                         update_action: None,
+                        total_duration_ms: 0,
                     });
                 }
                 SkillErrorPromptOutcome::Continue => {}
@@ -363,6 +448,7 @@ impl App {
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
+        let codex_home = config.codex_home.clone();
         let mut app = Self {
             server: conversation_manager.clone(),
             app_event_tx,
@@ -383,6 +469,7 @@ impl App {
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
             skills,
+            session_totals_tracker: SessionTotalsTracker::new(codex_home),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -435,10 +522,14 @@ impl App {
             }
         } {}
         tui.terminal.clear()?;
+        let token_usage = app.token_usage();
+        app.session_totals_tracker
+            .persist_current_session(token_usage.clone());
         Ok(AppExitInfo {
-            token_usage: app.token_usage(),
+            token_usage,
             conversation_id: app.chat_widget.conversation_id(),
             update_action: app.pending_update_action,
+            total_duration_ms: app.session_totals_tracker.total_duration_ms,
         })
     }
 
@@ -493,10 +584,15 @@ impl App {
             .await;
         match event {
             AppEvent::NewSession => {
+                let token_usage = self.chat_widget.token_usage();
+                let duration_ms = self.session_totals_tracker.current_total_duration_ms();
                 let summary = session_summary(
-                    self.chat_widget.token_usage(),
+                    token_usage.clone(),
+                    duration_ms,
                     self.chat_widget.conversation_id(),
                 );
+                self.session_totals_tracker
+                    .persist_current_session(token_usage);
                 self.shutdown_current_conversation().await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
@@ -514,7 +610,13 @@ impl App {
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    let mut lines: Vec<Line<'static>> = Vec::new();
+                    if let Some(line) = summary.usage_line {
+                        lines.push(line.into());
+                    }
+                    if let Some(line) = summary.duration_line {
+                        lines.push(line.into());
+                    }
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
                         lines.push(spans.into());
@@ -533,8 +635,11 @@ impl App {
                 .await?
                 {
                     ResumeSelection::Resume(path) => {
+                        let token_usage = self.chat_widget.token_usage();
+                        let duration_ms = self.session_totals_tracker.current_total_duration_ms();
                         let summary = session_summary(
-                            self.chat_widget.token_usage(),
+                            token_usage.clone(),
+                            duration_ms,
                             self.chat_widget.conversation_id(),
                         );
                         match self
@@ -547,6 +652,8 @@ impl App {
                             .await
                         {
                             Ok(resumed) => {
+                                self.session_totals_tracker
+                                    .persist_current_session(token_usage);
                                 self.shutdown_current_conversation().await;
                                 let init = crate::chatwidget::ChatWidgetInit {
                                     config: self.config.clone(),
@@ -568,8 +675,13 @@ impl App {
                                     resumed.session_configured,
                                 );
                                 if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
+                                    let mut lines: Vec<Line<'static>> = Vec::new();
+                                    if let Some(line) = summary.usage_line {
+                                        lines.push(line.into());
+                                    }
+                                    if let Some(line) = summary.duration_line {
+                                        lines.push(line.into());
+                                    }
                                     if let Some(command) = summary.resume_command {
                                         let spans = vec![
                                             "To continue this session, run ".into(),
@@ -649,7 +761,32 @@ impl App {
                     self.suppress_shutdown_complete = false;
                     return Ok(true);
                 }
+                let (session_id, is_resumed) = match &event.msg {
+                    EventMsg::SessionConfigured(e) => {
+                        (Some(e.session_id), e.initial_messages.is_some())
+                    }
+                    _ => (None, false),
+                };
                 self.chat_widget.handle_codex_event(event);
+                if let Some(session_id) = session_id {
+                    self.session_totals_tracker
+                        .on_session_configured(session_id);
+
+                    if is_resumed {
+                        let saved =
+                            crate::session_totals::load(&self.config.codex_home, session_id);
+                        let current = self.chat_widget.token_usage();
+                        if let Some(saved) = saved
+                            && saved.token_usage.total_tokens > current.total_tokens
+                        {
+                            self.chat_widget.set_token_info(Some(TokenUsageInfo {
+                                total_token_usage: saved.token_usage,
+                                last_token_usage: TokenUsage::default(),
+                                model_context_window: None,
+                            }));
+                        }
+                    }
+                }
             }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
@@ -1237,6 +1374,7 @@ mod tests {
     fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
         let config = chat_widget.config_ref().clone();
+        let codex_home = config.codex_home.clone();
         let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
             "Test API Key",
         )));
@@ -1264,6 +1402,7 @@ mod tests {
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
             skills: None,
+            session_totals_tracker: SessionTotalsTracker::new(codex_home),
         }
     }
 
@@ -1274,6 +1413,7 @@ mod tests {
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender();
         let config = chat_widget.config_ref().clone();
+        let codex_home = config.codex_home.clone();
         let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
             "Test API Key",
         )));
@@ -1302,6 +1442,7 @@ mod tests {
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
                 skills: None,
+                session_totals_tracker: SessionTotalsTracker::new(codex_home),
             },
             rx,
             op_rx,
@@ -1485,7 +1626,7 @@ mod tests {
 
     #[test]
     fn session_summary_skip_zero_usage() {
-        assert!(session_summary(TokenUsage::default(), None).is_none());
+        assert!(session_summary(TokenUsage::default(), 0, None).is_none());
     }
 
     #[test]
@@ -1499,11 +1640,12 @@ mod tests {
         let conversation =
             ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
-        let summary = session_summary(usage, Some(conversation)).expect("summary");
+        let summary = session_summary(usage, 0, Some(conversation)).expect("summary");
         assert_eq!(
             summary.usage_line,
-            "Token usage: total=12 input=10 output=2"
+            Some("Token usage: total=12 input=10 output=2".to_string())
         );
+        assert_eq!(summary.duration_line, None);
         assert_eq!(
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())

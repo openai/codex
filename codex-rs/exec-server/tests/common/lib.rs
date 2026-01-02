@@ -16,6 +16,7 @@ use rmcp::transport::ConfigureCommandExt;
 use rmcp::transport::TokioChildProcess;
 use serde_json::json;
 use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -23,34 +24,89 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::process::Command;
 
+const CODEX_SHELL_TOOL_MCP_TGZ_URL: &str = "https://github.com/openai/codex/releases/download/rust-v0.65.0/codex-shell-tool-mcp-npm-0.65.0.tgz";
+
 pub fn create_transport<P>(codex_home: P) -> anyhow::Result<TokioChildProcess>
 where
     P: AsRef<Path>,
 {
     let mcp_executable = assert_cmd::Command::cargo_bin("codex-exec-mcp-server")?;
     let execve_wrapper = assert_cmd::Command::cargo_bin("codex-execve-wrapper")?;
-    let bash = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("tests")
-        .join("suite")
-        .join("bash");
+    let mcp_program = Path::new(mcp_executable.get_program());
+    let bash = ensure_patched_bash(mcp_program)?;
 
-    let transport =
-        TokioChildProcess::new(Command::new(mcp_executable.get_program()).configure(|cmd| {
-            cmd.arg("--bash").arg(bash);
-            cmd.arg("--execve").arg(execve_wrapper.get_program());
-            cmd.env("CODEX_HOME", codex_home.as_ref());
+    let transport = TokioChildProcess::new(Command::new(mcp_program).configure(|cmd| {
+        cmd.arg("--bash").arg(bash);
+        cmd.arg("--execve").arg(execve_wrapper.get_program());
+        cmd.env("CODEX_HOME", codex_home.as_ref());
 
-            // Important: pipe stdio so rmcp can speak JSON-RPC over stdin/stdout
-            cmd.stdin(Stdio::piped());
-            cmd.stdout(Stdio::piped());
+        // Important: pipe stdio so rmcp can speak JSON-RPC over stdin/stdout
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
 
-            // Optional but very helpful while debugging:
-            cmd.stderr(Stdio::inherit());
-        }))?;
+        // Optional but very helpful while debugging:
+        cmd.stderr(Stdio::inherit());
+    }))?;
 
     Ok(transport)
+}
+
+fn ensure_patched_bash(mcp_executable: &Path) -> anyhow::Result<PathBuf> {
+    let bin_dir = mcp_executable
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("failed to determine bin dir for {mcp_executable:?}"))?;
+    let out_path = bin_dir.join("codex-test-bash");
+    if out_path.exists() {
+        return Ok(out_path);
+    }
+
+    let platform_path = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        "package/vendor/aarch64-apple-darwin/bash/macos-15/bash"
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
+        "package/vendor/x86_64-unknown-linux-musl/bash/ubuntu-24.04/bash"
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
+        "package/vendor/aarch64-unknown-linux-musl/bash/ubuntu-24.04/bash"
+    } else {
+        anyhow::bail!("unsupported platform for exec-server test bash");
+    };
+
+    let staging_dir = bin_dir.join("codex-test-bash.staging");
+    let _ = fs::remove_dir_all(&staging_dir);
+    fs::create_dir_all(&staging_dir)?;
+
+    let tgz_path = staging_dir.join("codex-shell-tool-mcp.tgz");
+    let curl_status = std::process::Command::new("curl")
+        .args(["-fsSL", CODEX_SHELL_TOOL_MCP_TGZ_URL, "-o"])
+        .arg(&tgz_path)
+        .status()?;
+    if !curl_status.success() {
+        anyhow::bail!("failed to download {CODEX_SHELL_TOOL_MCP_TGZ_URL}");
+    }
+
+    let tar_status = std::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(&tgz_path)
+        .arg("-C")
+        .arg(&staging_dir)
+        .arg(platform_path)
+        .status()?;
+    if !tar_status.success() {
+        anyhow::bail!("failed to extract {platform_path} from {CODEX_SHELL_TOOL_MCP_TGZ_URL}");
+    }
+
+    let extracted_path = staging_dir.join(platform_path);
+    fs::copy(&extracted_path, &out_path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = fs::metadata(&out_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&out_path, perms)?;
+    }
+
+    let _ = fs::remove_dir_all(&staging_dir);
+    Ok(out_path)
 }
 
 pub async fn write_default_execpolicy<P>(policy: &str, codex_home: P) -> anyhow::Result<()>

@@ -277,17 +277,23 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         conversation_id,
+        total_duration_ms,
         ..
     } = exit_info;
 
-    if token_usage.is_zero() {
-        return Vec::new();
+    let mut lines = Vec::new();
+    if !token_usage.is_zero() {
+        lines.push(format!(
+            "{}",
+            codex_core::protocol::FinalOutput::from(token_usage)
+        ));
     }
-
-    let mut lines = vec![format!(
-        "{}",
-        codex_core::protocol::FinalOutput::from(token_usage)
-    )];
+    if total_duration_ms > 0 {
+        lines.push(format!(
+            "Session duration: {}",
+            format_duration_ms(total_duration_ms)
+        ));
+    }
 
     if let Some(session_id) = conversation_id {
         let resume_cmd = format!("codex resume {session_id}");
@@ -300,6 +306,18 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     }
 
     lines
+}
+
+fn format_duration_ms(millis: i64) -> String {
+    if millis < 1000 {
+        return format!("{millis}ms");
+    }
+    if millis < 60_000 {
+        return format!("{:.2}s", millis as f64 / 1000.0);
+    }
+    let minutes = millis / 60_000;
+    let seconds = (millis % 60_000) / 1000;
+    format!("{minutes}m {seconds:02}s")
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
@@ -778,6 +796,7 @@ mod tests {
                 .map(ConversationId::from_string)
                 .map(Result::unwrap),
             update_action: None,
+            total_duration_ms: 0,
         }
     }
 
@@ -787,6 +806,7 @@ mod tests {
             token_usage: TokenUsage::default(),
             conversation_id: None,
             update_action: None,
+            total_duration_ms: 0,
         };
         let lines = format_exit_messages(exit_info, false);
         assert!(lines.is_empty());
