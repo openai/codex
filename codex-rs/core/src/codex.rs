@@ -810,6 +810,13 @@ impl Session {
                         .await;
                 }
 
+                // Seed usage info from the recorded rollout so UIs can show token counts
+                // immediately on resume/fork.
+                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                    let mut state = self.state.lock().await;
+                    state.set_token_info(Some(info));
+                }
+
                 // If persisting, persist all rollout items as-is (recorder filters)
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
@@ -818,6 +825,13 @@ impl Session {
                 self.flush_rollout().await;
             }
         }
+    }
+
+    fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
+        rollout_items.iter().rev().find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
+            _ => None,
+        })
     }
 
     pub(crate) async fn update_settings(
@@ -2759,6 +2773,9 @@ mod tests {
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
+    use crate::protocol::TokenCountEvent;
+    use crate::protocol::TokenUsage;
+    use crate::protocol::TokenUsageInfo;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -2811,6 +2828,83 @@ mod tests {
 
         let actual = session.state.lock().await.clone_history().get_history();
         assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_seeds_token_info_from_rollout() {
+        let (session, turn_context) = make_session_and_context().await;
+        let (mut rollout_items, _expected) = sample_rollout(&session, &turn_context);
+
+        let info1 = TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 10,
+                cached_input_tokens: 0,
+                output_tokens: 20,
+                reasoning_output_tokens: 0,
+                total_tokens: 30,
+            },
+            last_token_usage: TokenUsage {
+                input_tokens: 3,
+                cached_input_tokens: 0,
+                output_tokens: 4,
+                reasoning_output_tokens: 0,
+                total_tokens: 7,
+            },
+            model_context_window: Some(1_000),
+        };
+        let info2 = TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 50,
+                output_tokens: 200,
+                reasoning_output_tokens: 25,
+                total_tokens: 375,
+            },
+            last_token_usage: TokenUsage {
+                input_tokens: 10,
+                cached_input_tokens: 0,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 35,
+            },
+            model_context_window: Some(2_000),
+        };
+
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: Some(info1),
+                rate_limits: None,
+            },
+        )));
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            },
+        )));
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: Some(info2.clone()),
+                rate_limits: None,
+            },
+        )));
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            },
+        )));
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ConversationId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        let actual = session.state.lock().await.token_info();
+        assert_eq!(actual, Some(info2));
     }
 
     #[tokio::test]
