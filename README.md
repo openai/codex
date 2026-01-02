@@ -56,8 +56,4 @@ You can also use Codex with an API key, but this requires [additional setup](./d
 - [**Installing & building**](./docs/install.md)
 - [**Open source fund**](./docs/open-source-fund.md)
 
----
-
-## License
-
 This repository is licensed under the [Apache-2.0 License](LICENSE).
