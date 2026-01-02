@@ -1577,11 +1577,20 @@ impl ChatComposer {
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
         copy_selection_key: KeyBinding,
-    ) {
+    ) -> bool {
+        if self.transcript_scrolled == scrolled
+            && self.transcript_selection_active == selection_active
+            && self.transcript_scroll_position == scroll_position
+            && self.transcript_copy_selection_key == copy_selection_key
+        {
+            return false;
+        }
+
         self.transcript_scrolled = scrolled;
         self.transcript_selection_active = selection_active;
         self.transcript_scroll_position = scroll_position;
         self.transcript_copy_selection_key = copy_selection_key;
+        true
     }
 
     fn sync_popups(&mut self) {

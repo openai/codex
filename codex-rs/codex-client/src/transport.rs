@@ -69,6 +69,15 @@ impl ReqwestTransport {
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
+        if enabled!(Level::TRACE) {
+            trace!(
+                "{} to {}: {}",
+                req.method,
+                req.url,
+                req.body.as_ref().unwrap_or_default()
+            );
+        }
+
         let builder = self.build(req)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();
