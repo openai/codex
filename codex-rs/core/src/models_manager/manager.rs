@@ -86,11 +86,15 @@ impl ModelsManager {
         if self.try_load_cache().await {
             return Ok(());
         }
-        self.refresh_available_models_no_cache().await
+        self.refresh_available_models_no_cache(config.features.enabled(Feature::RemoteModels))
+            .await
     }
 
-    pub(crate) async fn refresh_available_models_no_cache(&self) -> CoreResult<()> {
-        if self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
+    pub(crate) async fn refresh_available_models_no_cache(
+        &self,
+        remote_models_feature: bool,
+    ) -> CoreResult<()> {
+        if !remote_models_feature && self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
             return Ok(());
         }
         let auth = self.auth_manager.auth();
@@ -157,12 +161,15 @@ impl ModelsManager {
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
     }
-    pub async fn refresh_if_new_etag(&self, etag: String) {
+    pub async fn refresh_if_new_etag(&self, etag: String, remote_models_feature: bool) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             return;
         }
-        if let Err(err) = self.refresh_available_models_no_cache().await {
+        if let Err(err) = self
+            .refresh_available_models_no_cache(remote_models_feature)
+            .await
+        {
             error!("failed to refresh available models: {err}");
         }
     }
