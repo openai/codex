@@ -1,0 +1,25 @@
+{
+  "name": "@celayasolutions/cora-mcp",
+  "version": "0.1.0",
+  "description": "CORA learning system as MCP server for Codex",
+  "license": "MIT",
+  "bin": {
+    "cora-mcp": "bin/mcp-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf bin",
+    "build": "tsup"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.18",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2"
+  }
+}
