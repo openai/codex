@@ -12,6 +12,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::num::NonZero;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -143,6 +144,7 @@ pub fn run(
     respect_gitignore: bool,
 ) -> anyhow::Result<FileSearchResults> {
     let pattern = create_pattern(pattern_text);
+    let canonical_root = canonicalize_path(search_directory);
     // Create one BestMatchesList per worker thread so that each worker can
     // operate independently. The results across threads will be merged when
     // the traversal is complete.
@@ -199,6 +201,7 @@ pub fn run(
         let index = index_counter.fetch_add(1, Ordering::Relaxed);
         let best_list_ptr = best_matchers_per_worker[index].get();
         let best_list = unsafe { &mut *best_list_ptr };
+        let canonical_root = canonical_root.clone();
 
         // Each worker keeps a local counter so we only read the atomic flag
         // every N entries which is cheaper than checking on every file.
@@ -207,7 +210,19 @@ pub fn run(
 
         let cancel = cancel_flag.clone();
 
-        Box::new(move |entry| {
+        Box::new(move |entry_result| {
+            let entry = match entry_result {
+                Ok(entry) => entry,
+                Err(_) => return ignore::WalkState::Continue,
+            };
+            if symlink_outside_root(&entry, &canonical_root) {
+                return if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                    ignore::WalkState::Skip
+                } else {
+                    ignore::WalkState::Continue
+                };
+            }
+
             if let Some(path) = get_file_path(&entry, search_directory) {
                 best_list.insert(path);
             }
@@ -222,13 +237,9 @@ pub fn run(
     });
 
     fn get_file_path<'a>(
-        entry_result: &'a Result<ignore::DirEntry, ignore::Error>,
+        entry: &'a ignore::DirEntry,
         search_directory: &std::path::Path,
     ) -> Option<&'a str> {
-        let entry = match entry_result {
-            Ok(e) => e,
-            Err(_) => return None,
-        };
         if entry.file_type().is_some_and(|ft| ft.is_dir()) {
             return None;
         }
@@ -408,6 +419,21 @@ fn create_pattern(pattern: &str) -> Pattern {
     )
 }
 
+fn canonicalize_path(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn symlink_outside_root(entry: &ignore::DirEntry, canonical_root: &Path) -> bool {
+    if !entry.path_is_symlink() {
+        return false;
+    }
+    let resolved = dunce::canonicalize(entry.path()).ok();
+    let Some(resolved) = resolved else {
+        return true;
+    };
+    !resolved.starts_with(canonical_root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,4 +479,59 @@ mod tests {
     fn file_name_from_path_falls_back_to_full_path() {
         assert_eq!(file_name_from_path(""), "");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_search_skips_symlink_outside_root() -> anyhow::Result<()> {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&root)?;
+        fs::create_dir(&outside)?;
+        fs::write(root.join("inside.txt"), "inside")?;
+        fs::write(outside.join("outside.txt"), "outside")?;
+        symlink(&outside, root.join("link"))?;
+
+        let limit = NonZero::new(10).unwrap();
+        let threads = NonZero::new(1).unwrap();
+
+        let results_inside = run(
+            "inside",
+            limit,
+            &root,
+            Vec::new(),
+            threads,
+            Arc::new(AtomicBool::new(false)),
+            false,
+            true,
+        )?;
+        let paths_inside: Vec<String> =
+            results_inside.matches.into_iter().map(|m| m.path).collect();
+        assert_eq!(paths_inside, vec!["inside.txt".to_string()]);
+
+        let results_outside = run(
+            "outside",
+            limit,
+            &root,
+            Vec::new(),
+            threads,
+            Arc::new(AtomicBool::new(false)),
+            false,
+            true,
+        )?;
+        let paths_outside: Vec<String> = results_outside
+            .matches
+            .into_iter()
+            .map(|m| m.path)
+            .collect();
+        assert_eq!(paths_outside, Vec::<String>::new());
+
+        Ok(())
+    }
 }
+

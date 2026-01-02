@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+dunce = { workspace = true }
 ignore = { workspace = true }
 nucleo-matcher = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -23,3 +24,4 @@ tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
