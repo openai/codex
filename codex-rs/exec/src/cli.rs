@@ -21,7 +21,7 @@ pub struct Cli {
     pub images: Vec<PathBuf>,
 
     /// Model the agent should use.
-    #[arg(long, short = 'm')]
+    #[arg(long, short = 'm', global = true)]
     pub model: Option<String>,
 
     /// Use open-source provider.
@@ -43,7 +43,7 @@ pub struct Cli {
     pub config_profile: Option<String>,
 
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
-    #[arg(long = "full-auto", default_value_t = false)]
+    #[arg(long = "full-auto", default_value_t = false, global = true)]
     pub full_auto: bool,
 
     /// Skip all confirmation prompts and execute commands without sandboxing.
@@ -52,6 +52,7 @@ pub struct Cli {
         long = "dangerously-bypass-approvals-and-sandbox",
         alias = "yolo",
         default_value_t = false,
+        global = true,
         conflicts_with = "full_auto"
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
@@ -61,7 +62,7 @@ pub struct Cli {
     pub cwd: Option<PathBuf>,
 
     /// Allow running Codex outside a Git repository.
-    #[arg(long = "skip-git-repo-check", default_value_t = false)]
+    #[arg(long = "skip-git-repo-check", global = true, default_value_t = false)]
     pub skip_git_repo_check: bool,
 
     /// Additional directories that should be writable alongside the primary workspace.
@@ -80,7 +81,12 @@ pub struct Cli {
     pub color: Color,
 
     /// Print events to stdout as JSONL.
-    #[arg(long = "json", alias = "experimental-json", default_value_t = false)]
+    #[arg(
+        long = "json",
+        alias = "experimental-json",
+        default_value_t = false,
+        global = true
+    )]
     pub json: bool,
 
     /// Specifies file where the last message from the agent should be written.
