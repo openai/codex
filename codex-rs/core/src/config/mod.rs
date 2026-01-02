@@ -1194,7 +1194,7 @@ impl Config {
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
-            model_providers.entry(key).or_insert(provider);
+            model_providers.insert(key, provider);
         }
 
         let model_provider_id = model_provider
@@ -3787,6 +3787,52 @@ trust_level = "untrusted"
                 "Expected WorkspaceWrite sandbox for untrusted project"
             );
         }
+
+        Ok(())
+    }
+
+    /// Regression test for https://github.com/openai/codex/issues/8240
+    /// User-defined model providers in config.toml should override built-in
+    /// providers with the same key (e.g., "ollama" with a custom base_url).
+    #[test]
+    fn test_user_defined_provider_overrides_builtin() -> std::io::Result<()> {
+        // Define a custom "ollama" provider with a remote base_url
+        let toml = r#"
+[model_providers.ollama]
+name = "Remote Ollama"
+base_url = "http://192.168.1.50:11434/v1"
+wire_api = "responses"
+"#;
+
+        let cfg: ConfigToml = toml::from_str(toml).expect("TOML deserialization should succeed");
+
+        let cwd_temp_dir = TempDir::new().unwrap();
+        let cwd = cwd_temp_dir.path().to_path_buf();
+        std::fs::write(cwd.join(".git"), "gitdir: nowhere")?;
+
+        let codex_home_temp_dir = TempDir::new().unwrap();
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(cwd),
+                ..Default::default()
+            },
+            codex_home_temp_dir.path().to_path_buf(),
+        )?;
+
+        // Verify the "ollama" provider was overridden with user's config
+        let ollama_provider = config
+            .model_providers
+            .get("ollama")
+            .expect("ollama provider should exist");
+
+        assert_eq!(ollama_provider.name, "Remote Ollama");
+        assert_eq!(
+            ollama_provider.base_url,
+            Some("http://192.168.1.50:11434/v1".to_string())
+        );
+        assert_eq!(ollama_provider.wire_api, crate::WireApi::Responses);
 
         Ok(())
     }
