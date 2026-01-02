@@ -209,7 +209,7 @@ class LessonPipeline:
 
     def generate_lesson(self, lesson_id: str) -> Dict[str, Any]:
         """
-        Full pipeline: plan → generate → validate.
+        Full pipeline: plan → generate → validate → write.
 
         Args:
             lesson_id: Lesson identifier
@@ -233,6 +233,10 @@ class LessonPipeline:
             result["errors"].append(f"Lesson {lesson_id} not found in syllabus")
             return result
 
+        # Create lesson directory
+        lesson_dir = self.artifact_dir / "lessons" / lesson_id
+        lesson_dir.mkdir(parents=True, exist_ok=True)
+
         # Stage 1: Plan
         lesson_plan, error = self.plan_lesson(lesson_config)
 
@@ -249,9 +253,11 @@ class LessonPipeline:
             result["errors"].append(f"Spec generation failed: {error}")
             return result
 
+        # Write spec.md
+        (lesson_dir / "spec.md").write_text(spec_content)
         result["artifacts"].append("spec.md")
 
-        # Stage 2: Generate tasks.json
+        # Stage 3: Generate tasks.json
         tasks, error = self.generate_tasks(lesson_plan)
 
         if error:
@@ -259,9 +265,9 @@ class LessonPipeline:
             result["errors"].append(f"Tasks generation failed: {error}")
             return result
 
+        # Write tasks.json
+        (lesson_dir / "tasks.json").write_text(json.dumps(tasks, indent=2))
         result["artifacts"].append("tasks.json")
-
-        # TODO: Generate other artifacts (expected_artifacts.json, run.sh, grader.md)
 
         result["status"] = "success"
         return result

@@ -20,10 +20,18 @@ class MockOllamaRunner:
     def generate(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.7) -> str:
         """Return mock JSON responses based on prompt."""
 
-        prompt_lower = prompt.lower()
+        # Check exact phrases from prompts.py
+        if "generating a lesson specification" in prompt.lower():
+            # PLAN_LESSON_PROMPT
+            return json.dumps({
+                "objective": "Map LMU concepts to CUDA equivalents",
+                "constraints": ["No speculative claims", "Testable criteria only"],
+                "success_criteria": ["Map 6 concepts correctly", "Generate valid spec.md"],
+                "cuda_analogy_explanation": "LMU operations map to CUDA kernel launches with deterministic execution"
+            })
 
-        # Generate tasks.json (check FIRST - most specific)
-        if "tasks.json" in prompt_lower or ("generate" in prompt_lower and "tasks" in prompt_lower):
+        elif "tasks.json file" in prompt.lower():
+            # GENERATE_TASKS_PROMPT
             return json.dumps({
                 "tasks": [
                     {"id": "task1", "description": "Map LMU to CUDA concepts", "weight": 0.4},
@@ -32,17 +40,8 @@ class MockOllamaRunner:
                 ]
             })
 
-        # Plan lesson
-        elif "plan" in prompt_lower and "lesson" in prompt_lower:
-            return json.dumps({
-                "objective": "Map LMU concepts to CUDA equivalents",
-                "constraints": ["No speculative claims", "Testable criteria only"],
-                "success_criteria": ["Map 6 concepts correctly", "Generate valid spec.md"],
-                "cuda_analogy_explanation": "LMU operations map to CUDA kernel launches with deterministic execution"
-            })
-
-        # Generate spec.md
-        elif "spec.md" in prompt_lower or "spec" in prompt_lower:
+        elif "spec.md file" in prompt.lower():
+            # GENERATE_SPEC_PROMPT
             return """# Organization: Celaya Solutions
 # Lesson 0.1: Introduction to LMU
 
@@ -67,8 +66,8 @@ LMU operations are analogous to CUDA kernel execution:
 - KV cache = SRAM/HBM memory hierarchy
 """
 
-        # Default
         else:
+            # Default fallback
             return json.dumps({
                 "response": "Mock Ollama response",
                 "model": self.model
