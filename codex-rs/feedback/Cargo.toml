@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = { workspace = true }
 codex-protocol = { workspace = true }
 sentry = { version = "0.46" }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]

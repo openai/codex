@@ -1454,6 +1454,7 @@ dependencies = [
  "codex-protocol",
  "pretty_assertions",
  "sentry",
+ "tracing",
  "tracing-subscriber",
 ]
 

@@ -88,6 +88,7 @@ use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
+use crate::feedback_tags;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
@@ -2524,6 +2525,15 @@ async fn try_run_turn(
         final_output_json_schema: turn_context.final_output_json_schema.clone(),
         truncation_policy: Some(turn_context.truncation_policy.into()),
     });
+
+    feedback_tags!(
+        model = turn_context.client.get_model(),
+        approval_policy = turn_context.approval_policy,
+        sandbox_policy = turn_context.sandbox_policy,
+        effort = turn_context.client.get_reasoning_effort(),
+        auth_mode = sess.services.auth_manager.get_auth_mode(),
+        features = sess.features.enabled_features(),
+    );
 
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context
