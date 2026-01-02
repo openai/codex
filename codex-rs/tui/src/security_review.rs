@@ -2488,6 +2488,84 @@ fn snapshot_bugs(snapshot: &SecurityReviewSnapshot) -> Vec<SecurityReviewBug> {
         .collect()
 }
 
+fn extract_vulnerability_tag_from_bug_markdown(markdown: &str) -> Option<String> {
+    markdown
+        .lines()
+        .map(str::trim)
+        .find_map(parse_taxonomy_vuln_tag)
+}
+
+fn count_files_with_findings_from_snapshots(snapshots: &[BugSnapshot]) -> usize {
+    let mut files: HashSet<String> = HashSet::new();
+    for snapshot in snapshots {
+        for loc in extract_file_locations_for_dedupe(&snapshot.bug.file) {
+            let Some((path, _)) = loc.split_once("#L") else {
+                continue;
+            };
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                files.insert(trimmed.to_string());
+            }
+        }
+    }
+    files.len()
+}
+
+fn dedupe_security_review_snapshot(snapshot: &mut SecurityReviewSnapshot) -> usize {
+    let mut summaries: Vec<BugSummary> = Vec::with_capacity(snapshot.bugs.len());
+    let mut details: Vec<BugDetail> = Vec::with_capacity(snapshot.bugs.len());
+
+    for entry in snapshot.bugs.iter_mut() {
+        if entry.bug.vulnerability_tag.is_none() {
+            entry.bug.vulnerability_tag =
+                extract_vulnerability_tag_from_bug_markdown(entry.original_markdown.as_str());
+        }
+
+        let bug = entry.bug.clone();
+        let markdown = entry.original_markdown.clone();
+        summaries.push(BugSummary {
+            id: bug.summary_id,
+            title: bug.title,
+            file: bug.file,
+            severity: bug.severity,
+            impact: bug.impact,
+            likelihood: bug.likelihood,
+            recommendation: bug.recommendation,
+            blame: bug.blame,
+            risk_score: bug.risk_score,
+            risk_rank: bug.risk_rank,
+            risk_reason: bug.risk_reason,
+            verification_types: bug.verification_types,
+            vulnerability_tag: bug.vulnerability_tag,
+            validation: bug.validation,
+            source_path: PathBuf::new(),
+            markdown: markdown.clone(),
+            author_github: bug.assignee_github,
+        });
+        details.push(BugDetail {
+            summary_id: bug.summary_id,
+            original_markdown: markdown,
+        });
+    }
+
+    let before = summaries.len();
+    if before == 0 {
+        return 0;
+    }
+
+    let (mut summaries, mut details, removed) = dedupe_bug_summaries(summaries, details);
+    normalize_bug_identifiers(&mut summaries, &mut details);
+    let (_bugs, snapshots) = build_bug_records(summaries, details);
+
+    snapshot.bugs = snapshots;
+    snapshot.findings_summary = format_findings_summary(
+        snapshot.bugs.len(),
+        count_files_with_findings_from_snapshots(&snapshot.bugs),
+    );
+
+    removed
+}
+
 pub(crate) fn resume_completed_review_from_checkpoint(
     checkpoint: SecurityReviewCheckpoint,
     progress_sender: Option<AppEventSender>,
@@ -4141,7 +4219,7 @@ pub async fn run_security_review(
     {
         match tokio_fs::read(path).await {
             Ok(bytes) => match serde_json::from_slice::<SecurityReviewSnapshot>(&bytes) {
-                Ok(loaded) => {
+                Ok(mut loaded) => {
                     record(
                         &mut logs,
                         format!(
@@ -4149,6 +4227,28 @@ pub async fn run_security_review(
                             path.display()
                         ),
                     );
+
+                    let removed = dedupe_security_review_snapshot(&mut loaded);
+                    if removed > 0 {
+                        record(
+                            &mut logs,
+                            format!(
+                                "Deduplicated {removed} finding{} while resuming from snapshot.",
+                                if removed == 1 { "" } else { "s" }
+                            ),
+                        );
+                        if let Ok(updated) = serde_json::to_vec_pretty(&loaded)
+                            && let Err(err) = tokio_fs::write(path, updated).await
+                        {
+                            record(
+                                &mut logs,
+                                format!(
+                                    "Failed to persist deduplicated snapshot {}: {err}",
+                                    path.display()
+                                ),
+                            );
+                        }
+                    }
 
                     plan_tracker.mark_complete(SecurityReviewPlanStep::AnalyzeBugs);
                     plan_tracker.mark_complete(SecurityReviewPlanStep::PolishFindings);
@@ -7571,6 +7671,213 @@ mod bug_analysis_progress_tests {
     }
 }
 
+#[cfg(test)]
+mod bug_dedupe_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_bug_markdown(title: &str, file: &str) -> String {
+        format!(
+            "### {title}\n- **File & Lines:** `{file}`\n- **Severity:** High\n- **Impact:** x\n- **Likelihood:** x\n- **Recommendation:** x\n"
+        )
+    }
+
+    fn make_bug_summary(id: usize, title: &str, file: &str, tag: Option<&str>) -> BugSummary {
+        BugSummary {
+            id,
+            title: title.to_string(),
+            file: file.to_string(),
+            severity: "High".to_string(),
+            impact: "x".to_string(),
+            likelihood: "x".to_string(),
+            recommendation: "x".to_string(),
+            blame: None,
+            risk_score: None,
+            risk_rank: None,
+            risk_reason: None,
+            verification_types: Vec::new(),
+            vulnerability_tag: tag.map(str::to_string),
+            validation: BugValidationState::default(),
+            source_path: PathBuf::new(),
+            markdown: make_bug_markdown(title, file),
+            author_github: None,
+        }
+    }
+
+    #[test]
+    fn parses_taxonomy_lines_in_common_formats() {
+        let lines = [
+            (
+                "TAXONOMY: {\"vuln_tag\":\"tls-hostname-not-verified\"}",
+                "tls-hostname-not-verified",
+            ),
+            (
+                "- TAXONOMY: {\"vuln_tag\":\"tls-hostname-not-verified\"}",
+                "tls-hostname-not-verified",
+            ),
+            (
+                "- TAXONOMY: `{\"vuln_tag\":\"tls-hostname-not-verified\"}`",
+                "tls-hostname-not-verified",
+            ),
+            (
+                "- **TAXONOMY:** `{\"vuln_tag\":\"tls-hostname-not-verified\"}`",
+                "tls-hostname-not-verified",
+            ),
+            (
+                "- TAXONOMY: {{\"vuln_tag\":\"tls-hostname-not-verified\"}}",
+                "tls-hostname-not-verified",
+            ),
+        ];
+
+        for (line, expected) in lines {
+            assert_eq!(
+                parse_taxonomy_vuln_tag(line).as_deref(),
+                Some(expected),
+                "failed to parse taxonomy line: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn dedupes_similar_vulnerability_tags() {
+        let summaries = vec![
+            make_bug_summary(
+                1,
+                "Missing hostname verification (A)",
+                "a.rs#L1-L2",
+                Some("tls-hostname-not-verified"),
+            ),
+            make_bug_summary(
+                2,
+                "Missing hostname verification (B)",
+                "b.rs#L3-L4",
+                Some("tls-hostname-bypass"),
+            ),
+        ];
+        let details = vec![
+            BugDetail {
+                summary_id: 1,
+                original_markdown: make_bug_markdown(
+                    "Missing hostname verification (A)",
+                    "a.rs#L1-L2",
+                ),
+            },
+            BugDetail {
+                summary_id: 2,
+                original_markdown: make_bug_markdown(
+                    "Missing hostname verification (B)",
+                    "b.rs#L3-L4",
+                ),
+            },
+        ];
+
+        let (summaries, details, removed) = dedupe_bug_summaries(summaries, details);
+        assert_eq!(removed, 1);
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(details.len(), 1);
+        let file = summaries[0].file.clone();
+        assert!(file.contains("a.rs#L1-L2"));
+        assert!(file.contains("b.rs#L3-L4"));
+    }
+
+    #[test]
+    fn avoids_deduping_on_generic_overlap_only() {
+        let summaries = vec![
+            make_bug_summary(
+                1,
+                "Heap buffer overflow",
+                "a.rs#L1-L2",
+                Some("heap-buffer-overflow"),
+            ),
+            make_bug_summary(
+                2,
+                "Stack buffer overflow",
+                "b.rs#L3-L4",
+                Some("stack-buffer-overflow"),
+            ),
+        ];
+        let details = vec![
+            BugDetail {
+                summary_id: 1,
+                original_markdown: make_bug_markdown("Heap buffer overflow", "a.rs#L1-L2"),
+            },
+            BugDetail {
+                summary_id: 2,
+                original_markdown: make_bug_markdown("Stack buffer overflow", "b.rs#L3-L4"),
+            },
+        ];
+
+        let (summaries, details, removed) = dedupe_bug_summaries(summaries, details);
+        assert_eq!(removed, 0);
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(details.len(), 2);
+    }
+
+    #[test]
+    fn dedupes_loaded_snapshot_bugs() {
+        let original_markdown_a = format!(
+            "{}\n- TAXONOMY: {{\"vuln_tag\":\"tls-hostname-not-verified\"}}\n",
+            make_bug_markdown("Missing hostname verification (A)", "a.rs#L1-L2")
+        );
+        let original_markdown_b = format!(
+            "{}\n- **TAXONOMY:** `{{\"vuln_tag\":\"tls-hostname-bypass\"}}`\n",
+            make_bug_markdown("Missing hostname verification (B)", "b.rs#L3-L4")
+        );
+        let mut snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: "placeholder".to_string(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 1,
+                        risk_rank: Some(1),
+                        risk_score: Some(9.0),
+                        title: "Missing hostname verification (A)".to_string(),
+                        severity: "High".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "a.rs#L1-L2".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: original_markdown_a,
+                },
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 2,
+                        risk_rank: Some(2),
+                        risk_score: Some(8.0),
+                        title: "Missing hostname verification (B)".to_string(),
+                        severity: "High".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "b.rs#L3-L4".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: original_markdown_b,
+                },
+            ],
+        };
+
+        let removed = dedupe_security_review_snapshot(&mut snapshot);
+        assert_eq!(removed, 1);
+        assert_eq!(snapshot.bugs.len(), 1);
+        assert!(snapshot.findings_summary.contains("Identified 1 finding"));
+    }
+}
+
 async fn filter_spec_directories(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
@@ -10173,6 +10480,42 @@ fn is_regex_parse_error(stderr: &str) -> bool {
     lowered.contains("regex parse error") || lowered.contains("error parsing regex")
 }
 
+fn parse_taxonomy_vuln_tag(line: &str) -> Option<String> {
+    let mut cursor = line.trim();
+
+    if let Some(rest) = cursor.strip_prefix('-') {
+        cursor = rest.trim_start();
+    }
+    cursor = cursor.trim_start_matches('*');
+
+    let lower = cursor.to_ascii_lowercase();
+    if !lower.starts_with("taxonomy") {
+        return None;
+    }
+
+    let colon = cursor.find(':')?;
+    let mut value = cursor[colon.saturating_add(1)..].trim();
+    value = value.trim_start_matches('*').trim();
+    value = value.trim_matches('`').trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let json = if value.starts_with("{{") && value.ends_with("}}") && value.len() >= 4 {
+        value.get(1..value.len().saturating_sub(1)).unwrap_or(value)
+    } else {
+        value
+    };
+
+    let taxonomy = serde_json::from_str::<Value>(json).ok()?;
+    let tag = taxonomy.get("vuln_tag")?.as_str()?.trim();
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag.to_string())
+    }
+}
+
 fn extract_bug_summaries(
     markdown: &str,
     default_path: &str,
@@ -10266,18 +10609,10 @@ fn extract_bug_summaries(
                         .filter(|entry| !entry.is_empty())
                         .collect();
                 }
-            } else if let Some(rest) = trimmed.strip_prefix("- TAXONOMY:") {
-                let value = rest.trim();
-                if !value.is_empty()
-                    && let Ok(taxonomy) = serde_json::from_str::<Value>(value)
-                    && let Some(tag) = taxonomy
-                        .get("vuln_tag")
-                        .and_then(Value::as_str)
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                {
-                    summary.vulnerability_tag = Some(tag);
-                }
+            } else if summary.vulnerability_tag.is_none()
+                && let Some(tag) = parse_taxonomy_vuln_tag(trimmed)
+            {
+                summary.vulnerability_tag = Some(tag);
             }
         }
     }
@@ -10314,6 +10649,92 @@ fn normalize_title_key(title: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+fn extract_file_locations_for_dedupe(file_field: &str) -> Vec<String> {
+    let trimmed = file_field.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    static LOCATION_RE: OnceLock<Regex> = OnceLock::new();
+    let re = LOCATION_RE.get_or_init(|| {
+        Regex::new(r"(?P<loc>[^\s,;()]+#L\d+(?:-L\d+)?)")
+            .unwrap_or_else(|error| panic!("failed to compile file location regex: {error}"))
+    });
+
+    let mut out: Vec<String> = re
+        .captures_iter(trimmed)
+        .filter_map(|caps| caps.name("loc").map(|m| m.as_str().to_string()))
+        .collect();
+
+    if out.is_empty() {
+        out = trimmed
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+
+    out
+}
+
+fn normalize_vuln_tag_token(token: &str) -> Option<String> {
+    let lower = token.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+
+    let canonical = match lower.as_str() {
+        "verification" | "verified" | "verifying" | "verify" => "verify",
+        "validation" | "validated" | "validating" | "validate" => "verify",
+        "checks" | "check" => "verify",
+        "ssl" | "https" => "tls",
+        "certificate" | "certificates" | "x509" => "cert",
+        other => other,
+    };
+
+    Some(canonical.to_string())
+}
+
+fn vuln_tag_tokens_for_dedupe(tag: &str) -> HashSet<String> {
+    let mut tokens: HashSet<String> = tag
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter_map(normalize_vuln_tag_token)
+        .collect();
+
+    if tokens.contains("hostname")
+        && (tokens.contains("tls") || tokens.contains("cert"))
+        && !tokens.contains("verify")
+    {
+        tokens.insert("verify".to_string());
+    }
+
+    tokens
+}
+
+fn is_generic_dedupe_token(token: &str) -> bool {
+    matches!(
+        token,
+        "missing"
+            | "not"
+            | "no"
+            | "without"
+            | "lack"
+            | "lacking"
+            | "bypass"
+            | "verify"
+            | "bug"
+            | "issue"
+            | "vuln"
+            | "vulnerability"
+            | "buffer"
+            | "overflow"
+            | "oob"
+            | "read"
+            | "write"
+    )
 }
 
 fn rewrite_bug_markdown_location(markdown: &str, new_location: &str) -> Option<String> {
@@ -10366,13 +10787,113 @@ fn dedupe_bug_summaries(
         members: Vec<usize>,
     }
 
+    #[derive(Clone)]
+    struct UnionFind {
+        parent: Vec<usize>,
+        rank: Vec<u8>,
+    }
+
+    impl UnionFind {
+        fn new(len: usize) -> Self {
+            Self {
+                parent: (0..len).collect(),
+                rank: vec![0; len],
+            }
+        }
+
+        fn find(&mut self, mut x: usize) -> usize {
+            let mut root = x;
+            while self.parent[root] != root {
+                root = self.parent[root];
+            }
+            while self.parent[x] != x {
+                let parent = self.parent[x];
+                self.parent[x] = root;
+                x = parent;
+            }
+            root
+        }
+
+        fn union(&mut self, a: usize, b: usize) {
+            let ra = self.find(a);
+            let rb = self.find(b);
+            if ra == rb {
+                return;
+            }
+
+            let rank_a = self.rank[ra];
+            let rank_b = self.rank[rb];
+            if rank_a < rank_b {
+                self.parent[ra] = rb;
+            } else if rank_b < rank_a {
+                self.parent[rb] = ra;
+            } else {
+                self.parent[rb] = ra;
+                self.rank[ra] = rank_a.saturating_add(1);
+            }
+        }
+    }
+
+    let tag_tokens: Vec<Option<HashSet<String>>> = summaries
+        .iter()
+        .map(|summary| {
+            summary
+                .vulnerability_tag
+                .as_deref()
+                .map(vuln_tag_tokens_for_dedupe)
+        })
+        .collect();
+
+    let mut uf = UnionFind::new(summaries.len());
+
+    for i in 0..summaries.len() {
+        let Some(a_tokens) = tag_tokens[i].as_ref() else {
+            continue;
+        };
+        for (j, tokens) in tag_tokens.iter().enumerate().skip(i + 1) {
+            let Some(b_tokens) = tokens.as_ref() else {
+                continue;
+            };
+
+            let (smaller, larger) = if a_tokens.len() <= b_tokens.len() {
+                (a_tokens, b_tokens)
+            } else {
+                (b_tokens, a_tokens)
+            };
+
+            let mut intersection = 0usize;
+            let mut informative = 0usize;
+            for token in smaller {
+                if larger.contains(token) {
+                    intersection += 1;
+                    if !is_generic_dedupe_token(token.as_str()) {
+                        informative += 1;
+                    }
+                }
+            }
+            if intersection < 2 || informative < 1 {
+                continue;
+            }
+            let union = a_tokens.len() + b_tokens.len() - intersection;
+            if union == 0 {
+                continue;
+            }
+            let jaccard = intersection as f32 / union as f32;
+            if jaccard >= 0.5 {
+                uf.union(i, j);
+            }
+        }
+    }
+
     let mut key_to_group: HashMap<String, GroupAgg> = HashMap::new();
     for (idx, s) in summaries.iter().enumerate() {
-        let key = if let Some(tag) = s.vulnerability_tag.as_ref() {
-            format!("tag::{}", tag.trim().to_ascii_lowercase())
+        let key = if s.vulnerability_tag.is_some() {
+            let root = uf.find(idx);
+            format!("tag_group::{root}")
         } else {
             format!("title::{}", normalize_title_key(&s.title))
         };
+
         let entry = key_to_group.entry(key).or_insert_with(|| GroupAgg {
             rep_index: idx,
             file_set: Vec::new(),
@@ -10380,15 +10901,21 @@ fn dedupe_bug_summaries(
         });
 
         let rep = &summaries[entry.rep_index];
-        let rep_rank = severity_rank(&rep.severity);
-        let cur_rank = severity_rank(&s.severity);
-        if cur_rank < rep_rank || (cur_rank == rep_rank && s.id < rep.id) {
+        let rep_risk = rep.risk_rank.unwrap_or(usize::MAX);
+        let cur_risk = s.risk_rank.unwrap_or(usize::MAX);
+        if cur_risk < rep_risk
+            || (cur_risk == rep_risk
+                && (severity_rank(&s.severity) < severity_rank(&rep.severity)
+                    || (severity_rank(&s.severity) == severity_rank(&rep.severity)
+                        && s.id < rep.id)))
+        {
             entry.rep_index = idx;
         }
 
-        let loc = s.file.trim().to_string();
-        if !loc.is_empty() && !entry.file_set.iter().any(|e| e == &loc) {
-            entry.file_set.push(loc);
+        for loc in extract_file_locations_for_dedupe(&s.file) {
+            if !entry.file_set.iter().any(|existing| existing == &loc) {
+                entry.file_set.push(loc);
+            }
         }
         entry.members.push(s.id);
     }
