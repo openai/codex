@@ -38,6 +38,10 @@ AGENTS.override.md
 .parcel-cache/
 .eslintcache
 .nyc_output/
+
+# Python
+__pycache__/
+*.py[cod]
 .jest/
 *.tsbuildinfo
 

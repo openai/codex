@@ -70,6 +70,7 @@ mod security_report_viewer;
 mod security_review;
 mod selection_list;
 mod session_log;
+mod session_totals;
 mod shimmer;
 mod skill_error_prompt;
 mod slash_command;
@@ -398,6 +399,7 @@ async fn run_ratatui_app(
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
                         update_action: Some(action),
+                        total_duration_ms: 0,
                     });
                 }
             }
@@ -437,6 +439,7 @@ async fn run_ratatui_app(
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
                 update_action: None,
+                total_duration_ms: 0,
             });
         }
         // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
@@ -472,6 +475,7 @@ async fn run_ratatui_app(
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    total_duration_ms: 0,
                 });
             }
         }
@@ -510,6 +514,7 @@ async fn run_ratatui_app(
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    total_duration_ms: 0,
                 });
             }
             other => other,

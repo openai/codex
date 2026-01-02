@@ -103,3 +103,18 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+## Releasing (Manual Artifact Upload)
+
+For local/manual releases (without modifying GitHub Actions workflows), use `scripts/release_to_oaiartifacts.py` from the repo root.
+
+- Prereqs: `bbb` on PATH (boostedblob), `az login` for auth, and `pnpm` for building `google-workspace-mcp`.
+- Default label is `YYYY-MM-DD` (override with `--label`).
+- Default destination for Codex releases is `az://oaiphx8/oaikhai/codex/` (override with `--dest-base`).
+
+Commands:
+
+- Build + upload `codex-tui-YYYY-MM-DD` and `codex-google-workspace-mcp-YYYY-MM-DD.tgz` (plus `.sha256` sidecars):
+  - `./scripts/release_to_oaiartifacts.py --release-codex --dest-base az://oaiphx8/oaikhai/codex/`
+- Dry run:
+  - `./scripts/release_to_oaiartifacts.py --release-codex --dry-run`
