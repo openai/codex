@@ -8,10 +8,17 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
+use codex_mcp_server::CodexToolCallReplyParam;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
 use codex_mcp_server::PatchApprovalElicitRequestParams;
 use codex_mcp_server::PatchApprovalResponse;
+use codex_protocol::ConversationId;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPC_VERSION;
@@ -35,6 +42,121 @@ use mcp_test_support::format_with_current_shell;
 
 // Allow ample time on slower CI or under load to avoid flakes.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn write_minimal_rollout_file(
+    codex_home: &Path,
+    conversation_id: ConversationId,
+) -> anyhow::Result<PathBuf> {
+    // Place the rollout under CODEX_HOME/sessions/... so the MCP server can locate it.
+    let day_dir = codex_home.join("sessions").join("2025").join("01").join("01");
+    std::fs::create_dir_all(&day_dir)?;
+    let rollout_path = day_dir.join(format!(
+        "rollout-2025-01-01T00-00-00-{conversation_id}.jsonl"
+    ));
+
+    let session_meta = SessionMeta {
+        id: conversation_id,
+        timestamp: "2025-01-01T00:00:00.000Z".to_string(),
+        cwd: codex_home.to_path_buf(),
+        originator: "mcp-server-test".to_string(),
+        cli_version: "0.0.0".to_string(),
+        instructions: None,
+        source: SessionSource::Mcp,
+        model_provider: Some("mock_provider".to_string()),
+    };
+    let line = RolloutLine {
+        timestamp: "2025-01-01T00:00:00.000Z".to_string(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: session_meta,
+            git: None,
+        }),
+    };
+
+    std::fs::write(&rollout_path, format!("{}\n", serde_json::to_string(&line)?))?;
+    Ok(rollout_path)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_codex_reply_tool_resumes_from_rollout_when_not_in_memory() {
+    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+    if let Err(err) = codex_reply_tool_resumes_from_rollout_when_not_in_memory().await {
+        panic!("failure: {err}");
+    }
+}
+
+async fn codex_reply_tool_resumes_from_rollout_when_not_in_memory() -> anyhow::Result<()> {
+    let McpHandle {
+        process: mut mcp_process,
+        server: _server,
+        dir,
+    } = create_mcp_process(vec![create_final_assistant_message_sse_response("OK")?]).await?;
+
+    let conversation_id = ConversationId::new();
+    let _rollout_path = write_minimal_rollout_file(dir.path(), conversation_id)?;
+
+    let reply_request_id = mcp_process
+        .send_codex_reply_tool_call(CodexToolCallReplyParam {
+            conversation_id: conversation_id.to_string(),
+            prompt: "hello".to_string(),
+        })
+        .await?;
+
+    // The server should rehydrate and emit session_configured as a notification.
+    let session_configured = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_session_configured_notification(),
+    )
+    .await??;
+
+    let msg = session_configured
+        .params
+        .as_ref()
+        .and_then(|p| p.get("msg"))
+        .cloned()
+        .unwrap_or_default();
+    let expected = conversation_id.to_string();
+    assert_eq!(
+        msg.get("session_id").and_then(|v| v.as_str()),
+        Some(expected.as_str()),
+        "expected resumed session_id to match the rollout file's ConversationId"
+    );
+
+    // Ensure the tool call completes.
+    let codex_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Integer(reply_request_id)),
+    )
+    .await??;
+
+    assert_ne!(
+        codex_response
+            .result
+            .get("isError")
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "expected MCP tool response to not be marked as error"
+    );
+    let text = codex_response
+        .result
+        .get("content")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|first| first.get("text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        text.contains("OK"),
+        "expected assistant output to include 'OK', got: {text:?}"
+    );
+
+    Ok(())
+}
 
 /// Test that a shell command that is not on the "trusted" list triggers an
 /// elicitation request to the MCP and that sending the approval runs the
