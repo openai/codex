@@ -1,0 +1,80 @@
+#!/usr/bin/env dotslash
+
+// Buildifier is published as raw binaries (not archived), so this manifest omits
+// the optional `format` field.
+//
+// TODO: Add `windows-aarch64` once the buildtools releases include a Windows
+// arm64 artifact. Support was added in https://github.com/bazelbuild/buildtools/issues/874,
+// but as of v8.2.1, only windows-amd64 is available.
+{
+  "name": "buildifier",
+  "platforms": {
+    "macos-aarch64": {
+      "size": 7717890,
+      "hash": "blake3",
+      "digest": "1f01da46c314bd22890d92731b44bcfc555331c87bc113c72c9be13eaa27cb59",
+      "path": "buildifier",
+      "providers": [
+        {
+          "url": "https://github.com/bazelbuild/buildtools/releases/download/v8.2.1/buildifier-darwin-arm64"
+        }
+      ]
+    },
+    "linux-aarch64": {
+      "size": 7755744,
+      "hash": "blake3",
+      "digest": "9a35407ecf3d4aa0daf493a364c1a68a2a469f0f96c295f85ab29deb46265f16",
+      "path": "buildifier",
+      "providers": [
+        {
+          "url": "https://github.com/bazelbuild/buildtools/releases/download/v8.2.1/buildifier-linux-arm64"
+        }
+      ]
+    },
+    "linux-riscv64": {
+      "size": 7895176,
+      "hash": "blake3",
+      "digest": "90abd14b0eac635de23273588d2224624541cf6a45f548334252182a45a2f9a6",
+      "path": "buildifier",
+      "providers": [
+        {
+          "url": "https://github.com/bazelbuild/buildtools/releases/download/v8.2.1/buildifier-linux-riscv64"
+        }
+      ]
+    },
+    "macos-x86_64": {
+      "size": 7776816,
+      "hash": "blake3",
+      "digest": "f367d5e52779571e4da8363b5db2cb60b64c1c97d83ab53de3eaa60d598e8bf1",
+      "path": "buildifier",
+      "providers": [
+        {
+          "url": "https://github.com/bazelbuild/buildtools/releases/download/v8.2.1/buildifier-darwin-amd64"
+        }
+      ]
+    },
+    "windows-x86_64": {
+      "size": 8020480,
+      "hash": "blake3",
+      "digest": "1aa436cdcbda55ab32ac18bf76940c8bc83d548c424e9e7db660ee38fb9a91fc",
+      "path": "buildifier.exe",
+      "providers": [
+        {
+          "url": "https://github.com/bazelbuild/buildtools/releases/download/v8.2.1/buildifier-windows-amd64.exe"
+        }
+      ]
+    },
+    "linux-x86_64": {
+      "size": 7882884,
+      "hash": "blake3",
+      "digest": "0405f14324a9dae109a9fffb556b49adff9d6fd710f2648d2a6787e000f6b8f9",
+      "path": "buildifier",
+      "providers": [
+        {
+          "url": "https://github.com/bazelbuild/buildtools/releases/download/v8.2.1/buildifier-linux-amd64"
+        }
+      ]
+    }
+  }
+}
+
