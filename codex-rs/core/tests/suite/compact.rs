@@ -1229,6 +1229,97 @@ async fn auto_compact_runs_after_token_limit_hit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let limit = 200_000;
+    let over_limit_tokens = 250_000;
+
+    let mut builder = test_codex().with_config(move |config| {
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(limit);
+    });
+    let initial = builder.build(&server).await.unwrap();
+    let home = initial.home.clone();
+    let rollout_path = initial.session_configured.rollout_path.clone();
+
+    // A single over-limit completion should not auto-compact until the next user message.
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("m1", FIRST_REPLY),
+            ev_completed_with_tokens("r1", over_limit_tokens),
+        ]),
+    )
+    .await;
+    initial.submit_turn("OVER_LIMIT_TURN").await.unwrap();
+
+    let requests = get_responses_requests(&server).await;
+    assert_eq!(requests.len(), 1, "expected only the initial request");
+    let initial_body = std::str::from_utf8(&requests[0].body).unwrap_or("");
+    assert!(
+        !body_contains_text(initial_body, SUMMARIZATION_PROMPT),
+        "initial over-limit turn should not auto compact"
+    );
+
+    let mut resume_builder = test_codex().with_config(move |config| {
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(limit);
+    });
+    let resumed = resume_builder
+        .resume(&server, home, rollout_path)
+        .await
+        .unwrap();
+
+    let follow_up_user = "AFTER_RESUME_USER";
+    let sse_compact = sse(vec![
+        ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r2", 10),
+    ]);
+    let sse_follow_up = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed("r3"),
+    ]);
+
+    let compact_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    mount_sse_once_match(&server, compact_matcher, sse_compact).await;
+
+    let follow_up_matcher = move |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(follow_up_user)
+            && body_contains_text(body, AUTO_SUMMARY_TEXT)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    mount_sse_once_match(&server, follow_up_matcher, sse_follow_up).await;
+
+    resumed.submit_turn(follow_up_user).await.unwrap();
+
+    let requests = get_responses_requests(&server).await;
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected initial request, auto compact request, and follow-up request"
+    );
+    let request_bodies: Vec<String> = requests
+        .into_iter()
+        .map(|request| String::from_utf8(request.body).unwrap_or_default())
+        .collect();
+    let auto_compact_index = request_bodies
+        .iter()
+        .position(|body| body_contains_text(body, SUMMARIZATION_PROMPT))
+        .expect("auto compact request missing after resume");
+    assert_eq!(
+        auto_compact_index, 1,
+        "auto compact should run first after resume"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_persists_rollout_entries() {
     skip_if_no_network!();
 
