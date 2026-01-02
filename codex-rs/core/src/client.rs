@@ -204,9 +204,14 @@ impl ModelClient {
         let instructions = prompt.get_full_instructions(&model_family).into_owned();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
+        let effort = normalize_reasoning_effort_for_model(
+            model_family.get_model_slug(),
+            self.effort,
+            model_family.default_reasoning_effort,
+        );
         let reasoning = if model_family.supports_reasoning_summaries {
             Some(Reasoning {
-                effort: self.effort.or(model_family.default_reasoning_effort),
+                effort,
                 summary: if self.summary == ReasoningSummaryConfig::None {
                     None
                 } else {
@@ -372,12 +377,26 @@ impl ModelClient {
 
 fn normalize_reasoning_effort_for_model(
     model: &str,
-    effort: Option<ReasoningEffortConfig>,
+    requested: Option<ReasoningEffortConfig>,
+    default: Option<ReasoningEffortConfig>,
 ) -> Option<ReasoningEffortConfig> {
-    if model.starts_with("gpt-5-codex") && effort == Some(ReasoningEffortConfig::XHigh) {
-        return Some(ReasoningEffortConfig::High);
+    if !model.starts_with("gpt-5-codex") {
+        return requested.or(default);
     }
-    effort
+
+    fn is_supported_by_gpt5_codex(effort: ReasoningEffortConfig) -> bool {
+        matches!(
+            effort,
+            ReasoningEffortConfig::Low
+                | ReasoningEffortConfig::Medium
+                | ReasoningEffortConfig::High
+        )
+    }
+
+    requested
+        .filter(|&effort| is_supported_by_gpt5_codex(effort))
+        .or(default)
+        .filter(|&effort| is_supported_by_gpt5_codex(effort))
 }
 
 impl ModelClient {
@@ -575,17 +594,22 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn gpt5_codex_downgrades_xhigh_to_high() {
+    fn gpt5_codex_uses_default_effort_for_xhigh() {
         assert_eq!(
-            normalize_reasoning_effort_for_model("gpt-5-codex", Some(ReasoningEffortConfig::XHigh)),
-            Some(ReasoningEffortConfig::High)
+            normalize_reasoning_effort_for_model(
+                "gpt-5-codex",
+                Some(ReasoningEffortConfig::XHigh),
+                Some(ReasoningEffortConfig::Medium),
+            ),
+            Some(ReasoningEffortConfig::Medium)
         );
         assert_eq!(
             normalize_reasoning_effort_for_model(
                 "gpt-5-codex-mini",
-                Some(ReasoningEffortConfig::XHigh)
+                Some(ReasoningEffortConfig::XHigh),
+                None,
             ),
-            Some(ReasoningEffortConfig::High)
+            None
         );
     }
 
@@ -594,7 +618,8 @@ mod tests {
         assert_eq!(
             normalize_reasoning_effort_for_model(
                 "gpt-5.1-codex-max",
-                Some(ReasoningEffortConfig::XHigh)
+                Some(ReasoningEffortConfig::XHigh),
+                None,
             ),
             Some(ReasoningEffortConfig::XHigh)
         );
