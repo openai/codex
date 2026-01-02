@@ -18,6 +18,11 @@ from . import prompts
 from . import extract
 from . import validators
 
+# Import runtime for Ollama
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from runtime.runner import OllamaRunner
+
 
 class LessonPipeline:
     """
@@ -34,7 +39,8 @@ class LessonPipeline:
         self,
         syllabus_path: str = "celaya/lmu/syllabus/syllabus.yaml",
         artifact_dir: str = "celaya/lmu/artifacts",
-        max_retries: int = 3
+        max_retries: int = 3,
+        ollama_model: str = "llama2:latest"
     ):
         """
         Initialize pipeline.
@@ -43,6 +49,7 @@ class LessonPipeline:
             syllabus_path: Path to syllabus.yaml
             artifact_dir: Output directory for artifacts
             max_retries: Maximum retry attempts per operation
+            ollama_model: Ollama model name
         """
         self.syllabus_path = Path(syllabus_path)
         self.artifact_dir = Path(artifact_dir)
@@ -54,6 +61,9 @@ class LessonPipeline:
 
         # Create artifact directory
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize Ollama
+        self.ollama = OllamaRunner(model=ollama_model)
 
     def load_lesson_config(self, lesson_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -90,18 +100,11 @@ class LessonPipeline:
             cuda_analogy=lesson_config.get("cuda_analogy", "")
         )
 
-        # TODO: Call LLM here (placeholder for now)
-        # For build-phase-1, this is structure only
-        # Example: response = call_ollama(prompt)
-
-        response = """
-        {
-          "objective": "Map LMU concepts to CUDA equivalents",
-          "constraints": ["No AGI claims", "Testable criteria only"],
-          "success_criteria": ["Map 6 concepts correctly", "Generate valid spec.md"],
-          "cuda_analogy_explanation": "LMU operations are analogous to CUDA kernel launches"
-        }
-        """
+        # Call Ollama
+        try:
+            response = self.ollama.generate(prompt, max_tokens=500, temperature=0.3)
+        except Exception as e:
+            return None, f"Ollama call failed: {e}"
 
         # Extract and validate
         plan, extract_error = extract.extract_json_from_text(response)
@@ -139,9 +142,11 @@ class LessonPipeline:
             header=header
         )
 
-        # TODO: Call LLM here
-        response = f"{header}\n\n# Lesson {lesson_config['id']}: {lesson_config['name']}\n\n"
-        response += "Placeholder spec content.\n"
+        # Call Ollama
+        try:
+            response = self.ollama.generate(prompt, max_tokens=800, temperature=0.3)
+        except Exception as e:
+            return None, f"Ollama call failed: {e}"
 
         # Validate CUDA analogy
         is_valid, warnings = validators.validate_cuda_analogy(response)
@@ -175,16 +180,11 @@ class LessonPipeline:
             lesson_plan=json.dumps(lesson_plan, indent=2)
         )
 
-        # TODO: Call LLM here
-        response = """
-        {
-          "tasks": [
-            {"id": "task1", "description": "Map LMU to CUDA", "weight": 0.4},
-            {"id": "task2", "description": "Generate spec.md", "weight": 0.35},
-            {"id": "task3", "description": "Validate output", "weight": 0.25}
-          ]
-        }
-        """
+        # Call Ollama
+        try:
+            response = self.ollama.generate(prompt, max_tokens=400, temperature=0.3)
+        except Exception as e:
+            return None, f"Ollama call failed: {e}"
 
         tasks, extract_error = extract.extract_json_from_text(response)
 

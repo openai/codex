@@ -9,6 +9,7 @@ Status: Experimental
 
 import subprocess
 import json
+import requests
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime, timezone
@@ -266,7 +267,7 @@ class OllamaRunner:
         temperature: float = 0.7
     ) -> str:
         """
-        Generate text using Ollama.
+        Generate text using Ollama API.
 
         Args:
             prompt: Input prompt
@@ -275,18 +276,23 @@ class OllamaRunner:
 
         Returns:
             Generated text
-
-        Note: This is a placeholder. Actual implementation would use
-        ollama-python library or HTTP requests to Ollama API.
         """
-        # TODO: Implement actual Ollama API call
-        # Example using ollama-python:
-        # import ollama
-        # response = ollama.generate(model=self.model, prompt=prompt)
-        # return response['response']
+        url = f"{self.base_url}/api/generate"
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens
+            }
+        }
 
-        # Placeholder
-        return f"[Ollama response for: {prompt[:50]}...]"
+        response = requests.post(url, json=payload, timeout=120)
+        response.raise_for_status()
+
+        data = response.json()
+        return data.get("response", "")
 
     def verify_connectivity(self) -> bool:
         """
@@ -296,13 +302,8 @@ class OllamaRunner:
             True if Ollama is running and accessible
         """
         try:
-            # TODO: Implement actual health check
-            # import requests
-            # response = requests.get(f"{self.base_url}/api/tags")
-            # return response.status_code == 200
-
-            # Placeholder
-            return True
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            return response.status_code == 200
         except Exception:
             return False
 

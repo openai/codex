@@ -28,47 +28,30 @@ from celaya.lmu.grading.grader import LessonGrader
 
 
 def check_ollama_connectivity(ollama_model: str = "llama2:latest") -> bool:
-    """
-    Verify Ollama is running and accessible.
-
-    Args:
-        ollama_model: Model to check
-
-    Returns:
-        True if Ollama is accessible
-    """
-    print("Checking Ollama connectivity...")
+    """Verify Ollama running and accessible."""
+    print("Checking Ollama...")
 
     ollama = OllamaRunner(model=ollama_model)
 
     if ollama.verify_connectivity():
-        print(f"✓ Ollama is accessible")
+        print(f"✓ Ollama accessible")
         print(f"  Model: {ollama_model}")
-        print(f"  Base URL: {ollama.base_url}")
+        print(f"  URL: {ollama.base_url}")
         return True
     else:
-        print(f"✗ Ollama is not accessible at {ollama.base_url}")
-        print(f"  Please ensure Ollama is running: ollama serve")
-        print(f"  And model is installed: ollama pull {ollama_model}")
+        print(f"✗ Ollama not accessible: {ollama.base_url}")
+        print(f"  Run: ollama serve")
+        print(f"  Pull: ollama pull {ollama_model}")
         return False
 
 
 def generate_curriculum(
     lessons: list[str] | None = None,
     phase: str | None = None,
-    max_retries: int = 3
+    max_retries: int = 3,
+    ollama_model: str = "llama2:latest"
 ) -> dict:
-    """
-    Generate curriculum lessons.
-
-    Args:
-        lessons: List of lesson IDs to generate, or None for all
-        phase: Phase name to generate, or None
-        max_retries: Maximum retry attempts
-
-    Returns:
-        Generation summary dict
-    """
+    """Generate curriculum lessons."""
     print("=" * 60)
     print("LMU Curriculum Generation")
     print("=" * 60)
@@ -76,46 +59,45 @@ def generate_curriculum(
     print()
 
     # Initialize pipeline
-    pipeline = LessonPipeline(max_retries=max_retries)
+    pipeline = LessonPipeline(max_retries=max_retries, ollama_model=ollama_model)
 
-    # Determine which lessons to generate
+    # Determine lessons
     if phase:
-        # Filter lessons by phase
         lessons = [
             lesson["id"]
             for lesson in pipeline.syllabus.get("lessons", [])
             if lesson.get("phase") == phase
         ]
-        print(f"Generating phase: {phase}")
-        print(f"Lessons in phase: {', '.join(lessons)}")
+        print(f"Phase: {phase}")
+        print(f"Lessons: {', '.join(lessons)}")
     elif lessons:
-        print(f"Generating specific lessons: {', '.join(lessons)}")
+        print(f"Lessons: {', '.join(lessons)}")
     else:
-        print("Generating all lessons")
+        print("All lessons")
         lessons = None
 
     print()
 
-    # Generate curriculum
+    # Generate
     summary = pipeline.generate_curriculum(lesson_ids=lessons)
 
     print()
     print("=" * 60)
-    print("Generation Complete")
+    print("Complete")
     print("=" * 60)
-    print(f"Total lessons: {summary['total_lessons']}")
+    print(f"Total: {summary['total_lessons']}")
     print(f"Passed: {summary['lessons_passed']}")
     print(f"Failed: {summary['lessons_failed']}")
     print()
 
-    # Write summary to file
+    # Write summary
     summary_file = Path("celaya/lmu/artifacts/generation_summary.json")
     summary_file.parent.mkdir(parents=True, exist_ok=True)
 
     with open(summary_file, 'w') as f:
         json.dump(summary, f, indent=2)
 
-    print(f"Summary written to: {summary_file}")
+    print(f"Summary: {summary_file}")
 
     return summary
 
@@ -248,18 +230,19 @@ Examples:
         summary = generate_curriculum(
             lessons=lesson_list,
             phase=args.phase,
-            max_retries=args.max_retries
+            max_retries=args.max_retries,
+            ollama_model=args.model
         )
 
-        # Exit with appropriate code
+        # Exit
         if summary.get("lessons_failed", 0) > 0:
             print()
-            print("⚠ Some lessons failed. Check receipts for details.")
-            print(f"  Receipts: celaya/lmu/artifacts/receipts.jsonl")
+            print("⚠ Failures. Check receipts.")
+            print(f"  {Path('celaya/lmu/artifacts/receipts.jsonl').absolute()}")
             sys.exit(1)
         else:
             print()
-            print("✓ All lessons generated successfully")
+            print("✓ Success")
             sys.exit(0)
 
     except KeyboardInterrupt:
