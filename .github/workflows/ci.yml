@@ -7,7 +7,7 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
