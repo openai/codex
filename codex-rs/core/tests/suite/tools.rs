@@ -10,6 +10,7 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::sandboxing::SandboxPermissions;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -105,7 +106,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     let first_args = json!({
         "command": command,
         "timeout_ms": 1_000,
-        "with_escalated_permissions": true,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
     });
     let second_args = json!({
         "command": command,
@@ -414,7 +415,10 @@ async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
-        config.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        config
+            .sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
 
@@ -507,7 +511,9 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|cfg| {
-        cfg.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        cfg.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
 

@@ -27,7 +27,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
     }
 
     let mut builder = test_codex().with_config(|config| {
-        let policy_path = config.codex_home.join("policy").join("policy.codexpolicy");
+        let policy_path = config.codex_home.join("rules").join("policy.rules");
         fs::create_dir_all(
             policy_path
                 .parent()

@@ -71,25 +71,6 @@ No special Git commands, email attachments, or commit footers required.
 
 The **DCO check** blocks merges until every commit in the PR carries the footer (with squash this is just the one).
 
-### Releasing `codex`
-
-_For admins only._
-
-Make sure you are on `main` and have no local changes. Then run:
-
-```shell
-VERSION=0.2.0  # Can also be 0.2.0-alpha.1 or any valid Rust version.
-./codex-rs/scripts/create_github_release.sh "$VERSION"
-```
-
-This will make a local commit on top of `main` with `version` set to `$VERSION` in `codex-rs/Cargo.toml` (note that on `main`, we leave the version as `version = "0.0.0"`).
-
-This will push the commit using the tag `rust-v${VERSION}`, which in turn kicks off [the release workflow](../.github/workflows/rust-release.yml). This will create a new GitHub Release named `$VERSION`.
-
-If everything looks good in the generated GitHub Release, uncheck the **pre-release** box so it is the latest release.
-
-Create a PR to update [`Cask/c/codex.rb`](https://github.com/Homebrew/homebrew-cask/blob/main/Formula/c/codex.rb) on Homebrew.
-
 ### Security & responsible AI
 
 Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.

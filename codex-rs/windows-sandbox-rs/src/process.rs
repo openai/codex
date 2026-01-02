@@ -1,5 +1,6 @@
 use crate::logging;
 use crate::winutil::format_last_error;
+use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -15,17 +16,8 @@ use windows_sys::Win32::System::Console::GetStdHandle;
 use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
-use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
-use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
-use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
-use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
-use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
-use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
-use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
@@ -49,36 +41,6 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     w
 }
 
-fn quote_arg(a: &str) -> String {
-    let needs_quote = a.is_empty() || a.chars().any(|ch| ch.is_whitespace() || ch == '"');
-    if !needs_quote {
-        return a.to_string();
-    }
-    let mut out = String::from("\"");
-    let mut bs: usize = 0;
-    for ch in a.chars() {
-        if (ch as u32) == 92 {
-            bs += 1;
-            continue;
-        }
-        if ch == '"' {
-            out.push_str(&"\\".repeat(bs * 2 + 1));
-            out.push('"');
-            bs = 0;
-            continue;
-        }
-        if bs > 0 {
-            out.push_str(&"\\".repeat(bs * 2));
-            bs = 0;
-        }
-        out.push(ch);
-    }
-    if bs > 0 {
-        out.push_str(&"\\".repeat(bs * 2));
-    }
-    out.push('"');
-    out
-}
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         let h = GetStdHandle(kind);
@@ -96,16 +58,20 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     Ok(())
 }
 
+/// # Safety
+/// Caller must provide a valid primary token handle (`h_token`) with appropriate access,
+/// and the `argv`, `cwd`, and `env_map` must remain valid for the duration of the call.
 pub unsafe fn create_process_as_user(
     h_token: HANDLE,
     argv: &[String],
     cwd: &Path,
     env_map: &HashMap<String, String>,
     logs_base_dir: Option<&Path>,
+    stdio: Option<(HANDLE, HANDLE, HANDLE)>,
 ) -> Result<(PROCESS_INFORMATION, STARTUPINFOW)> {
     let cmdline_str = argv
         .iter()
-        .map(|a| quote_arg(a))
+        .map(|a| quote_windows_arg(a))
         .collect::<Vec<_>>()
         .join(" ");
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
@@ -117,15 +83,37 @@ pub unsafe fn create_process_as_user(
     // Point explicitly at the interactive desktop.
     let desktop = to_wide("Winsta0\\Default");
     si.lpDesktop = desktop.as_ptr() as *mut u16;
-    ensure_inheritable_stdio(&mut si)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+    // Ensure handles are inheritable when custom stdio is supplied.
+    let inherit_handles = match stdio {
+        Some((stdin_h, stdout_h, stderr_h)) => {
+            si.dwFlags |= STARTF_USESTDHANDLES;
+            si.hStdInput = stdin_h;
+            si.hStdOutput = stdout_h;
+            si.hStdError = stderr_h;
+            for h in [stdin_h, stdout_h, stderr_h] {
+                if SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
+                    return Err(anyhow!(
+                        "SetHandleInformation failed for stdio handle: {}",
+                        GetLastError()
+                    ));
+                }
+            }
+            true
+        }
+        None => {
+            ensure_inheritable_stdio(&mut si)?;
+            true
+        }
+    };
+
     let ok = CreateProcessAsUserW(
         h_token,
         std::ptr::null(),
         cmdline.as_mut_ptr(),
         std::ptr::null_mut(),
         std::ptr::null_mut(),
-        1,
+        inherit_handles as i32,
         CREATE_UNICODE_ENVIRONMENT,
         env_block.as_ptr() as *mut c_void,
         to_wide(cwd).as_ptr(),
@@ -147,48 +135,4 @@ pub unsafe fn create_process_as_user(
         return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
     }
     Ok((pi, si))
-}
-
-pub unsafe fn wait_process_and_exitcode(pi: &PROCESS_INFORMATION) -> Result<i32> {
-    let res = WaitForSingleObject(pi.hProcess, INFINITE);
-    if res != 0 {
-        return Err(anyhow!("WaitForSingleObject failed: {}", GetLastError()));
-    }
-    let mut code: u32 = 0;
-    if GetExitCodeProcess(pi.hProcess, &mut code) == 0 {
-        return Err(anyhow!("GetExitCodeProcess failed: {}", GetLastError()));
-    }
-    Ok(code as i32)
-}
-
-pub unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
-    let h = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
-    if h == 0 {
-        return Err(anyhow!("CreateJobObjectW failed: {}", GetLastError()));
-    }
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    let ok = SetInformationJobObject(
-        h,
-        JobObjectExtendedLimitInformation,
-        &mut limits as *mut _ as *mut c_void,
-        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-    );
-    if ok == 0 {
-        return Err(anyhow!(
-            "SetInformationJobObject failed: {}",
-            GetLastError()
-        ));
-    }
-    Ok(h)
-}
-
-pub unsafe fn assign_to_job(h_job: HANDLE, h_process: HANDLE) -> Result<()> {
-    if AssignProcessToJobObject(h_job, h_process) == 0 {
-        return Err(anyhow!(
-            "AssignProcessToJobObject failed: {}",
-            GetLastError()
-        ));
-    }
-    Ok(())
 }

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use clap::Parser;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 use crate::get_task::GetTaskResponse;
@@ -28,7 +27,6 @@ pub async fn run_apply_command(
             .config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
-        ConfigOverrides::default(),
     )
     .await?;
 

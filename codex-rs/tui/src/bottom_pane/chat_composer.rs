@@ -43,6 +43,7 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -281,6 +282,85 @@ impl ChatComposer {
         }
     }
 
+    /// Replace the composer content with text from an external editor.
+    /// Clears pending paste placeholders and keeps only attachments whose
+    /// placeholder labels still appear in the new text. Cursor is placed at
+    /// the end after rebuilding elements.
+    pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.pending_pastes.clear();
+
+        // Count placeholder occurrences in the new text.
+        let mut placeholder_counts: HashMap<String, usize> = HashMap::new();
+        for placeholder in self.attached_images.iter().map(|img| &img.placeholder) {
+            if placeholder_counts.contains_key(placeholder) {
+                continue;
+            }
+            let count = text.match_indices(placeholder).count();
+            if count > 0 {
+                placeholder_counts.insert(placeholder.clone(), count);
+            }
+        }
+
+        // Keep attachments only while we have matching occurrences left.
+        let mut kept_images = Vec::new();
+        for img in self.attached_images.drain(..) {
+            if let Some(count) = placeholder_counts.get_mut(&img.placeholder)
+                && *count > 0
+            {
+                *count -= 1;
+                kept_images.push(img);
+            }
+        }
+        self.attached_images = kept_images;
+
+        // Rebuild textarea so placeholders become elements again.
+        self.textarea.set_text("");
+        let mut remaining: HashMap<&str, usize> = HashMap::new();
+        for img in &self.attached_images {
+            *remaining.entry(img.placeholder.as_str()).or_insert(0) += 1;
+        }
+
+        let mut occurrences: Vec<(usize, &str)> = Vec::new();
+        for placeholder in remaining.keys() {
+            for (pos, _) in text.match_indices(placeholder) {
+                occurrences.push((pos, *placeholder));
+            }
+        }
+        occurrences.sort_unstable_by_key(|(pos, _)| *pos);
+
+        let mut idx = 0usize;
+        for (pos, ph) in occurrences {
+            let Some(count) = remaining.get_mut(ph) else {
+                continue;
+            };
+            if *count == 0 {
+                continue;
+            }
+            if pos > idx {
+                self.textarea.insert_str(&text[idx..pos]);
+            }
+            self.textarea.insert_element(ph);
+            *count -= 1;
+            idx = pos + ph.len();
+        }
+        if idx < text.len() {
+            self.textarea.insert_str(&text[idx..]);
+        }
+
+        self.textarea.set_cursor(self.textarea.text().len());
+        self.sync_popups();
+    }
+
+    pub(crate) fn current_text_with_pending(&self) -> String {
+        let mut text = self.textarea.text().to_string();
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        text
+    }
+
     /// Override the footer hint items displayed beneath the composer. Passing
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
@@ -320,7 +400,8 @@ impl ChatComposer {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "image".to_string());
-        let placeholder = format!("[{file_label} {width}x{height}]");
+        let base_placeholder = format!("{file_label} {width}x{height}");
+        let placeholder = self.next_image_placeholder(&base_placeholder);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
@@ -380,6 +461,22 @@ impl ChatComposer {
             base
         } else {
             format!("{base} #{next_suffix}")
+        }
+    }
+
+    fn next_image_placeholder(&mut self, base: &str) -> String {
+        let text = self.textarea.text();
+        let mut suffix = 1;
+        loop {
+            let placeholder = if suffix == 1 {
+                format!("[{base}]")
+            } else {
+                format!("[{base} #{suffix}]")
+            };
+            if !text.contains(&placeholder) {
+                return placeholder;
+            }
+            suffix += 1;
         }
     }
 
@@ -799,6 +896,10 @@ impl ChatComposer {
 
     fn skills_enabled(&self) -> bool {
         self.skills.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.skills.as_ref()
     }
 
     /// Extract a token prefixed with `prefix` under the cursor, if any.
@@ -1506,7 +1607,8 @@ impl ChatComposer {
 
         let toggles = matches!(key_event.code, KeyCode::Char('?'))
             && !has_ctrl_or_alt(key_event.modifiers)
-            && self.is_empty();
+            && self.is_empty()
+            && !self.is_in_paste_burst();
 
         if !toggles {
             return false;
@@ -1579,6 +1681,56 @@ impl ChatComposer {
         }
     }
 
+    /// If the cursor is currently within a slash command on the first line,
+    /// extract the command name and the rest of the line after it.
+    /// Returns None if the cursor is outside a slash command.
+    fn slash_command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)> {
+        if !first_line.starts_with('/') {
+            return None;
+        }
+
+        let name_start = 1usize;
+        let name_end = first_line[name_start..]
+            .find(char::is_whitespace)
+            .map(|idx| name_start + idx)
+            .unwrap_or_else(|| first_line.len());
+
+        if cursor > name_end {
+            return None;
+        }
+
+        let name = &first_line[name_start..name_end];
+        let rest_start = first_line[name_end..]
+            .find(|c: char| !c.is_whitespace())
+            .map(|idx| name_end + idx)
+            .unwrap_or(name_end);
+        let rest = &first_line[rest_start..];
+
+        Some((name, rest))
+    }
+
+    /// Heuristic for whether the typed slash command looks like a valid
+    /// prefix for any known command (built-in or custom prompt).
+    /// Empty names only count when there is no extra content after the '/'.
+    fn looks_like_slash_prefix(&self, name: &str, rest_after_name: &str) -> bool {
+        if name.is_empty() {
+            return rest_after_name.is_empty();
+        }
+
+        let builtin_match = built_in_slash_commands()
+            .into_iter()
+            .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
+
+        if builtin_match {
+            return true;
+        }
+
+        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+        self.custom_prompts
+            .iter()
+            .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -1596,17 +1748,10 @@ impl ChatComposer {
         let cursor = self.textarea.cursor();
         let caret_on_first_line = cursor <= first_line_end;
 
-        let is_editing_slash_command_name = if first_line.starts_with('/') && caret_on_first_line {
-            // Compute the end of the initial '/name' token (name may be empty yet).
-            let token_end = first_line
-                .char_indices()
-                .find(|(_, c)| c.is_whitespace())
-                .map(|(i, _)| i)
-                .unwrap_or(first_line.len());
-            cursor <= token_end
-        } else {
-            false
-        };
+        let is_editing_slash_command_name = caret_on_first_line
+            && Self::slash_command_under_cursor(first_line, cursor)
+                .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
+
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
         // as an argument to the command (e.g., "/review @docs/...").
@@ -2125,6 +2270,35 @@ mod tests {
         assert_eq!(composer.textarea.text(), "h?");
         assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
         assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
+    }
+
+    #[test]
+    fn question_mark_does_not_toggle_during_paste_burst() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        for ch in ['h', 'i', '?', 't', 'h', 'e', 'r', 'e'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert!(composer.is_in_paste_burst());
+        assert_eq!(composer.textarea.text(), "");
+
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let _ = composer.flush_paste_burst_if_due();
+
+        assert_eq!(composer.textarea.text(), "hi?there");
+        assert_ne!(composer.footer_mode, FooterMode::ShortcutOverlay);
     }
 
     #[test]
@@ -3107,6 +3281,35 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_image_placeholders_get_suffix() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let path = PathBuf::from("/tmp/image_dup.png");
+        composer.attach_image(path.clone(), 10, 5, "PNG");
+        composer.handle_paste(" ".into());
+        composer.attach_image(path, 10, 5, "PNG");
+
+        let text = composer.textarea.text().to_string();
+        assert!(text.contains("[image_dup.png 10x5]"));
+        assert!(text.contains("[image_dup.png 10x5 #2]"));
+        assert_eq!(
+            composer.attached_images[0].placeholder,
+            "[image_dup.png 10x5]"
+        );
+        assert_eq!(
+            composer.attached_images[1].placeholder,
+            "[image_dup.png 10x5 #2]"
+        );
+    }
+
+    #[test]
     fn image_placeholder_backspace_behaves_like_text_placeholder() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -3876,5 +4079,195 @@ mod tests {
 
         assert_eq!(composer.textarea.text(), "z".repeat(count));
         assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn slash_popup_not_activated_for_slash_space_text_history_like_input() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Simulate history-like content: "/ test"
+        composer.set_text_content("/ test".to_string());
+
+        // After set_text_content -> sync_popups is called; popup should NOT be Command.
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "expected no slash popup for '/ test'"
+        );
+
+        // Up should be handled by history navigation path, not slash popup handler.
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+    }
+
+    #[test]
+    fn slash_popup_activated_for_bare_slash_and_valid_prefixes() {
+        // use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Case 1: bare "/"
+        composer.set_text_content("/".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "bare '/' should activate slash popup"
+        );
+
+        // Case 2: valid prefix "/re" (matches /review, /resume, etc.)
+        composer.set_text_content("/re".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/re' should activate slash popup via prefix match"
+        );
+
+        // Case 3: fuzzy match "/ac" (subsequence of /compact and /feedback)
+        composer.set_text_content("/ac".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/ac' should activate slash popup via fuzzy match"
+        );
+
+        // Case 4: invalid prefix "/zzz" – still allowed to open popup if it
+        // matches no built-in command; our current logic will not open popup.
+        // Verify that explicitly.
+        composer.set_text_content("/zzz".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
+        );
+    }
+
+    #[test]
+    fn apply_external_edit_rebuilds_text_and_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+        composer
+            .pending_pastes
+            .push(("[Pasted]".to_string(), "data".to_string()));
+
+        composer.apply_external_edit(format!("Edited {placeholder} text"));
+
+        assert_eq!(
+            composer.current_text(),
+            format!("Edited {placeholder} text")
+        );
+        assert!(composer.pending_pastes.is_empty());
+        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attached_images[0].placeholder, placeholder);
+        assert_eq!(composer.textarea.cursor(), composer.current_text().len());
+    }
+
+    #[test]
+    fn apply_external_edit_drops_missing_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+
+        composer.apply_external_edit("No images here".to_string());
+
+        assert_eq!(composer.current_text(), "No images here".to_string());
+        assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn current_text_with_pending_expands_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[Pasted Content 5 chars]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer
+            .pending_pastes
+            .push((placeholder.clone(), "hello".to_string()));
+
+        assert_eq!(
+            composer.current_text_with_pending(),
+            "hello".to_string(),
+            "placeholder should expand to actual text"
+        );
+    }
+
+    #[test]
+    fn apply_external_edit_limits_duplicates_to_occurrences() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+
+        composer.apply_external_edit(format!("{placeholder} extra {placeholder}"));
+
+        assert_eq!(
+            composer.current_text(),
+            format!("{placeholder} extra {placeholder}")
+        );
+        assert_eq!(composer.attached_images.len(), 1);
     }
 }

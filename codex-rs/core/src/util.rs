@@ -77,7 +77,7 @@ pub(crate) fn add_retry_jitter_and_buffer(delay: Duration) -> Duration {
 }
 
 pub(crate) fn error_or_panic(message: impl std::string::ToString) {
-    if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
+    if cfg!(debug_assertions) {
         panic!("{}", message.to_string());
     } else {
         error!("{}", message.to_string());

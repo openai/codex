@@ -37,7 +37,7 @@ model_provider = "openai"
 # Reasoning & Verbosity (Responses API capable models)
 ################################################################################
 
-# Reasoning effort: minimal | low | medium | high | xhigh (default: medium; xhigh only on gpt-5.1-codex-max)
+# Reasoning effort: minimal | low | medium | high | xhigh (default: medium; xhigh on gpt-5.1-codex-max and gpt-5.2)
 model_reasoning_effort = "medium"
 
 # Reasoning summary: auto | concise | detailed | none (default: auto)
@@ -49,17 +49,14 @@ model_verbosity = "medium"
 # Force-enable reasoning summaries for current model (default: false)
 model_supports_reasoning_summaries = false
 
-# Force reasoning summary format: none | experimental (default: none)
-model_reasoning_summary_format = "none"
-
 ################################################################################
 # Instruction Overrides
 ################################################################################
 
-# Additional user instructions appended after AGENTS.md. Default: unset.
+# Additional user instructions inject before AGENTS.md. Default: unset.
 # developer_instructions = ""
 
-# Optional legacy base instructions override (prefer AGENTS.md). Default: unset.
+# (Ignored) Optional legacy base instructions override (prefer AGENTS.md). Default: unset.
 # instructions = ""
 
 # Inline override for the history compaction prompt. Default: unset.
@@ -106,8 +103,8 @@ exclude_slash_tmp = false
 [shell_environment_policy]
 # inherit: all (default) | core | none
 inherit = "all"
-# Skip default excludes for names containing KEY/TOKEN (case-insensitive). Default: false
-ignore_default_excludes = false
+# Skip default excludes for names containing KEY/SECRET/TOKEN (case-insensitive). Default: true
+ignore_default_excludes = true
 # Case-insensitive glob patterns to remove (e.g., "AWS_*", "AZURE_*"). Default: []
 exclude = []
 # Explicit key/value overrides (always win). Default: {}
@@ -214,13 +211,11 @@ view_image = true
 [features]
 # Leave this table empty to accept defaults. Set explicit booleans to opt in/out.
 unified_exec = false
-rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
-experimental_sandbox_command_assessment = false
-ghost_commit = false
 enable_experimental_windows_sandbox = false
+skills = false
 
 ################################################################################
 # Experimental toggles (legacy; prefer [features])
@@ -311,10 +306,9 @@ experimental_use_freeform_apply_patch = false
 # model_reasoning_summary = "auto"
 # model_verbosity = "medium"
 # chatgpt_base_url = "https://chatgpt.com/backend-api/"
-# experimental_compact_prompt_file = "compact_prompt.txt"
+# experimental_compact_prompt_file = "./compact_prompt.txt"
 # include_apply_patch_tool = false
 # experimental_use_freeform_apply_patch = false
-# experimental_sandbox_command_assessment = false
 # tools_web_search = false
 # tools_view_image = true
 # features = { unified_exec = false }

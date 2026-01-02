@@ -8,21 +8,17 @@ use clap::ArgGroup;
 use codex_common::CliConfigOverrides;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::supports_oauth_login;
 
-/// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
-///
 /// Subcommands:
 /// - `serve`  — run the MCP server on stdio
 /// - `list`   — list configured servers (with `--json`)
@@ -40,24 +36,11 @@ pub struct McpCli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum McpSubcommand {
-    /// [experimental] List configured MCP servers.
     List(ListArgs),
-
-    /// [experimental] Show details for a configured MCP server.
     Get(GetArgs),
-
-    /// [experimental] Add a global MCP server entry.
     Add(AddArgs),
-
-    /// [experimental] Remove a global MCP server entry.
     Remove(RemoveArgs),
-
-    /// [experimental] Authenticate with a configured MCP server via OAuth.
-    /// Requires experimental_use_rmcp_client = true in config.toml.
     Login(LoginArgs),
-
-    /// [experimental] Remove stored OAuth credentials for a server.
-    /// Requires experimental_use_rmcp_client = true in config.toml.
     Logout(LogoutArgs),
 }
 
@@ -200,7 +183,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+    let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
 
@@ -283,24 +266,17 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     {
         match supports_oauth_login(&url).await {
             Ok(true) => {
-                if !config.features.enabled(Feature::RmcpClient) {
-                    println!(
-                        "MCP server supports login. Add `experimental_use_rmcp_client = true` \
-                         to your config.toml and run `codex mcp login {name}` to login."
-                    );
-                } else {
-                    println!("Detected OAuth support. Starting OAuth flow…");
-                    perform_oauth_login(
-                        &name,
-                        &url,
-                        config.mcp_oauth_credentials_store_mode,
-                        http_headers.clone(),
-                        env_http_headers.clone(),
-                        &Vec::new(),
-                    )
-                    .await?;
-                    println!("Successfully logged in.");
-                }
+                println!("Detected OAuth support. Starting OAuth flow…");
+                perform_oauth_login(
+                    &name,
+                    &url,
+                    config.mcp_oauth_credentials_store_mode,
+                    http_headers.clone(),
+                    env_http_headers.clone(),
+                    &Vec::new(),
+                )
+                .await?;
+                println!("Successfully logged in.");
             }
             Ok(false) => {}
             Err(_) => println!(
@@ -349,15 +325,9 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+    let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
-
-    if !config.features.enabled(Feature::RmcpClient) {
-        bail!(
-            "OAuth login is only supported when [features].rmcp_client is true in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
-        );
-    }
 
     let LoginArgs { name, scopes } = login_args;
 
@@ -392,7 +362,7 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+    let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
 
@@ -421,7 +391,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+    let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
 
@@ -678,7 +648,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+    let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
 

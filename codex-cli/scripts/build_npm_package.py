@@ -20,9 +20,14 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": ["codex"],
 }
+WINDOWS_ONLY_COMPONENTS: dict[str, list[str]] = {
+    "codex": ["codex-windows-sandbox-setup", "codex-command-runner"],
+}
 COMPONENT_DEST_DIR: dict[str, str] = {
     "codex": "codex",
     "codex-responses-api-proxy": "codex-responses-api-proxy",
+    "codex-windows-sandbox-setup": "codex",
+    "codex-command-runner": "codex",
     "rg": "path",
 }
 
@@ -103,7 +108,7 @@ def main() -> int:
                     "pointing to a directory containing pre-installed binaries."
                 )
 
-            copy_native_binaries(vendor_src, staging_dir, native_components)
+            copy_native_binaries(vendor_src, staging_dir, package, native_components)
 
         if release_version:
             staging_dir_str = str(staging_dir)
@@ -232,7 +237,12 @@ def stage_codex_sdk_sources(staging_dir: Path) -> None:
         shutil.copy2(license_src, staging_dir / "LICENSE")
 
 
-def copy_native_binaries(vendor_src: Path, staging_dir: Path, components: list[str]) -> None:
+def copy_native_binaries(
+    vendor_src: Path,
+    staging_dir: Path,
+    package: str,
+    components: list[str],
+) -> None:
     vendor_src = vendor_src.resolve()
     if not vendor_src.exists():
         raise RuntimeError(f"Vendor source directory not found: {vendor_src}")
@@ -249,6 +259,9 @@ def copy_native_binaries(vendor_src: Path, staging_dir: Path, components: list[s
     for target_dir in vendor_src.iterdir():
         if not target_dir.is_dir():
             continue
+
+        if "windows" in target_dir.name:
+            components_set.update(WINDOWS_ONLY_COMPONENTS.get(package, []))
 
         dest_target_dir = vendor_dest / target_dir.name
         dest_target_dir.mkdir(parents=True, exist_ok=True)

@@ -2,9 +2,20 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 const LOG_COMMAND_PREVIEW_LIMIT: usize = 200;
-pub const LOG_FILE_NAME: &str = "sandbox_commands.rust.log";
+pub const LOG_FILE_NAME: &str = "sandbox.log";
+
+fn exe_label() -> &'static str {
+    static LABEL: OnceLock<String> = OnceLock::new();
+    LABEL.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "proc".to_string())
+    })
+}
 
 fn preview(command: &[String]) -> String {
     let joined = command.join(" ");
@@ -35,17 +46,17 @@ fn append_line(line: &str, base_dir: Option<&Path>) {
 
 pub fn log_start(command: &[String], base_dir: Option<&Path>) {
     let p = preview(command);
-    append_line(&format!("START: {p}"), base_dir);
+    log_note(&format!("START: {p}"), base_dir);
 }
 
 pub fn log_success(command: &[String], base_dir: Option<&Path>) {
     let p = preview(command);
-    append_line(&format!("SUCCESS: {p}"), base_dir);
+    log_note(&format!("SUCCESS: {p}"), base_dir);
 }
 
 pub fn log_failure(command: &[String], detail: &str, base_dir: Option<&Path>) {
     let p = preview(command);
-    append_line(&format!("FAILURE: {p} ({detail})"), base_dir);
+    log_note(&format!("FAILURE: {p} ({detail})"), base_dir);
 }
 
 // Debug logging helper. Emits only when SBX_DEBUG=1 to avoid noisy logs.
@@ -56,7 +67,8 @@ pub fn debug_log(msg: &str, base_dir: Option<&Path>) {
     }
 }
 
-// Unconditional note logging to sandbox_commands.rust.log
+// Unconditional note logging to sandbox.log
 pub fn log_note(msg: &str, base_dir: Option<&Path>) {
-    append_line(msg, base_dir);
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    append_line(&format!("[{ts} {}] {}", exe_label(), msg), base_dir);
 }

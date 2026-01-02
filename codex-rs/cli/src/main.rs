@@ -25,6 +25,7 @@ use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::update_action::UpdateAction;
+use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -37,7 +38,13 @@ use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::features::Feature;
+use codex_core::features::FeatureOverrides;
+use codex_core::features::Features;
 use codex_core::features::is_known_feature_key;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Codex CLI
 ///
@@ -422,7 +429,7 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     use codex_core::features::Stage;
     match stage {
         Stage::Experimental => "experimental",
-        Stage::Beta => "beta",
+        Stage::Beta { .. } => "beta",
         Stage::Stable => "stable",
         Stage::Deprecated => "deprecated",
         Stage::Removed => "removed",
@@ -462,7 +469,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
             );
-            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
@@ -517,7 +524,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 all,
                 config_overrides,
             );
-            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
@@ -643,7 +650,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     ..Default::default()
                 };
 
-                let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+                let config = Config::load_with_cli_overrides_and_harness_overrides(
+                    cli_kv_overrides,
+                    overrides,
+                )
+                .await?;
                 for def in codex_core::features::FEATURES.iter() {
                     let name = def.key;
                     let stage = stage_str(def.stage);
@@ -666,6 +677,46 @@ fn prepend_config_flags(
     subcommand_config_overrides
         .raw_overrides
         .splice(0..0, cli_config_overrides.raw_overrides);
+}
+
+/// Run the interactive Codex TUI, dispatching to either the legacy implementation or the
+/// experimental TUI v2 shim based on feature flags resolved from config.
+async fn run_interactive_tui(
+    interactive: TuiCli,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+) -> std::io::Result<AppExitInfo> {
+    if is_tui2_enabled(&interactive).await? {
+        let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
+        Ok(result.into())
+    } else {
+        codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
+    }
+}
+
+/// Returns `Ok(true)` when the resolved configuration enables the `tui2` feature flag.
+///
+/// This performs a lightweight config load (honoring the same precedence as the lower-level TUI
+/// bootstrap: `$CODEX_HOME`, config.toml, profile, and CLI `-c` overrides) solely to decide which
+/// TUI frontend to launch. The full configuration is still loaded later by the interactive TUI.
+async fn is_tui2_enabled(cli: &TuiCli) -> std::io::Result<bool> {
+    let raw_overrides = cli.config_overrides.raw_overrides.clone();
+    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let cli_kv_overrides = overrides_cli
+        .parse_overrides()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let codex_home = find_codex_home()?;
+    let cwd = cli.cwd.clone();
+    let config_cwd = match cwd.as_deref() {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+    let config_toml =
+        load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_kv_overrides).await?;
+    let config_profile = config_toml.get_config_profile(cli.config_profile.clone())?;
+    let overrides = FeatureOverrides::default();
+    let features = Features::from_config(&config_toml, &config_profile, overrides);
+    Ok(features.enabled(Feature::Tui2))
 }
 
 /// Build the final `TuiCli` for a `codex resume` invocation.

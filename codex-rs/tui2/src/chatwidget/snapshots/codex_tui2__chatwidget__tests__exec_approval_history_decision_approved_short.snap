@@ -1,0 +1,5 @@
+---
+source: tui2/src/chatwidget/tests.rs
+expression: lines_to_single_string(&decision)
+---
+✔ You approved codex to run echo hello world this time

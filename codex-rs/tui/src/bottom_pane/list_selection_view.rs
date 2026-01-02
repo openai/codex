@@ -40,9 +40,11 @@ pub(crate) struct SelectionItem {
     pub description: Option<String>,
     pub selected_description: Option<String>,
     pub is_current: bool,
+    pub is_default: bool,
     pub actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
+    pub disabled_reason: Option<String>,
 }
 
 pub(crate) struct SelectionViewParams {
@@ -187,11 +189,14 @@ impl ListSelectionView {
                     let is_selected = self.state.selected_idx == Some(visible_idx);
                     let prefix = if is_selected { '›' } else { ' ' };
                     let name = item.name.as_str();
-                    let name_with_marker = if item.is_current {
-                        format!("{name} (current)")
+                    let marker = if item.is_current {
+                        " (current)"
+                    } else if item.is_default {
+                        " (default)"
                     } else {
-                        item.name.clone()
+                        ""
                     };
+                    let name_with_marker = format!("{name}{marker}");
                     let n = visible_idx + 1;
                     let wrap_prefix = if self.is_searchable {
                         // The number keys don't work when search is enabled (since we let the
@@ -213,6 +218,7 @@ impl ListSelectionView {
                         match_indices: None,
                         description,
                         wrap_indent,
+                        disabled_reason: item.disabled_reason.clone(),
                     }
                 })
             })
@@ -224,6 +230,7 @@ impl ListSelectionView {
         self.state.move_up_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
+        self.skip_disabled_up();
     }
 
     fn move_down(&mut self) {
@@ -231,12 +238,14 @@ impl ListSelectionView {
         self.state.move_down_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
+        self.skip_disabled_down();
     }
 
     fn accept(&mut self) {
         if let Some(idx) = self.state.selected_idx
             && let Some(actual_idx) = self.filtered_indices.get(idx)
             && let Some(item) = self.items.get(*actual_idx)
+            && item.disabled_reason.is_none()
         {
             self.last_selected_actual_idx = Some(*actual_idx);
             for act in &item.actions {
@@ -262,6 +271,40 @@ impl ListSelectionView {
 
     fn rows_width(total_width: u16) -> u16 {
         total_width.saturating_sub(2)
+    }
+
+    fn skip_disabled_down(&mut self) {
+        let len = self.visible_len();
+        for _ in 0..len {
+            if let Some(idx) = self.state.selected_idx
+                && let Some(actual_idx) = self.filtered_indices.get(idx)
+                && self
+                    .items
+                    .get(*actual_idx)
+                    .is_some_and(|item| item.disabled_reason.is_some())
+            {
+                self.state.move_down_wrap(len);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn skip_disabled_up(&mut self) {
+        let len = self.visible_len();
+        for _ in 0..len {
+            if let Some(idx) = self.state.selected_idx
+                && let Some(actual_idx) = self.filtered_indices.get(idx)
+                && self
+                    .items
+                    .get(*actual_idx)
+                    .is_some_and(|item| item.disabled_reason.is_some())
+            {
+                self.state.move_up_wrap(len);
+            } else {
+                break;
+            }
+        }
     }
 }
 
@@ -344,6 +387,10 @@ impl BottomPaneView for ListSelectionView {
                     .map(|d| d as usize)
                     .and_then(|d| d.checked_sub(1))
                     && idx < self.items.len()
+                    && self
+                        .items
+                        .get(idx)
+                        .is_some_and(|item| item.disabled_reason.is_none())
                 {
                     self.state.selected_idx = Some(idx);
                     self.accept();

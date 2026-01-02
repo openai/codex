@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
+use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
@@ -136,6 +137,11 @@ pub(crate) enum AppEvent {
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
 
+    /// Update feature flags and persist them to the top-level config.
+    UpdateFeatureFlags {
+        updates: Vec<(Feature, bool)>,
+    },
+
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),
 
@@ -158,7 +164,8 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {
-        migration_config: String,
+        from_model: String,
+        to_model: String,
     },
 
     /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.
@@ -266,6 +273,9 @@ pub(crate) enum AppEvent {
     SecurityReviewFailed {
         error: SecurityReviewFailure,
     },
+
+    /// Launch the external editor after a normal draw has completed.
+    LaunchExternalEditor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

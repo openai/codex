@@ -21,4 +21,10 @@ pub enum UserInput {
     LocalImage {
         path: std::path::PathBuf,
     },
+
+    /// Skill selected by the user (name + path to SKILL.md).
+    Skill {
+        name: String,
+        path: std::path::PathBuf,
+    },
 }
