@@ -14,8 +14,30 @@ export type ChatBlock =
       type: "image";
       title: string;
       src: string;
+      // Offloaded images omit `src` and use `imageKey` to request data on-demand.
+      imageKey?: string;
+      mimeType?: string;
+      byteLength?: number;
+      autoLoad?: boolean;
       alt: string;
       caption: string | null;
+      role: "user" | "assistant" | "tool" | "system";
+    }
+  | {
+      id: string;
+      type: "imageGallery";
+      title: string;
+      images: Array<{
+        title: string;
+        src: string;
+        // Offloaded images omit `src` and use `imageKey` to request data on-demand.
+        imageKey?: string;
+        mimeType?: string;
+        byteLength?: number;
+        autoLoad?: boolean;
+        alt: string;
+        caption: string | null;
+      }>;
       role: "user" | "assistant" | "tool" | "system";
     }
   | { id: string; type: "info"; title: string; text: string }
@@ -700,6 +722,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .imageTitle { font-weight: 600; font-size: 12px; opacity: 0.8; }
       .imageCaption { font-size: 12px; opacity: 0.7; word-break: break-word; }
       .imageContent { width: 100%; max-width: 100%; height: auto; max-height: var(--cm-chat-image-max-height); object-fit: contain; border-radius: 8px; border: 1px solid rgba(127,127,127,0.25); background: rgba(0,0,0,0.02); }
+      .imageGallery { display: flex; flex-direction: column; gap: 8px; }
+      .imageGallery-user { background: rgba(255,255,255,0.035); border-color: rgba(0, 120, 212, 0.35); }
+      .imageGallery-assistant { background: rgba(0,0,0,0.06); }
+      .imageGallery-tool { background: rgba(0, 200, 170, 0.08); }
+      .imageGallery-system { background: rgba(255, 185, 0, 0.12); }
+      .imageGalleryTitle { font-weight: 600; font-size: 12px; opacity: 0.8; }
+      .imageGalleryGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .imageGalleryTile { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .imageGalleryCaption { font-size: 12px; opacity: 0.7; word-break: break-word; }
+      .imageGalleryImage { width: 100%; max-width: 100%; height: auto; max-height: min(240px, var(--cm-chat-image-max-height)); object-fit: contain; border-radius: 8px; border: 1px solid rgba(127,127,127,0.25); background: rgba(0,0,0,0.02); }
       details { border-radius: 10px; border: 1px solid rgba(127,127,127,0.25); padding: 4px 12px; margin: 5px 0; }
       details.notice { background: rgba(127,127,127,0.04); }
       details.notice.info { background: rgba(255,255,255,0.06); }

@@ -285,6 +285,9 @@ export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
   const output = vscode.window.createOutputChannel("Codex UI");
   outputChannel = output;
+  output.appendLine(
+    `[debug] Codex UI extension version=${String(context.extension.packageJSON.version || "")}`,
+  );
   output.appendLine(`[debug] extensionPath=${context.extensionPath}`);
   void loadInitialModelState(output);
 
@@ -1737,18 +1740,69 @@ async function sendUserInput(
     sessionPanels?.addUserMessage(session.id, text);
   }
   if (images.length > 0) {
-    const names = images
-      .map((img) => String(img.name || "").trim())
-      .filter((name) => name.length > 0);
-    const label =
-      names.length > 0
-        ? `Attached ${images.length} image(s): ${names.join(", ")}`
-        : `Attached ${images.length} image(s)`;
-    upsertBlock(session.id, {
-      id: newLocalId("user-images"),
-      type: "note",
-      text: label,
-    });
+    const galleryImages: Array<{
+      title: string;
+      src: string;
+      imageKey: string;
+      mimeType: string;
+      byteLength: number;
+      autoLoad?: boolean;
+      alt: string;
+      caption: string | null;
+    }> = [];
+    const errors: string[] = [];
+
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i]!;
+      const rawName = String(img.name || "").trim();
+      const name = rawName || `image-${i + 1}`;
+      try {
+        const saved = await cacheImageDataUrl({
+          prefix: `user-${session.id}`,
+          dataUrl: img.url,
+        });
+        galleryImages.push({
+          title: name,
+          src: "",
+          imageKey: saved.imageKey,
+          mimeType: saved.mimeType,
+          byteLength: saved.byteLength,
+          autoLoad: true,
+          alt: name,
+          caption: name,
+        });
+      } catch (err) {
+        errors.push(`${name}: ${String(err)}`);
+      }
+    }
+
+    if (galleryImages.length > 0) {
+      const title =
+        galleryImages.length === 1
+          ? "Attached 1 image"
+          : `Attached ${galleryImages.length} images`;
+      upsertBlock(session.id, {
+        id: newLocalId("user-image-gallery"),
+        type: "imageGallery",
+        title,
+        images: galleryImages,
+        role: "user",
+      });
+      enforceSessionImageAutoloadLimit(rt);
+    }
+
+    if (errors.length > 0) {
+      upsertBlock(session.id, {
+        id: newLocalId("user-image-cache-error"),
+        type: "error",
+        title: "Failed to cache input image(s)",
+        text: errors.join("\n"),
+      });
+    }
+
+    outputChannel?.appendLine(
+      `[images] input images: total=${images.length} cached=${galleryImages.length} errors=${errors.length}`,
+    );
   }
   chatView?.refresh();
   schedulePersistRuntime(session.id);
@@ -3319,17 +3373,29 @@ function enforceSessionImageAutoloadLimit(rt: SessionRuntime): void {
   let kept = 0;
   for (let i = rt.blocks.length - 1; i >= 0; i--) {
     const b = rt.blocks[i];
-    if (!b || b.type !== "image") continue;
-    const hasKey =
-      typeof (b as any).imageKey === "string" && (b as any).imageKey;
-    if (!hasKey) continue;
-    if (kept < keep) {
-      (b as any).autoLoad = true;
-      kept += 1;
-    } else {
-      (b as any).autoLoad = false;
-      // Ensure we don't keep a large inline src around for offloaded images.
-      if (typeof (b as any).src === "string") (b as any).src = "";
+    if (!b) continue;
+
+    const refs: any[] =
+      b.type === "image"
+        ? [b as any]
+        : b.type === "imageGallery"
+          ? Array.isArray((b as any).images)
+            ? ((b as any).images as any[])
+            : []
+          : [];
+
+    for (let j = refs.length - 1; j >= 0; j--) {
+      const ref = refs[j];
+      const hasKey = typeof ref?.imageKey === "string" && ref.imageKey;
+      if (!hasKey) continue;
+      if (kept < keep) {
+        ref.autoLoad = true;
+        kept += 1;
+      } else {
+        ref.autoLoad = false;
+        // Ensure we don't keep a large inline src around for offloaded images.
+        if (typeof ref.src === "string") ref.src = "";
+      }
     }
   }
 }

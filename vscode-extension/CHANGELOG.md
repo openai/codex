@@ -4,15 +4,16 @@
 
 ## Unreleased
 
-- Images: MCP image / Image view の表示を安定化（`file+.vscode-resource...` の 401 回避、`blob:` 描画 + CSP、オンデマンド読み込み/オフロード、リサイズ＆圧縮（最大辺 1024px / 目標 350KB）、`globalStorage/images.v2` キャッシュ（件数/容量上限で削除）、Webview Object URL キャッシュ上限（LRU））
-- Mentions: コピペしたログ等に含まれる `@...` をファイル参照として解決できなくても送信をブロックしない（未解決はプレーンテキスト扱い）
-- Mentions: `@selection` は展開できない場合は送信を中断してエラー表示（サイレント送信しない）
+- （未リリースの変更はありません）
+
+## 0.1.13
+
+- 画像: 入力画像をチャット履歴にギャラリー表示（横2列、`imageKey` でオフロード、`SESSION_IMAGE_AUTOLOAD_RECENT=24` 枚のみ自動ロード）。表示時に縮小＆圧縮（最大辺 1024px / 目標 350KB）＋ Webview Object URL キャッシュ（LRU）
+- 画像: MCP image / Image view の表示を安定化（`file+.vscode-resource...` の 401 回避、`blob:` 描画 + CSP、オンデマンド読み込み/オフロード、`globalStorage/images.v2` キャッシュ（件数/容量上限で削除）、Webview Object URL キャッシュ上限（LRU））
+- Mentions: `@selection` のみ展開。展開できない場合は送信を中断してエラー表示（サイレント送信しない）。その他の `@...` は解決せずプレーンテキストとして送信（コピペログ等でブロックしない）
 - ステータス: rate limit（例: `5h:11% wk:7%`）にホバーするとリセット時刻を表示
-- Interrupt: 送信直後など turnId 未確定のタイミングでも Stop/Interrupt が取りこぼされないように修正（turn/started 到達後に割り込みを送る）
-- Interrupt: backend を kill/restart する Force Stop を廃止（workspace 単位で backend を共有しており他セッションも停止するため）。turnId 不明時は `thread/resume` で inProgress の turn を探索して `turn/interrupt` を試行
-- Interrupt: `codexMine.interrupt.forceStopAfterMs` 設定を削除（Force Stop 廃止に伴い不要）
-- Backend: backend停止時の streamState クリーンアップ不具合を修正（スレッド単位で削除）
-- Backend: backend が外部要因で終了しても、セッションの `sending`/承認待ち状態が残らないように UI 状態を同期
+- Interrupt: turnId 未確定でも Stop/Interrupt を取りこぼさない（turn/started 到達後に割り込み送信）。turnId 不明時は `thread/resume` で inProgress turn を探索して `turn/interrupt` を試行。backend kill/restart の Force Stop は廃止（`codexMine.interrupt.forceStopAfterMs` も削除）
+- Backend: backend 停止/終了時に thread/streamState などのキャッシュをクリーンアップし、セッションの `sending`/承認待ち状態を同期して残さない
 - Agents: agents（subagents）の一覧/候補取得をローカル走査（`.codex/agents` / `$CODEX_HOME/agents`）で提供
 
 ## 0.1.12

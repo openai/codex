@@ -42,6 +42,23 @@ type ChatBlock =
       caption: string | null;
       role: "user" | "assistant" | "tool" | "system";
     }
+  | {
+      id: string;
+      type: "imageGallery";
+      title: string;
+      images: Array<{
+        title: string;
+        src: string;
+        // Offloaded images omit `src` and use `imageKey` to request data on-demand.
+        imageKey?: string;
+        mimeType?: string;
+        byteLength?: number;
+        autoLoad?: boolean;
+        alt: string;
+        caption: string | null;
+      }>;
+      role: "user" | "assistant" | "tool" | "system";
+    }
   | { id: string; type: "info"; title: string; text: string }
   | { id: string; type: "webSearch"; query: string; status: string }
   | {
@@ -838,14 +855,23 @@ function main(): void {
     });
   }
 
+  type OffloadableImageRef = {
+    imageKey?: string;
+    src: string;
+    mimeType?: string;
+    autoLoad?: boolean;
+    caption: string | null;
+  };
+
   async function ensureImageRendered(
-    block: Extract<ChatBlock, { type: "image" }>,
+    imageRef: OffloadableImageRef,
     imgEl: HTMLImageElement,
     captionEl: HTMLDivElement,
   ): Promise<void> {
-    const imageKey = typeof block.imageKey === "string" ? block.imageKey : "";
+    const imageKey =
+      typeof imageRef.imageKey === "string" ? imageRef.imageKey : "";
     if (!imageKey) {
-      if (block.src && imgEl.src !== block.src) imgEl.src = block.src;
+      if (imageRef.src && imgEl.src !== imageRef.src) imgEl.src = imageRef.src;
       return;
     }
 
@@ -856,17 +882,17 @@ function main(): void {
       return;
     }
 
-    if (!block.autoLoad) {
+    if (!imageRef.autoLoad) {
       imgEl.removeAttribute("src");
       imgEl.style.cursor = "pointer";
-      const caption = (block.caption || "").trim();
+      const caption = (imageRef.caption || "").trim();
       captionEl.textContent = caption || "画像はオフロードされています（クリックで読み込み）";
       captionEl.style.display = "";
       imgEl.addEventListener(
         "click",
         () => {
-          (block as any).autoLoad = true;
-          void ensureImageRendered(block, imgEl, captionEl);
+          (imageRef as any).autoLoad = true;
+          void ensureImageRendered(imageRef, imgEl, captionEl);
         },
         { once: true },
       );
@@ -885,7 +911,7 @@ function main(): void {
 
     const bytes = await decodeBase64ToBytes(res.base64);
     const mimeType =
-      res.mimeType || (block.mimeType ? String(block.mimeType) : "");
+      res.mimeType || (imageRef.mimeType ? String(imageRef.mimeType) : "");
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
     const rawBlob = new Blob([copy.buffer as ArrayBuffer], {
@@ -902,7 +928,7 @@ function main(): void {
 
     imgEl.style.cursor = "";
     if (imgEl.src !== url) imgEl.src = url;
-    const caption = (block.caption || "").trim();
+    const caption = (imageRef.caption || "").trim();
     captionEl.textContent = caption;
     captionEl.style.display = caption ? "" : "none";
   }
@@ -2232,6 +2258,78 @@ function main(): void {
           captionEl.textContent = `画像の描画に失敗: ${String(err)}`;
           captionEl.style.display = "";
         });
+        continue;
+      }
+
+      if (block.type === "imageGallery") {
+        const key = "b:" + block.id;
+        const div = ensureDiv(
+          key,
+          "msg imageGallery imageGallery-" + String(block.role || "system"),
+        );
+        const titleEl =
+          (div.querySelector('div[data-k="title"]') as HTMLDivElement | null) ??
+          (() => {
+            const t = document.createElement("div");
+            t.dataset.k = "title";
+            t.className = "imageGalleryTitle";
+            div.appendChild(t);
+            return t;
+          })();
+        if (titleEl.textContent !== block.title)
+          titleEl.textContent = block.title;
+
+        const gridEl =
+          (div.querySelector(
+            'div[data-k="grid"]',
+          ) as HTMLDivElement | null) ??
+          (() => {
+            const g = document.createElement("div");
+            g.dataset.k = "grid";
+            g.className = "imageGalleryGrid";
+            div.appendChild(g);
+            return g;
+          })();
+
+        gridEl.replaceChildren();
+        for (let i = 0; i < block.images.length; i++) {
+          const imageRef = block.images[i]!;
+          const tile = document.createElement("div");
+          tile.className = "imageGalleryTile";
+
+          const img =
+            (tile.querySelector(
+              'img[data-k="image"]',
+            ) as HTMLImageElement | null) ??
+            (() => {
+              const im = document.createElement("img");
+              im.dataset.k = "image";
+              im.className = "imageGalleryImage";
+              im.loading = "lazy";
+              tile.appendChild(im);
+              return im;
+            })();
+          img.alt = imageRef.alt || "image";
+
+          const captionEl =
+            (tile.querySelector(
+              'div[data-k="caption"]',
+            ) as HTMLDivElement | null) ??
+            (() => {
+              const c = document.createElement("div");
+              c.dataset.k = "caption";
+              c.className = "imageGalleryCaption";
+              tile.appendChild(c);
+              return c;
+            })();
+
+          void ensureImageRendered(imageRef, img, captionEl).catch((err) => {
+            captionEl.textContent = `画像の描画に失敗: ${String(err)}`;
+            captionEl.style.display = "";
+          });
+
+          gridEl.appendChild(tile);
+        }
         continue;
       }
 
