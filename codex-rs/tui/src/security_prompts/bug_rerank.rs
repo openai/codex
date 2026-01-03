@@ -28,7 +28,11 @@ Instructions:
 - Output severity **only** from ["High","Medium","Low","Informational"]. Map "critical"/"p0" to "High".
 - Produce `risk_score` between 0-100 (higher means greater customer impact) and use the full range for comparability.
 - Review the repository summary, spec excerpt, blame metadata, and file locations before requesting anything new; reuse existing specs or context attachments when possible.
-- If a finding's impact states remote code execution, output severity "High".
+- Determine severity from Impact and Likelihood levels using this deterministic risk matrix:
+  - Convert levels to numbers: High=3, Medium=2, Low=1.
+  - risk = Impact * Likelihood (range 1-9).
+  - 6-9 => severity "High"; 3-4 => "Medium"; 1-2 => "Low".
+  - If the finding's `impact`/`likelihood` fields include explicit levels (e.g., start with "High - ..."), use those; otherwise infer levels from the description and state uncertainty in the reason.
 - If you still lack certainty, request concrete follow-up (e.g., repo_search, read_file, git blame) in the reason and cite the spec section you need.
 - Reference concrete evidence (spec section, tool name, log line) in the reason when you confirm mitigations or reclassify a finding.
 - Prefer reusing existing tool outputs and cached specs before launching new expensive calls; only request fresh tooling when the supplied artifacts truly lack the needed context.

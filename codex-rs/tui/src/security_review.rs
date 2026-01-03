@@ -4650,6 +4650,21 @@ pub async fn run_security_review(
                 summary.severity = summary.severity.trim().to_string();
             }
         }
+        for summary in all_summaries.iter_mut() {
+            if let Some(update) = apply_severity_matrix(summary) {
+                let id = summary.id;
+                let previous = update.previous;
+                let computed = summary.severity.as_str();
+                let impact = update.impact.label();
+                let likelihood = update.likelihood.label();
+                let product = update.product;
+                let message = format!(
+                    "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product})."
+                );
+                record(&mut logs, message.clone());
+                aggregated_logs.push(message);
+            }
+        }
 
         if !all_summaries.is_empty() {
             let mut replacements: HashMap<usize, String> = HashMap::new();
@@ -8179,18 +8194,18 @@ mod bug_dedupe_tests {
 }
 
 #[cfg(test)]
-mod severity_floor_tests {
+mod severity_matrix_tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn make_bug_summary(severity: &str, impact: &str) -> BugSummary {
+    fn make_bug_summary(severity: &str, impact: &str, likelihood: &str) -> BugSummary {
         BugSummary {
             id: 1,
             title: "Example".to_string(),
             file: "x.rs#L1-L2".to_string(),
             severity: severity.to_string(),
             impact: impact.to_string(),
-            likelihood: "x".to_string(),
+            likelihood: likelihood.to_string(),
             recommendation: "x".to_string(),
             blame: None,
             risk_score: None,
@@ -8206,31 +8221,41 @@ mod severity_floor_tests {
     }
 
     #[test]
-    fn upgrades_medium_when_impact_mentions_remote_code_execution() {
+    fn upgrades_medium_when_high_impact_medium_likelihood() {
         let mut summary = make_bug_summary(
             "Medium",
-            "Remote code execution (as the user running the daemon).",
+            "High - Remote code execution in daemon context.",
+            "Medium - Attacker-controlled input via untrusted ciphertext.",
         );
-        let previous = apply_remote_code_execution_severity_floor(&mut summary);
-        assert_eq!(previous.as_deref(), Some("Medium"));
+        let update = apply_severity_matrix(&mut summary).expect("matrix update");
+        assert_eq!(update.previous, "Medium");
+        assert_eq!(update.product, 6);
         assert_eq!(summary.severity, "High");
     }
 
     #[test]
-    fn does_not_upgrade_when_impact_is_not_remote_rce() {
-        let mut summary =
-            make_bug_summary("Medium", "Arbitrary code execution when invoked locally.");
-        let previous = apply_remote_code_execution_severity_floor(&mut summary);
-        assert_eq!(previous, None);
+    fn downgrades_high_when_high_impact_low_likelihood() {
+        let mut summary = make_bug_summary(
+            "High",
+            "High - Arbitrary code execution in daemon context.",
+            "Low - Requires local privileged attacker and unusual configuration.",
+        );
+        let update = apply_severity_matrix(&mut summary).expect("matrix update");
+        assert_eq!(update.previous, "High");
+        assert_eq!(update.product, 3);
         assert_eq!(summary.severity, "Medium");
     }
 
     #[test]
-    fn does_not_upgrade_when_already_high() {
-        let mut summary = make_bug_summary("High", "Remote code execution is possible.");
-        let previous = apply_remote_code_execution_severity_floor(&mut summary);
-        assert_eq!(previous, None);
-        assert_eq!(summary.severity, "High");
+    fn does_not_override_ignore_severity() {
+        let mut summary = make_bug_summary(
+            "Ignore",
+            "High - Remote code execution in daemon context.",
+            "High - Unauthenticated remote reachability.",
+        );
+        let update = apply_severity_matrix(&mut summary);
+        assert!(update.is_none());
+        assert_eq!(summary.severity, "Ignore");
     }
 }
 
@@ -12720,10 +12745,15 @@ async fn rerank_bugs_by_risk(
     }
 
     for summary in summaries.iter_mut() {
-        if let Some(previous) = apply_remote_code_execution_severity_floor(summary) {
+        if let Some(update) = apply_severity_matrix(summary) {
             let id = summary.id;
+            let previous = update.previous;
+            let computed = summary.severity.as_str();
+            let impact = update.impact.label();
+            let likelihood = update.likelihood.label();
+            let product = update.product;
             logs.push(format!(
-                "Severity floor: bug #{id} upgraded from {previous} to High (impact mentions remote code execution)."
+                "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product})."
             ));
         }
     }
@@ -12897,21 +12927,99 @@ fn severity_rank(severity: &str) -> usize {
     }
 }
 
-fn impact_mentions_remote_code_execution(impact: &str) -> bool {
-    let lower = impact.trim().to_ascii_lowercase();
-    lower.contains("remote code execution") || (lower.contains("remote") && lower.contains("rce"))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RiskLevel {
+    Low,
+    Medium,
+    High,
 }
 
-fn apply_remote_code_execution_severity_floor(summary: &mut BugSummary) -> Option<String> {
-    if severity_rank(&summary.severity) > severity_rank("High")
-        && impact_mentions_remote_code_execution(&summary.impact)
-    {
-        let previous = summary.severity.clone();
-        summary.severity = "High".to_string();
-        Some(previous)
+impl RiskLevel {
+    const fn weight(self) -> i64 {
+        match self {
+            Self::Low => 1,
+            Self::Medium => 2,
+            Self::High => 3,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+        }
+    }
+}
+
+fn parse_risk_level_prefix(value: &str) -> Option<RiskLevel> {
+    let trimmed = value.trim_start();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    fn starts_with_level(lower: &str, token: &str) -> bool {
+        lower.strip_prefix(token).is_some_and(|rest| {
+            let mut chars = rest.chars();
+            match chars.next() {
+                None => true,
+                Some(ch) => !ch.is_ascii_alphabetic(),
+            }
+        })
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if starts_with_level(&lower, "high") {
+        Some(RiskLevel::High)
+    } else if starts_with_level(&lower, "medium") || starts_with_level(&lower, "med") {
+        Some(RiskLevel::Medium)
+    } else if starts_with_level(&lower, "low") {
+        Some(RiskLevel::Low)
     } else {
         None
     }
+}
+
+struct SeverityMatrixUpdate {
+    previous: String,
+    impact: RiskLevel,
+    likelihood: RiskLevel,
+    product: i64,
+}
+
+fn apply_severity_matrix(summary: &mut BugSummary) -> Option<SeverityMatrixUpdate> {
+    let severity = summary.severity.trim();
+    if severity.eq_ignore_ascii_case("ignore")
+        || severity.eq_ignore_ascii_case("informational")
+        || severity.eq_ignore_ascii_case("info")
+    {
+        return None;
+    }
+
+    let impact = parse_risk_level_prefix(&summary.impact)?;
+    let likelihood = parse_risk_level_prefix(&summary.likelihood)?;
+    let product = impact.weight().saturating_mul(likelihood.weight());
+    let computed = if product >= 6 {
+        "High"
+    } else if product >= 3 {
+        "Medium"
+    } else {
+        "Low"
+    };
+
+    if summary.severity.trim().eq_ignore_ascii_case(computed) {
+        return None;
+    }
+
+    let previous = summary.severity.clone();
+    summary.severity = computed.to_string();
+
+    Some(SeverityMatrixUpdate {
+        previous,
+        impact,
+        likelihood,
+        product,
+    })
 }
 
 fn normalize_severity_label(value: &str) -> Option<String> {
