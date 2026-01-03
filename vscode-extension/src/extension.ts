@@ -1918,138 +1918,34 @@ async function expandMentions(
     const editor = vscode.window.activeTextEditor ?? null;
     const sel = editor?.selection ?? null;
     const selected = sel ? (editor?.document.getText(sel) ?? "") : "";
-    if (!selected.trim()) {
-      return {
-        ok: false,
-        error: "@selection is empty (select a range first).",
-      };
-    }
+    if (selected.trim()) {
+      const folder = resolveWorkspaceFolderForSession(session);
+      const docUri = editor?.document?.uri ?? null;
+      if (folder && docUri) {
+        const folderFsPath = folder.uri.fsPath;
+        const docFsPath = docUri.fsPath;
+        let relPath = path.relative(folderFsPath, docFsPath);
+        relPath = relPath.split(path.sep).join("/");
+        if (relPath && !relPath.startsWith("../") && !path.isAbsolute(relPath)) {
+          const startLine = (sel?.start?.line ?? 0) + 1;
+          let endLine = (sel?.end?.line ?? 0) + 1;
+          const endChar = sel?.end?.character ?? 0;
+          const endLine0 = sel?.end?.line ?? 0;
+          const startLine0 = sel?.start?.line ?? 0;
+          if (endChar === 0 && endLine0 > startLine0) endLine = endLine0;
 
-    const folder = resolveWorkspaceFolderForSession(session);
-    if (!folder) {
-      return {
-        ok: false,
-        error:
-          "Cannot expand @selection because no workspace folder is available.",
-      };
-    }
-
-    const docUri = editor?.document?.uri ?? null;
-    if (!docUri) {
-      return {
-        ok: false,
-        error: "Cannot expand @selection because there is no active editor.",
-      };
-    }
-
-    const folderFsPath = folder.uri.fsPath;
-    const docFsPath = docUri.fsPath;
-    let relPath = path.relative(folderFsPath, docFsPath);
-    relPath = relPath.split(path.sep).join("/");
-    if (!relPath || relPath.startsWith("../") || path.isAbsolute(relPath)) {
-      return {
-        ok: false,
-        error: " file is outside the workspace.",
-      };
-    }
-
-    const startLine = (sel?.start?.line ?? 0) + 1;
-    let endLine = (sel?.end?.line ?? 0) + 1;
-    const endChar = sel?.end?.character ?? 0;
-    const endLine0 = sel?.end?.line ?? 0;
-    const startLine0 = sel?.start?.line ?? 0;
-    if (endChar === 0 && endLine0 > startLine0) endLine = endLine0;
-
-    const range =
-      startLine === endLine ? `#L${startLine}` : `#L${startLine}-L${endLine}`;
-    const replacement = `@${relPath}${range}`;
-    out = out.replaceAll("@selection", replacement);
-  }
-
-  // Support both "@relative/path" and legacy "@file:relative/path".
-  // Match CLI-like rule: token must start at whitespace boundary.
-  const fileRe = /(^|[\s])@([^\s]+)/g;
-  const matches = [...out.matchAll(fileRe)];
-  if (matches.length === 0) return { ok: true, text: out };
-
-  const folder = resolveWorkspaceFolderForSession(session);
-  if (!folder) {
-    return {
-      ok: false,
-      error:
-        "Cannot validate @ mentions because no workspace folder is available.",
-    };
-  }
-
-  const cliVariant =
-    cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
-  const allowAgents = cliVariant === "codex-mine";
-  const agentNamesLower = new Set<string>();
-  if (allowAgents) {
-    const { agents, errors, gitRoot } = await listAgentsFromDisk(
-      folder.uri.fsPath,
-    );
-    if (errors.length > 0) {
-      const header = `[agents] scanned cwd=${folder.uri.fsPath} gitRoot=${gitRoot ?? "(none)"}`;
-      if (!loggedAgentScanErrors.has(header)) {
-        loggedAgentScanErrors.add(header);
-        outputChannel?.appendLine(header);
-      }
-      for (const e of errors) {
-        const line = `[agents] ${e}`;
-        if (loggedAgentScanErrors.has(line)) continue;
-        loggedAgentScanErrors.add(line);
-        outputChannel?.appendLine(line);
+          const range =
+            startLine === endLine
+              ? `#L${startLine}`
+              : `#L${startLine}-L${endLine}`;
+          const replacement = `@${relPath}${range}`;
+          out = out.replaceAll("@selection", replacement);
+        }
       }
     }
-    for (const a of agents) agentNamesLower.add(a.name.toLowerCase());
   }
 
-  const unique = new Set<string>();
-  for (const m of matches) {
-    const raw = m[2];
-    if (!raw) continue;
-    if (raw === "selection") continue;
-
-    const withoutFrag = raw.includes("#") ? (raw.split("#")[0] ?? "") : raw;
-    if (allowAgents && agentNamesLower.has(withoutFrag.toLowerCase())) {
-      continue;
-    }
-    const rel = withoutFrag.toLowerCase().startsWith("file:")
-      ? withoutFrag.slice("file:".length)
-      : withoutFrag;
-    if (rel) unique.add(rel);
-  }
-  if (unique.size === 0) return { ok: true, text: out };
-
-  for (const rel of unique) {
-    if (rel.startsWith("/") || rel.includes(":")) {
-      return {
-        ok: false,
-        error: `@ mentions only support relative paths: ${rel}`,
-      };
-    }
-
-    const uri = vscode.Uri.joinPath(folder.uri, rel);
-    try {
-      const stat = await vscode.workspace.fs.stat(uri);
-      const isFile = (stat.type & vscode.FileType.File) !== 0;
-      const isDir = (stat.type & vscode.FileType.Directory) !== 0;
-      if (!isFile && !isDir) {
-        return {
-          ok: false,
-          error: `@ mentions only support files or directories: ${rel}`,
-        };
-      }
-    } catch (err) {
-      return {
-        ok: false,
-        error: `Failed to resolve @ mention: ${rel} (${String(err)})`,
-      };
-    }
-  }
-
-  // NOTE: @ mentions send file paths only. Do not expand file contents here.
+  // NOTE: Treat unresolved "@" tokens in copied text as plain text.
   return { ok: true, text: out };
 }
 
