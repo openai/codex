@@ -52,7 +52,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     }
 
     // Build git args
-    let mut args: Vec<String> = vec!["apply".into(), "--3way".into()];
+    let mut args: Vec<String> = vec!["apply".into()];
     if req.revert {
         args.push("-R".into());
     }
@@ -711,5 +711,33 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             !r2.cmd_for_log.contains("--check"),
             "non-preflight path should not use --check"
         );
+    }
+
+    #[test]
+    fn apply_does_not_stage_files() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        // Seed file and commit original content
+        std::fs::write(root.join("file.txt"), "orig\n").unwrap();
+        let _ = run(root, &["git", "add", "file.txt"]);
+        let _ = run(root, &["git", "commit", "-m", "seed"]);
+
+        // Apply patch: orig -> ORIG
+        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+ORIG\n";
+        let apply_req = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.to_string(),
+            revert: false,
+            preflight: false,
+        };
+        let res_apply = apply_git_patch(&apply_req).expect("apply ok");
+        assert_eq!(res_apply.exit_code, 0, "apply succeeded");
+        let after_apply = read_file_normalized(&root.join("file.txt"));
+        assert_eq!(after_apply, "ORIG\n");
+
+        // Verify file is NOT staged (should be empty)
+        let (_code, staged, _stderr) = run(root, &["git", "diff", "--cached", "--name-only"]);
+        assert_eq!(staged.trim(), "", "applied file should not be staged");
     }
 }
