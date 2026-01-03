@@ -48,13 +48,13 @@ macOS/Linux 向けに GitHub Releases に prebuilt バイナリ（`codex-<target
 
 このドキュメントでは、`$CODEX_HOME` 配下を **user** と呼ぶ（例: user（`$CODEX_HOME`）/`config.toml`）。
 
-| 対象                  | 置き場所                                             | 読み込み/優先順位                                                                                                                                                                  | 更新方法                                                                                  | 備考                                                                                                                                                                           |
-| --------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `config.toml`         | `cwd/.codex/config.toml` / user（`$CODEX_HOME`）/`config.toml` | **`cwd/.codex/config.toml` が存在する場合、user（`$CODEX_HOME`）/`config.toml` は読み込まない**（Codex-Mine方針）。その上に managed config / CLI overrides が乗る。                | 手編集                                                                                    | dotenv は `cwd/.codex/.env` があればそれのみ読み込み、無ければ user（`$CODEX_HOME`）/`.env` を読む（dotenv から `CODEX_` は読まない）。                                        |
-| `mcp_servers`（MCP）  | `cwd/.codex/config.toml` / user（`$CODEX_HOME`）/`config.toml` | cwd-local `config.toml` がある場合は **global 側が読み込まれない**ため、cwd-local の `mcp_servers` のみが有効。                                                                    | `codex mcp add/remove` は **常に** user（`$CODEX_HOME`）/`config.toml` を更新。cwd-local は手編集。 | `codex mcp` は cwd-local には書かない（`-g/--global` フラグもない）。cwd-local `config.toml` がある場合、`codex mcp add/remove` の変更はその作業ディレクトリでは反映されない。 |
-| `prompts`             | `repo/.codex/prompts/` / user（`$CODEX_HOME`）/`prompts/`      | `<git root>/.codex/prompts` → user（`$CODEX_HOME`）/`prompts` の順に探索し、同名は repo 側が優先。                                                                                 | 追加/編集/削除（`.md`）                                                                   | `.md` のみ対象。                                                                                                                                                               |
-| `skills`              | `repo/.codex/skills/` / user（`$CODEX_HOME`）/`skills/`        | **repo-local からの読み込みに対応済み**。git repo 内では `cwd` から repo root までの間で最初に見つかった `.codex/skills` を優先し、次に user（`$CODEX_HOME`）/`skills`（→ system → admin）。 | 追加/編集/削除（`SKILL.md`）                                                              | 同名 skill は repo が優先で dedupe。                                                                                                                                           |
-| `agents`（subagents） | `<git root>/.codex/agents/` / user（`$CODEX_HOME`）/`agents/`  | `./.codex/config.toml` の `[agents].sources` で探索順を指定（デフォルトは `["repo", "user"]`）。同名は `sources` 順に **先勝ち**。                                                  | 追加/編集/削除（`<name>.md`）                                                             | skills と違い、subagents は「最寄り `.codex`」探索はしない（repo は `<git root>` 固定）。                                                                                      |
+| 対象                  | 置き場所                                                       | 読み込み/優先順位                                                                                                                                                                            | 更新方法                                                                                            | 備考                                                                                                                                                                           |
+| --------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `config.toml`         | `cwd/.codex/config.toml` / user（`$CODEX_HOME`）/`config.toml` | **`cwd/.codex/config.toml` が存在する場合、user（`$CODEX_HOME`）/`config.toml` は読み込まない**（Codex-Mine方針）。その上に managed config / CLI overrides が乗る。                          | 手編集                                                                                              | dotenv は `cwd/.codex/.env` があればそれのみ読み込み、無ければ user（`$CODEX_HOME`）/`.env` を読む（dotenv から `CODEX_` は読まない）。                                        |
+| `mcp_servers`（MCP）  | `cwd/.codex/config.toml` / user（`$CODEX_HOME`）/`config.toml` | cwd-local `config.toml` がある場合は **global 側が読み込まれない**ため、cwd-local の `mcp_servers` のみが有効。                                                                              | `codex mcp add/remove` は **常に** user（`$CODEX_HOME`）/`config.toml` を更新。cwd-local は手編集。 | `codex mcp` は cwd-local には書かない（`-g/--global` フラグもない）。cwd-local `config.toml` がある場合、`codex mcp add/remove` の変更はその作業ディレクトリでは反映されない。 |
+| `prompts`             | `repo/.codex/prompts/` / user（`$CODEX_HOME`）/`prompts/`      | `<git root>/.codex/prompts` → user（`$CODEX_HOME`）/`prompts` の順に探索し、同名は repo 側が優先。                                                                                           | 追加/編集/削除（`.md`）                                                                             | `.md` のみ対象。                                                                                                                                                               |
+| `skills`              | `repo/.codex/skills/` / user（`$CODEX_HOME`）/`skills/`        | **repo-local からの読み込みに対応済み**。git repo 内では `cwd` から repo root までの間で最初に見つかった `.codex/skills` を優先し、次に user（`$CODEX_HOME`）/`skills`（→ system → admin）。 | 追加/編集/削除（`SKILL.md`）                                                                        | 同名 skill は repo が優先で dedupe。                                                                                                                                           |
+| `agents`（subagents） | `<git root>/.codex/agents/` / user（`$CODEX_HOME`）/`agents/`  | `./.codex/config.toml` の `[agents].sources` で探索順を指定（デフォルトは `["repo", "user"]`）。同名は `sources` 順に **先勝ち**。                                                           | 追加/編集/削除（`<name>.md`）                                                                       | skills と違い、subagents は「最寄り `.codex`」探索はしない（repo は `<git root>` 固定）。                                                                                      |
 
 #### `config.toml` / `.env` の upstream との差分（重要）
 
@@ -92,7 +92,7 @@ Codex-Mine では `config.toml` に `[[hooks]]` を定義して、内部イベ�
 
 - 設定場所: `cwd/.codex/config.toml`（存在する場合は user（`$CODEX_HOME`）/`config.toml` は読み込まれないため、hooks も「マージ」されず二重発火しない）
 - スクリプト置き場例: `cwd/.codex/hooks/*.py`（音を鳴らす等の確認用サンプルを置ける）
-- 特徴: observe-only（失敗はログに出るが、エージェントの実行は止めない）
+- 特徴: デフォルトは observe-only（失敗はログに出るが、エージェントの実行は止めない）。ただし `blocking = true` を使うと tool 実行をブロックできる（後述）。
 - 実行cwd: 可能なら git repo root、無ければセッションの `cwd`
 
 #### Claude Code 互換: tool 実行のブロック（統合hooks）
@@ -106,6 +106,9 @@ Claude Code の `PreToolUse` に寄せて、Codex-Mine の `[[hooks]]` でもツ
   - exit code 2: deny（ブロック）
   - それ以外: hook の失敗として warning に出しつつ allow（＝意図しないロックアウトを避ける）
 - `include_tool_arguments = true` を付けると、stdin JSON に `tool_input` が含まれる（shell/unified_exec 等の引数を見て判定できる）
+- 対象範囲:
+  - **Codex-Mine が tool として実行するコマンドのみ**（TUI / `codex-mine exec` / VSCode拡張の app-server など）
+  - ターミナルで直接叩いたコマンド（例: 自分で `git clean -f` を実行）は hooks の対象外
 
 #### 最小例
 
@@ -126,7 +129,7 @@ timeout_ms = 2000
 - `timeout_ms`（任意）: hook コマンドのタイムアウト（ミリ秒）。
 - `blocking`（任意）: `true` の場合、`tool.call.begin` で exit code 2 によりツール実行をブロックできる。
 - `matcher`（任意）: イベントに応じてマッチ対象が変わる正規表現（Rust `regex`）。
-  - `tool.call.*`: `tool_name`（例: `apply_patch`, `mcp__chrome-devtools__list_pages`, `exec_command`）
+  - `tool.call.*`: `tool_name`（例: `apply_patch`, `mcp__chrome-devtools__list_pages`, `exec_command`, `unified_exec`）
   - `tool.mcp.*`: MCP tool 名（例: `list_pages`）
   - `tool.exec.*`: 実行ソース（`shell` / `unified_exec` / `user_shell`）
   - それ以外: 現状マッチ対象なし（`matcher` 指定しても絞れない）
