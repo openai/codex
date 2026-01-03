@@ -1,5 +1,7 @@
 #![cfg(target_os = "windows")]
 
+mod firewall;
+
 use anyhow::Context;
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -28,22 +30,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
-use windows::core::Interface;
-use windows::core::BSTR;
-use windows::Win32::Foundation::VARIANT_TRUE;
-use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
-use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule3;
-use windows::Win32::NetworkManagement::WindowsFirewall::NetFwPolicy2;
-use windows::Win32::NetworkManagement::WindowsFirewall::NetFwRule;
-use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_BLOCK;
-use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_ANY;
-use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_PROFILE2_ALL;
-use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_RULE_DIR_OUT;
-use windows::Win32::System::Com::CoCreateInstance;
-use windows::Win32::System::Com::CoInitializeEx;
-use windows::Win32::System::Com::CoUninitialize;
-use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
-use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HLOCAL;
@@ -237,79 +223,6 @@ fn read_mask_allows_or_log(
             Ok(false)
         }
     }
-}
-
-fn run_netsh_firewall(sid: &str, log: &mut File) -> Result<()> {
-    let local_user_spec = format!("O:LSD:(A;;CC;;;{sid})");
-    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-    if hr.is_err() {
-        return Err(anyhow::anyhow!("CoInitializeEx failed: {hr:?}"));
-    }
-    let result = unsafe {
-        (|| -> Result<()> {
-            let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| anyhow::anyhow!("CoCreateInstance NetFwPolicy2: {e:?}"))?;
-            let rules = policy
-                .Rules()
-                .map_err(|e| anyhow::anyhow!("INetFwPolicy2::Rules: {e:?}"))?;
-            let name = BSTR::from("Codex Sandbox Offline - Block Outbound");
-            let rule: INetFwRule3 = match rules.Item(&name) {
-                Ok(existing) => existing.cast().map_err(|e| {
-                    anyhow::anyhow!("cast existing firewall rule to INetFwRule3: {e:?}")
-                })?,
-                Err(_) => {
-                    let new_rule: INetFwRule3 =
-                        CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER)
-                            .map_err(|e| anyhow::anyhow!("CoCreateInstance NetFwRule: {e:?}"))?;
-                    new_rule
-                        .SetName(&name)
-                        .map_err(|e| anyhow::anyhow!("SetName: {e:?}"))?;
-                    new_rule
-                        .SetDirection(NET_FW_RULE_DIR_OUT)
-                        .map_err(|e| anyhow::anyhow!("SetDirection: {e:?}"))?;
-                    new_rule
-                        .SetAction(NET_FW_ACTION_BLOCK)
-                        .map_err(|e| anyhow::anyhow!("SetAction: {e:?}"))?;
-                    new_rule
-                        .SetEnabled(VARIANT_TRUE)
-                        .map_err(|e| anyhow::anyhow!("SetEnabled: {e:?}"))?;
-                    new_rule
-                        .SetProfiles(NET_FW_PROFILE2_ALL.0)
-                        .map_err(|e| anyhow::anyhow!("SetProfiles: {e:?}"))?;
-                    new_rule
-                        .SetProtocol(NET_FW_IP_PROTOCOL_ANY.0)
-                        .map_err(|e| anyhow::anyhow!("SetProtocol: {e:?}"))?;
-                    rules
-                        .Add(&new_rule)
-                        .map_err(|e| anyhow::anyhow!("Rules::Add: {e:?}"))?;
-                    new_rule
-                }
-            };
-            rule.SetLocalUserAuthorizedList(&BSTR::from(local_user_spec.as_str()))
-                .map_err(|e| anyhow::anyhow!("SetLocalUserAuthorizedList: {e:?}"))?;
-            rule.SetEnabled(VARIANT_TRUE)
-                .map_err(|e| anyhow::anyhow!("SetEnabled: {e:?}"))?;
-            rule.SetProfiles(NET_FW_PROFILE2_ALL.0)
-                .map_err(|e| anyhow::anyhow!("SetProfiles: {e:?}"))?;
-            rule.SetAction(NET_FW_ACTION_BLOCK)
-                .map_err(|e| anyhow::anyhow!("SetAction: {e:?}"))?;
-            rule.SetDirection(NET_FW_RULE_DIR_OUT)
-                .map_err(|e| anyhow::anyhow!("SetDirection: {e:?}"))?;
-            rule.SetProtocol(NET_FW_IP_PROTOCOL_ANY.0)
-                .map_err(|e| anyhow::anyhow!("SetProtocol: {e:?}"))?;
-            log_line(
-                log,
-                &format!(
-                    "firewall rule configured via COM with LocalUserAuthorizedList={local_user_spec}"
-                ),
-            )?;
-            Ok(())
-        })()
-    };
-    unsafe {
-        CoUninitialize();
-    }
-    result
 }
 
 fn lock_sandbox_dir(
@@ -549,7 +462,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     };
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
-        run_netsh_firewall(&offline_sid_str, log)?;
+        firewall::ensure_offline_outbound_block(&offline_sid_str, log)?;
     }
 
     if payload.read_roots.is_empty() {
