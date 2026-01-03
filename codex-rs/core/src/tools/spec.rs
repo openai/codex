@@ -256,6 +256,27 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
+fn create_terminate_session_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "session_id".to_string(),
+        JsonSchema::Number {
+            description: Some("Identifier of the unified exec session to terminate.".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "terminate_session".to_string(),
+        description: "Terminates a running unified exec session.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_shell_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1015,8 +1036,10 @@ pub(crate) fn build_specs(
         ConfigShellToolType::UnifiedExec => {
             builder.push_spec(create_exec_command_tool());
             builder.push_spec(create_write_stdin_tool());
+            builder.push_spec(create_terminate_session_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
-            builder.register_handler("write_stdin", unified_exec_handler);
+            builder.register_handler("write_stdin", unified_exec_handler.clone());
+            builder.register_handler("terminate_session", unified_exec_handler);
         }
         ConfigShellToolType::Disabled => {
             // Do nothing.
@@ -1254,6 +1277,7 @@ mod tests {
         for spec in [
             create_exec_command_tool(),
             create_write_stdin_tool(),
+            create_terminate_session_tool(),
             create_list_mcp_resources_tool(),
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
@@ -1336,6 +1360,7 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
+                "terminate_session",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1357,6 +1382,7 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
+                "terminate_session",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1442,6 +1468,7 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
+                "terminate_session",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1462,6 +1489,7 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
+                "terminate_session",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1486,7 +1514,12 @@ mod tests {
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
 
         // Only check the shell variant and a couple of core tools.
-        let mut subset = vec!["exec_command", "write_stdin", "update_plan"];
+        let mut subset = vec![
+            "exec_command",
+            "write_stdin",
+            "terminate_session",
+            "update_plan",
+        ];
         if let Some(shell_tool) = shell_tool_name(&tools_config) {
             subset.push(shell_tool);
         }
@@ -1509,6 +1542,7 @@ mod tests {
 
         assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
+        assert!(!find_tool(&tools, "terminate_session").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);

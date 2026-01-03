@@ -106,9 +106,15 @@ impl UnifiedExecSessionManager {
         }
     }
 
-    pub(crate) async fn release_process_id(&self, process_id: &str) {
+    pub(crate) async fn terminate_session(&self, process_id: &str) -> bool {
         let mut store = self.session_store.lock().await;
-        store.remove(process_id);
+        if let Some(entry) = store.remove(process_id) {
+            entry.session.terminate();
+            true
+        } else {
+            // It might just be a reserved ID not yet in sessions
+            store.reserved_sessions_id.remove(process_id)
+        }
     }
 
     pub(crate) async fn exec_command(
@@ -134,7 +140,7 @@ impl UnifiedExecSessionManager {
         let session = match session {
             Ok(session) => Arc::new(session),
             Err(err) => {
-                self.release_process_id(&request.process_id).await;
+                self.terminate_session(&request.process_id).await;
                 return Err(err);
             }
         };
@@ -189,7 +195,7 @@ impl UnifiedExecSessionManager {
             )
             .await;
 
-            self.release_process_id(&request.process_id).await;
+            self.terminate_session(&request.process_id).await;
             session.check_for_sandbox_denial_with_text(&text).await?;
         } else {
             // Long‑lived command: persist the session so write_stdin can reuse

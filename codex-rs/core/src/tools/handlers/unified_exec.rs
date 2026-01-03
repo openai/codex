@@ -58,6 +58,11 @@ struct WriteStdinArgs {
     max_output_tokens: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct TerminateSessionArgs {
+    session_id: i32,
+}
+
 fn default_exec_yield_time_ms() -> u64 {
     10000
 }
@@ -144,7 +149,7 @@ impl ToolHandler for UnifiedExecHandler {
                         codex_protocol::protocol::AskForApproval::OnRequest
                     )
                 {
-                    manager.release_process_id(&process_id).await;
+                    manager.terminate_session(&process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
                         policy = context.turn.approval_policy
@@ -168,7 +173,7 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .await?
                 {
-                    manager.release_process_id(&process_id).await;
+                    manager.terminate_session(&process_id).await;
                     return Ok(output);
                 }
 
@@ -232,6 +237,32 @@ impl ToolHandler for UnifiedExecHandler {
                     .await;
 
                 response
+            }
+            "terminate_session" => {
+                let args: TerminateSessionArgs =
+                    serde_json::from_str(&arguments).map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse terminate_session arguments: {err:?}"
+                        ))
+                    })?;
+                let success = manager
+                    .terminate_session(&args.session_id.to_string())
+                    .await;
+                UnifiedExecResponse {
+                    event_call_id: context.call_id.clone(),
+                    chunk_id: crate::unified_exec::generate_chunk_id(),
+                    wall_time: std::time::Duration::ZERO,
+                    output: if success {
+                        "Session terminated.".to_string()
+                    } else {
+                        "Session not found.".to_string()
+                    },
+                    raw_output: Vec::new(),
+                    process_id: None,
+                    exit_code: None,
+                    original_token_count: None,
+                    session_command: None,
+                }
             }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
