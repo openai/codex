@@ -105,7 +105,7 @@ impl MermaidLinter {
                     continue;
                 }
             }
-            if filtered_arrows.len() > 1 {
+            if !in_sequence && filtered_arrows.len() > 1 {
                 let replacement = filtered_arrows
                     .iter()
                     .enumerate()
@@ -140,7 +140,7 @@ impl MermaidLinter {
                 ));
                 continue;
             }
-            if let Some(single_arrow) = filtered_arrows.first() {
+            if !in_sequence && let Some(single_arrow) = filtered_arrows.first() {
                 let right_side = line[single_arrow.end()..].trim();
                 let pipe_count = right_side.matches('|').count();
                 if pipe_count == 1 && right_side.starts_with('|') {
@@ -1103,6 +1103,17 @@ sequenceDiagram
 ```"#;
         let fixed = fix_mermaid_blocks(raw);
         assert!(fixed.contains(r#"API->>FileMgr: sanitize & upload files ("if any")"#));
+    }
+
+    #[test]
+    fn sequence_inner_arrows_in_messages_are_preserved() {
+        let raw = r#"```mermaid
+sequenceDiagram
+  Client->>Server: tpm2_load_key() -> tpm2_persist_key()
+```"#;
+        let fixed = fix_mermaid_blocks(raw);
+        assert_eq!(fixed.matches("Client->>Server").count(), 1);
+        assert!(fixed.contains("Client->>Server: tpm2_load_key() -> tpm2_persist_key()"));
     }
 
     #[test]

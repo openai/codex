@@ -8178,6 +8178,62 @@ mod bug_dedupe_tests {
     }
 }
 
+#[cfg(test)]
+mod severity_floor_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_bug_summary(severity: &str, impact: &str) -> BugSummary {
+        BugSummary {
+            id: 1,
+            title: "Example".to_string(),
+            file: "x.rs#L1-L2".to_string(),
+            severity: severity.to_string(),
+            impact: impact.to_string(),
+            likelihood: "x".to_string(),
+            recommendation: "x".to_string(),
+            blame: None,
+            risk_score: None,
+            risk_rank: None,
+            risk_reason: None,
+            verification_types: Vec::new(),
+            vulnerability_tag: None,
+            validation: BugValidationState::default(),
+            source_path: PathBuf::new(),
+            markdown: String::new(),
+            author_github: None,
+        }
+    }
+
+    #[test]
+    fn upgrades_medium_when_impact_mentions_remote_code_execution() {
+        let mut summary = make_bug_summary(
+            "Medium",
+            "Remote code execution (as the user running the daemon).",
+        );
+        let previous = apply_remote_code_execution_severity_floor(&mut summary);
+        assert_eq!(previous.as_deref(), Some("Medium"));
+        assert_eq!(summary.severity, "High");
+    }
+
+    #[test]
+    fn does_not_upgrade_when_impact_is_not_remote_rce() {
+        let mut summary =
+            make_bug_summary("Medium", "Arbitrary code execution when invoked locally.");
+        let previous = apply_remote_code_execution_severity_floor(&mut summary);
+        assert_eq!(previous, None);
+        assert_eq!(summary.severity, "Medium");
+    }
+
+    #[test]
+    fn does_not_upgrade_when_already_high() {
+        let mut summary = make_bug_summary("High", "Remote code execution is possible.");
+        let previous = apply_remote_code_execution_severity_floor(&mut summary);
+        assert_eq!(previous, None);
+        assert_eq!(summary.severity, "High");
+    }
+}
+
 async fn filter_spec_directories(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
@@ -12663,6 +12719,15 @@ async fn rerank_bugs_by_risk(
         }
     }
 
+    for summary in summaries.iter_mut() {
+        if let Some(previous) = apply_remote_code_execution_severity_floor(summary) {
+            let id = summary.id;
+            logs.push(format!(
+                "Severity floor: bug #{id} upgraded from {previous} to High (impact mentions remote code execution)."
+            ));
+        }
+    }
+
     rank_bug_summaries_for_reporting(summaries);
 
     for (idx, summary) in summaries.iter().enumerate() {
@@ -12829,6 +12894,23 @@ fn severity_rank(severity: &str) -> usize {
         "low" => 2,
         "informational" | "info" => 3,
         _ => 4,
+    }
+}
+
+fn impact_mentions_remote_code_execution(impact: &str) -> bool {
+    let lower = impact.trim().to_ascii_lowercase();
+    lower.contains("remote code execution") || (lower.contains("remote") && lower.contains("rce"))
+}
+
+fn apply_remote_code_execution_severity_floor(summary: &mut BugSummary) -> Option<String> {
+    if severity_rank(&summary.severity) > severity_rank("High")
+        && impact_mentions_remote_code_execution(&summary.impact)
+    {
+        let previous = summary.severity.clone();
+        summary.severity = "High".to_string();
+        Some(previous)
+    } else {
+        None
     }
 }
 

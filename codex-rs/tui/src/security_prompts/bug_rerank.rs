@@ -8,6 +8,7 @@ Spec excerpt (trimmed; pull in concrete details or note if unavailable):
 
 Examples:
 - External unauthenticated remote code execution on a production API ⇒ risk_score 95, severity "High", reason "unauth RCE takeover".
+- Memory corruption reachable from untrusted inputs in a local daemon ⇒ risk_score 85, severity "High", reason "untrusted input RCE".
 - Stored XSS on user dashboards that leaks session tokens ⇒ risk_score 72, severity "High", reason "persistent session theft".
 - Originally escalated CSRF on an internal admin tool behind SSO ⇒ risk_score 28, severity "Low", reason "internal-only with SSO".
 - Header injection in a deprecated endpoint with response sanitization ⇒ risk_score 18, severity "Informational", reason "sanitized legacy endpoint".
@@ -27,6 +28,7 @@ Instructions:
 - Output severity **only** from ["High","Medium","Low","Informational"]. Map "critical"/"p0" to "High".
 - Produce `risk_score` between 0-100 (higher means greater customer impact) and use the full range for comparability.
 - Review the repository summary, spec excerpt, blame metadata, and file locations before requesting anything new; reuse existing specs or context attachments when possible.
+- If a finding's impact states remote code execution, output severity "High".
 - If you still lack certainty, request concrete follow-up (e.g., repo_search, read_file, git blame) in the reason and cite the spec section you need.
 - Reference concrete evidence (spec section, tool name, log line) in the reason when you confirm mitigations or reclassify a finding.
 - Prefer reusing existing tool outputs and cached specs before launching new expensive calls; only request fresh tooling when the supplied artifacts truly lack the needed context.
