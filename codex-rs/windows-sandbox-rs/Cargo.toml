@@ -25,6 +25,7 @@ chrono = { version = "0.4.42", default-features = false, features = [
     "std",
 ] }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-string = { workspace = true }
 dunce = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
