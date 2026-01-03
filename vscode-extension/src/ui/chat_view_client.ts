@@ -3090,7 +3090,7 @@ function main(): void {
 
       fileSearch = { sessionId, query, paths };
       fileSearchInFlight = null;
-      renderSuggest();
+      updateSuggestions();
       return;
     }
     if (anyMsg.type === "agentIndex") {
