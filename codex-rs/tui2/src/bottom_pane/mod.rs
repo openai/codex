@@ -389,13 +389,15 @@ impl BottomPane {
         scroll_position: Option<(usize, usize)>,
         copy_selection_key: crate::key_hint::KeyBinding,
     ) {
-        self.composer.set_transcript_ui_state(
+        let updated = self.composer.set_transcript_ui_state(
             scrolled,
             selection_active,
             scroll_position,
             copy_selection_key,
         );
-        self.request_redraw();
+        if updated {
+            self.request_redraw();
+        }
     }
 
     /// Show a generic list selection view with the provided items.

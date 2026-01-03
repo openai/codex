@@ -77,7 +77,7 @@ impl ModelsManager {
     }
 
     /// Fetch the latest remote models, using the on-disk cache when still fresh.
-    pub async fn refresh_available_models(&self, config: &Config) -> CoreResult<()> {
+    pub async fn refresh_available_models_with_cache(&self, config: &Config) -> CoreResult<()> {
         if !config.features.enabled(Feature::RemoteModels)
             || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey)
         {
@@ -86,7 +86,17 @@ impl ModelsManager {
         if self.try_load_cache().await {
             return Ok(());
         }
+        self.refresh_available_models_no_cache(config.features.enabled(Feature::RemoteModels))
+            .await
+    }
 
+    pub(crate) async fn refresh_available_models_no_cache(
+        &self,
+        remote_models_feature: bool,
+    ) -> CoreResult<()> {
+        if !remote_models_feature || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
+            return Ok(());
+        }
         let auth = self.auth_manager.auth();
         let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
@@ -94,12 +104,10 @@ impl ModelsManager {
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
         let client_version = format_client_version_to_whole();
-        let ModelsResponse { models, etag } = client
+        let (models, etag) = client
             .list_models(&client_version, HeaderMap::new())
             .await
             .map_err(map_api_error)?;
-
-        let etag = (!etag.is_empty()).then_some(etag);
 
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
@@ -108,7 +116,7 @@ impl ModelsManager {
     }
 
     pub async fn list_models(&self, config: &Config) -> Vec<ModelPreset> {
-        if let Err(err) = self.refresh_available_models(config).await {
+        if let Err(err) = self.refresh_available_models_with_cache(config).await {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.remote_models(config).await;
@@ -135,7 +143,7 @@ impl ModelsManager {
         if let Some(model) = model.as_ref() {
             return model.to_string();
         }
-        if let Err(err) = self.refresh_available_models(config).await {
+        if let Err(err) = self.refresh_available_models_with_cache(config).await {
             error!("failed to refresh available models: {err}");
         }
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
@@ -153,6 +161,18 @@ impl ModelsManager {
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
     }
+    pub async fn refresh_if_new_etag(&self, etag: String, remote_models_feature: bool) {
+        let current_etag = self.get_etag().await;
+        if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
+            return;
+        }
+        if let Err(err) = self
+            .refresh_available_models_no_cache(remote_models_feature)
+            .await
+        {
+            error!("failed to refresh available models: {err}");
+        }
+    }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn get_model_offline(model: Option<&str>) -> String {
@@ -163,6 +183,10 @@ impl ModelsManager {
     /// Offline helper that builds a `ModelFamily` without consulting remote state.
     pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
         Self::find_family_for_model(model).with_config_overrides(config)
+    }
+
+    async fn get_etag(&self) -> Option<String> {
+        self.etag.read().await.clone()
     }
 
     /// Replace the cached remote models and rebuild the derived presets list.
@@ -288,24 +312,12 @@ impl ModelsManager {
 
 /// Convert a client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3")
 fn format_client_version_to_whole() -> String {
-    format_client_version_from_parts(
+    format!(
+        "{}.{}.{}",
         env!("CARGO_PKG_VERSION_MAJOR"),
         env!("CARGO_PKG_VERSION_MINOR"),
-        env!("CARGO_PKG_VERSION_PATCH"),
+        env!("CARGO_PKG_VERSION_PATCH")
     )
-}
-
-fn format_client_version_from_parts(major: &str, minor: &str, patch: &str) -> String {
-    const DEV_VERSION: &str = "0.0.0";
-    const FALLBACK_VERSION: &str = "99.99.99";
-
-    let normalized = format!("{major}.{minor}.{patch}");
-
-    if normalized == DEV_VERSION {
-        FALLBACK_VERSION.to_string()
-    } else {
-        normalized
-    }
 }
 
 #[cfg(test)]
@@ -388,7 +400,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: remote_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -406,7 +417,7 @@ mod tests {
         let manager = ModelsManager::with_provider(auth_manager, provider);
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("refresh succeeds");
         let cached_remote = manager.remote_models(&config).await;
@@ -445,7 +456,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: remote_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -466,7 +476,7 @@ mod tests {
         let manager = ModelsManager::with_provider(auth_manager, provider);
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("first refresh succeeds");
         assert_eq!(
@@ -477,7 +487,7 @@ mod tests {
 
         // Second call should read from cache and avoid the network.
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("cached refresh succeeds");
         assert_eq!(
@@ -500,7 +510,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: initial_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -521,7 +530,7 @@ mod tests {
         let manager = ModelsManager::with_provider(auth_manager, provider);
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("initial refresh succeeds");
 
@@ -541,13 +550,12 @@ mod tests {
             &server,
             ModelsResponse {
                 models: updated_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("second refresh succeeds");
         assert_eq!(
@@ -575,7 +583,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: initial_models,
-                etag: String::new(),
             },
         )
         .await;
@@ -594,7 +601,7 @@ mod tests {
         manager.cache_ttl = Duration::ZERO;
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("initial refresh succeeds");
 
@@ -604,13 +611,12 @@ mod tests {
             &server,
             ModelsResponse {
                 models: refreshed_models,
-                etag: String::new(),
             },
         )
         .await;
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("second refresh succeeds");
 

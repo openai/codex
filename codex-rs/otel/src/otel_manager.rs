@@ -70,7 +70,7 @@ impl OtelManager {
         let session_span = trace_span!("new_session", conversation_id = %conversation_id, session_source = %session_source);
 
         if let Some(context) = traceparent_context_from_env() {
-            session_span.set_parent(context);
+            let _ = session_span.set_parent(context);
         }
 
         Self {
@@ -511,6 +511,7 @@ impl OtelManager {
                 "reasoning_summary_part_added".into()
             }
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
+            ResponseEvent::ModelsEtag(_) => "models_etag".into(),
         }
     }
 
