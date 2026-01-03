@@ -79,7 +79,7 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// OpenAI's Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
+/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// MCP server/tool names are user-controlled, so sanitize the fully-qualified
 /// name we expose to the model by replacing any disallowed character with `_`.
 fn sanitize_responses_api_tool_name(name: &str) -> String {
@@ -126,8 +126,7 @@ where
         // Start from a "pretty" name (sanitized), then deterministically disambiguate on
         // collisions by appending a hash of the *raw* (unsanitized) qualified name. This
         // ensures tools like `foo.bar` and `foo_bar` don't collapse to the same key.
-        let base = sanitize_responses_api_tool_name(&qualified_name_raw);
-        let mut qualified_name = base.clone();
+        let mut qualified_name = sanitize_responses_api_tool_name(&qualified_name_raw);
 
         // Enforce length constraints early; use the raw name for the hash input so the
         // output remains stable even when sanitization changes.
@@ -138,29 +137,8 @@ where
         }
 
         if used_names.contains(&qualified_name) {
-            // Collision after sanitization (or in extremely rare hash collision cases).
-            // Disambiguate by hashing the raw qualified name and, if necessary, retry
-            // with a counter.
-            let mut attempt = 0usize;
-            loop {
-                let hash_input = if attempt == 0 {
-                    qualified_name_raw.clone()
-                } else {
-                    format!("{qualified_name_raw}__{attempt}")
-                };
-                let sha1_str = sha1_hex(&hash_input);
-                let prefix_len = MAX_TOOL_NAME_LENGTH.saturating_sub(sha1_str.len());
-                let prefix = if base.len() > prefix_len {
-                    &base[..prefix_len]
-                } else {
-                    base.as_str()
-                };
-                qualified_name = format!("{prefix}{sha1_str}");
-                if !used_names.contains(&qualified_name) {
-                    break;
-                }
-                attempt += 1;
-            }
+            warn!("skipping duplicated tool {}", qualified_name);
+            continue;
         }
 
         used_names.insert(qualified_name.clone());
@@ -1111,24 +1089,6 @@ mod tests {
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
             "qualified name must be Responses API compatible: {qualified_name:?}"
         );
-    }
-
-    #[test]
-    fn test_qualify_tools_disambiguates_sanitization_collisions() {
-        let tools = vec![
-            // These sanitize to the same base name (`foo.bar` -> `foo_bar`).
-            create_test_tool("foo.bar", "tool"),
-            create_test_tool("foo_bar", "tool"),
-        ];
-
-        let qualified_tools = qualify_tools(tools);
-
-        assert_eq!(qualified_tools.len(), 2);
-        assert!(qualified_tools.contains_key("mcp__foo_bar__tool"));
-
-        // The second entry is disambiguated by appending a hash of its raw name.
-        let expected_suffix = sha1_hex("mcp__foo_bar__tool");
-        assert!(qualified_tools.contains_key(&format!("mcp__foo_bar__tool{expected_suffix}")));
     }
 
     #[test]
