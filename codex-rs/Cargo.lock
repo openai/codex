@@ -1583,6 +1583,7 @@ dependencies = [
  "codex-core",
  "futures",
  "reqwest",
+ "semver",
  "serde_json",
  "tokio",
  "tracing",
