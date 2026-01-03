@@ -89,7 +89,9 @@ function sanitizeImageKey(key: string): string {
   return key.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 160) || "img";
 }
 
-async function pruneImageCache(context: vscode.ExtensionContext): Promise<void> {
+async function pruneImageCache(
+  context: vscode.ExtensionContext,
+): Promise<void> {
   const dir = imageCacheDirFsPath(context);
   let entries: string[];
   try {
@@ -174,12 +176,17 @@ async function cacheImageBytes(args: {
   await fs.writeFile(dataPath, args.bytes);
   await fs.writeFile(metaPath, JSON.stringify(meta));
   void pruneImageCache(context);
-  return { imageKey, mimeType: args.mimeType, byteLength: args.bytes.byteLength };
+  return {
+    imageKey,
+    mimeType: args.mimeType,
+    byteLength: args.bytes.byteLength,
+  };
 }
 
 function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
   const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
-  if (!m) throw new Error("Unsupported image URL (expected data:...;base64,...)");
+  if (!m)
+    throw new Error("Unsupported image URL (expected data:...;base64,...)");
   const mimeType = m[1] || "";
   const base64 = m[2] || "";
   if (!mimeType || !base64) throw new Error("Invalid data URL");
@@ -426,13 +433,13 @@ export function activate(context: vscode.ExtensionContext): void {
         scope: s.scope,
         path: s.path,
       }));
-	    },
-	    async (imageKey) => {
-	      return await loadCachedImageBase64(imageKey);
-	    },
-	    async () => {
-	      if (!sessions) throw new Error("sessions is not initialized");
-	      const session = activeSessionId
+    },
+    async (imageKey) => {
+      return await loadCachedImageBase64(imageKey);
+    },
+    async () => {
+      if (!sessions) throw new Error("sessions is not initialized");
+      const session = activeSessionId
         ? sessions.getById(activeSessionId)
         : null;
       if (!session) {
@@ -713,8 +720,7 @@ export function activate(context: vscode.ExtensionContext): void {
           id: newLocalId("info"),
           type: "info",
           title: "Nothing to interrupt",
-          text:
-            "Interrupt was requested, but no in-progress turn was found for this session.",
+          text: "Interrupt was requested, but no in-progress turn was found for this session.",
         });
         chatView?.refresh();
         schedulePersistRuntime(session.id);
@@ -1433,8 +1439,7 @@ function handleBackendTerminated(
     .update(backendKey)
     .digest("hex")
     .slice(0, 10);
-  const title =
-    info.reason === "exit" ? "Backend exited" : "Backend stopped";
+  const title = info.reason === "exit" ? "Backend exited" : "Backend stopped";
   const detailParts: string[] = [`cwd=${folderLabel}`, `reason=${info.reason}`];
   if (info.code !== null) detailParts.push(`code=${info.code}`);
   if (info.signal !== null) detailParts.push(`signal=${info.signal}`);
@@ -1918,31 +1923,49 @@ async function expandMentions(
     const editor = vscode.window.activeTextEditor ?? null;
     const sel = editor?.selection ?? null;
     const selected = sel ? (editor?.document.getText(sel) ?? "") : "";
-    if (selected.trim()) {
-      const folder = resolveWorkspaceFolderForSession(session);
-      const docUri = editor?.document?.uri ?? null;
-      if (folder && docUri) {
-        const folderFsPath = folder.uri.fsPath;
-        const docFsPath = docUri.fsPath;
-        let relPath = path.relative(folderFsPath, docFsPath);
-        relPath = relPath.split(path.sep).join("/");
-        if (relPath && !relPath.startsWith("../") && !path.isAbsolute(relPath)) {
-          const startLine = (sel?.start?.line ?? 0) + 1;
-          let endLine = (sel?.end?.line ?? 0) + 1;
-          const endChar = sel?.end?.character ?? 0;
-          const endLine0 = sel?.end?.line ?? 0;
-          const startLine0 = sel?.start?.line ?? 0;
-          if (endChar === 0 && endLine0 > startLine0) endLine = endLine0;
-
-          const range =
-            startLine === endLine
-              ? `#L${startLine}`
-              : `#L${startLine}-L${endLine}`;
-          const replacement = `@${relPath}${range}`;
-          out = out.replaceAll("@selection", replacement);
-        }
-      }
+    if (!selected.trim()) {
+      return {
+        ok: false,
+        error: "@selection is empty (select a range first).",
+      };
     }
+
+    const folder = resolveWorkspaceFolderForSession(session);
+    if (!folder) {
+      return {
+        ok: false,
+        error:
+          "Cannot expand @selection because no workspace folder is available.",
+      };
+    }
+
+    const docUri = editor?.document?.uri ?? null;
+    if (!docUri) {
+      return {
+        ok: false,
+        error: "Cannot expand @selection because there is no active editor.",
+      };
+    }
+
+    const folderFsPath = folder.uri.fsPath;
+    const docFsPath = docUri.fsPath;
+    let relPath = path.relative(folderFsPath, docFsPath);
+    relPath = relPath.split(path.sep).join("/");
+    if (!relPath || relPath.startsWith("../") || path.isAbsolute(relPath)) {
+      return { ok: false, error: " file is outside the workspace." };
+    }
+
+    const startLine = (sel?.start?.line ?? 0) + 1;
+    let endLine = (sel?.end?.line ?? 0) + 1;
+    const endChar = sel?.end?.character ?? 0;
+    const endLine0 = sel?.end?.line ?? 0;
+    const startLine0 = sel?.start?.line ?? 0;
+    if (endChar === 0 && endLine0 > startLine0) endLine = endLine0;
+
+    const range =
+      startLine === endLine ? `#L${startLine}` : `#L${startLine}-L${endLine}`;
+    const replacement = `@${relPath}${range}`;
+    out = out.replaceAll("@selection", replacement);
   }
 
   // NOTE: Treat unresolved "@" tokens in copied text as plain text.
@@ -3297,7 +3320,8 @@ function enforceSessionImageAutoloadLimit(rt: SessionRuntime): void {
   for (let i = rt.blocks.length - 1; i >= 0; i--) {
     const b = rt.blocks[i];
     if (!b || b.type !== "image") continue;
-    const hasKey = typeof (b as any).imageKey === "string" && (b as any).imageKey;
+    const hasKey =
+      typeof (b as any).imageKey === "string" && (b as any).imageKey;
     if (!hasKey) continue;
     if (kept < keep) {
       (b as any).autoLoad = true;
@@ -3320,8 +3344,11 @@ async function appendMcpImageBlocks(
 ): Promise<void> {
   const images = content.filter(isImageContent);
   if (images.length === 0) return;
-  const cached: Array<{ imageKey: string; mimeType: string; byteLength: number }> =
-    [];
+  const cached: Array<{
+    imageKey: string;
+    mimeType: string;
+    byteLength: number;
+  }> = [];
   for (let index = 0; index < images.length; index++) {
     const img = images[index]!;
     const bytes = Buffer.from(img.data, "base64");
