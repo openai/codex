@@ -4,13 +4,13 @@ use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
 use codex_api::provider::WireApi;
 use codex_client::ReqwestTransport;
-use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use http::HeaderMap;
 use http::Method;
 use wiremock::Mock;
@@ -73,13 +73,19 @@ async fn models_client_hits_models_endpoint() {
             ],
             shell_type: ConfigShellToolType::ShellCommand,
             visibility: ModelVisibility::List,
-            minimal_client_version: ClientVersion(0, 1, 0),
             supported_in_api: true,
             priority: 1,
             upgrade: None,
             base_instructions: None,
+            supports_reasoning_summaries: false,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            supports_parallel_tool_calls: false,
+            context_window: None,
+            experimental_supported_tools: Vec::new(),
         }],
-        etag: String::new(),
     };
 
     Mock::given(method("GET"))
@@ -95,13 +101,13 @@ async fn models_client_hits_models_endpoint() {
     let transport = ReqwestTransport::new(reqwest::Client::new());
     let client = ModelsClient::new(transport, provider(&base_url), DummyAuth);
 
-    let result = client
+    let (models, _) = client
         .list_models("0.1.0", HeaderMap::new())
         .await
         .expect("models request should succeed");
 
-    assert_eq!(result.models.len(), 1);
-    assert_eq!(result.models[0].slug, "gpt-test");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].slug, "gpt-test");
 
     let received = server
         .received_requests()

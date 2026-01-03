@@ -54,6 +54,7 @@ impl ExecCommandSession {
     pub fn new(
         writer_tx: mpsc::Sender<Vec<u8>>,
         output_tx: broadcast::Sender<Vec<u8>>,
+        initial_output_rx: broadcast::Receiver<Vec<u8>>,
         killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
         reader_handle: JoinHandle<()>,
         writer_handle: JoinHandle<()>,
@@ -62,7 +63,6 @@ impl ExecCommandSession {
         exit_code: Arc<StdMutex<Option<i32>>>,
         pair: PtyPairWrapper,
     ) -> (Self, broadcast::Receiver<Vec<u8>>) {
-        let initial_output_rx = output_tx.subscribe();
         (
             Self {
                 writer_tx,
@@ -94,10 +94,8 @@ impl ExecCommandSession {
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code.lock().ok().and_then(|guard| *guard)
     }
-}
 
-impl Drop for ExecCommandSession {
-    fn drop(&mut self) {
+    pub fn terminate(&self) {
         if let Ok(mut killer_opt) = self.killer.lock() {
             if let Some(mut killer) = killer_opt.take() {
                 let _ = killer.kill();
@@ -122,11 +120,26 @@ impl Drop for ExecCommandSession {
     }
 }
 
+impl Drop for ExecCommandSession {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
 #[derive(Debug)]
 pub struct SpawnedPty {
     pub session: ExecCommandSession,
     pub output_rx: broadcast::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
+}
+
+#[allow(unreachable_code)]
+pub fn conpty_supported() -> bool {
+    // Annotation required because `win` can't be compiled on other OS.
+    #[cfg(windows)]
+    return win::conpty_supported();
+
+    true
 }
 
 #[cfg(windows)]
@@ -173,6 +186,8 @@ pub async fn spawn_pty_process(
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
     let (output_tx, _) = broadcast::channel::<Vec<u8>>(256);
+    // Subscribe before starting the reader thread.
+    let initial_output_rx = output_tx.subscribe();
 
     let mut reader = pair.master.try_clone_reader()?;
     let output_tx_clone = output_tx.clone();
@@ -238,6 +253,7 @@ pub async fn spawn_pty_process(
     let (session, output_rx) = ExecCommandSession::new(
         writer_tx,
         output_tx,
+        initial_output_rx,
         killer,
         reader_handle,
         writer_handle,

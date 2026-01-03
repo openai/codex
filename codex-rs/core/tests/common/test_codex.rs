@@ -23,10 +23,13 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::load_default_config_for_test;
+use crate::responses::get_responses_request_bodies;
 use crate::responses::start_mock_server;
+use crate::streaming_sse::StreamingSseServer;
 use crate::wait_for_event;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
+type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 
 /// A collection of different ways the model can output an apply_patch call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -50,6 +53,7 @@ pub enum ShellModelOutput {
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
+    pre_build_hooks: Vec<Box<PreBuildHook>>,
 }
 
 impl TestCodexBuilder {
@@ -69,13 +73,31 @@ impl TestCodexBuilder {
     pub fn with_model(self, model: &str) -> Self {
         let new_model = model.to_string();
         self.with_config(move |config| {
-            config.model = new_model.clone();
+            config.model = Some(new_model.clone());
         })
+    }
+
+    pub fn with_pre_build_hook<F>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(&Path) + Send + 'static,
+    {
+        self.pre_build_hooks.push(Box::new(hook));
+        self
     }
 
     pub async fn build(&mut self, server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
         let home = Arc::new(TempDir::new()?);
         self.build_with_home(server, home, None).await
+    }
+
+    pub async fn build_with_streaming_server(
+        &mut self,
+        server: &StreamingSseServer,
+    ) -> anyhow::Result<TestCodex> {
+        let base_url = server.uri();
+        let home = Arc::new(TempDir::new()?);
+        self.build_with_home_and_base_url(format!("{base_url}/v1"), home, None)
+            .await
     }
 
     pub async fn resume(
@@ -93,10 +115,34 @@ impl TestCodexBuilder {
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
-        let (config, cwd) = self.prepare_config(server, &home).await?;
+        let base_url = format!("{}/v1", server.uri());
+        let (config, cwd) = self.prepare_config(base_url, &home).await?;
+        self.build_from_config(config, cwd, home, resume_from).await
+    }
 
+    async fn build_with_home_and_base_url(
+        &mut self,
+        base_url: String,
+        home: Arc<TempDir>,
+        resume_from: Option<PathBuf>,
+    ) -> anyhow::Result<TestCodex> {
+        let (config, cwd) = self.prepare_config(base_url, &home).await?;
+        self.build_from_config(config, cwd, home, resume_from).await
+    }
+
+    async fn build_from_config(
+        &mut self,
+        config: Config,
+        cwd: Arc<TempDir>,
+        home: Arc<TempDir>,
+        resume_from: Option<PathBuf>,
+    ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let conversation_manager = ConversationManager::with_auth(auth.clone());
+        let conversation_manager = ConversationManager::with_models_provider_and_home(
+            auth.clone(),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
 
         let new_conversation = match resume_from {
             Some(path) => {
@@ -124,19 +170,22 @@ impl TestCodexBuilder {
 
     async fn prepare_config(
         &mut self,
-        server: &wiremock::MockServer,
+        base_url: String,
         home: &TempDir,
     ) -> anyhow::Result<(Config, Arc<TempDir>)> {
         let model_provider = ModelProviderInfo {
-            base_url: Some(format!("{}/v1", server.uri())),
+            base_url: Some(base_url),
             ..built_in_model_providers()["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
-        let mut config = load_default_config_for_test(home);
+        let mut config = load_default_config_for_test(home).await;
         config.cwd = cwd.path().to_path_buf();
         config.model_provider = model_provider;
-        if let Ok(cmd) = assert_cmd::Command::cargo_bin("codex") {
-            config.codex_linux_sandbox_exe = Some(PathBuf::from(cmd.get_program().to_os_string()));
+        for hook in self.pre_build_hooks.drain(..) {
+            hook(home.path());
+        }
+        if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
+            config.codex_linux_sandbox_exe = Some(path);
         }
 
         let mut mutators = vec![];
@@ -167,6 +216,10 @@ pub struct TestCodex {
 impl TestCodex {
     pub fn cwd_path(&self) -> &Path {
         self.cwd.path()
+    }
+
+    pub fn codex_home_path(&self) -> &Path {
+        self.config.codex_home.as_path()
     }
 
     pub fn workspace_path(&self, rel: impl AsRef<Path>) -> PathBuf {
@@ -272,13 +325,7 @@ impl TestCodexHarness {
     }
 
     pub async fn request_bodies(&self) -> Vec<Value> {
-        self.server
-            .received_requests()
-            .await
-            .expect("requests")
-            .into_iter()
-            .map(|req| serde_json::from_slice(&req.body).expect("request body json"))
-            .collect()
+        get_responses_request_bodies(&self.server).await
     }
 
     pub async fn function_call_output_value(&self, call_id: &str) -> Value {
@@ -355,5 +402,6 @@ pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
         config_mutators: vec![],
         auth: CodexAuth::from_api_key("dummy"),
+        pre_build_hooks: vec![],
     }
 }

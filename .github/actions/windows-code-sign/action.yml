@@ -1,0 +1,57 @@
+name: windows-code-sign
+description: Sign Windows binaries with Azure Trusted Signing.
+inputs:
+  target:
+    description: Target triple for the artifacts to sign.
+    required: true
+  client-id:
+    description: Azure Trusted Signing client ID.
+    required: true
+  tenant-id:
+    description: Azure tenant ID for Trusted Signing.
+    required: true
+  subscription-id:
+    description: Azure subscription ID for Trusted Signing.
+    required: true
+  endpoint:
+    description: Azure Trusted Signing endpoint.
+    required: true
+  account-name:
+    description: Azure Trusted Signing account name.
+    required: true
+  certificate-profile-name:
+    description: Certificate profile name for signing.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Azure login for Trusted Signing (OIDC)
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    - name: Sign Windows binaries with Azure Trusted Signing
+      uses: azure/trusted-signing-action@v0
+      with:
+        endpoint: ${{ inputs.endpoint }}
+        trusted-signing-account-name: ${{ inputs.account-name }}
+        certificate-profile-name: ${{ inputs.certificate-profile-name }}
+        exclude-environment-credential: true
+        exclude-workload-identity-credential: true
+        exclude-managed-identity-credential: true
+        exclude-shared-token-cache-credential: true
+        exclude-visual-studio-credential: true
+        exclude-visual-studio-code-credential: true
+        exclude-azure-cli-credential: false
+        exclude-azure-powershell-credential: true
+        exclude-azure-developer-cli-credential: true
+        exclude-interactive-browser-credential: true
+        cache-dependencies: false
+        files: |
+          ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex.exe
+          ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex-responses-api-proxy.exe
+          ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex-windows-sandbox-setup.exe
+          ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex-command-runner.exe

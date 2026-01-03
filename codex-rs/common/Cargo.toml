@@ -21,3 +21,10 @@ toml = { workspace = true, optional = true }
 cli = ["clap", "serde", "toml"]
 elapsed = []
 sandbox_summary = []
+
+[dev-dependencies]
+clap = { workspace = true, features = ["derive", "wrap_help"] }
+codex-utils-absolute-path = { workspace = true }
+pretty_assertions = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

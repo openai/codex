@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
+use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
@@ -25,6 +26,7 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
+mod experimental_features_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
@@ -41,6 +43,7 @@ mod scroll_state;
 mod security_review_scope_confirm_view;
 mod selection_popup_common;
 mod textarea;
+mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
 
 pub(crate) use security_review_scope_confirm_view::SecurityReviewScopeConfirmView;
@@ -57,6 +60,8 @@ use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use crate::status_indicator_widget::StatusSnapshot;
+pub(crate) use experimental_features_view::BetaFeatureItem;
+pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
@@ -80,6 +85,8 @@ pub(crate) struct BottomPane {
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
+    /// Unified exec session summary shown above the composer.
+    unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
     /// Recent log messages shown beneath the status header.
@@ -129,6 +136,7 @@ impl BottomPane {
             is_task_running: false,
             ctrl_c_quit_hint: false,
             status: None,
+            unified_exec_footer: UnifiedExecFooter::new(),
             queued_user_messages: QueuedUserMessages::new(),
             status_logs: Vec::new(),
             esc_backtrack_hint: false,
@@ -138,8 +146,17 @@ impl BottomPane {
         }
     }
 
+    pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
+        self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.composer.skills()
     }
 
     #[cfg(test)]
@@ -269,12 +286,36 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    /// Update the animated header shown to the left of the brackets in the
-    /// status indicator (defaults to "Working"). No-ops if the status
-    /// indicator is not active.
+    pub(crate) fn composer_text_with_pending(&self) -> String {
+        self.composer.current_text_with_pending()
+    }
+
+    pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.composer.apply_external_edit(text);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.composer.set_footer_hint_override(items);
+        self.request_redraw();
+    }
+
+    /// Update the animated header shown to the left of the brackets in the status indicator
+    /// (defaults to "Working"). No-ops if the status indicator is not active.
     pub(crate) fn update_status_header(&mut self, header: String) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
+            self.request_redraw();
+        }
+    }
+
+    /// Update the status indicator header (defaults to "Working") and details below it.
+    ///
+    /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
+    pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
+        if let Some(status) = self.status.as_mut() {
+            status.update_header(header);
+            status.update_details(details);
             self.request_redraw();
         }
     }
@@ -415,6 +456,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_unified_exec_sessions(&mut self, sessions: Vec<String>) {
+        if self.unified_exec_footer.set_sessions(sessions) {
+            self.request_redraw();
+        }
+    }
+
     /// Update custom prompts available for the slash popup.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.composer.set_custom_prompts(prompts);
@@ -434,6 +481,11 @@ impl BottomPane {
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+    }
+
+    /// Return true when no popups or modal views are active, regardless of task state.
+    pub(crate) fn can_launch_external_editor(&self) -> bool {
+        self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -545,8 +597,14 @@ impl BottomPane {
             if let Some(status) = &self.status {
                 flex.push(0, RenderableItem::Borrowed(status));
             }
+            if !self.unified_exec_footer.is_empty() {
+                flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
+            }
             flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
-            if self.status.is_some() || !self.queued_user_messages.messages.is_empty() {
+            if self.status.is_some()
+                || !self.unified_exec_footer.is_empty()
+                || !self.queued_user_messages.messages.is_empty()
+            {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
@@ -601,7 +659,6 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
-            risk: None,
             proposed_execpolicy_amendment: None,
         }
     }

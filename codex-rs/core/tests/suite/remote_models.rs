@@ -3,15 +3,20 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use codex_core::CodexAuth;
+use codex_core::CodexConversation;
+use codex_core::ConversationManager;
+use codex_core::ModelProviderInfo;
+use codex_core::built_in_model_providers;
+use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -19,7 +24,9 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::user_input::UserInput;
+use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -30,11 +37,11 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use pretty_assertions::assert_eq;
 use serde_json::json;
+use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -64,37 +71,45 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         }],
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
         upgrade: None,
         base_instructions: None,
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: None,
+        experimental_supported_tools: Vec::new(),
     };
 
     let models_mock = mount_models_once(
         &server,
         ModelsResponse {
             models: vec![remote_model],
-            etag: String::new(),
         },
     )
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let harness = build_remote_models_harness(&server, |config| {
         config.features.enable(Feature::RemoteModels);
-        config.model = "gpt-5.1".to_string();
-    });
+        config.model = Some("gpt-5.1".to_string());
+    })
+    .await?;
 
-    let TestCodex {
+    let RemoteModelsHarness {
         codex,
         cwd,
         config,
         conversation_manager,
         ..
-    } = builder.build(&server).await?;
+    } = harness;
 
     let models_manager = conversation_manager.get_models_manager();
-    let available_model = wait_for_model_available(&models_manager, REMOTE_MODEL_SLUG).await;
+    let available_model =
+        wait_for_model_available(&models_manager, REMOTE_MODEL_SLUG, &config).await;
 
     assert_eq!(available_model.model, REMOTE_MODEL_SLUG);
 
@@ -193,17 +208,23 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         }],
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
         upgrade: None,
         base_instructions: Some(remote_base.to_string()),
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: None,
+        experimental_supported_tools: Vec::new(),
     };
     mount_models_once(
         &server,
         ModelsResponse {
             models: vec![remote_model],
-            etag: String::new(),
         },
     )
     .await;
@@ -218,20 +239,22 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     )
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let harness = build_remote_models_harness(&server, |config| {
         config.features.enable(Feature::RemoteModels);
-        config.model = "gpt-5.1".to_string();
-    });
+        config.model = Some("gpt-5.1".to_string());
+    })
+    .await?;
 
-    let TestCodex {
+    let RemoteModelsHarness {
         codex,
         cwd,
+        config,
         conversation_manager,
         ..
-    } = builder.build(&server).await?;
+    } = harness;
 
     let models_manager = conversation_manager.get_models_manager();
-    wait_for_model_available(&models_manager, model).await;
+    wait_for_model_available(&models_manager, model, &config).await;
 
     codex
         .submit(Op::OverrideTurnContext {
@@ -268,11 +291,115 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> ModelPreset {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_preserve_builtin_presets() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let remote_model = test_remote_model("remote-alpha", ModelVisibility::List, 0);
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model.clone()],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    manager
+        .refresh_available_models_with_cache(&config)
+        .await
+        .expect("refresh succeeds");
+
+    let available = manager.list_models(&config).await;
+    let remote = available
+        .iter()
+        .find(|model| model.model == "remote-alpha")
+        .expect("remote model should be listed");
+    let mut expected_remote: ModelPreset = remote_model.into();
+    expected_remote.is_default = true;
+    assert_eq!(*remote, expected_remote);
+    assert!(
+        available
+            .iter()
+            .any(|model| model.model == "gpt-5.1-codex-max"),
+        "builtin presets should remain available after refresh"
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected a single /models request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_hide_picker_only_models() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let remote_model = test_remote_model("codex-auto-balanced", ModelVisibility::Hide, 0);
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    let selected = manager.get_model(&None, &config).await;
+    assert_eq!(selected, "gpt-5.2-codex");
+
+    let available = manager.list_models(&config).await;
+    assert!(
+        available
+            .iter()
+            .all(|model| model.model != "codex-auto-balanced"),
+        "hidden models should not appear in the picker list"
+    );
+
+    Ok(())
+}
+
+async fn wait_for_model_available(
+    manager: &Arc<ModelsManager>,
+    slug: &str,
+    config: &Config,
+) -> ModelPreset {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {
-            let guard = manager.list_models().await;
+            let guard = manager.list_models(config).await;
             guard.iter().find(|model| model.model == slug).cloned()
         } {
             return model;
@@ -281,5 +408,77 @@ async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> M
             panic!("timed out waiting for the remote model {slug} to appear");
         }
         sleep(Duration::from_millis(25)).await;
+    }
+}
+
+struct RemoteModelsHarness {
+    codex: Arc<CodexConversation>,
+    cwd: Arc<TempDir>,
+    config: Config,
+    conversation_manager: Arc<ConversationManager>,
+}
+
+// todo(aibrahim): move this to with_model_provier in test_codex
+async fn build_remote_models_harness<F>(
+    server: &MockServer,
+    mutate_config: F,
+) -> Result<RemoteModelsHarness>
+where
+    F: FnOnce(&mut Config),
+{
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let home = Arc::new(TempDir::new()?);
+    let cwd = Arc::new(TempDir::new()?);
+
+    let mut config = load_default_config_for_test(&home).await;
+    config.cwd = cwd.path().to_path_buf();
+    config.features.enable(Feature::RemoteModels);
+
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    config.model_provider = provider.clone();
+
+    mutate_config(&mut config);
+
+    let conversation_manager = Arc::new(ConversationManager::with_models_provider(auth, provider));
+
+    let new_conversation = conversation_manager
+        .new_conversation(config.clone())
+        .await?;
+
+    Ok(RemoteModelsHarness {
+        codex: new_conversation.conversation,
+        cwd,
+        config,
+        conversation_manager,
+    })
+}
+
+fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> ModelInfo {
+    ModelInfo {
+        slug: slug.to_string(),
+        display_name: format!("{slug} display"),
+        description: Some(format!("{slug} description")),
+        default_reasoning_level: ReasoningEffort::Medium,
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        }],
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility,
+        supported_in_api: true,
+        priority,
+        upgrade: None,
+        base_instructions: None,
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: None,
+        experimental_supported_tools: Vec::new(),
     }
 }

@@ -12,42 +12,46 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
-[features]
-# Compile-time gate for OTLP support; disabled by default.
-# Downstream crates can enable via `features = ["otel"]`.
-default = []
-otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tonic"]
-
 [dependencies]
 chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-api = { workspace = true }
 codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
-opentelemetry = { workspace = true, features = ["logs"], optional = true }
+opentelemetry = { workspace = true, features = ["logs", "trace"] }
+opentelemetry-appender-tracing = { workspace = true }
 opentelemetry-otlp = { workspace = true, features = [
     "grpc-tonic",
     "http-proto",
     "http-json",
     "logs",
+    "trace",
     "reqwest-blocking-client",
     "reqwest-rustls",
     "tls",
     "tls-roots",
-], optional = true }
+]}
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
     "logs",
     "rt-tokio",
-], optional = true }
+    "trace",
+]}
 http = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum_macros = { workspace = true }
 tokio = { workspace = true }
-tonic = { workspace = true, optional = true, features = [
+tonic = { workspace = true, features = [
     "transport",
     "tls-native-roots",
     "tls-ring",
 ] }
 tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }

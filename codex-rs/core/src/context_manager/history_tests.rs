@@ -699,11 +699,8 @@ fn normalize_mixed_inserts_and_removals() {
     );
 }
 
-// In debug builds we panic on normalization errors instead of silently fixing them.
-#[cfg(debug_assertions)]
 #[test]
-#[should_panic]
-fn normalize_adds_missing_output_for_function_call_panics_in_debug() {
+fn normalize_adds_missing_output_for_function_call_inserts_output() {
     let items = vec![ResponseItem::FunctionCall {
         id: None,
         name: "do_it".to_string(),
@@ -712,6 +709,24 @@ fn normalize_adds_missing_output_for_function_call_panics_in_debug() {
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history();
+    assert_eq!(
+        h.contents(),
+        vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "do_it".to_string(),
+                arguments: "{}".to_string(),
+                call_id: "call-x".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-x".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "aborted".to_string(),
+                    ..Default::default()
+                },
+            },
+        ]
+    );
 }
 
 #[cfg(debug_assertions)]

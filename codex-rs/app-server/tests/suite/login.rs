@@ -1,8 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
-use codex_app_server_protocol::CancelLoginChatGptParams;
-use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -14,7 +12,6 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use serial_test::serial;
 use std::path::Path;
-use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -84,48 +81,6 @@ async fn logout_chatgpt_removes_auth() -> Result<()> {
     let status: GetAuthStatusResponse = to_response(status_resp)?;
     assert_eq!(status.auth_method, None);
     assert_eq!(status.auth_token, None);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// Serialize tests that launch the login server since it binds to a fixed port.
-#[serial(login_port)]
-async fn login_and_cancel_chatgpt() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let login_id = mcp.send_login_chat_gpt_request().await?;
-    let login_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(login_id)),
-    )
-    .await??;
-    let login: LoginChatGptResponse = to_response(login_resp)?;
-
-    let cancel_id = mcp
-        .send_cancel_login_chat_gpt_request(CancelLoginChatGptParams {
-            login_id: login.login_id,
-        })
-        .await?;
-    let cancel_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-    )
-    .await??;
-    let _ok: CancelLoginChatGptResponse = to_response(cancel_resp)?;
-
-    // Optionally observe the completion notification; do not fail if it races.
-    let maybe_note = timeout(
-        Duration::from_secs(2),
-        mcp.read_stream_until_notification_message("codex/event/login_chat_gpt_complete"),
-    )
-    .await;
-    if maybe_note.is_err() {
-        eprintln!("warning: did not observe login_chat_gpt_complete notification after cancel");
-    }
     Ok(())
 }
 

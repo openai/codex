@@ -12,6 +12,7 @@ use crate::security_report_viewer::build_report_html;
 use crate::status_indicator_widget::fmt_elapsed_compact;
 use crate::text_formatting::truncate_text;
 use base64::Engine;
+use codex_client::CodexHttpClient;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
@@ -22,7 +23,6 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::default_client::CodexHttpClient;
 use codex_core::default_client::CodexRequestBuilder;
 use codex_core::default_client::create_client;
 use codex_core::default_retry_backoff;
@@ -38,6 +38,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SubAgentSource;
 use codex_core::protocol::TokenUsage;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -110,6 +111,8 @@ const MAX_FILE_SEARCH_RESULTS: usize = 40;
 // Not related to per-file search/tool attempts. Defaults to 3.
 const BUG_FINDING_PASSES: usize = 1;
 const BUG_POLISH_CONCURRENCY: usize = 8;
+const BUG_DEDUP_CONFIDENCE_THRESHOLD: f32 = 0.85;
+const BUG_DEDUP_PROMPT_MAX_CHARS: usize = 120_000;
 const COMMAND_PREVIEW_MAX_LINES: usize = 2;
 const COMMAND_PREVIEW_MAX_GRAPHEMES: usize = 96;
 const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
@@ -117,7 +120,7 @@ const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
 const FILE_TRIAGE_MODEL: &str = "gpt-5-codex-mini";
-const SPEC_GENERATION_MODEL: &str = "gpt-5-codex";
+const SPEC_GENERATION_MODEL: &str = "gpt-5.2";
 const THREAT_MODEL_MODEL: &str = "gpt-5-codex";
 const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
 // prompts moved to `security_prompts.rs`
@@ -279,7 +282,7 @@ pub(crate) fn extract_linear_issue_ref(input: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
         Regex::new(r"(?i)linear\.app/[^\s]+/issue/([A-Z0-9]+-[0-9]+)|\b([A-Z][A-Z0-9]+-[0-9]+)\b")
-            .expect("linear regex compiles")
+            .unwrap_or_else(|error| panic!("failed to compile Linear issue regex: {error}"))
     });
     re.captures_iter(input)
         .find_map(|caps| caps.get(1).or_else(|| caps.get(2)))
@@ -391,6 +394,48 @@ pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecuri
     })
 }
 
+pub fn latest_completed_review_candidate(
+    repo_path: &Path,
+) -> Option<RunningSecurityReviewCandidate> {
+    let storage_root = security_review_storage_root(repo_path);
+    let entries = fs::read_dir(storage_root).ok()?;
+    let mut candidates: Vec<(String, PathBuf, SecurityReviewCheckpoint)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(checkpoint) = load_checkpoint(&path) else {
+            continue;
+        };
+        if checkpoint.status != SecurityReviewCheckpointStatus::Complete {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .to_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            });
+        candidates.push((name, path, checkpoint));
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    let (_, path, checkpoint) = candidates.into_iter().next()?;
+    Some(RunningSecurityReviewCandidate {
+        output_root: path,
+        checkpoint,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SecurityReviewMode {
     #[default]
@@ -437,6 +482,8 @@ pub struct SecurityReviewRequest {
     pub skip_auto_scope_confirmation: bool,
     pub auto_scope_prompt: Option<String>,
     pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
+    // When true, rebuild artifacts even if the checkpoint is already complete.
+    pub rebuild_completed_review: bool,
     // Optional Linear issue reference to sync status and create child tickets.
     pub linear_issue: Option<String>,
 }
@@ -2164,7 +2211,17 @@ fn build_bug_records(
 
 fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLinkInfo>) -> String {
     let mut sections: Vec<String> = Vec::new();
-    for snapshot in snapshots {
+    let mut ordered: Vec<&BugSnapshot> = snapshots.iter().collect();
+    ordered.sort_by(|a, b| match (a.bug.risk_rank, b.bug.risk_rank) {
+        (Some(ra), Some(rb)) => ra.cmp(&rb),
+        (Some(_), None) => CmpOrdering::Less,
+        (None, Some(_)) => CmpOrdering::Greater,
+        _ => severity_rank(&a.bug.severity)
+            .cmp(&severity_rank(&b.bug.severity))
+            .then_with(|| a.bug.summary_id.cmp(&b.bug.summary_id)),
+    });
+
+    for snapshot in ordered {
         let base = snapshot.original_markdown.trim();
         if base.is_empty() {
             continue;
@@ -2486,6 +2543,127 @@ fn snapshot_bugs(snapshot: &SecurityReviewSnapshot) -> Vec<SecurityReviewBug> {
         .iter()
         .map(|entry| entry.bug.clone())
         .collect()
+}
+
+fn snapshot_summaries_and_details(
+    snapshot: &SecurityReviewSnapshot,
+) -> (Vec<BugSummary>, Vec<BugDetail>) {
+    let mut summaries: Vec<BugSummary> = Vec::with_capacity(snapshot.bugs.len());
+    let mut details: Vec<BugDetail> = Vec::with_capacity(snapshot.bugs.len());
+
+    for entry in &snapshot.bugs {
+        let bug = entry.bug.clone();
+        let markdown = entry.original_markdown.clone();
+        let vulnerability_tag = bug.vulnerability_tag.clone().or_else(|| {
+            extract_vulnerability_tag_from_bug_markdown(entry.original_markdown.as_str())
+        });
+
+        summaries.push(BugSummary {
+            id: bug.summary_id,
+            title: bug.title,
+            file: bug.file,
+            severity: bug.severity,
+            impact: bug.impact,
+            likelihood: bug.likelihood,
+            recommendation: bug.recommendation,
+            blame: bug.blame,
+            risk_score: bug.risk_score,
+            risk_rank: bug.risk_rank,
+            risk_reason: bug.risk_reason,
+            verification_types: bug.verification_types,
+            vulnerability_tag,
+            validation: bug.validation,
+            source_path: PathBuf::new(),
+            markdown: markdown.clone(),
+            author_github: bug.assignee_github,
+        });
+
+        details.push(BugDetail {
+            summary_id: bug.summary_id,
+            original_markdown: markdown,
+        });
+    }
+
+    (summaries, details)
+}
+
+fn extract_vulnerability_tag_from_bug_markdown(markdown: &str) -> Option<String> {
+    markdown
+        .lines()
+        .map(str::trim)
+        .find_map(parse_taxonomy_vuln_tag)
+}
+
+fn count_files_with_findings_from_snapshots(snapshots: &[BugSnapshot]) -> usize {
+    let mut files: HashSet<String> = HashSet::new();
+    for snapshot in snapshots {
+        for loc in extract_file_locations_for_dedupe(&snapshot.bug.file) {
+            let Some((path, _)) = loc.split_once("#L") else {
+                continue;
+            };
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                files.insert(trimmed.to_string());
+            }
+        }
+    }
+    files.len()
+}
+
+fn dedupe_security_review_snapshot(snapshot: &mut SecurityReviewSnapshot) -> usize {
+    let mut summaries: Vec<BugSummary> = Vec::with_capacity(snapshot.bugs.len());
+    let mut details: Vec<BugDetail> = Vec::with_capacity(snapshot.bugs.len());
+
+    for entry in snapshot.bugs.iter_mut() {
+        if entry.bug.vulnerability_tag.is_none() {
+            entry.bug.vulnerability_tag =
+                extract_vulnerability_tag_from_bug_markdown(entry.original_markdown.as_str());
+        }
+
+        let bug = entry.bug.clone();
+        let markdown = entry.original_markdown.clone();
+        summaries.push(BugSummary {
+            id: bug.summary_id,
+            title: bug.title,
+            file: bug.file,
+            severity: bug.severity,
+            impact: bug.impact,
+            likelihood: bug.likelihood,
+            recommendation: bug.recommendation,
+            blame: bug.blame,
+            risk_score: bug.risk_score,
+            risk_rank: bug.risk_rank,
+            risk_reason: bug.risk_reason,
+            verification_types: bug.verification_types,
+            vulnerability_tag: bug.vulnerability_tag,
+            validation: bug.validation,
+            source_path: PathBuf::new(),
+            markdown: markdown.clone(),
+            author_github: bug.assignee_github,
+        });
+        details.push(BugDetail {
+            summary_id: bug.summary_id,
+            original_markdown: markdown,
+        });
+    }
+
+    let before = summaries.len();
+    if before == 0 {
+        return 0;
+    }
+
+    let (mut summaries, mut details, removed) = dedupe_bug_summaries(summaries, details);
+    rank_bug_summaries_for_reporting(&mut summaries);
+    normalize_bug_identifiers(&mut summaries, &mut details);
+    let (_bugs, snapshots) = build_bug_records(summaries, details);
+
+    snapshot.bugs = snapshots;
+    snapshot.findings_summary = format_findings_summary(
+        snapshot.bugs.len(),
+        count_files_with_findings_from_snapshots(&snapshot.bugs),
+    );
+
+    removed
 }
 
 pub(crate) fn resume_completed_review_from_checkpoint(
@@ -3110,8 +3288,10 @@ pub async fn run_security_review(
             while let Some(event) = rx.recv().await {
                 match event {
                     AppEvent::SecurityReviewLog(message) => {
-                        eprintln!("{message}");
                         write_log_sink(&log_sink_for_task, message.as_str());
+                        if log_sink_for_task.is_none() {
+                            tracing::info!("{message}");
+                        }
                     }
                     AppEvent::SecurityReviewCommandStatus {
                         summary,
@@ -3125,15 +3305,17 @@ pub async fn run_security_review(
                             SecurityReviewCommandState::NoMatches => "no matches",
                             SecurityReviewCommandState::Error => "error",
                         };
-                        eprintln!("Command [{state_label}]: {summary}");
-                        write_log_sink(
-                            &log_sink_for_task,
-                            format!("Command [{state_label}]: {summary}").as_str(),
-                        );
+                        let command_message = format!("Command [{state_label}]: {summary}");
+                        write_log_sink(&log_sink_for_task, command_message.as_str());
+                        if log_sink_for_task.is_none() {
+                            tracing::info!("{command_message}");
+                        }
                         for line in preview {
                             if !line.trim().is_empty() {
-                                eprintln!("{line}");
                                 write_log_sink(&log_sink_for_task, line.as_str());
+                                if log_sink_for_task.is_none() {
+                                    tracing::info!("{line}");
+                                }
                             }
                         }
                     }
@@ -3167,6 +3349,7 @@ pub async fn run_security_review(
     let resuming = checkpoint.is_some();
     if let Some(checkpoint) = checkpoint.as_ref()
         && checkpoint.status == SecurityReviewCheckpointStatus::Complete
+        && !request.rebuild_completed_review
     {
         return resume_completed_review_from_checkpoint(
             checkpoint.clone(),
@@ -4137,7 +4320,7 @@ pub async fn run_security_review(
     {
         match tokio_fs::read(path).await {
             Ok(bytes) => match serde_json::from_slice::<SecurityReviewSnapshot>(&bytes) {
-                Ok(loaded) => {
+                Ok(mut loaded) => {
                     record(
                         &mut logs,
                         format!(
@@ -4145,6 +4328,71 @@ pub async fn run_security_review(
                             path.display()
                         ),
                     );
+
+                    let mut removed = dedupe_security_review_snapshot(&mut loaded);
+                    if loaded.bugs.len() > 1 {
+                        let dedupe_model = if request.triage_model.trim().is_empty() {
+                            FILE_TRIAGE_MODEL
+                        } else {
+                            request.triage_model.as_str()
+                        };
+                        let (summaries, details) = snapshot_summaries_and_details(&loaded);
+                        let llm_outcome = llm_dedupe_bug_summaries(
+                            &model_client,
+                            &request.provider,
+                            &request.auth,
+                            dedupe_model,
+                            summaries,
+                            details,
+                            progress_sender.clone(),
+                            metrics.clone(),
+                        )
+                        .await;
+                        for line in llm_outcome.logs {
+                            record(&mut logs, line);
+                        }
+                        if llm_outcome.removed > 0 {
+                            let llm_removed = llm_outcome.removed;
+                            record(
+                                &mut logs,
+                                format!(
+                                    "Deduplicated {llm_removed} additional finding{} via LLM while resuming from snapshot.",
+                                    if llm_removed == 1 { "" } else { "s" }
+                                ),
+                            );
+                            let mut summaries = llm_outcome.summaries;
+                            let mut details = llm_outcome.details;
+                            rank_bug_summaries_for_reporting(&mut summaries);
+                            normalize_bug_identifiers(&mut summaries, &mut details);
+                            let (_bugs, snapshots) = build_bug_records(summaries, details);
+                            loaded.bugs = snapshots;
+                            loaded.findings_summary = format_findings_summary(
+                                loaded.bugs.len(),
+                                count_files_with_findings_from_snapshots(&loaded.bugs),
+                            );
+                            removed = removed.saturating_add(llm_removed);
+                        }
+                    }
+                    if removed > 0 {
+                        record(
+                            &mut logs,
+                            format!(
+                                "Deduplicated {removed} finding{} while resuming from snapshot.",
+                                if removed == 1 { "" } else { "s" }
+                            ),
+                        );
+                        if let Ok(updated) = serde_json::to_vec_pretty(&loaded)
+                            && let Err(err) = tokio_fs::write(path, updated).await
+                        {
+                            record(
+                                &mut logs,
+                                format!(
+                                    "Failed to persist deduplicated snapshot {}: {err}",
+                                    path.display()
+                                ),
+                            );
+                        }
+                    }
 
                     plan_tracker.mark_complete(SecurityReviewPlanStep::AnalyzeBugs);
                     plan_tracker.mark_complete(SecurityReviewPlanStep::PolishFindings);
@@ -4466,6 +4714,42 @@ pub async fn run_security_review(
             if removed > 0 {
                 let msg = format!(
                     "Deduplicated {removed} duplicated finding{} by grouping titles/tags.",
+                    if removed == 1 { "" } else { "s" }
+                );
+                record(&mut logs, msg.clone());
+                aggregated_logs.push(msg);
+            }
+        }
+
+        if all_summaries.len() > 1 {
+            let dedupe_model = if request.triage_model.trim().is_empty() {
+                FILE_TRIAGE_MODEL
+            } else {
+                request.triage_model.as_str()
+            };
+            let llm_outcome = llm_dedupe_bug_summaries(
+                &model_client,
+                &request.provider,
+                &request.auth,
+                dedupe_model,
+                all_summaries,
+                all_details,
+                progress_sender.clone(),
+                metrics.clone(),
+            )
+            .await;
+
+            all_summaries = llm_outcome.summaries;
+            all_details = llm_outcome.details;
+
+            for line in llm_outcome.logs {
+                record(&mut logs, line.clone());
+                aggregated_logs.push(line);
+            }
+            if llm_outcome.removed > 0 {
+                let removed = llm_outcome.removed;
+                let msg = format!(
+                    "Deduplicated {removed} additional finding{} via LLM clustering.",
                     if removed == 1 { "" } else { "s" }
                 );
                 record(&mut logs, msg.clone());
@@ -5040,7 +5324,7 @@ async fn fetch_linear_context_for_auto_scope(
 ) -> Result<(String, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
     let mut lin_config = config.clone();
-    lin_config.model = "gpt-5.1".to_string();
+    lin_config.model = Some("gpt-5.1".to_string());
     lin_config.model_provider = provider.clone();
     lin_config.base_instructions = Some(LINEAR_SCOPE_CONTEXT_SYSTEM_PROMPT.to_string());
     lin_config.user_instructions = None;
@@ -5051,9 +5335,7 @@ async fn fetch_linear_context_for_auto_scope(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
-    lin_config.use_experimental_use_rmcp_client = false;
+        .disable(Feature::ViewImageTool);
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -5362,7 +5644,7 @@ async fn run_linear_status_agent(
 ) -> Result<(), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
     let mut lin_config = config.clone();
-    lin_config.model = "gpt-5.1".to_string();
+    lin_config.model = Some("gpt-5.1".to_string());
     lin_config.model_provider = provider.clone();
     lin_config.base_instructions = Some(
         "Use Linear, Notion, and Google Workspace via MCP tools. Prefer MCP tools for reading/updating issues and documents. When an issue key is provided, open it directly with Linear MCP `get_issue` before any searches; avoid enumerating teams/projects/resources unless direct lookup fails. Keep repositories under ~/code; if a repository is missing under ~/code, use GitHub CLI to clone a shallow copy (depth=1), e.g., `gh repo clone owner/repo ~/code/repo -- --depth=1`."
@@ -5377,9 +5659,7 @@ async fn run_linear_status_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
-    lin_config.use_experimental_use_rmcp_client = false;
+        .disable(Feature::ViewImageTool);
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -7041,7 +7321,7 @@ async fn run_auto_scope_agent(
     let mut logs: Vec<String> = Vec::new();
 
     let mut auto_config = config.clone();
-    auto_config.model = model.to_string();
+    auto_config.model = Some(model.to_string());
     auto_config.model_provider = provider.clone();
     auto_config.base_instructions = Some(AUTO_SCOPE_SYSTEM_PROMPT.to_string());
     auto_config.user_instructions = None;
@@ -7052,10 +7332,8 @@ async fn run_auto_scope_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
+        .disable(Feature::ViewImageTool);
     auto_config.mcp_servers.clear();
-    auto_config.use_experimental_use_rmcp_client = false;
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -7573,6 +7851,333 @@ mod bug_analysis_progress_tests {
     }
 }
 
+#[cfg(test)]
+mod bug_dedupe_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_bug_markdown(title: &str, file: &str) -> String {
+        format!(
+            "### {title}\n- **File & Lines:** `{file}`\n- **Severity:** High\n- **Impact:** x\n- **Likelihood:** x\n- **Recommendation:** x\n"
+        )
+    }
+
+    fn make_bug_summary(id: usize, title: &str, file: &str, tag: Option<&str>) -> BugSummary {
+        BugSummary {
+            id,
+            title: title.to_string(),
+            file: file.to_string(),
+            severity: "High".to_string(),
+            impact: "x".to_string(),
+            likelihood: "x".to_string(),
+            recommendation: "x".to_string(),
+            blame: None,
+            risk_score: None,
+            risk_rank: None,
+            risk_reason: None,
+            verification_types: Vec::new(),
+            vulnerability_tag: tag.map(str::to_string),
+            validation: BugValidationState::default(),
+            source_path: PathBuf::new(),
+            markdown: make_bug_markdown(title, file),
+            author_github: None,
+        }
+    }
+
+    #[test]
+    fn parses_taxonomy_lines_in_common_formats() {
+        let lines = [
+            (
+                "TAXONOMY: {\"vuln_tag\":\"tls-hostname-not-verified\"}",
+                "tls-hostname-not-verified",
+            ),
+            (
+                "- TAXONOMY: {\"vuln_tag\":\"tls-hostname-not-verified\"}",
+                "tls-hostname-not-verified",
+            ),
+            (
+                "- TAXONOMY: `{\"vuln_tag\":\"tls-hostname-not-verified\"}`",
+                "tls-hostname-not-verified",
+            ),
+            (
+                "- **TAXONOMY:** `{\"vuln_tag\":\"tls-hostname-not-verified\"}`",
+                "tls-hostname-not-verified",
+            ),
+            (
+                "- TAXONOMY: {{\"vuln_tag\":\"tls-hostname-not-verified\"}}",
+                "tls-hostname-not-verified",
+            ),
+        ];
+
+        for (line, expected) in lines {
+            assert_eq!(
+                parse_taxonomy_vuln_tag(line).as_deref(),
+                Some(expected),
+                "failed to parse taxonomy line: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn dedupes_similar_vulnerability_tags() {
+        let summaries = vec![
+            make_bug_summary(
+                1,
+                "Missing hostname verification (A)",
+                "a.rs#L1-L2",
+                Some("tls-hostname-not-verified"),
+            ),
+            make_bug_summary(
+                2,
+                "Missing hostname verification (B)",
+                "b.rs#L3-L4",
+                Some("tls-hostname-bypass"),
+            ),
+        ];
+        let details = vec![
+            BugDetail {
+                summary_id: 1,
+                original_markdown: make_bug_markdown(
+                    "Missing hostname verification (A)",
+                    "a.rs#L1-L2",
+                ),
+            },
+            BugDetail {
+                summary_id: 2,
+                original_markdown: make_bug_markdown(
+                    "Missing hostname verification (B)",
+                    "b.rs#L3-L4",
+                ),
+            },
+        ];
+
+        let (summaries, details, removed) = dedupe_bug_summaries(summaries, details);
+        assert_eq!(removed, 1);
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(details.len(), 1);
+        let file = summaries[0].file.clone();
+        assert!(file.contains("a.rs#L1-L2"));
+        assert!(file.contains("b.rs#L3-L4"));
+    }
+
+    #[test]
+    fn avoids_deduping_on_generic_overlap_only() {
+        let summaries = vec![
+            make_bug_summary(
+                1,
+                "Heap buffer overflow",
+                "a.rs#L1-L2",
+                Some("heap-buffer-overflow"),
+            ),
+            make_bug_summary(
+                2,
+                "Stack buffer overflow",
+                "b.rs#L3-L4",
+                Some("stack-buffer-overflow"),
+            ),
+        ];
+        let details = vec![
+            BugDetail {
+                summary_id: 1,
+                original_markdown: make_bug_markdown("Heap buffer overflow", "a.rs#L1-L2"),
+            },
+            BugDetail {
+                summary_id: 2,
+                original_markdown: make_bug_markdown("Stack buffer overflow", "b.rs#L3-L4"),
+            },
+        ];
+
+        let (summaries, details, removed) = dedupe_bug_summaries(summaries, details);
+        assert_eq!(removed, 0);
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(details.len(), 2);
+    }
+
+    #[test]
+    fn dedupes_loaded_snapshot_bugs() {
+        let original_markdown_a = format!(
+            "{}\n- TAXONOMY: {{\"vuln_tag\":\"tls-hostname-not-verified\"}}\n",
+            make_bug_markdown("Missing hostname verification (A)", "a.rs#L1-L2")
+        );
+        let original_markdown_b = format!(
+            "{}\n- **TAXONOMY:** `{{\"vuln_tag\":\"tls-hostname-bypass\"}}`\n",
+            make_bug_markdown("Missing hostname verification (B)", "b.rs#L3-L4")
+        );
+        let mut snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: "placeholder".to_string(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 1,
+                        risk_rank: Some(1),
+                        risk_score: Some(9.0),
+                        title: "Missing hostname verification (A)".to_string(),
+                        severity: "High".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "a.rs#L1-L2".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: original_markdown_a,
+                },
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 2,
+                        risk_rank: Some(2),
+                        risk_score: Some(8.0),
+                        title: "Missing hostname verification (B)".to_string(),
+                        severity: "High".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "b.rs#L3-L4".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: original_markdown_b,
+                },
+            ],
+        };
+
+        let removed = dedupe_security_review_snapshot(&mut snapshot);
+        assert_eq!(removed, 1);
+        assert_eq!(snapshot.bugs.len(), 1);
+        assert!(snapshot.findings_summary.contains("Identified 1 finding"));
+    }
+
+    #[test]
+    fn reranks_snapshot_bugs_by_severity_after_dedupe() {
+        fn bug_markdown(title: &str, file: &str, severity: &str) -> String {
+            format!(
+                "### {title}\n- **File & Lines:** `{file}`\n- **Severity:** {severity}\n- **Impact:** x\n- **Likelihood:** x\n- **Recommendation:** x\n"
+            )
+        }
+
+        let mut snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: "placeholder".to_string(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 1,
+                        risk_rank: Some(1),
+                        risk_score: Some(90.0),
+                        title: "Medium first by old rank".to_string(),
+                        severity: "Medium".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "b.rs#L3-L4".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: bug_markdown(
+                        "Medium first by old rank",
+                        "b.rs#L3-L4",
+                        "Medium",
+                    ),
+                },
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 2,
+                        risk_rank: Some(2),
+                        risk_score: Some(50.0),
+                        title: "Low second by old rank".to_string(),
+                        severity: "Low".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "c.rs#L5-L6".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: bug_markdown("Low second by old rank", "c.rs#L5-L6", "Low"),
+                },
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 3,
+                        risk_rank: Some(3),
+                        risk_score: Some(10.0),
+                        title: "High last by old rank".to_string(),
+                        severity: "High".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "a.rs#L1-L2".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: bug_markdown("High last by old rank", "a.rs#L1-L2", "High"),
+                },
+            ],
+        };
+
+        let removed = dedupe_security_review_snapshot(&mut snapshot);
+        assert_eq!(removed, 0);
+        assert_eq!(snapshot.bugs.len(), 3);
+
+        let severities = snapshot
+            .bugs
+            .iter()
+            .map(|entry| entry.bug.severity.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(severities, vec!["High", "Medium", "Low"]);
+
+        let ranks = snapshot
+            .bugs
+            .iter()
+            .map(|entry| entry.bug.risk_rank)
+            .collect::<Vec<_>>();
+        assert_eq!(ranks, vec![Some(1), Some(2), Some(3)]);
+
+        let ids = snapshot
+            .bugs
+            .iter()
+            .map(|entry| entry.bug.summary_id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, 2, 3]);
+
+        snapshot.bugs.reverse();
+        let markdown = build_bugs_markdown(&snapshot, None);
+        let high = markdown
+            .find("### [1] High last by old rank")
+            .expect("high heading");
+        let medium = markdown
+            .find("### [2] Medium first by old rank")
+            .expect("medium heading");
+        let low = markdown
+            .find("### [3] Low second by old rank")
+            .expect("low heading");
+        assert!(high < medium);
+        assert!(medium < low);
+    }
+}
+
 async fn filter_spec_directories(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
@@ -7691,7 +8296,8 @@ async fn run_spec_agent(
     let mut logs: Vec<String> = Vec::new();
 
     let mut spec_config = config.clone();
-    spec_config.model = SPEC_GENERATION_MODEL.to_string();
+    spec_config.model = Some(SPEC_GENERATION_MODEL.to_string());
+    spec_config.model_reasoning_effort = Some(ReasoningEffort::High);
     spec_config.model_provider = provider.clone();
     spec_config.base_instructions = Some(SPEC_SYSTEM_PROMPT.to_string());
     spec_config.user_instructions = None;
@@ -7702,10 +8308,8 @@ async fn run_spec_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
+        .disable(Feature::ViewImageTool);
     spec_config.mcp_servers.clear();
-    spec_config.use_experimental_use_rmcp_client = false;
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -7823,7 +8427,7 @@ async fn run_bug_agent(
     let mut logs: Vec<String> = Vec::new();
 
     let mut bug_config = config.clone();
-    bug_config.model = model.to_string();
+    bug_config.model = Some(model.to_string());
     bug_config.model_provider = provider.clone();
     bug_config.base_instructions = Some(BUGS_SYSTEM_PROMPT.to_string());
     bug_config.user_instructions = None;
@@ -7834,10 +8438,8 @@ async fn run_bug_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::WebSearchRequest)
-        .disable(Feature::ViewImageTool)
-        .disable(Feature::RmcpClient);
+        .disable(Feature::ViewImageTool);
     bug_config.mcp_servers.clear();
-    bug_config.use_experimental_use_rmcp_client = false;
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -10179,6 +10781,42 @@ fn is_regex_parse_error(stderr: &str) -> bool {
     lowered.contains("regex parse error") || lowered.contains("error parsing regex")
 }
 
+fn parse_taxonomy_vuln_tag(line: &str) -> Option<String> {
+    let mut cursor = line.trim();
+
+    if let Some(rest) = cursor.strip_prefix('-') {
+        cursor = rest.trim_start();
+    }
+    cursor = cursor.trim_start_matches('*');
+
+    let lower = cursor.to_ascii_lowercase();
+    if !lower.starts_with("taxonomy") {
+        return None;
+    }
+
+    let colon = cursor.find(':')?;
+    let mut value = cursor[colon.saturating_add(1)..].trim();
+    value = value.trim_start_matches('*').trim();
+    value = value.trim_matches('`').trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let json = if value.starts_with("{{") && value.ends_with("}}") && value.len() >= 4 {
+        value.get(1..value.len().saturating_sub(1)).unwrap_or(value)
+    } else {
+        value
+    };
+
+    let taxonomy = serde_json::from_str::<Value>(json).ok()?;
+    let tag = taxonomy.get("vuln_tag")?.as_str()?.trim();
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag.to_string())
+    }
+}
+
 fn extract_bug_summaries(
     markdown: &str,
     default_path: &str,
@@ -10272,18 +10910,10 @@ fn extract_bug_summaries(
                         .filter(|entry| !entry.is_empty())
                         .collect();
                 }
-            } else if let Some(rest) = trimmed.strip_prefix("- TAXONOMY:") {
-                let value = rest.trim();
-                if !value.is_empty()
-                    && let Ok(taxonomy) = serde_json::from_str::<Value>(value)
-                    && let Some(tag) = taxonomy
-                        .get("vuln_tag")
-                        .and_then(Value::as_str)
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                {
-                    summary.vulnerability_tag = Some(tag);
-                }
+            } else if summary.vulnerability_tag.is_none()
+                && let Some(tag) = parse_taxonomy_vuln_tag(trimmed)
+            {
+                summary.vulnerability_tag = Some(tag);
             }
         }
     }
@@ -10322,6 +10952,92 @@ fn normalize_title_key(title: &str) -> String {
     out.trim().to_string()
 }
 
+fn extract_file_locations_for_dedupe(file_field: &str) -> Vec<String> {
+    let trimmed = file_field.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    static LOCATION_RE: OnceLock<Regex> = OnceLock::new();
+    let re = LOCATION_RE.get_or_init(|| {
+        Regex::new(r"(?P<loc>[^\s,;()]+#L\d+(?:-L\d+)?)")
+            .unwrap_or_else(|error| panic!("failed to compile file location regex: {error}"))
+    });
+
+    let mut out: Vec<String> = re
+        .captures_iter(trimmed)
+        .filter_map(|caps| caps.name("loc").map(|m| m.as_str().to_string()))
+        .collect();
+
+    if out.is_empty() {
+        out = trimmed
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+
+    out
+}
+
+fn normalize_vuln_tag_token(token: &str) -> Option<String> {
+    let lower = token.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+
+    let canonical = match lower.as_str() {
+        "verification" | "verified" | "verifying" | "verify" => "verify",
+        "validation" | "validated" | "validating" | "validate" => "verify",
+        "checks" | "check" => "verify",
+        "ssl" | "https" => "tls",
+        "certificate" | "certificates" | "x509" => "cert",
+        other => other,
+    };
+
+    Some(canonical.to_string())
+}
+
+fn vuln_tag_tokens_for_dedupe(tag: &str) -> HashSet<String> {
+    let mut tokens: HashSet<String> = tag
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter_map(normalize_vuln_tag_token)
+        .collect();
+
+    if tokens.contains("hostname")
+        && (tokens.contains("tls") || tokens.contains("cert"))
+        && !tokens.contains("verify")
+    {
+        tokens.insert("verify".to_string());
+    }
+
+    tokens
+}
+
+fn is_generic_dedupe_token(token: &str) -> bool {
+    matches!(
+        token,
+        "missing"
+            | "not"
+            | "no"
+            | "without"
+            | "lack"
+            | "lacking"
+            | "bypass"
+            | "verify"
+            | "bug"
+            | "issue"
+            | "vuln"
+            | "vulnerability"
+            | "buffer"
+            | "overflow"
+            | "oob"
+            | "read"
+            | "write"
+    )
+}
+
 fn rewrite_bug_markdown_location(markdown: &str, new_location: &str) -> Option<String> {
     if markdown.trim().is_empty() {
         return None;
@@ -10352,6 +11068,344 @@ fn rewrite_bug_markdown_location(markdown: &str, new_location: &str) -> Option<S
     Some(lines.join("\n"))
 }
 
+#[derive(Debug, Deserialize)]
+struct BugDedupeDecision {
+    id: usize,
+    canonical_id: usize,
+    #[serde(default)]
+    confidence: Option<f32>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+struct BugLlmDedupeOutcome {
+    summaries: Vec<BugSummary>,
+    details: Vec<BugDetail>,
+    removed: usize,
+    logs: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn llm_dedupe_bug_summaries(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    model: &str,
+    mut summaries: Vec<BugSummary>,
+    details: Vec<BugDetail>,
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+) -> BugLlmDedupeOutcome {
+    let mut logs: Vec<String> = Vec::new();
+
+    if summaries.len() < 2 {
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs,
+        };
+    }
+
+    let mut ordered: Vec<&BugSummary> = summaries.iter().collect();
+    ordered.sort_by_key(|summary| summary.id);
+
+    let listing = ordered
+        .into_iter()
+        .map(|summary| {
+            let mut files = extract_file_locations_for_dedupe(&summary.file);
+            if files.len() > 6 {
+                let overflow = files.len().saturating_sub(6);
+                files.truncate(6);
+                files.push(format!("...(+{overflow})"));
+            }
+
+            json!({
+                "id": summary.id,
+                "title": truncate_text(&summary.title, 160),
+                "severity": summary.severity,
+                "vulnerability_tag": summary.vulnerability_tag,
+                "files": files,
+                "recommendation": truncate_text(&summary.recommendation, 200),
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = BUG_DEDUP_PROMPT_TEMPLATE.replace("{findings}", listing.as_str());
+    if prompt.len() > BUG_DEDUP_PROMPT_MAX_CHARS {
+        logs.push(format!(
+            "Skipping LLM dedupe: prompt too large ({} chars).",
+            prompt.len()
+        ));
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs,
+        };
+    }
+
+    let response = await_with_heartbeat(
+        progress_sender,
+        "running LLM dedupe",
+        Some(&format!("{} finding(s)", summaries.len())),
+        call_model(
+            client,
+            provider,
+            auth,
+            model,
+            BUG_DEDUP_SYSTEM_PROMPT,
+            &prompt,
+            metrics.clone(),
+            0.0,
+        ),
+    )
+    .await;
+
+    let response_output = match response {
+        Ok(output) => output,
+        Err(err) => {
+            logs.push(format!("LLM dedupe model request failed: {err}"));
+            return BugLlmDedupeOutcome {
+                summaries,
+                details,
+                removed: 0,
+                logs,
+            };
+        }
+    };
+
+    if let Some(reasoning) = response_output.reasoning.as_ref() {
+        let none_sender: Option<AppEventSender> = None;
+        let none_sink: Option<Arc<SecurityReviewLogSink>> = None;
+        log_model_reasoning(reasoning, &none_sender, &none_sink, &mut logs);
+    }
+
+    let mut decisions: Vec<BugDedupeDecision> = Vec::new();
+    for raw_line in response_output.text.lines() {
+        let trimmed = raw_line.trim().trim_matches('`');
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<BugDedupeDecision>(trimmed) {
+            Ok(entry) => decisions.push(entry),
+            Err(_) => continue,
+        }
+    }
+
+    if decisions.is_empty() {
+        logs.push("LLM dedupe returned no parseable JSON Lines; skipping.".to_string());
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs,
+        };
+    }
+
+    #[derive(Clone)]
+    struct UnionFind {
+        parent: Vec<usize>,
+        rank: Vec<u8>,
+    }
+
+    impl UnionFind {
+        fn new(len: usize) -> Self {
+            Self {
+                parent: (0..len).collect(),
+                rank: vec![0; len],
+            }
+        }
+
+        fn find(&mut self, mut x: usize) -> usize {
+            let mut root = x;
+            while self.parent[root] != root {
+                root = self.parent[root];
+            }
+            while self.parent[x] != x {
+                let parent = self.parent[x];
+                self.parent[x] = root;
+                x = parent;
+            }
+            root
+        }
+
+        fn union(&mut self, a: usize, b: usize) {
+            let ra = self.find(a);
+            let rb = self.find(b);
+            if ra == rb {
+                return;
+            }
+
+            let rank_a = self.rank[ra];
+            let rank_b = self.rank[rb];
+            if rank_a < rank_b {
+                self.parent[ra] = rb;
+            } else if rank_b < rank_a {
+                self.parent[rb] = ra;
+            } else {
+                self.parent[rb] = ra;
+                self.rank[ra] = rank_a.saturating_add(1);
+            }
+        }
+    }
+
+    let id_to_index: HashMap<usize, usize> = summaries
+        .iter()
+        .enumerate()
+        .map(|(idx, summary)| (summary.id, idx))
+        .collect();
+
+    let mut uf = UnionFind::new(summaries.len());
+    let mut proposed_merges = 0usize;
+    let mut accepted_merges = 0usize;
+    for decision in decisions {
+        if decision.id == decision.canonical_id {
+            continue;
+        }
+        proposed_merges += 1;
+        let confidence = decision.confidence.unwrap_or(0.0);
+        if confidence < BUG_DEDUP_CONFIDENCE_THRESHOLD {
+            continue;
+        }
+        let Some(&a) = id_to_index.get(&decision.id) else {
+            continue;
+        };
+        let Some(&b) = id_to_index.get(&decision.canonical_id) else {
+            continue;
+        };
+        uf.union(a, b);
+        accepted_merges += 1;
+    }
+
+    #[derive(Clone)]
+    struct GroupAgg {
+        rep_index: usize,
+        file_set: Vec<String>,
+        members: Vec<usize>,
+    }
+
+    let mut root_to_group: HashMap<usize, GroupAgg> = HashMap::new();
+    for (idx, summary) in summaries.iter().enumerate() {
+        let root = uf.find(idx);
+        let entry = root_to_group.entry(root).or_insert_with(|| GroupAgg {
+            rep_index: idx,
+            file_set: Vec::new(),
+            members: Vec::new(),
+        });
+
+        let rep = &summaries[entry.rep_index];
+        let rep_risk = rep.risk_rank.unwrap_or(usize::MAX);
+        let cur_risk = summary.risk_rank.unwrap_or(usize::MAX);
+        if cur_risk < rep_risk
+            || (cur_risk == rep_risk
+                && (severity_rank(&summary.severity) < severity_rank(&rep.severity)
+                    || (severity_rank(&summary.severity) == severity_rank(&rep.severity)
+                        && summary.id < rep.id)))
+        {
+            entry.rep_index = idx;
+        }
+
+        for loc in extract_file_locations_for_dedupe(&summary.file) {
+            if !entry.file_set.iter().any(|existing| existing == &loc) {
+                entry.file_set.push(loc);
+            }
+        }
+        entry.members.push(summary.id);
+    }
+
+    if root_to_group.len() == summaries.len() {
+        logs.push(format!(
+            "LLM dedupe proposed {proposed_merges} merge(s); accepted {accepted_merges}; no groups formed."
+        ));
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs,
+        };
+    }
+
+    logs.push(format!(
+        "LLM dedupe proposed {proposed_merges} merge(s); accepted {accepted_merges}."
+    ));
+
+    let mut detail_by_id: HashMap<usize, String> = HashMap::new();
+    for detail in &details {
+        detail_by_id.insert(detail.summary_id, detail.original_markdown.clone());
+    }
+
+    let mut keep_ids: HashSet<usize> = HashSet::new();
+    let id_to_index: HashMap<usize, usize> = summaries
+        .iter()
+        .enumerate()
+        .map(|(idx, summary)| (summary.id, idx))
+        .collect();
+    for agg in root_to_group.values() {
+        let rep_id = summaries[agg.rep_index].id;
+        let location_joined = if agg.file_set.is_empty() {
+            summaries[agg.rep_index].file.clone()
+        } else {
+            agg.file_set.join(", ")
+        };
+
+        let mut types: Vec<String> = Vec::new();
+        for m_id in &agg.members {
+            if let Some(&idx) = id_to_index.get(m_id) {
+                for entry in &summaries[idx].verification_types {
+                    if !types
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(entry))
+                    {
+                        types.push(entry.clone());
+                    }
+                }
+            }
+        }
+
+        let mut best_severity = summaries[agg.rep_index].severity.clone();
+        for m_id in &agg.members {
+            if let Some(&idx) = id_to_index.get(m_id)
+                && severity_rank(&summaries[idx].severity) < severity_rank(&best_severity)
+            {
+                best_severity = summaries[idx].severity.clone();
+            }
+        }
+
+        let rep_mut = &mut summaries[agg.rep_index];
+        rep_mut.file = location_joined.clone();
+        rep_mut.severity = best_severity;
+        rep_mut.verification_types = types;
+        if let Some(updated) = rewrite_bug_markdown_location(&rep_mut.markdown, &location_joined) {
+            rep_mut.markdown = updated.clone();
+            detail_by_id.insert(rep_id, updated);
+        }
+        keep_ids.insert(rep_id);
+    }
+
+    summaries.retain(|summary| keep_ids.contains(&summary.id));
+
+    let mut new_details: Vec<BugDetail> = Vec::with_capacity(keep_ids.len());
+    for id in &keep_ids {
+        if let Some(markdown) = detail_by_id.get(id) {
+            new_details.push(BugDetail {
+                summary_id: *id,
+                original_markdown: markdown.clone(),
+            });
+        }
+    }
+
+    let removed = details.len().saturating_sub(new_details.len());
+    BugLlmDedupeOutcome {
+        summaries,
+        details: new_details,
+        removed,
+        logs,
+    }
+}
+
 fn dedupe_bug_summaries(
     mut summaries: Vec<BugSummary>,
     details: Vec<BugDetail>,
@@ -10372,13 +11426,113 @@ fn dedupe_bug_summaries(
         members: Vec<usize>,
     }
 
+    #[derive(Clone)]
+    struct UnionFind {
+        parent: Vec<usize>,
+        rank: Vec<u8>,
+    }
+
+    impl UnionFind {
+        fn new(len: usize) -> Self {
+            Self {
+                parent: (0..len).collect(),
+                rank: vec![0; len],
+            }
+        }
+
+        fn find(&mut self, mut x: usize) -> usize {
+            let mut root = x;
+            while self.parent[root] != root {
+                root = self.parent[root];
+            }
+            while self.parent[x] != x {
+                let parent = self.parent[x];
+                self.parent[x] = root;
+                x = parent;
+            }
+            root
+        }
+
+        fn union(&mut self, a: usize, b: usize) {
+            let ra = self.find(a);
+            let rb = self.find(b);
+            if ra == rb {
+                return;
+            }
+
+            let rank_a = self.rank[ra];
+            let rank_b = self.rank[rb];
+            if rank_a < rank_b {
+                self.parent[ra] = rb;
+            } else if rank_b < rank_a {
+                self.parent[rb] = ra;
+            } else {
+                self.parent[rb] = ra;
+                self.rank[ra] = rank_a.saturating_add(1);
+            }
+        }
+    }
+
+    let tag_tokens: Vec<Option<HashSet<String>>> = summaries
+        .iter()
+        .map(|summary| {
+            summary
+                .vulnerability_tag
+                .as_deref()
+                .map(vuln_tag_tokens_for_dedupe)
+        })
+        .collect();
+
+    let mut uf = UnionFind::new(summaries.len());
+
+    for i in 0..summaries.len() {
+        let Some(a_tokens) = tag_tokens[i].as_ref() else {
+            continue;
+        };
+        for (j, tokens) in tag_tokens.iter().enumerate().skip(i + 1) {
+            let Some(b_tokens) = tokens.as_ref() else {
+                continue;
+            };
+
+            let (smaller, larger) = if a_tokens.len() <= b_tokens.len() {
+                (a_tokens, b_tokens)
+            } else {
+                (b_tokens, a_tokens)
+            };
+
+            let mut intersection = 0usize;
+            let mut informative = 0usize;
+            for token in smaller {
+                if larger.contains(token) {
+                    intersection += 1;
+                    if !is_generic_dedupe_token(token.as_str()) {
+                        informative += 1;
+                    }
+                }
+            }
+            if intersection < 2 || informative < 1 {
+                continue;
+            }
+            let union = a_tokens.len() + b_tokens.len() - intersection;
+            if union == 0 {
+                continue;
+            }
+            let jaccard = intersection as f32 / union as f32;
+            if jaccard >= 0.5 {
+                uf.union(i, j);
+            }
+        }
+    }
+
     let mut key_to_group: HashMap<String, GroupAgg> = HashMap::new();
     for (idx, s) in summaries.iter().enumerate() {
-        let key = if let Some(tag) = s.vulnerability_tag.as_ref() {
-            format!("tag::{}", tag.trim().to_ascii_lowercase())
+        let key = if s.vulnerability_tag.is_some() {
+            let root = uf.find(idx);
+            format!("tag_group::{root}")
         } else {
             format!("title::{}", normalize_title_key(&s.title))
         };
+
         let entry = key_to_group.entry(key).or_insert_with(|| GroupAgg {
             rep_index: idx,
             file_set: Vec::new(),
@@ -10386,15 +11540,21 @@ fn dedupe_bug_summaries(
         });
 
         let rep = &summaries[entry.rep_index];
-        let rep_rank = severity_rank(&rep.severity);
-        let cur_rank = severity_rank(&s.severity);
-        if cur_rank < rep_rank || (cur_rank == rep_rank && s.id < rep.id) {
+        let rep_risk = rep.risk_rank.unwrap_or(usize::MAX);
+        let cur_risk = s.risk_rank.unwrap_or(usize::MAX);
+        if cur_risk < rep_risk
+            || (cur_risk == rep_risk
+                && (severity_rank(&s.severity) < severity_rank(&rep.severity)
+                    || (severity_rank(&s.severity) == severity_rank(&rep.severity)
+                        && s.id < rep.id)))
+        {
             entry.rep_index = idx;
         }
 
-        let loc = s.file.trim().to_string();
-        if !loc.is_empty() && !entry.file_set.iter().any(|e| e == &loc) {
-            entry.file_set.push(loc);
+        for loc in extract_file_locations_for_dedupe(&s.file) {
+            if !entry.file_set.iter().any(|existing| existing == &loc) {
+                entry.file_set.push(loc);
+            }
         }
         entry.members.push(s.id);
     }
@@ -10476,6 +11636,24 @@ fn bug_summary_cmp(a: &BugSummary, b: &BugSummary) -> CmpOrdering {
         _ => severity_rank(&a.severity)
             .cmp(&severity_rank(&b.severity))
             .then_with(|| a.id.cmp(&b.id)),
+    }
+}
+
+fn rank_bug_summaries_for_reporting(summaries: &mut [BugSummary]) {
+    summaries.sort_by(|a, b| {
+        severity_rank(&a.severity)
+            .cmp(&severity_rank(&b.severity))
+            .then_with(|| match (a.risk_score, b.risk_score) {
+                (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(CmpOrdering::Equal),
+                (Some(_), None) => CmpOrdering::Less,
+                (None, Some(_)) => CmpOrdering::Greater,
+                _ => CmpOrdering::Equal,
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    for (idx, summary) in summaries.iter_mut().enumerate() {
+        summary.risk_rank = Some(idx + 1);
     }
 }
 
@@ -11485,35 +12663,23 @@ async fn rerank_bugs_by_risk(
         }
     }
 
-    summaries.sort_by(|a, b| match (a.risk_score, b.risk_score) {
-        (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(CmpOrdering::Equal),
-        (Some(_), None) => CmpOrdering::Less,
-        (None, Some(_)) => CmpOrdering::Greater,
-        _ => severity_rank(&a.severity)
-            .cmp(&severity_rank(&b.severity))
-            .then_with(|| a.id.cmp(&b.id)),
-    });
+    rank_bug_summaries_for_reporting(summaries);
 
-    for (idx, summary) in summaries.iter_mut().enumerate() {
-        summary.risk_rank = Some(idx + 1);
+    for (idx, summary) in summaries.iter().enumerate() {
+        let id = summary.id;
+        let rank = summary.risk_rank.unwrap_or(idx + 1);
+        let severity = summary.severity.as_str();
         let log_entry = if let Some(score) = summary.risk_score {
             let reason = summary
                 .risk_reason
                 .as_deref()
                 .unwrap_or("no reason provided");
             format!(
-                "Risk rerank: bug #{id} -> priority {rank} (score {score:.1}, severity {severity}) — {reason}",
-                id = summary.id,
-                rank = idx + 1,
-                score = score,
-                severity = summary.severity,
-                reason = reason
+                "Risk rerank: bug #{id} -> priority {rank} (score {score:.1}, severity {severity}) — {reason}"
             )
         } else {
             format!(
-                "Risk rerank: bug #{id} retained original severity {severity} (no model decision)",
-                id = summary.id,
-                severity = summary.severity
+                "Risk rerank: bug #{id} retained original severity {severity} (no model decision)"
             )
         };
         logs.push(log_entry);

@@ -13,6 +13,7 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::user_instructions::SkillInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_shell_command::is_user_shell_command_text;
 
@@ -23,7 +24,9 @@ fn is_session_prefix(text: &str) -> bool {
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
-    if UserInstructions::is_user_instructions(message) {
+    if UserInstructions::is_user_instructions(message)
+        || SkillInstructions::is_skill_instructions(message)
+    {
         return None;
     }
 
@@ -198,14 +201,22 @@ mod tests {
                     text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
             },
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
-            }],
-        },
-    ];
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
+                        .to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
+                }],
+            },
+        ];
 
         for item in items {
             let turn_item = parse_turn_item(&item);

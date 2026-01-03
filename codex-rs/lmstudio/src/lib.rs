@@ -11,7 +11,10 @@ pub const DEFAULT_OSS_MODEL: &str = "openai/gpt-oss-20b";
 /// - Ensures a local LM Studio server is reachable.
 /// - Checks if the model exists locally and downloads it if missing.
 pub async fn ensure_oss_ready(config: &Config) -> std::io::Result<()> {
-    let model: &str = config.model.as_ref();
+    let model = match config.model.as_ref() {
+        Some(model) => model,
+        None => DEFAULT_OSS_MODEL,
+    };
 
     // Verify local LM Studio is reachable.
     let lmstudio_client = LMStudioClient::try_from_provider(config).await?;

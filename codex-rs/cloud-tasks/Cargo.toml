@@ -37,6 +37,9 @@ unicode-width = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 supports-color = { workspace = true }
 
+[dependencies.async-trait]
+workspace = true
+
 [dev-dependencies]
 async-trait = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -33,7 +33,9 @@ use tokio::sync::Mutex;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::sandboxing::SandboxPermissions;
 
+mod async_watcher;
 mod errors;
 mod session;
 mod session_manager;
@@ -50,6 +52,24 @@ pub(crate) const MAX_UNIFIED_EXEC_SESSIONS: usize = 64;
 
 // Send a warning message to the models when it reaches this number of sessions.
 pub(crate) const WARNING_UNIFIED_EXEC_SESSIONS: usize = 60;
+
+#[derive(Debug, Default)]
+pub(crate) struct CommandTranscript {
+    pub data: Vec<u8>,
+}
+
+impl CommandTranscript {
+    pub fn append(&mut self, bytes: &[u8]) {
+        self.data.extend_from_slice(bytes);
+        if self.data.len() > UNIFIED_EXEC_OUTPUT_MAX_BYTES {
+            let excess = self
+                .data
+                .len()
+                .saturating_sub(UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+            self.data.drain(..excess);
+        }
+    }
+}
 
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
@@ -74,7 +94,7 @@ pub(crate) struct ExecCommandRequest {
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
-    pub with_escalated_permissions: Option<bool>,
+    pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
 }
 
@@ -92,18 +112,14 @@ pub(crate) struct UnifiedExecResponse {
     pub chunk_id: String,
     pub wall_time: Duration,
     pub output: String,
+    /// Raw bytes returned for this unified exec call before any truncation.
+    pub raw_output: Vec<u8>,
     pub process_id: Option<String>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
     pub session_command: Option<Vec<String>>,
 }
 
-#[derive(Default)]
-pub(crate) struct UnifiedExecSessionManager {
-    session_store: Mutex<SessionStore>,
-}
-
-// Required for mutex sharing.
 #[derive(Default)]
 pub(crate) struct SessionStore {
     sessions: HashMap<String, SessionEntry>,
@@ -115,22 +131,27 @@ impl SessionStore {
         self.reserved_sessions_id.remove(session_id);
         self.sessions.remove(session_id)
     }
+}
 
-    pub(crate) fn clear(&mut self) {
-        self.reserved_sessions_id.clear();
-        self.sessions.clear();
+pub(crate) struct UnifiedExecSessionManager {
+    session_store: Mutex<SessionStore>,
+}
+
+impl Default for UnifiedExecSessionManager {
+    fn default() -> Self {
+        Self {
+            session_store: Mutex::new(SessionStore::default()),
+        }
     }
 }
 
 struct SessionEntry {
-    session: UnifiedExecSession,
+    session: Arc<UnifiedExecSession>,
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,
     process_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
-    started_at: tokio::time::Instant,
     last_used: tokio::time::Instant,
 }
 
@@ -166,8 +187,8 @@ mod tests {
 
     use super::session::OutputBufferState;
 
-    fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
-        let (session, mut turn) = make_session_and_context();
+    async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
+        let (session, mut turn) = make_session_and_context().await;
         turn.approval_policy = AskForApproval::Never;
         turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
         (Arc::new(session), Arc::new(turn))
@@ -197,7 +218,7 @@ mod tests {
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
-                    with_escalated_permissions: None,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
                 },
                 &context,
@@ -245,7 +266,7 @@ mod tests {
     async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
-        let (session, turn) = test_session_and_turn();
+        let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
         let process_id = open_shell
@@ -281,7 +302,7 @@ mod tests {
     async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
-        let (session, turn) = test_session_and_turn();
+        let (session, turn) = test_session_and_turn().await;
 
         let shell_a = exec_command(&session, &turn, "bash -i", 2_500).await?;
         let session_a = shell_a
@@ -333,7 +354,7 @@ mod tests {
     async fn unified_exec_timeouts() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
-        let (session, turn) = test_session_and_turn();
+        let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
         let process_id = open_shell
@@ -377,7 +398,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Ignored while we have a better way to test this.
     async fn requests_with_large_timeout_are_capped() -> anyhow::Result<()> {
-        let (session, turn) = test_session_and_turn();
+        let (session, turn) = test_session_and_turn().await;
 
         let result = exec_command(&session, &turn, "echo codex", 120_000).await?;
 
@@ -390,7 +411,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Ignored while we have a better way to test this.
     async fn completed_commands_do_not_persist_sessions() -> anyhow::Result<()> {
-        let (session, turn) = test_session_and_turn();
+        let (session, turn) = test_session_and_turn().await;
         let result = exec_command(&session, &turn, "echo codex", 2_500).await?;
 
         assert!(
@@ -417,7 +438,7 @@ mod tests {
     async fn reusing_completed_session_returns_unknown_session() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
-        let (session, turn) = test_session_and_turn();
+        let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
         let process_id = open_shell

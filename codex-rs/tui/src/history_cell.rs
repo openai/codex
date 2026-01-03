@@ -7,11 +7,13 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::shimmer::shimmer_spans;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
@@ -26,7 +28,6 @@ use base64::Engine;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::config::types::ReasoningSummaryFormat;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
@@ -56,6 +57,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// Represents an event to display in the conversation history. Returns its
@@ -375,6 +377,245 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct UnifiedExecInteractionCell {
+    command_display: Option<String>,
+    stdin: String,
+}
+
+impl UnifiedExecInteractionCell {
+    pub(crate) fn new(command_display: Option<String>, stdin: String) -> Self {
+        Self {
+            command_display,
+            stdin,
+        }
+    }
+}
+
+impl HistoryCell for UnifiedExecInteractionCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+        let wrap_width = width as usize;
+
+        let mut header_spans = vec!["↳ ".dim(), "Interacted with background terminal".bold()];
+        if let Some(command) = &self.command_display
+            && !command.is_empty()
+        {
+            header_spans.push(" · ".dim());
+            header_spans.push(command.clone().dim());
+        }
+        let header = Line::from(header_spans);
+
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
+        push_owned_lines(&header_wrapped, &mut out);
+
+        let input_lines: Vec<Line<'static>> = if self.stdin.is_empty() {
+            vec![vec!["(waited)".dim()].into()]
+        } else {
+            self.stdin
+                .lines()
+                .map(|line| Line::from(line.to_string()))
+                .collect()
+        };
+
+        let input_wrapped = word_wrap_lines(
+            input_lines,
+            RtOptions::new(wrap_width)
+                .initial_indent(Line::from("  └ ".dim()))
+                .subsequent_indent(Line::from("    ".dim())),
+        );
+        out.extend(input_wrapped);
+        out
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width).len() as u16
+    }
+}
+
+pub(crate) fn new_unified_exec_interaction(
+    command_display: Option<String>,
+    stdin: String,
+) -> UnifiedExecInteractionCell {
+    UnifiedExecInteractionCell::new(command_display, stdin)
+}
+
+#[derive(Debug)]
+// Live-only wait cell that shimmers while we poll; flushes into a static entry later.
+pub(crate) struct UnifiedExecWaitCell {
+    command_display: Option<String>,
+    animations_enabled: bool,
+}
+
+impl UnifiedExecWaitCell {
+    pub(crate) fn new(command_display: Option<String>, animations_enabled: bool) -> Self {
+        Self {
+            command_display: command_display.filter(|display| !display.is_empty()),
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn matches(&self, command_display: Option<&str>) -> bool {
+        let command_display = command_display.filter(|display| !display.is_empty());
+        match (self.command_display.as_deref(), command_display) {
+            (Some(current), Some(incoming)) => current == incoming,
+            _ => true,
+        }
+    }
+
+    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) {
+        if self.command_display.is_none() {
+            self.command_display = command_display.filter(|display| !display.is_empty());
+        }
+    }
+
+    pub(crate) fn command_display(&self) -> Option<String> {
+        self.command_display.clone()
+    }
+}
+
+impl HistoryCell for UnifiedExecWaitCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+        let wrap_width = width as usize;
+
+        let mut header_spans = vec!["• ".dim()];
+        if self.animations_enabled {
+            header_spans.extend(shimmer_spans("Waiting for background terminal"));
+        } else {
+            header_spans.push("Waiting for background terminal".bold());
+        }
+        if let Some(command) = &self.command_display
+            && !command.is_empty()
+        {
+            header_spans.push(" · ".dim());
+            header_spans.push(command.clone().dim());
+        }
+        let header = Line::from(header_spans);
+
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
+        push_owned_lines(&header_wrapped, &mut out);
+        out
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width).len() as u16
+    }
+}
+
+pub(crate) fn new_unified_exec_wait_live(
+    command_display: Option<String>,
+    animations_enabled: bool,
+) -> UnifiedExecWaitCell {
+    UnifiedExecWaitCell::new(command_display, animations_enabled)
+}
+
+#[derive(Debug)]
+struct UnifiedExecSessionsCell {
+    sessions: Vec<String>,
+}
+
+impl UnifiedExecSessionsCell {
+    fn new(sessions: Vec<String>) -> Self {
+        Self { sessions }
+    }
+}
+
+impl HistoryCell for UnifiedExecSessionsCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+
+        let wrap_width = width as usize;
+        let max_sessions = 16usize;
+        let mut out: Vec<Line<'static>> = Vec::new();
+        out.push(vec!["Background terminals".bold()].into());
+        out.push("".into());
+
+        if self.sessions.is_empty() {
+            out.push("  • No background terminals running.".italic().into());
+            return out;
+        }
+
+        let prefix = "  • ";
+        let prefix_width = UnicodeWidthStr::width(prefix);
+        let truncation_suffix = " [...]";
+        let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
+        let mut shown = 0usize;
+        for command in &self.sessions {
+            if shown >= max_sessions {
+                break;
+            }
+            let (snippet, snippet_truncated) = {
+                let (first_line, has_more_lines) = match command.split_once('\n') {
+                    Some((first, _)) => (first, true),
+                    None => (command.as_str(), false),
+                };
+                let max_graphemes = 80;
+                let mut graphemes = first_line.grapheme_indices(true);
+                if let Some((byte_index, _)) = graphemes.nth(max_graphemes) {
+                    (first_line[..byte_index].to_string(), true)
+                } else {
+                    (first_line.to_string(), has_more_lines)
+                }
+            };
+            if wrap_width <= prefix_width {
+                out.push(Line::from(prefix.dim()));
+                shown += 1;
+                continue;
+            }
+            let budget = wrap_width.saturating_sub(prefix_width);
+            let mut needs_suffix = snippet_truncated;
+            if !needs_suffix {
+                let (_, remainder, _) = take_prefix_by_width(&snippet, budget);
+                if !remainder.is_empty() {
+                    needs_suffix = true;
+                }
+            }
+            if needs_suffix && budget > truncation_suffix_width {
+                let available = budget.saturating_sub(truncation_suffix_width);
+                let (truncated, _, _) = take_prefix_by_width(&snippet, available);
+                out.push(vec![prefix.dim(), truncated.cyan(), truncation_suffix.dim()].into());
+            } else {
+                let (truncated, _, _) = take_prefix_by_width(&snippet, budget);
+                out.push(vec![prefix.dim(), truncated.cyan()].into());
+            }
+            shown += 1;
+        }
+
+        let remaining = self.sessions.len().saturating_sub(shown);
+        if remaining > 0 {
+            let more_text = format!("... and {remaining} more running");
+            if wrap_width <= prefix_width {
+                out.push(Line::from(prefix.dim()));
+            } else {
+                let budget = wrap_width.saturating_sub(prefix_width);
+                let (truncated, _, _) = take_prefix_by_width(&more_text, budget);
+                out.push(vec![prefix.dim(), truncated.dim()].into());
+            }
+        }
+
+        out
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width).len() as u16
+    }
+}
+
+pub(crate) fn new_unified_exec_sessions_output(sessions: Vec<String>) -> CompositeHistoryCell {
+    let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
+    let summary = UnifiedExecSessionsCell::new(sessions);
+    CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
+}
+
 fn truncate_exec_snippet(full_cmd: &str) -> String {
     let mut snippet = match full_cmd.split_once('\n') {
         Some((first, _)) => format!("{first} ..."),
@@ -621,6 +862,7 @@ impl HistoryCell for SessionInfoCell {
 
 pub(crate) fn new_session_info(
     config: &Config,
+    requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
 ) -> SessionInfoCell {
@@ -679,10 +921,10 @@ pub(crate) fn new_session_info(
         {
             parts.push(Box::new(tooltips));
         }
-        if config.model != model {
+        if requested_model != model {
             let lines = vec![
                 "model changed:".magenta().bold().into(),
-                format!("requested: {}", config.model).into(),
+                format!("requested: {requested_model}").into(),
                 format!("used: {model}").into(),
             ];
             parts.push(Box::new(PlainHistoryCell { lines }));
@@ -1020,9 +1262,9 @@ pub(crate) fn new_active_mcp_tool_call(
     McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
-pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![Line::from(vec![padded_emoji("🌐").into(), query.into()])];
-    PlainHistoryCell { lines }
+pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
+    let text: Text<'static> = Line::from(vec!["Searched".bold(), " ".into(), query.into()]).into();
+    PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
 }
 
 /// If the first content is an image, return a new cell with the image.
@@ -1418,39 +1660,28 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_reasoning_summary_block(
-    full_reasoning_buffer: String,
-    reasoning_summary_format: ReasoningSummaryFormat,
-) -> Box<dyn HistoryCell> {
-    if reasoning_summary_format == ReasoningSummaryFormat::Experimental {
-        // Experimental format is following:
-        // ** header **
-        //
-        // reasoning summary
-        //
-        // So we need to strip header from reasoning summary
-        let full_reasoning_buffer = full_reasoning_buffer.trim();
-        if let Some(open) = full_reasoning_buffer.find("**") {
-            let after_open = &full_reasoning_buffer[(open + 2)..];
-            if let Some(close) = after_open.find("**") {
-                let after_close_idx = open + 2 + close + 2;
-                // if we don't have anything beyond `after_close_idx`
-                // then we don't have a summary to inject into history
-                if after_close_idx < full_reasoning_buffer.len() {
-                    let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                    let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-                    return Box::new(ReasoningSummaryCell::new(
-                        header_buffer,
-                        summary_buffer,
-                        false,
-                    ));
-                }
+pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
+    let full_reasoning_buffer = full_reasoning_buffer.trim();
+    if let Some(open) = full_reasoning_buffer.find("**") {
+        let after_open = &full_reasoning_buffer[(open + 2)..];
+        if let Some(close) = after_open.find("**") {
+            let after_close_idx = open + 2 + close + 2;
+            // if we don't have anything beyond `after_close_idx`
+            // then we don't have a summary to inject into history
+            if after_close_idx < full_reasoning_buffer.len() {
+                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
+                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                return Box::new(ReasoningSummaryCell::new(
+                    header_buffer,
+                    summary_buffer,
+                    false,
+                ));
             }
         }
     }
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
-        full_reasoning_buffer,
+        full_reasoning_buffer.to_string(),
         true,
     ))
 }
@@ -1513,11 +1744,9 @@ mod tests {
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
     use codex_core::config::Config;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
+    use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::openai_models::models_manager::ModelsManager;
     use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -1531,14 +1760,13 @@ mod tests {
     use mcp_types::TextContent;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
-
-    fn test_config() -> Config {
-        Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            std::env::temp_dir(),
-        )
-        .expect("config")
+    async fn test_config() -> Config {
+        let codex_home = std::env::temp_dir();
+        ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .build()
+            .await
+            .expect("config")
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -1558,8 +1786,74 @@ mod tests {
     }
 
     #[test]
-    fn mcp_tools_output_masks_sensitive_values() {
-        let mut config = test_config();
+    fn unified_exec_interaction_cell_renders_input() {
+        let cell =
+            new_unified_exec_interaction(Some("echo hello".to_string()), "ls\npwd".to_string());
+        let lines = render_transcript(&cell);
+        assert_eq!(
+            lines,
+            vec![
+                "↳ Interacted with background terminal · echo hello",
+                "  └ ls",
+                "    pwd",
+            ],
+        );
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_renders_wait() {
+        let cell = new_unified_exec_interaction(None, String::new());
+        let lines = render_transcript(&cell);
+        assert_eq!(
+            lines,
+            vec!["↳ Interacted with background terminal", "  └ (waited)"],
+        );
+    }
+
+    #[test]
+    fn unified_exec_wait_cell_renders_wait() {
+        let cell = new_unified_exec_wait_live(None, false);
+        let lines = render_transcript(&cell);
+        assert_eq!(lines, vec!["• Waiting for background terminal"],);
+    }
+
+    #[test]
+    fn ps_output_empty_snapshot() {
+        let cell = new_unified_exec_sessions_output(Vec::new());
+        let rendered = render_lines(&cell.display_lines(60)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn ps_output_multiline_snapshot() {
+        let cell = new_unified_exec_sessions_output(vec![
+            "echo hello\nand then some extra text".to_string(),
+            "rg \"foo\" src".to_string(),
+        ]);
+        let rendered = render_lines(&cell.display_lines(40)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn ps_output_long_command_snapshot() {
+        let cell = new_unified_exec_sessions_output(vec![String::from(
+            "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
+        )]);
+        let rendered = render_lines(&cell.display_lines(36)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn ps_output_many_sessions_snapshot() {
+        let cell =
+            new_unified_exec_sessions_output((0..20).map(|idx| format!("command {idx}")).collect());
+        let rendered = render_lines(&cell.display_lines(32)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_masks_sensitive_values() {
+        let mut config = test_config().await;
         let mut env = HashMap::new();
         env.insert("TOKEN".to_string(), "secret".to_string());
         let stdio_config = McpServerConfig {
@@ -1663,13 +1957,57 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                "✔ You approved codex".to_string(),
-                "  to run echo something".to_string(),
+                "✔ You approved codex to".to_string(),
+                "  run echo something".to_string(),
                 "  really long to ensure".to_string(),
                 "  wrapping happens this".to_string(),
                 "  time".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn web_search_history_cell_snapshot() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(64)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn web_search_history_cell_wraps_with_indented_continuation() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(64));
+
+        assert_eq!(
+            rendered,
+            vec![
+                "• Searched example search query with several generic words to".to_string(),
+                "  exercise wrapping".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn web_search_history_cell_short_query_does_not_wrap() {
+        let cell = new_web_search_call("short query".to_string());
+        let rendered = render_lines(&cell.display_lines(64));
+
+        assert_eq!(rendered, vec!["• Searched short query".to_string()]);
+    }
+
+    #[test]
+    fn web_search_history_cell_transcript_snapshot() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]
@@ -2321,13 +2659,8 @@ mod tests {
     }
     #[test]
     fn reasoning_summary_block() {
-        let config = test_config();
-        let reasoning_format =
-            ModelsManager::construct_model_family_offline(&config.model, &config)
-                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            reasoning_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2339,34 +2672,19 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let config = test_config();
-        let reasoning_format =
-            ModelsManager::construct_model_family_offline(&config.model, &config)
-                .reasoning_summary_format;
-        let cell = new_reasoning_summary_block(
-            "Detailed reasoning goes here.".to_string(),
-            reasoning_format,
-        );
+        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
     }
 
-    #[test]
-    fn reasoning_summary_block_respects_config_overrides() {
-        let mut config = test_config();
-        config.model = "gpt-3.5-turbo".to_string();
+    #[tokio::test]
+    async fn reasoning_summary_block_respects_config_overrides() {
+        let mut config = test_config().await;
+        config.model = Some("gpt-3.5-turbo".to_string());
         config.model_supports_reasoning_summaries = Some(true);
-        config.model_reasoning_summary_format = Some(ReasoningSummaryFormat::Experimental);
-        let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
-        assert_eq!(
-            model_family.reasoning_summary_format,
-            ReasoningSummaryFormat::Experimental
-        );
-
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            model_family.reasoning_summary_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2375,14 +2693,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
-        let config = test_config();
-        let reasoning_format =
-            ModelsManager::construct_model_family_offline(&config.model, &config)
-                .reasoning_summary_format;
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning without closing".to_string(),
-            reasoning_format,
-        );
+        let cell =
+            new_reasoning_summary_block("**High level reasoning without closing".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
@@ -2390,21 +2702,14 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
-        let config = test_config();
-        let reasoning_format =
-            ModelsManager::construct_model_family_offline(&config.model, &config)
-                .reasoning_summary_format;
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning without closing**".to_string(),
-            reasoning_format.clone(),
-        );
+        let cell =
+            new_reasoning_summary_block("**High level reasoning without closing**".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• High level reasoning without closing"]);
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
-            reasoning_format,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2413,13 +2718,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
-        let config = test_config();
-        let reasoning_format =
-            ModelsManager::construct_model_family_offline(&config.model, &config)
-                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
-            reasoning_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));

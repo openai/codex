@@ -179,7 +179,6 @@ async fn run_codex_tool_session_inner(
                         cwd,
                         call_id,
                         reason: _,
-                        risk,
                         proposed_execpolicy_amendment: _,
                         parsed_cmd,
                     }) => {
@@ -193,7 +192,6 @@ async fn run_codex_tool_session_inner(
                             event.id.clone(),
                             call_id,
                             parsed_cmd,
-                            risk,
                         )
                         .await;
                         continue;
@@ -281,7 +279,9 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::McpToolCallEnd(_)
                     | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ListCustomPromptsResponse(_)
+                    | EventMsg::ListSkillsResponse(_)
                     | EventMsg::ExecCommandBegin(_)
+                    | EventMsg::TerminalInteraction(_)
                     | EventMsg::ExecCommandOutputDelta(_)
                     | EventMsg::ExecCommandEnd(_)
                     | EventMsg::BackgroundEvent(_)
@@ -304,6 +304,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::AgentMessageContentDelta(_)
                     | EventMsg::ReasoningContentDelta(_)
                     | EventMsg::ReasoningRawContentDelta(_)
+                    | EventMsg::SkillsUpdateAvailable
                     | EventMsg::UndoStarted(_)
                     | EventMsg::UndoCompleted(_)
                     | EventMsg::ExitedReviewMode(_)

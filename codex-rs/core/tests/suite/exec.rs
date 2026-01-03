@@ -8,6 +8,7 @@ use codex_core::exec::ExecToolCallOutput;
 use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use tempfile::TempDir;
 
@@ -34,7 +35,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         cwd: tmp.path().to_path_buf(),
         expiration: 1000.into(),
         env: HashMap::new(),
-        with_escalated_permissions: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
         arg0: None,
     };

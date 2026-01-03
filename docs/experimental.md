@@ -7,4 +7,4 @@ Codex CLI is an experimental project under active development. It is not yet sta
 - Pull requests
 - Good vibes
 
-Help us improve by filing issues or submitting PRs (see [docs/contributing.md](docs/contributing.md) for guidance)!
+Help us improve by filing issues or submitting PRs (see [contributing.md](./contributing.md) for guidance)!

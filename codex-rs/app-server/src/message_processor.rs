@@ -59,6 +59,7 @@ impl MessageProcessor {
             outgoing.clone(),
             codex_linux_sandbox_exe,
             Arc::clone(&config),
+            cli_overrides.clone(),
             feedback,
         );
         let config_api = ConfigApi::new(config.codex_home.clone(), cli_overrides);

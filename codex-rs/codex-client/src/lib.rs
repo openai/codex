@@ -1,3 +1,4 @@
+mod default_client;
 mod error;
 mod request;
 mod retry;
@@ -5,6 +6,8 @@ mod sse;
 mod telemetry;
 mod transport;
 
+pub use crate::default_client::CodexHttpClient;
+pub use crate::default_client::CodexRequestBuilder;
 pub use crate::error::StreamError;
 pub use crate::error::TransportError;
 pub use crate::request::Request;

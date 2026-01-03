@@ -14,6 +14,7 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Approvals,
+    Experimental,
     Skills,
     Review,
     #[strum(serialize = "secreview")]
@@ -24,7 +25,7 @@ pub enum SlashCommand {
     Resume,
     Init,
     Compact,
-    Undo,
+    // Undo,
     Diff,
     Mention,
     Status,
@@ -34,6 +35,7 @@ pub enum SlashCommand {
     Exit,
     Feedback,
     Rollout,
+    Ps,
     TestApproval,
 }
 
@@ -49,14 +51,16 @@ impl SlashCommand {
             SlashCommand::SecReview => "run an AppSec security review over the repo",
             SlashCommand::Validate => "validate high-risk findings (web + api)",
             SlashCommand::Resume => "resume a saved chat",
-            SlashCommand::Undo => "ask Codex to undo a turn",
+            // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
+            SlashCommand::Experimental => "toggle beta features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
@@ -77,9 +81,10 @@ impl SlashCommand {
             | SlashCommand::Resume
             | SlashCommand::Init
             | SlashCommand::Compact
-            | SlashCommand::Undo
+            // | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Approvals
+            | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::SecReview
             | SlashCommand::Validate
@@ -88,6 +93,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Ps
             | SlashCommand::Mcp
             | SlashCommand::Feedback
             | SlashCommand::Quit

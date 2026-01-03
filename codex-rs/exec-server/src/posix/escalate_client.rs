@@ -51,7 +51,10 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
         })
         .await
         .context("failed to send EscalateRequest")?;
-    let message = client.receive::<EscalateResponse>().await?;
+    let message = client
+        .receive::<EscalateResponse>()
+        .await
+        .context("failed to receive EscalateResponse")?;
     match message.action {
         EscalateAction::Escalate => {
             // TODO: maybe we should send ALL open FDs (except the escalate client)?

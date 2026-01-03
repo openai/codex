@@ -1,9 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use anyhow::Context;
 use anyhow::Result;
+use anyhow::ensure;
 use codex_exec_server::ExecResult;
 use exec_server_test_support::InteractiveClient;
 use exec_server_test_support::create_transport;
@@ -15,10 +18,14 @@ use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParam;
 use rmcp::model::CallToolResult;
 use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::EmptyResult;
+use rmcp::model::ServerResult;
 use rmcp::model::object;
 use serde_json::json;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
+use tokio::process::Command;
 
 /// Verify that when using a read-only sandbox and an execpolicy that prompts,
 /// the proper elicitation is sent. Upon auto-approving the elicitation, the
@@ -42,15 +49,17 @@ prefix_rule(
         codex_home.as_ref(),
     )
     .await?;
-    let transport = create_transport(codex_home.as_ref())?;
+    let dotslash_cache_temp_dir = TempDir::new()?;
+    let dotslash_cache = dotslash_cache_temp_dir.path();
+    let transport = create_transport(codex_home.as_ref(), dotslash_cache).await?;
 
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;
-    let git = which::which("git")?;
     let project_root_path = project_root.path().canonicalize().unwrap();
+    let git_path = resolve_git_path().await?;
     let expected_elicitation_message = format!(
         "Allow agent to run `{} init .` in `{}`?",
-        git.display(),
+        git_path,
         project_root_path.display()
     );
     let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>> = Default::default();
@@ -68,16 +77,17 @@ prefix_rule(
     let linux_sandbox_exe_folder = TempDir::new()?;
     let codex_linux_sandbox_exe = if cfg!(target_os = "linux") {
         let codex_linux_sandbox_exe = linux_sandbox_exe_folder.path().join("codex-linux-sandbox");
-        let codex_cli = assert_cmd::Command::cargo_bin("codex")?
-            .get_program()
-            .to_os_string();
-        let codex_cli_path = std::path::PathBuf::from(codex_cli);
-        symlink(&codex_cli_path, &codex_linux_sandbox_exe)?;
+        let codex_cli = ensure_codex_cli()?;
+        symlink(&codex_cli, &codex_linux_sandbox_exe)?;
         Some(codex_linux_sandbox_exe)
     } else {
         None
     };
-    notify_readable_sandbox(&project_root_path, codex_linux_sandbox_exe, &service).await?;
+    let response =
+        notify_readable_sandbox(&project_root_path, codex_linux_sandbox_exe, &service).await?;
+    let ServerResult::EmptyResult(EmptyResult {}) = response else {
+        panic!("expected EmptyResult from sandbox state notification but found: {response:?}");
+    };
 
     // Call the shell tool and verify that an elicitation was created and
     // auto-approved.
@@ -88,6 +98,7 @@ prefix_rule(
             name: Cow::Borrowed("shell"),
             arguments: Some(object(json!(
                 {
+                    "login": false,
                     "command": "git init .",
                     "workdir": project_root_path.to_string_lossy(),
                 }
@@ -128,4 +139,49 @@ prefix_rule(
     assert_eq!(vec![expected_elicitation_message], elicitation_messages);
 
     Ok(())
+}
+
+fn ensure_codex_cli() -> Result<PathBuf> {
+    let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+
+    let metadata = codex_cli.metadata().with_context(|| {
+        format!(
+            "failed to read metadata for codex binary at {}",
+            codex_cli.display()
+        )
+    })?;
+    ensure!(
+        metadata.is_file(),
+        "expected codex binary at {} to be a file; run `cargo build -p codex-cli --bin codex` before this test",
+        codex_cli.display()
+    );
+
+    let mode = metadata.permissions().mode();
+    ensure!(
+        mode & 0o111 != 0,
+        "codex binary at {} is not executable (mode {mode:o}); run `cargo build -p codex-cli --bin codex` before this test",
+        codex_cli.display()
+    );
+
+    Ok(codex_cli)
+}
+
+async fn resolve_git_path() -> Result<String> {
+    let git = Command::new("bash")
+        .arg("-lc")
+        .arg("command -v git")
+        .output()
+        .await
+        .context("failed to resolve git via login shell")?;
+    ensure!(
+        git.status.success(),
+        "failed to resolve git via login shell: {}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+    let git_path = String::from_utf8(git.stdout)
+        .context("git path was not valid utf8")?
+        .trim()
+        .to_string();
+    ensure!(!git_path.is_empty(), "git path should not be empty");
+    Ok(git_path)
 }

@@ -670,6 +670,25 @@ pub async fn mount_models_once(server: &MockServer, body: ModelsResponse) -> Mod
     models_mock
 }
 
+pub async fn mount_models_once_with_etag(
+    server: &MockServer,
+    body: ModelsResponse,
+    etag: &str,
+) -> ModelsMock {
+    let (mock, models_mock) = models_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            // ModelsClient reads the ETag header, not a JSON field.
+            .insert_header("ETag", etag)
+            .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    models_mock
+}
+
 pub async fn start_mock_server() -> MockServer {
     let server = MockServer::builder()
         .body_print_limit(BodyPrintLimit::Limited(80_000))
@@ -677,16 +696,36 @@ pub async fn start_mock_server() -> MockServer {
         .await;
 
     // Provide a default `/models` response so tests remain hermetic when the client queries it.
-    let _ = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: Vec::new(),
-            etag: String::new(),
-        },
-    )
-    .await;
+    let _ = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
     server
+}
+
+// todo(aibrahim): remove this and use our search matching patterns directly
+/// Get all POST requests to `/responses` endpoints from the mock server.
+/// Filters out GET requests (e.g., `/models`) .
+pub async fn get_responses_requests(server: &MockServer) -> Vec<wiremock::Request> {
+    server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| req.method == "POST" && req.url.path().ends_with("/responses"))
+        .collect()
+}
+
+// todo(aibrahim): remove this and use our search matching patterns directly
+/// Get request bodies as JSON values from POST requests to `/responses` endpoints.
+/// Filters out GET requests (e.g., `/models`) .
+pub async fn get_responses_request_bodies(server: &MockServer) -> Vec<Value> {
+    get_responses_requests(server)
+        .await
+        .into_iter()
+        .map(|req| {
+            req.body_json::<Value>()
+                .expect("request body to be valid JSON")
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -769,6 +808,10 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`
 ///   in the `input` must have a matching output entry.
 fn validate_request_body_invariants(request: &wiremock::Request) {
+    // Skip GET requests (e.g., /models)
+    if request.method != "POST" || !request.url.path().ends_with("/responses") {
+        return;
+    }
     let Ok(body): Result<Value, _> = request.body_json() else {
         return;
     };

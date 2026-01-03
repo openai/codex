@@ -257,7 +257,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(target_os = "linux")]
     use std::process::Command as StdCommand;
-    use std::sync::Arc;
+
     use tempfile::tempdir;
 
     #[cfg(not(target_os = "windows"))]
@@ -294,53 +294,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn wrap_command_with_snapshot_wraps_bash_shell() {
-        let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
-        let shell = Shell {
-            shell_type: ShellType::Bash,
-            shell_path: PathBuf::from("/bin/bash"),
-            shell_snapshot: Some(Arc::new(ShellSnapshot {
-                path: snapshot_path.clone(),
-            })),
-        };
-        let original_command = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "echo hello".to_string(),
-        ];
-
-        let wrapped = shell.wrap_command_with_snapshot(&original_command);
-
-        let mut expected = shell.derive_exec_args(". \"$0\" && exec \"$@\"", false);
-        expected.push(snapshot_path.to_string_lossy().to_string());
-        expected.extend_from_slice(&original_command);
-
-        assert_eq!(wrapped, expected);
-    }
-
-    #[test]
-    fn wrap_command_with_snapshot_preserves_cmd_shell() {
-        let snapshot_path = PathBuf::from("C:\\snapshot.cmd");
-        let shell = Shell {
-            shell_type: ShellType::Cmd,
-            shell_path: PathBuf::from("cmd"),
-            shell_snapshot: Some(Arc::new(ShellSnapshot {
-                path: snapshot_path,
-            })),
-        };
-        let original_command = vec![
-            "cmd".to_string(),
-            "/c".to_string(),
-            "echo hello".to_string(),
-        ];
-
-        let wrapped = shell.wrap_command_with_snapshot(&original_command);
-
-        assert_eq!(wrapped, original_command);
-    }
-
-    #[cfg(unix)]
     #[tokio::test]
     async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         let dir = tempdir()?;
@@ -367,6 +320,10 @@ mod tests {
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         use std::process::Stdio;
+        use tokio::time::Duration as TokioDuration;
+        use tokio::time::Instant;
+        use tokio::time::sleep;
+
         let dir = tempdir()?;
         let shell_path = dir.path().join("hanging-shell.sh");
         let pid_path = dir.path().join("pid");
@@ -402,16 +359,22 @@ mod tests {
             .trim()
             .parse::<i32>()?;
 
-        let kill_status = StdCommand::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stderr(Stdio::null())
-            .stdout(Stdio::null())
-            .status()?;
-        assert!(
-            !kill_status.success(),
-            "timed out snapshot shell should be terminated"
-        );
+        let deadline = Instant::now() + TokioDuration::from_secs(1);
+        loop {
+            let kill_status = StdCommand::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stderr(Stdio::null())
+                .stdout(Stdio::null())
+                .status()?;
+            if !kill_status.success() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out snapshot shell is still alive after grace period");
+            }
+            sleep(TokioDuration::from_millis(50)).await;
+        }
 
         Ok(())
     }

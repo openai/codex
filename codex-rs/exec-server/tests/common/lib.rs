@@ -1,4 +1,4 @@
-use codex_core::MCP_SANDBOX_STATE_NOTIFICATION;
+use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
 use codex_core::protocol::SandboxPolicy;
 use rmcp::ClientHandler;
@@ -7,16 +7,17 @@ use rmcp::RoleClient;
 use rmcp::Service;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ClientInfo;
+use rmcp::model::ClientRequest;
 use rmcp::model::CreateElicitationRequestParam;
 use rmcp::model::CreateElicitationResult;
-use rmcp::model::CustomClientNotification;
+use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
+use rmcp::model::ServerResult;
 use rmcp::service::RunningService;
 use rmcp::transport::ConfigureCommandExt;
 use rmcp::transport::TokioChildProcess;
 use serde_json::json;
 use std::collections::HashSet;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -24,21 +25,42 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::process::Command;
 
-const CODEX_SHELL_TOOL_MCP_TGZ_URL: &str = "https://github.com/openai/codex/releases/download/rust-v0.65.0/codex-shell-tool-mcp-npm-0.65.0.tgz";
-
-pub fn create_transport<P>(codex_home: P) -> anyhow::Result<TokioChildProcess>
+pub async fn create_transport<P>(
+    codex_home: P,
+    dotslash_cache: P,
+) -> anyhow::Result<TokioChildProcess>
 where
     P: AsRef<Path>,
 {
-    let mcp_executable = assert_cmd::Command::cargo_bin("codex-exec-mcp-server")?;
-    let execve_wrapper = assert_cmd::Command::cargo_bin("codex-execve-wrapper")?;
-    let mcp_program = Path::new(mcp_executable.get_program());
-    let bash = ensure_patched_bash(mcp_program)?;
+    let mcp_executable = codex_utils_cargo_bin::cargo_bin("codex-exec-mcp-server")?;
+    let execve_wrapper = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")?;
+    // `bash` requires a special lookup when running under Buck because it is a
+    // _resource_ rather than a binary target.
+    let bash = if let Some(root) = codex_utils_cargo_bin::buck_project_root()? {
+        root.join("codex-rs/exec-server/tests/suite/bash")
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("suite")
+            .join("bash")
+    };
 
-    let transport = TokioChildProcess::new(Command::new(mcp_program).configure(|cmd| {
+    // Need to ensure the artifact associated with the bash DotSlash file is
+    // available before it is run in a read-only sandbox.
+    let status = Command::new("dotslash")
+        .arg("--")
+        .arg("fetch")
+        .arg(bash.clone())
+        .env("DOTSLASH_CACHE", dotslash_cache.as_ref())
+        .status()
+        .await?;
+    assert!(status.success(), "dotslash fetch failed: {status:?}");
+
+    let transport = TokioChildProcess::new(Command::new(&mcp_executable).configure(|cmd| {
         cmd.arg("--bash").arg(bash);
-        cmd.arg("--execve").arg(execve_wrapper.get_program());
+        cmd.arg("--execve").arg(&execve_wrapper);
         cmd.env("CODEX_HOME", codex_home.as_ref());
+        cmd.env("DOTSLASH_CACHE", dotslash_cache.as_ref());
 
         // Important: pipe stdio so rmcp can speak JSON-RPC over stdin/stdout
         cmd.stdin(Stdio::piped());
@@ -51,71 +73,13 @@ where
     Ok(transport)
 }
 
-fn ensure_patched_bash(mcp_executable: &Path) -> anyhow::Result<PathBuf> {
-    let bin_dir = mcp_executable
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("failed to determine bin dir for {mcp_executable:?}"))?;
-    let out_path = bin_dir.join("codex-test-bash");
-    if out_path.exists() {
-        return Ok(out_path);
-    }
-
-    let platform_path = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
-        "package/vendor/aarch64-apple-darwin/bash/macos-15/bash"
-    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
-        "package/vendor/x86_64-unknown-linux-musl/bash/ubuntu-24.04/bash"
-    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
-        "package/vendor/aarch64-unknown-linux-musl/bash/ubuntu-24.04/bash"
-    } else {
-        anyhow::bail!("unsupported platform for exec-server test bash");
-    };
-
-    let staging_dir = bin_dir.join("codex-test-bash.staging");
-    let _ = fs::remove_dir_all(&staging_dir);
-    fs::create_dir_all(&staging_dir)?;
-
-    let tgz_path = staging_dir.join("codex-shell-tool-mcp.tgz");
-    let curl_status = std::process::Command::new("curl")
-        .args(["-fsSL", CODEX_SHELL_TOOL_MCP_TGZ_URL, "-o"])
-        .arg(&tgz_path)
-        .status()?;
-    if !curl_status.success() {
-        anyhow::bail!("failed to download {CODEX_SHELL_TOOL_MCP_TGZ_URL}");
-    }
-
-    let tar_status = std::process::Command::new("tar")
-        .arg("-xzf")
-        .arg(&tgz_path)
-        .arg("-C")
-        .arg(&staging_dir)
-        .arg(platform_path)
-        .status()?;
-    if !tar_status.success() {
-        anyhow::bail!("failed to extract {platform_path} from {CODEX_SHELL_TOOL_MCP_TGZ_URL}");
-    }
-
-    let extracted_path = staging_dir.join(platform_path);
-    fs::copy(&extracted_path, &out_path)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut perms = fs::metadata(&out_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&out_path, perms)?;
-    }
-
-    let _ = fs::remove_dir_all(&staging_dir);
-    Ok(out_path)
-}
-
 pub async fn write_default_execpolicy<P>(policy: &str, codex_home: P) -> anyhow::Result<()>
 where
     P: AsRef<Path>,
 {
-    let policy_dir = codex_home.as_ref().join("policy");
+    let policy_dir = codex_home.as_ref().join("rules");
     tokio::fs::create_dir_all(&policy_dir).await?;
-    tokio::fs::write(policy_dir.join("default.codexpolicy"), policy).await?;
+    tokio::fs::write(policy_dir.join("default.rules"), policy).await?;
     Ok(())
 }
 
@@ -123,7 +87,7 @@ pub async fn notify_readable_sandbox<P, S>(
     sandbox_cwd: P,
     codex_linux_sandbox_exe: Option<PathBuf>,
     service: &RunningService<RoleClient, S>,
-) -> anyhow::Result<()>
+) -> anyhow::Result<ServerResult>
 where
     P: AsRef<Path>,
     S: Service<RoleClient> + ClientHandler,
@@ -133,14 +97,14 @@ where
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
     };
-    send_sandbox_notification(sandbox_state, service).await
+    send_sandbox_state_update(sandbox_state, service).await
 }
 
 pub async fn notify_writable_sandbox_only_one_folder<P, S>(
     writable_folder: P,
     codex_linux_sandbox_exe: Option<PathBuf>,
     service: &RunningService<RoleClient, S>,
-) -> anyhow::Result<()>
+) -> anyhow::Result<ServerResult>
 where
     P: AsRef<Path>,
     S: Service<RoleClient> + ClientHandler,
@@ -160,24 +124,23 @@ where
         codex_linux_sandbox_exe,
         sandbox_cwd: writable_folder.as_ref().to_path_buf(),
     };
-    send_sandbox_notification(sandbox_state, service).await
+    send_sandbox_state_update(sandbox_state, service).await
 }
 
-async fn send_sandbox_notification<S>(
+async fn send_sandbox_state_update<S>(
     sandbox_state: SandboxState,
     service: &RunningService<RoleClient, S>,
-) -> anyhow::Result<()>
+) -> anyhow::Result<ServerResult>
 where
     S: Service<RoleClient> + ClientHandler,
 {
-    let sandbox_state_notification = CustomClientNotification::new(
-        MCP_SANDBOX_STATE_NOTIFICATION,
-        Some(serde_json::to_value(sandbox_state)?),
-    );
-    service
-        .send_notification(sandbox_state_notification.into())
+    let response = service
+        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+            MCP_SANDBOX_STATE_METHOD,
+            Some(serde_json::to_value(sandbox_state)?),
+        )))
         .await?;
-    Ok(())
+    Ok(response)
 }
 
 pub struct InteractiveClient {

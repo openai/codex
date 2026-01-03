@@ -47,23 +47,46 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         .file_name()
         .and_then(|osstr| osstr.to_str())
     {
+        Some(cmd) if cfg!(target_os = "linux") && matches!(cmd, "numfmt" | "tac") => true,
+
         #[rustfmt::skip]
         Some(
             "cat" |
             "cd" |
+            "cut" |
             "echo" |
+            "expr" |
             "false" |
             "grep" |
             "head" |
+            "id" |
             "ls" |
             "nl" |
+            "paste" |
             "pwd" |
+            "rev" |
+            "seq" |
+            "stat" |
             "tail" |
+            "tr" |
             "true" |
+            "uname" |
+            "uniq" |
             "wc" |
-            "which") => {
+            "which" |
+            "whoami") => {
             true
         },
+
+        Some("base64") => {
+            const UNSAFE_BASE64_OPTIONS: &[&str] = &["-o", "--output"];
+
+            !command.iter().skip(1).any(|arg| {
+                UNSAFE_BASE64_OPTIONS.contains(&arg.as_str())
+                    || arg.starts_with("--output=")
+                    || (arg.starts_with("-o") && arg != "-o")
+            })
+        }
 
         Some("find") => {
             // Certain options to `find` can delete files, write to files, or
@@ -184,6 +207,7 @@ mod tests {
     fn known_safe_examples() {
         assert!(is_safe_to_call_with_exec(&vec_str(&["ls"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&["base64"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "sed", "-n", "1,5p", "file.txt"
         ])));
@@ -197,6 +221,14 @@ mod tests {
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "find", ".", "-name", "file.txt"
         ])));
+
+        if cfg!(target_os = "linux") {
+            assert!(is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
+            assert!(is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
+        } else {
+            assert!(!is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
+            assert!(!is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
+        }
     }
 
     #[test]
@@ -229,6 +261,21 @@ mod tests {
             assert!(
                 !is_safe_to_call_with_exec(&args),
                 "expected {args:?} to be unsafe"
+            );
+        }
+    }
+
+    #[test]
+    fn base64_output_options_are_unsafe() {
+        for args in [
+            vec_str(&["base64", "-o", "out.bin"]),
+            vec_str(&["base64", "--output", "out.bin"]),
+            vec_str(&["base64", "--output=out.bin"]),
+            vec_str(&["base64", "-ob64.txt"]),
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&args),
+                "expected {args:?} to be considered unsafe due to output option"
             );
         }
     }

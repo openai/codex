@@ -9,18 +9,92 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint::KeyBinding;
 
 use super::scroll_state::ScrollState;
 
 /// A generic representation of a display row for selection popups.
+#[derive(Default)]
 pub(crate) struct GenericDisplayRow {
     pub name: String,
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
+    pub disabled_reason: Option<String>,   // optional disabled message
     pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
+}
+
+fn line_width(line: &Line<'_>) -> usize {
+    line.iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
+    if max_width == 0 {
+        return Line::from(Vec::<Span<'static>>::new());
+    }
+
+    let mut used = 0usize;
+    let mut spans_out: Vec<Span<'static>> = Vec::new();
+
+    for span in line.spans {
+        let text = span.content.into_owned();
+        let style = span.style;
+        let span_width = UnicodeWidthStr::width(text.as_str());
+
+        if span_width == 0 {
+            spans_out.push(Span::styled(text, style));
+            continue;
+        }
+
+        if used >= max_width {
+            break;
+        }
+
+        if used + span_width <= max_width {
+            used += span_width;
+            spans_out.push(Span::styled(text, style));
+            continue;
+        }
+
+        let mut truncated = String::new();
+        for ch in text.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + ch_width > max_width {
+                break;
+            }
+            truncated.push(ch);
+            used += ch_width;
+        }
+
+        if !truncated.is_empty() {
+            spans_out.push(Span::styled(truncated, style));
+        }
+
+        break;
+    }
+
+    Line::from(spans_out)
+}
+
+fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize) -> Line<'static> {
+    if max_width == 0 {
+        return Line::from(Vec::<Span<'static>>::new());
+    }
+
+    let width = line_width(&line);
+    if width <= max_width {
+        return line;
+    }
+
+    let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
+    let mut spans = truncated.spans;
+    let ellipsis_style = spans.last().map(|span| span.style).unwrap_or_default();
+    spans.push(Span::styled("…", ellipsis_style));
+    Line::from(spans)
 }
 
 /// Compute a shared description-column start based on the widest visible name
@@ -37,7 +111,13 @@ fn compute_desc_col(
         .iter()
         .enumerate()
         .filter(|(i, _)| visible_range.contains(i))
-        .map(|(_, r)| Line::from(r.name.clone()).width())
+        .map(|(_, r)| {
+            let mut spans: Vec<Span> = vec![r.name.clone().into()];
+            if r.disabled_reason.is_some() {
+                spans.push(" (disabled)".dim());
+            }
+            Line::from(spans).width()
+        })
         .max()
         .unwrap_or(0);
     let mut desc_col = max_name_width.saturating_add(2);
@@ -51,7 +131,7 @@ fn compute_desc_col(
 fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usize {
     let max_indent = max_width.saturating_sub(1) as usize;
     let indent = row.wrap_indent.unwrap_or_else(|| {
-        if row.description.is_some() {
+        if row.description.is_some() || row.disabled_reason.is_some() {
             desc_col
         } else {
             0
@@ -64,10 +144,16 @@ fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usiz
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
 fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
+    let combined_description = match (&row.description, &row.disabled_reason) {
+        (Some(desc), Some(reason)) => Some(format!("{desc} (disabled: {reason})")),
+        (Some(desc), None) => Some(desc.clone()),
+        (None, Some(reason)) => Some(format!("disabled: {reason}")),
+        (None, None) => None,
+    };
+
     // Enforce single-line name: allow at most desc_col - 2 cells for name,
     // reserving two spaces before the description column.
-    let name_limit = row
-        .description
+    let name_limit = combined_description
         .as_ref()
         .map(|_| desc_col.saturating_sub(2))
         .unwrap_or(usize::MAX);
@@ -113,6 +199,10 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         name_spans.push("…".into());
     }
 
+    if row.disabled_reason.is_some() {
+        name_spans.push(" (disabled)".dim());
+    }
+
     let this_name_width = Line::from(name_spans.clone()).width();
     let mut full_spans: Vec<Span> = name_spans;
     if let Some(display_shortcut) = row.display_shortcut {
@@ -120,7 +210,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         full_spans.push(display_shortcut.into());
         full_spans.push(")".into());
     }
-    if let Some(desc) = row.description.as_ref() {
+    if let Some(desc) = combined_description.as_ref() {
         let gap = desc_col.saturating_sub(this_name_width);
         if gap > 0 {
             full_spans.push(" ".repeat(gap).into());
@@ -217,6 +307,72 @@ pub(crate) fn render_rows(
     }
 }
 
+/// Render rows as a single line each (no wrapping), truncating overflow with an ellipsis.
+pub(crate) fn render_rows_single_line(
+    area: Rect,
+    buf: &mut Buffer,
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    empty_message: &str,
+) {
+    if rows_all.is_empty() {
+        if area.height > 0 {
+            Line::from(empty_message.dim().italic()).render(area, buf);
+        }
+        return;
+    }
+
+    let visible_items = max_results
+        .min(rows_all.len())
+        .min(area.height.max(1) as usize);
+
+    let mut start_idx = state.scroll_top.min(rows_all.len().saturating_sub(1));
+    if let Some(sel) = state.selected_idx {
+        if sel < start_idx {
+            start_idx = sel;
+        } else if visible_items > 0 {
+            let bottom = start_idx + visible_items - 1;
+            if sel > bottom {
+                start_idx = sel + 1 - visible_items;
+            }
+        }
+    }
+
+    let desc_col = compute_desc_col(rows_all, start_idx, visible_items, area.width);
+
+    let mut cur_y = area.y;
+    for (i, row) in rows_all
+        .iter()
+        .enumerate()
+        .skip(start_idx)
+        .take(visible_items)
+    {
+        if cur_y >= area.y + area.height {
+            break;
+        }
+
+        let mut full_line = build_full_line(row, desc_col);
+        if Some(i) == state.selected_idx {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = Style::default().fg(Color::Cyan).bold();
+            });
+        }
+
+        let full_line = truncate_line_with_ellipsis_if_overflow(full_line, area.width as usize);
+        full_line.render(
+            Rect {
+                x: area.x,
+                y: cur_y,
+                width: area.width,
+                height: 1,
+            },
+            buf,
+        );
+        cur_y = cur_y.saturating_add(1);
+    }
+}
+
 /// Compute the number of terminal rows required to render up to `max_results`
 /// items from `rows_all` given the current scroll/selection state and the
 /// available `width`. Accounts for description wrapping and alignment so the
@@ -263,7 +419,8 @@ pub(crate) fn measure_rows_height(
         let opts = RtOptions::new(content_width as usize)
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
-        total = total.saturating_add(word_wrap_line(&full_line, opts).len() as u16);
+        let wrapped_lines = word_wrap_line(&full_line, opts).len();
+        total = total.saturating_add(wrapped_lines as u16);
     }
     total.max(1)
 }

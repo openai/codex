@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn appends_rule_and_creates_directories() {
         let tmp = tempdir().expect("create temp dir");
-        let policy_path = tmp.path().join("policy").join("default.codexpolicy");
+        let policy_path = tmp.path().join("rules").join("default.rules");
 
         blocking_append_allow_prefix_rule(
             &policy_path,
@@ -162,8 +162,7 @@ mod tests {
         )
         .expect("append rule");
 
-        let contents =
-            std::fs::read_to_string(&policy_path).expect("default.codexpolicy should exist");
+        let contents = std::fs::read_to_string(&policy_path).expect("default.rules should exist");
         assert_eq!(
             contents,
             r#"prefix_rule(pattern=["echo", "Hello, world!"], decision="allow")
@@ -174,7 +173,7 @@ mod tests {
     #[test]
     fn appends_rule_without_duplicate_newline() {
         let tmp = tempdir().expect("create temp dir");
-        let policy_path = tmp.path().join("policy").join("default.codexpolicy");
+        let policy_path = tmp.path().join("rules").join("default.rules");
         std::fs::create_dir_all(policy_path.parent().unwrap()).expect("create policy dir");
         std::fs::write(
             &policy_path,
@@ -201,7 +200,7 @@ prefix_rule(pattern=["echo", "Hello, world!"], decision="allow")
     #[test]
     fn inserts_newline_when_missing_before_append() {
         let tmp = tempdir().expect("create temp dir");
-        let policy_path = tmp.path().join("policy").join("default.codexpolicy");
+        let policy_path = tmp.path().join("rules").join("default.rules");
         std::fs::create_dir_all(policy_path.parent().unwrap()).expect("create policy dir");
         std::fs::write(
             &policy_path,

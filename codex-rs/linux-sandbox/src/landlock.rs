@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
 use codex_core::error::SandboxErr;
 use codex_core::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use landlock::ABI;
 use landlock::Access;
@@ -56,7 +56,9 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
 ///
 /// # Errors
 /// Returns [`CodexErr::Sandbox`] variants when the ruleset fails to apply.
-fn install_filesystem_landlock_rules_on_current_thread(writable_roots: Vec<PathBuf>) -> Result<()> {
+fn install_filesystem_landlock_rules_on_current_thread(
+    writable_roots: Vec<AbsolutePathBuf>,
+) -> Result<()> {
     let abi = ABI::V5;
     let access_rw = AccessFs::from_all(abi);
     let access_ro = AccessFs::from_read(abi);

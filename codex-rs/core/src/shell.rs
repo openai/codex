@@ -63,33 +63,6 @@ impl Shell {
             }
         }
     }
-
-    pub(crate) fn wrap_command_with_snapshot(&self, command: &[String]) -> Vec<String> {
-        let Some(snapshot) = &self.shell_snapshot else {
-            return command.to_vec();
-        };
-
-        if command.is_empty() {
-            return command.to_vec();
-        }
-
-        match self.shell_type {
-            ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
-                let mut args = self.derive_exec_args(". \"$0\" && exec \"$@\"", false);
-                args.push(snapshot.path.to_string_lossy().to_string());
-                args.extend_from_slice(command);
-                args
-            }
-            ShellType::PowerShell => {
-                let mut args =
-                    self.derive_exec_args("param($snapshot) . $snapshot; & @args", false);
-                args.push(snapshot.path.to_string_lossy().to_string());
-                args.extend_from_slice(command);
-                args
-            }
-            ShellType::Cmd => command.to_vec(),
-        }
-    }
 }
 
 #[cfg(unix)]

@@ -271,7 +271,6 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             command: format_with_current_shell("python3 -c 'print(42)'"),
             cwd: working_directory.clone(),
             reason: None,
-            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "python3 -c 'print(42)'".to_string()
             }],
@@ -411,7 +410,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             cwd: first_cwd.clone(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![first_cwd.clone()],
+                writable_roots: vec![first_cwd.try_into()?],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
