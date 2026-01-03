@@ -12,7 +12,7 @@ Examples:
 - Stored XSS on user dashboards that leaks session tokens ⇒ risk_score 72, severity "High", reason "persistent session theft".
 - Originally escalated CSRF on an internal admin tool behind SSO ⇒ risk_score 28, severity "Low", reason "internal-only with SSO".
 - Header injection in a deprecated endpoint with response sanitization ⇒ risk_score 18, severity "Informational", reason "sanitized legacy endpoint".
-- Static analysis high alert that only touches dead code ⇒ risk_score 10, severity "Informational", reason "dead code path".
+- Static analysis high alert that only touches dead code ⇒ risk_score 0, severity "Ignore", reason "dead code path".
 - High-severity SQL injection finding that uses fully parameterized queries ⇒ risk_score 20, severity "Low", reason "parameterized queries".
 - SSRF flagged as critical but the target requires internal metadata access tokens ⇒ risk_score 24, severity "Low", reason "internal metadata token".
 - Critical-looking command injection in an internal-only CLI guarded by SSO and audited logging ⇒ risk_score 22, severity "Low", reason "internal CLI".
@@ -25,7 +25,7 @@ Examples:
 - Issue at most one tool command per round and wait for the tool output before continuing. Reuse earlier tool outputs when possible.
 
 Instructions:
-- Output severity **only** from ["High","Medium","Low","Informational"]. Map "critical"/"p0" to "High".
+- Output severity **only** from ["High","Medium","Low","Informational","Ignore"]. Map "critical"/"p0" to "High".
 - Produce `risk_score` between 0-100 (higher means greater customer impact) and use the full range for comparability.
 - Review the repository summary, spec excerpt, blame metadata, and file locations before requesting anything new; reuse existing specs or context attachments when possible.
 - Determine severity from Impact and Likelihood levels using this deterministic risk matrix:
@@ -41,7 +41,7 @@ Instructions:
 - De-emphasize DoS findings that are just repeated calls without resource amplification (memory/CPU/locks); if no meaningful exhaustion or lockout risk exists, ignore the finding.
 - Upgrade issues when exploitability or exposure was understated, or when multiple components amplify the blast radius.
 - Respond with one JSON object per finding, **in the same order**, formatted exactly as:
-  {{"id": <number>, "risk_score": <0-100>, "severity": "<High|Medium|Low|Informational>", "reason": "<≤12 words>"}}
+  {{"id": <number>, "risk_score": <0-100>, "severity": "<High|Medium|Low|Informational|Ignore>", "reason": "<≤12 words>"}}
 
 Findings:
 {findings}

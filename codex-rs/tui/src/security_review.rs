@@ -4818,27 +4818,46 @@ pub async fn run_security_review(
                     }
                 }
             }
-            // Final filter in case rerank reduced severity to informational
-            let before = all_summaries.len();
+            // Final filter in case rerank reduces a finding to informational/ignore
+            let before = all_summaries.len() as i64;
+            let mut filtered_informational = 0_i64;
+            let mut filtered_ignore = 0_i64;
+            let mut filtered_other = 0_i64;
             let mut retained: HashSet<usize> = HashSet::new();
             all_summaries.retain(|summary| {
-                let keep = matches!(
-                    summary.severity.trim().to_ascii_lowercase().as_str(),
-                    "high" | "medium" | "low"
-                );
+                let normalized = summary.severity.trim().to_ascii_lowercase();
+                let keep = matches!(normalized.as_str(), "high" | "medium" | "low");
                 if keep {
                     retained.insert(summary.id);
+                } else if matches!(normalized.as_str(), "informational" | "info") {
+                    filtered_informational = filtered_informational.saturating_add(1);
+                } else if matches!(normalized.as_str(), "ignore" | "ignored") {
+                    filtered_ignore = filtered_ignore.saturating_add(1);
+                } else {
+                    filtered_other = filtered_other.saturating_add(1);
                 }
                 keep
             });
             all_details.retain(|detail| retained.contains(&detail.summary_id));
-            let after = all_summaries.len();
-            if after < before {
-                let filtered = before - after;
-                let msg = format!(
-                    "Filtered out {filtered} informational finding{} after rerank.",
-                    if filtered == 1 { "" } else { "s" }
-                );
+            let after = all_summaries.len() as i64;
+            let filtered_total = before.saturating_sub(after);
+            if filtered_total > 0 {
+                let mut filtered_labels: Vec<String> = Vec::new();
+                if filtered_informational > 0 {
+                    filtered_labels.push(format!("{filtered_informational} informational"));
+                }
+                if filtered_ignore > 0 {
+                    filtered_labels.push(format!("{filtered_ignore} ignored"));
+                }
+                if filtered_other > 0 {
+                    filtered_labels.push(format!("{filtered_other} other"));
+                }
+                let filtered = if filtered_labels.is_empty() {
+                    filtered_total.to_string()
+                } else {
+                    filtered_labels.join(", ")
+                };
+                let msg = format!("Filtered out {filtered} finding(s) after rerank.");
                 record(&mut logs, msg.clone());
                 aggregated_logs.push(msg);
             }
@@ -8190,6 +8209,67 @@ mod bug_dedupe_tests {
             .expect("low heading");
         assert!(high < medium);
         assert!(medium < low);
+    }
+
+    #[test]
+    fn omits_ignored_findings_from_report_markdown() {
+        fn bug_markdown(title: &str, file: &str, severity: &str) -> String {
+            format!(
+                "### {title}\n- **File & Lines:** `{file}`\n- **Severity:** {severity}\n- **Impact:** x\n- **Likelihood:** x\n- **Recommendation:** x\n"
+            )
+        }
+
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: "placeholder".to_string(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 1,
+                        risk_rank: Some(1),
+                        risk_score: Some(90.0),
+                        title: "High bug".to_string(),
+                        severity: "High".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "a.rs#L1-L2".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: bug_markdown("High bug", "a.rs#L1-L2", "High"),
+                },
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 2,
+                        risk_rank: Some(2),
+                        risk_score: Some(0.0),
+                        title: "Ignored bug".to_string(),
+                        severity: "Ignore".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "b.rs#L3-L4".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: bug_markdown("Ignored bug", "b.rs#L3-L4", "Ignore"),
+                },
+            ],
+        };
+
+        let markdown = build_bugs_markdown(&snapshot, None);
+        assert!(markdown.contains("High bug"));
+        assert!(!markdown.contains("Ignored bug"));
     }
 }
 
@@ -14207,12 +14287,23 @@ fn build_bugs_markdown(
     snapshot: &SecurityReviewSnapshot,
     git_link_info: Option<&GitLinkInfo>,
 ) -> String {
-    let bugs = snapshot_bugs(snapshot);
+    let report_bugs: Vec<BugSnapshot> = snapshot
+        .bugs
+        .iter()
+        .filter(|entry| {
+            !matches!(
+                entry.bug.severity.trim().to_ascii_lowercase().as_str(),
+                "ignore" | "ignored"
+            )
+        })
+        .cloned()
+        .collect();
+    let bugs: Vec<SecurityReviewBug> = report_bugs.iter().map(|entry| entry.bug.clone()).collect();
     let mut sections: Vec<String> = Vec::new();
     if let Some(table) = make_bug_summary_table_from_bugs(&bugs) {
         sections.push(table);
     }
-    let details = render_bug_sections(&snapshot.bugs, git_link_info);
+    let details = render_bug_sections(&report_bugs, git_link_info);
     if !details.trim().is_empty() {
         sections.push(details);
     }
