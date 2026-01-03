@@ -2211,7 +2211,17 @@ fn build_bug_records(
 
 fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLinkInfo>) -> String {
     let mut sections: Vec<String> = Vec::new();
-    for snapshot in snapshots {
+    let mut ordered: Vec<&BugSnapshot> = snapshots.iter().collect();
+    ordered.sort_by(|a, b| match (a.bug.risk_rank, b.bug.risk_rank) {
+        (Some(ra), Some(rb)) => ra.cmp(&rb),
+        (Some(_), None) => CmpOrdering::Less,
+        (None, Some(_)) => CmpOrdering::Greater,
+        _ => severity_rank(&a.bug.severity)
+            .cmp(&severity_rank(&b.bug.severity))
+            .then_with(|| a.bug.summary_id.cmp(&b.bug.summary_id)),
+    });
+
+    for snapshot in ordered {
         let base = snapshot.original_markdown.trim();
         if base.is_empty() {
             continue;
@@ -2643,6 +2653,7 @@ fn dedupe_security_review_snapshot(snapshot: &mut SecurityReviewSnapshot) -> usi
     }
 
     let (mut summaries, mut details, removed) = dedupe_bug_summaries(summaries, details);
+    rank_bug_summaries_for_reporting(&mut summaries);
     normalize_bug_identifiers(&mut summaries, &mut details);
     let (_bugs, snapshots) = build_bug_records(summaries, details);
 
@@ -4351,6 +4362,7 @@ pub async fn run_security_review(
                             );
                             let mut summaries = llm_outcome.summaries;
                             let mut details = llm_outcome.details;
+                            rank_bug_summaries_for_reporting(&mut summaries);
                             normalize_bug_identifiers(&mut summaries, &mut details);
                             let (_bugs, snapshots) = build_bug_records(summaries, details);
                             loaded.bugs = snapshots;
@@ -8044,6 +8056,126 @@ mod bug_dedupe_tests {
         assert_eq!(snapshot.bugs.len(), 1);
         assert!(snapshot.findings_summary.contains("Identified 1 finding"));
     }
+
+    #[test]
+    fn reranks_snapshot_bugs_by_severity_after_dedupe() {
+        fn bug_markdown(title: &str, file: &str, severity: &str) -> String {
+            format!(
+                "### {title}\n- **File & Lines:** `{file}`\n- **Severity:** {severity}\n- **Impact:** x\n- **Likelihood:** x\n- **Recommendation:** x\n"
+            )
+        }
+
+        let mut snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: "placeholder".to_string(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 1,
+                        risk_rank: Some(1),
+                        risk_score: Some(90.0),
+                        title: "Medium first by old rank".to_string(),
+                        severity: "Medium".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "b.rs#L3-L4".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: bug_markdown(
+                        "Medium first by old rank",
+                        "b.rs#L3-L4",
+                        "Medium",
+                    ),
+                },
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 2,
+                        risk_rank: Some(2),
+                        risk_score: Some(50.0),
+                        title: "Low second by old rank".to_string(),
+                        severity: "Low".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "c.rs#L5-L6".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: bug_markdown("Low second by old rank", "c.rs#L5-L6", "Low"),
+                },
+                BugSnapshot {
+                    bug: SecurityReviewBug {
+                        summary_id: 3,
+                        risk_rank: Some(3),
+                        risk_score: Some(10.0),
+                        title: "High last by old rank".to_string(),
+                        severity: "High".to_string(),
+                        impact: "x".to_string(),
+                        likelihood: "x".to_string(),
+                        recommendation: "x".to_string(),
+                        file: "a.rs#L1-L2".to_string(),
+                        blame: None,
+                        risk_reason: None,
+                        verification_types: Vec::new(),
+                        vulnerability_tag: None,
+                        validation: BugValidationState::default(),
+                        assignee_github: None,
+                    },
+                    original_markdown: bug_markdown("High last by old rank", "a.rs#L1-L2", "High"),
+                },
+            ],
+        };
+
+        let removed = dedupe_security_review_snapshot(&mut snapshot);
+        assert_eq!(removed, 0);
+        assert_eq!(snapshot.bugs.len(), 3);
+
+        let severities = snapshot
+            .bugs
+            .iter()
+            .map(|entry| entry.bug.severity.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(severities, vec!["High", "Medium", "Low"]);
+
+        let ranks = snapshot
+            .bugs
+            .iter()
+            .map(|entry| entry.bug.risk_rank)
+            .collect::<Vec<_>>();
+        assert_eq!(ranks, vec![Some(1), Some(2), Some(3)]);
+
+        let ids = snapshot
+            .bugs
+            .iter()
+            .map(|entry| entry.bug.summary_id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, 2, 3]);
+
+        snapshot.bugs.reverse();
+        let markdown = build_bugs_markdown(&snapshot, None);
+        let high = markdown
+            .find("### [1] High last by old rank")
+            .expect("high heading");
+        let medium = markdown
+            .find("### [2] Medium first by old rank")
+            .expect("medium heading");
+        let low = markdown
+            .find("### [3] Low second by old rank")
+            .expect("low heading");
+        assert!(high < medium);
+        assert!(medium < low);
+    }
 }
 
 async fn filter_spec_directories(
@@ -11507,6 +11639,24 @@ fn bug_summary_cmp(a: &BugSummary, b: &BugSummary) -> CmpOrdering {
     }
 }
 
+fn rank_bug_summaries_for_reporting(summaries: &mut [BugSummary]) {
+    summaries.sort_by(|a, b| {
+        severity_rank(&a.severity)
+            .cmp(&severity_rank(&b.severity))
+            .then_with(|| match (a.risk_score, b.risk_score) {
+                (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(CmpOrdering::Equal),
+                (Some(_), None) => CmpOrdering::Less,
+                (None, Some(_)) => CmpOrdering::Greater,
+                _ => CmpOrdering::Equal,
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    for (idx, summary) in summaries.iter_mut().enumerate() {
+        summary.risk_rank = Some(idx + 1);
+    }
+}
+
 fn normalize_bug_identifiers(summaries: &mut Vec<BugSummary>, details: &mut Vec<BugDetail>) {
     if summaries.is_empty() {
         details.clear();
@@ -12513,35 +12663,23 @@ async fn rerank_bugs_by_risk(
         }
     }
 
-    summaries.sort_by(|a, b| match (a.risk_score, b.risk_score) {
-        (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(CmpOrdering::Equal),
-        (Some(_), None) => CmpOrdering::Less,
-        (None, Some(_)) => CmpOrdering::Greater,
-        _ => severity_rank(&a.severity)
-            .cmp(&severity_rank(&b.severity))
-            .then_with(|| a.id.cmp(&b.id)),
-    });
+    rank_bug_summaries_for_reporting(summaries);
 
-    for (idx, summary) in summaries.iter_mut().enumerate() {
-        summary.risk_rank = Some(idx + 1);
+    for (idx, summary) in summaries.iter().enumerate() {
+        let id = summary.id;
+        let rank = summary.risk_rank.unwrap_or(idx + 1);
+        let severity = summary.severity.as_str();
         let log_entry = if let Some(score) = summary.risk_score {
             let reason = summary
                 .risk_reason
                 .as_deref()
                 .unwrap_or("no reason provided");
             format!(
-                "Risk rerank: bug #{id} -> priority {rank} (score {score:.1}, severity {severity}) — {reason}",
-                id = summary.id,
-                rank = idx + 1,
-                score = score,
-                severity = summary.severity,
-                reason = reason
+                "Risk rerank: bug #{id} -> priority {rank} (score {score:.1}, severity {severity}) — {reason}"
             )
         } else {
             format!(
-                "Risk rerank: bug #{id} retained original severity {severity} (no model decision)",
-                id = summary.id,
-                severity = summary.severity
+                "Risk rerank: bug #{id} retained original severity {severity} (no model decision)"
             )
         };
         logs.push(log_entry);
