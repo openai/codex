@@ -14,11 +14,14 @@ use codex_mcp_server::ExecApprovalResponse;
 use codex_mcp_server::PatchApprovalElicitRequestParams;
 use codex_mcp_server::PatchApprovalResponse;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnContextItem;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPC_VERSION;
@@ -48,7 +51,11 @@ fn write_minimal_rollout_file(
     conversation_id: ConversationId,
 ) -> anyhow::Result<PathBuf> {
     // Place the rollout under CODEX_HOME/sessions/... so the MCP server can locate it.
-    let day_dir = codex_home.join("sessions").join("2025").join("01").join("01");
+    let day_dir = codex_home
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("01");
     std::fs::create_dir_all(&day_dir)?;
     let rollout_path = day_dir.join(format!(
         "rollout-2025-01-01T00-00-00-{conversation_id}.jsonl"
@@ -72,7 +79,35 @@ fn write_minimal_rollout_file(
         }),
     };
 
-    std::fs::write(&rollout_path, format!("{}\n", serde_json::to_string(&line)?))?;
+    // Add a TurnContext line so resume can restore per-session settings (cwd/model/policies).
+    let resumed_cwd = codex_home.join("resumed-workdir");
+    std::fs::create_dir_all(&resumed_cwd)?;
+    let turn_ctx = TurnContextItem {
+        cwd: resumed_cwd,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        model: "rollout-model".to_string(),
+        effort: None,
+        summary: Default::default(),
+        base_instructions: None,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: None,
+    };
+    let ctx_line = RolloutLine {
+        timestamp: "2025-01-01T00:00:01.000Z".to_string(),
+        item: RolloutItem::TurnContext(turn_ctx),
+    };
+
+    std::fs::write(
+        &rollout_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&line)?,
+            serde_json::to_string(&ctx_line)?,
+        ),
+    )?;
     Ok(rollout_path)
 }
 
@@ -125,6 +160,29 @@ async fn codex_reply_tool_resumes_from_rollout_when_not_in_memory() -> anyhow::R
         Some(expected.as_str()),
         "expected resumed session_id to match the rollout file's ConversationId"
     );
+    let expected_cwd = dir.path().join("resumed-workdir");
+    assert_eq!(
+        msg.get("cwd").and_then(|v| v.as_str()),
+        Some(expected_cwd.to_string_lossy().as_ref()),
+        "expected resumed session cwd to be restored from TurnContextItem"
+    );
+    assert_eq!(
+        msg.get("approval_policy").and_then(|v| v.as_str()),
+        Some("never"),
+        "expected approval_policy to be restored from TurnContextItem"
+    );
+    assert_eq!(
+        msg.get("model").and_then(|v| v.as_str()),
+        Some("rollout-model"),
+        "expected model to be restored from TurnContextItem"
+    );
+    assert_eq!(
+        msg.get("sandbox_policy")
+            .and_then(|v| v.get("type"))
+            .and_then(|v| v.as_str()),
+        Some("read-only"),
+        "expected sandbox_policy to be restored from TurnContextItem"
+    );
 
     // Ensure the tool call completes.
     let codex_response = timeout(
@@ -137,7 +195,7 @@ async fn codex_reply_tool_resumes_from_rollout_when_not_in_memory() -> anyhow::R
         codex_response
             .result
             .get("isError")
-            .and_then(|v| v.as_bool()),
+            .and_then(serde_json::Value::as_bool),
         Some(true),
         "expected MCP tool response to not be marked as error"
     );
