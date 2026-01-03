@@ -7,6 +7,7 @@ use sha2::Sha256;
 use std::fmt::Debug;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 #[cfg(unix)]
@@ -81,7 +82,8 @@ impl FileAuthStorage {
         let mut file = File::open(auth_file)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
-        let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)?;
+        let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)
+            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
 
         Ok(auth_dot_json)
     }

@@ -153,7 +153,7 @@ impl ModelClient {
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
-        let mut refreshed = false;
+        let mut recovery = UnauthorizedRecovery::default();
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
             let api_provider = self
@@ -179,7 +179,7 @@ impl ModelClient {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await?;
+                    handle_unauthorized(status, &mut recovery, &auth_manager, &auth).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -242,7 +242,7 @@ impl ModelClient {
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
-        let mut refreshed = false;
+        let mut recovery = UnauthorizedRecovery::default();
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
             let api_provider = self
@@ -276,7 +276,7 @@ impl ModelClient {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await?;
+                    handle_unauthorized(status, &mut recovery, &auth_manager, &auth).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -485,11 +485,11 @@ where
 /// the mapped `CodexErr` is returned to the caller.
 async fn handle_unauthorized(
     status: StatusCode,
-    refreshed: &mut bool,
+    recovery: &mut UnauthorizedRecovery,
     auth_manager: &Option<Arc<AuthManager>>,
     auth: &Option<crate::auth::CodexAuth>,
 ) -> Result<()> {
-    if *refreshed {
+    if recovery.refreshed_token {
         return Err(map_unauthorized_status(status));
     }
 
@@ -497,17 +497,45 @@ async fn handle_unauthorized(
         && let Some(auth) = auth.as_ref()
         && auth.mode == AuthMode::ChatGPT
     {
-        match manager.refresh_token().await {
-            Ok(_) => {
-                *refreshed = true;
-                Ok(())
+        if !recovery.synced_from_storage {
+            let sync = manager
+                .sync_from_storage_for_request(auth)
+                .await
+                .map_err(CodexErr::Io)?;
+            recovery.synced_from_storage = true;
+            match sync {
+                crate::auth::SyncFromStorageResult::Applied { changed } => {
+                    tracing::debug!(changed, "synced ChatGPT credentials from storage after 401");
+                    Ok(())
+                }
+                crate::auth::SyncFromStorageResult::SkippedMissingIdentity => Ok(()),
+                crate::auth::SyncFromStorageResult::LoggedOut
+                | crate::auth::SyncFromStorageResult::IdentityMismatch => {
+                    Err(map_unauthorized_status(status))
+                }
             }
-            Err(RefreshTokenError::Permanent(failed)) => Err(CodexErr::RefreshTokenFailed(failed)),
-            Err(RefreshTokenError::Transient(other)) => Err(CodexErr::Io(other)),
+        } else {
+            match manager.refresh_token_for_request(auth).await {
+                Ok(Some(_)) => {
+                    recovery.refreshed_token = true;
+                    Ok(())
+                }
+                Ok(None) => Err(map_unauthorized_status(status)),
+                Err(RefreshTokenError::Permanent(failed)) => {
+                    Err(CodexErr::RefreshTokenFailed(failed))
+                }
+                Err(RefreshTokenError::Transient(other)) => Err(CodexErr::Io(other)),
+            }
         }
     } else {
         Err(map_unauthorized_status(status))
     }
+}
+
+#[derive(Default, Debug)]
+struct UnauthorizedRecovery {
+    synced_from_storage: bool,
+    refreshed_token: bool,
 }
 
 fn map_unauthorized_status(status: StatusCode) -> CodexErr {
