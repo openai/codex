@@ -66,6 +66,11 @@ pub struct Cli {
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,
 
+    /// Path to write the full session rollout as a JSON file after completion.
+    /// Useful for training or RL workflows.
+    #[arg(long = "output-rollout", value_name = "FILE")]
+    pub output_rollout: Option<PathBuf>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 

@@ -9,6 +9,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
+mod rollout_export;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -90,6 +91,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
+        output_rollout,
         config_overrides,
     } = cli;
 
@@ -445,6 +447,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
+    // Get the rollout path from the already-received session_configured event
+    let rollout_source_path = session_configured.rollout_path.clone();
+
     while let Some(event) = rx.recv().await {
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
@@ -471,6 +476,22 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     }
     event_processor.print_final_output();
+
+    // Export rollout to JSON if requested
+    if let Some(output_path) = output_rollout {
+        match rollout_export::export_rollout_to_json(&rollout_source_path, &output_path) {
+            Ok(step_count) => {
+                eprintln!(
+                    "Exported RL training data ({step_count} trajectory steps) to {}",
+                    output_path.display()
+                );
+            }
+            Err(e) => {
+                eprintln!("Failed to export rollout to {}: {e}", output_path.display());
+            }
+        }
+    }
+
     if error_seen {
         std::process::exit(1);
     }
