@@ -1135,7 +1135,8 @@ impl App {
         let max_start = total_lines.saturating_sub(max_visible);
         let top_offset = match self.transcript_scroll {
             TranscriptScroll::ToBottom => max_start,
-            TranscriptScroll::Scrolled { .. } => {
+            TranscriptScroll::Scrolled { .. }
+            | TranscriptScroll::ScrolledSpacerBeforeCell { .. } => {
                 // Already anchored; nothing to lock.
                 return;
             }
