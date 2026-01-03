@@ -398,6 +398,8 @@ struct TranscriptRasterCache {
     capacity: usize,
     /// Monotonic counter used to stamp accesses for eviction.
     clock: u64,
+    /// Version of the terminal palette used for the cached rows.
+    palette_version: u64,
     /// Access log used for approximate LRU eviction.
     lru: VecDeque<(u64, u64)>,
     /// Cached rasterized rows by key.
@@ -422,6 +424,7 @@ impl TranscriptRasterCache {
             width: 0,
             capacity: 0,
             clock: 0,
+            palette_version: crate::terminal_palette::palette_version(),
             lru: VecDeque::new(),
             rows: HashMap::new(),
         }
@@ -459,6 +462,12 @@ impl TranscriptRasterCache {
     ) {
         if row_area.width == 0 || row_area.height == 0 {
             return;
+        }
+
+        let palette_version = crate::terminal_palette::palette_version();
+        if palette_version != self.palette_version {
+            self.palette_version = palette_version;
+            self.clear();
         }
 
         if self.width != row_area.width {
@@ -974,6 +983,34 @@ mod tests {
         cache.render_row_index_into(1, area, &mut buf);
         assert_eq!(cache.raster.rows.len(), 1);
         assert!(cache.raster.rows.contains_key(&raster_key(1, false)));
+    }
+
+    #[test]
+    fn raster_cache_resets_when_palette_version_changes() {
+        let mut cache = TranscriptViewCache::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(FakeCell::new(
+            vec![Line::from("palette")],
+            vec![None],
+            false,
+            calls,
+        ))];
+
+        cache.ensure_wrapped(&cells, 20);
+        cache.set_raster_capacity(1);
+
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+
+        cache.render_row_index_into(0, area, &mut buf);
+        assert_eq!(cache.raster.clock, 1);
+
+        cache.render_row_index_into(0, area, &mut buf);
+        assert_eq!(cache.raster.clock, 2);
+
+        crate::terminal_palette::requery_default_colors();
+        cache.render_row_index_into(0, area, &mut buf);
+        assert_eq!(cache.raster.clock, 1);
     }
 
     #[test]
