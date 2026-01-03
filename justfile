@@ -14,9 +14,9 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
-# `codex tui`
+# Interactive TUI (default `codex` behavior)
 tui *args:
-    cargo run --bin codex -- tui "$@"
+    cargo run --bin codex -- "$@"
 
 # Run the CLI version of the file-search crate.
 file-search *args:
