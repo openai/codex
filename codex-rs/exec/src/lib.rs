@@ -12,7 +12,9 @@ pub mod exec_events;
 
 pub use cli::Cli;
 pub use cli::Command;
+pub use cli::NetworkAccessCliArg;
 pub use cli::ReviewArgs;
+pub use cli::SandboxCliArg;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
@@ -33,6 +35,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
@@ -88,6 +91,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         last_message_file,
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
+        external_sandbox_network_access,
         prompt,
         output_schema: output_schema_path,
         config_overrides,
@@ -115,12 +119,49 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with_writer(std::io::stderr)
         .with_filter(env_filter);
 
+    if full_auto && matches!(sandbox_mode_cli_arg, Some(SandboxCliArg::ExternalSandbox)) {
+        return Err(anyhow::anyhow!(
+            "--sandbox external-sandbox cannot be used with --full-auto"
+        ));
+    }
+    if dangerously_bypass_approvals_and_sandbox
+        && matches!(sandbox_mode_cli_arg, Some(SandboxCliArg::ExternalSandbox))
+    {
+        return Err(anyhow::anyhow!(
+            "--sandbox external-sandbox cannot be used with --dangerously-bypass-approvals-and-sandbox"
+        ));
+    }
+    if external_sandbox_network_access.is_some()
+        && !matches!(sandbox_mode_cli_arg, Some(SandboxCliArg::ExternalSandbox))
+    {
+        return Err(anyhow::anyhow!(
+            "--network-access can only be used with --sandbox external-sandbox"
+        ));
+    }
+
+    let external_sandbox_override: Option<SandboxPolicy> =
+        if matches!(sandbox_mode_cli_arg, Some(SandboxCliArg::ExternalSandbox)) {
+            Some(SandboxPolicy::ExternalSandbox {
+                network_access: external_sandbox_network_access
+                    .unwrap_or(NetworkAccessCliArg::Restricted)
+                    .to_network_access(),
+            })
+        } else {
+            None
+        };
+
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
     } else if dangerously_bypass_approvals_and_sandbox {
         Some(SandboxMode::DangerFullAccess)
     } else {
-        sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
+        match sandbox_mode_cli_arg {
+            Some(SandboxCliArg::ReadOnly) => Some(SandboxMode::ReadOnly),
+            Some(SandboxCliArg::WorkspaceWrite) => Some(SandboxMode::WorkspaceWrite),
+            Some(SandboxCliArg::DangerFullAccess) => Some(SandboxMode::DangerFullAccess),
+            Some(SandboxCliArg::ExternalSandbox) => None,
+            None => None,
+        }
     };
 
     // Parse `-c` overrides from the CLI.
@@ -215,8 +256,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         additional_writable_roots: add_dir,
     };
 
-    let config =
+    let mut config =
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    
+    if let Some(sandbox_policy) = external_sandbox_override {
+        config
+            .sandbox_policy
+            .set(sandbox_policy)
+            .map_err(|err| anyhow::anyhow!("Invalid external sandbox policy: {err}"))?;
+    }
 
     if let Err(err) = enforce_login_restrictions(&config).await {
         eprintln!("{err}");

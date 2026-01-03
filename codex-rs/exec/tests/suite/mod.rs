@@ -6,4 +6,5 @@ mod originator;
 mod output_schema;
 mod resume;
 mod sandbox;
+mod sandbox_mode;
 mod server_error_exit;

@@ -1,6 +1,7 @@
 use clap::Parser;
 use clap::ValueEnum;
-use codex_common::CliConfigOverrides;
+use codex_common::{CliConfigOverrides, SandboxModeCliArg};
+use codex_protocol::config_types::SandboxMode;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -30,7 +31,12 @@ pub struct Cli {
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's', value_enum)]
-    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+    pub sandbox_mode: Option<SandboxCliArg>,
+
+    /// When using `--sandbox external-sandbox`, declare whether outbound
+    /// network access is available to the external sandbox.
+    #[arg(long = "network-access", value_enum)]
+    pub external_sandbox_network_access: Option<NetworkAccessCliArg>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
@@ -154,4 +160,31 @@ pub enum Color {
     Never,
     #[default]
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum SandboxCliArg {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+
+    /// Indicates the process is already in an external sandbox.
+    ExternalSandbox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum NetworkAccessCliArg {
+    Restricted,
+    Enabled,
+}
+
+impl NetworkAccessCliArg {
+    pub fn to_network_access(self) -> codex_core::protocol::NetworkAccess {
+        match self {
+            Self::Restricted => codex_core::protocol::NetworkAccess::Restricted,
+            Self::Enabled => codex_core::protocol::NetworkAccess::Enabled,
+        }
+    }
 }
