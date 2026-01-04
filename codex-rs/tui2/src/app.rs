@@ -20,6 +20,7 @@ use crate::transcript_copy_action::TranscriptCopyAction;
 use crate::transcript_copy_action::TranscriptCopyFeedback;
 use crate::transcript_copy_ui::TranscriptCopyUi;
 use crate::transcript_multi_click::TranscriptMultiClick;
+use crate::transcript_scrollbar::render_transcript_scrollbar_if_active;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
@@ -806,6 +807,13 @@ impl App {
         } else {
             self.transcript_copy_ui.clear_affordance();
         }
+        render_transcript_scrollbar_if_active(
+            frame.buffer,
+            transcript_area,
+            total_lines,
+            max_visible,
+            top_offset,
+        );
         chat_top
     }
 
