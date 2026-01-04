@@ -249,8 +249,16 @@ impl TranscriptCopyUi {
         let Some((y, to_x)) = last_visible_segment else {
             return;
         };
-        // Place the pill on the row below the last visible selection segment.
-        let Some(y) = y.checked_add(1).filter(|y| *y < area.bottom()) else {
+        // Prefer placing the pill on the row below the last visible selection segment. If the
+        // selection ends on the last visible row, fall back to placing it above (or, if the view
+        // is only one row tall, on the same row).
+        let Some(y) = y
+            .checked_add(1)
+            .filter(|y| *y < area.bottom())
+            .or_else(|| y.checked_sub(1).filter(|y| *y >= area.y))
+            .or(Some(y))
+            .filter(|y| *y < area.bottom())
+        else {
             return;
         };
 
@@ -328,5 +336,27 @@ mod tests {
         assert!(rendered.contains("ctrl + y"));
         assert!(!rendered.contains("ctrl + shift + c"));
         assert!(ui.affordance_rect.is_some());
+    }
+
+    #[test]
+    fn pill_renders_when_selection_on_last_row() {
+        let area = Rect::new(0, 0, 60, 3);
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        let mut ui = TranscriptCopyUi::new_with_shortcut(CopySelectionShortcut::CtrlShiftC);
+        ui.render_copy_pill(area, &mut buf, (2, 2), (2, 6), 0, 3);
+
+        let rendered = buf_to_string(&buf, area);
+        assert!(rendered.contains("copy"));
+        assert!(rendered.contains("ctrl + shift + c"));
+
+        let rect = ui.affordance_rect.expect("expected pill to render");
+        assert_eq!(rect.y, 1);
+        assert!(ui.hit_test(rect.x, rect.y));
     }
 }
