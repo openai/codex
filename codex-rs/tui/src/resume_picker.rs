@@ -1127,6 +1127,20 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
+    /// Snapshot output differs on Windows because paths render with Windows separators.
+    /// Keep the UX OS-native and use OS-specific snapshot variants.
+    macro_rules! assert_snapshot_os {
+        ($name:expr, $value:expr) => {{
+            #[cfg(target_os = "windows")]
+            insta::with_settings!({ snapshot_suffix => "windows" }, {
+                assert_snapshot!($name, $value);
+            });
+
+            #[cfg(not(target_os = "windows"))]
+            assert_snapshot!($name, $value);
+        }};
+    }
+
     fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
         vec![
             json!({ "timestamp": ts }),
@@ -1486,7 +1500,7 @@ mod tests {
         terminal.flush().expect("flush");
 
         let snapshot = terminal.backend().to_string();
-        assert_snapshot!("resume_picker_screen", snapshot);
+        assert_snapshot_os!("resume_picker_screen", snapshot);
     }
 
     #[tokio::test]
@@ -1652,7 +1666,7 @@ mod tests {
         terminal.flush().expect("flush");
 
         let snapshot = terminal.backend().to_string();
-        assert_snapshot!("resume_picker_screen_filtered", snapshot);
+        assert_snapshot_os!("resume_picker_screen_filtered", snapshot);
     }
 
     #[test]

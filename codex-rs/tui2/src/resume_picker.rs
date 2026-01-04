@@ -27,7 +27,6 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use unicode_width::UnicodeWidthStr;
 
-use crate::diff_render::display_path_for;
 use crate::key_hint;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
@@ -726,13 +725,7 @@ fn render_filter_hint_line(state: &PickerState) -> Line<'static> {
     let cwd = state
         .display_cwd
         .as_ref()
-        .map(|path| {
-            if path.is_absolute() {
-                path.display().to_string()
-            } else {
-                display_path_for(path, Path::new("/"))
-            }
-        })
+        .map(|path| path.display().to_string())
         .unwrap_or_else(|| String::from("unknown"));
 
     if state.show_all_flag {
@@ -1100,7 +1093,7 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
             let cwd_raw = row
                 .cwd
                 .as_ref()
-                .map(|p| display_path_for(p, std::path::Path::new("/")))
+                .map(|p| p.display().to_string())
                 .unwrap_or_default();
             right_elide(&cwd_raw, 24)
         } else {
@@ -1132,6 +1125,20 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
+
+    /// Snapshot output differs on Windows because paths render with Windows separators.
+    /// Keep the UX OS-native and use OS-specific snapshot variants.
+    macro_rules! assert_snapshot_os {
+        ($name:expr, $value:expr) => {{
+            #[cfg(target_os = "windows")]
+            insta::with_settings!({ snapshot_suffix => "windows" }, {
+                assert_snapshot!($name, $value);
+            });
+
+            #[cfg(not(target_os = "windows"))]
+            assert_snapshot!($name, $value);
+        }};
+    }
 
     fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
         vec![
@@ -1492,7 +1499,7 @@ mod tests {
         terminal.flush().expect("flush");
 
         let snapshot = terminal.backend().to_string();
-        assert_snapshot!("resume_picker_screen", snapshot);
+        assert_snapshot_os!("resume_picker_screen", snapshot);
     }
 
     #[tokio::test]
@@ -1658,7 +1665,7 @@ mod tests {
         terminal.flush().expect("flush");
 
         let snapshot = terminal.backend().to_string();
-        assert_snapshot!("resume_picker_screen_filtered", snapshot);
+        assert_snapshot_os!("resume_picker_screen_filtered", snapshot);
     }
 
     #[test]
