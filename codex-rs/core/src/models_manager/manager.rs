@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
 use tracing::error;
@@ -39,6 +40,7 @@ pub struct ModelsManager {
     // todo(aibrahim) merge available_models and model family creation into one struct
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
+    refresh_lock: Mutex<()>,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     codex_home: PathBuf,
@@ -53,6 +55,7 @@ impl ModelsManager {
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            refresh_lock: Mutex::new(()),
             auth_manager,
             etag: RwLock::new(None),
             codex_home,
@@ -68,6 +71,7 @@ impl ModelsManager {
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            refresh_lock: Mutex::new(()),
             auth_manager,
             etag: RwLock::new(None),
             codex_home,
@@ -93,6 +97,7 @@ impl ModelsManager {
         if self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
             return Ok(());
         }
+        let _refresh_guard = self.refresh_lock.lock().await;
         let auth = self.auth_manager.auth();
         let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
@@ -100,10 +105,23 @@ impl ModelsManager {
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
         let client_version = format_client_version_to_whole();
-        let (models, etag) = client
-            .list_models(&client_version, HeaderMap::new())
-            .await
-            .map_err(map_api_error)?;
+        let remote_models = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.list_models(&client_version, HeaderMap::new()),
+        )
+        .await;
+
+        let (models, etag) = match remote_models {
+            Ok(Ok((models, etag))) => (models, etag),
+            Ok(Err(err)) => {
+                error!("failed to refresh remote models: {}", map_api_error(err));
+                return Ok(());
+            }
+            Err(_) => {
+                error!("timed out refreshing remote models after 5s");
+                return Ok(());
+            }
+        };
 
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();

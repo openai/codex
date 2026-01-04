@@ -58,6 +58,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+#[cfg(test)]
 mod model_migration;
 mod notifications;
 pub mod onboarding;

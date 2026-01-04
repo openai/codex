@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +17,8 @@ use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -78,6 +82,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use serde::Deserialize;
+use serde::Serialize;
+
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
@@ -141,12 +148,23 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
+const PENDING_MODEL_MIGRATION_NOTICE_FILENAME: &str = "pending_model_migration_notice.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingModelMigrationNotice {
+    from_model: String,
+    to_model: String,
+    // Used to respect hide flags even if config changes between scheduling and display.
+    #[serde(default)]
+    migration_config_key: Option<String>,
+}
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -402,6 +420,199 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    fn is_session_configured(&self) -> bool {
+        self.conversation_id.is_some()
+    }
+
+    fn pending_model_migration_notice_path(&self) -> PathBuf {
+        self.config
+            .codex_home
+            .join(PENDING_MODEL_MIGRATION_NOTICE_FILENAME)
+    }
+
+    fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool {
+        match migration_config_key {
+            HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => config
+                .notices
+                .hide_gpt_5_1_codex_max_migration_prompt
+                .unwrap_or(false),
+            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => {
+                config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
+    fn should_show_model_migration_notice(
+        current_model: &str,
+        target_model: &str,
+        seen_migrations: &BTreeMap<String, String>,
+        available_models: &[ModelPreset],
+    ) -> bool {
+        if target_model == current_model {
+            return false;
+        }
+
+        if let Some(seen_target) = seen_migrations.get(current_model)
+            && seen_target == target_model
+        {
+            return false;
+        }
+
+        if available_models
+            .iter()
+            .any(|preset| preset.model == current_model && preset.upgrade.is_some())
+        {
+            return true;
+        }
+
+        if available_models
+            .iter()
+            .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
+        {
+            return true;
+        }
+
+        false
+    }
+
+    fn maybe_show_pending_model_migration_notice(&mut self) {
+        let notice_path = self.pending_model_migration_notice_path();
+        let contents = match std::fs::read_to_string(&notice_path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    notice_path = %notice_path.display(),
+                    "failed to read pending model migration notice"
+                );
+                return;
+            }
+        };
+
+        let notice: PendingModelMigrationNotice = match serde_json::from_str(&contents) {
+            Ok(notice) => notice,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    notice_path = %notice_path.display(),
+                    "failed to parse pending model migration notice"
+                );
+                return;
+            }
+        };
+
+        if let Some(migration_config_key) = notice.migration_config_key.as_deref()
+            && Self::migration_prompt_hidden(&self.config, migration_config_key)
+        {
+            let _ = std::fs::remove_file(&notice_path);
+            return;
+        }
+
+        if let Some(seen_target) = self.config.notices.model_migrations.get(&notice.from_model)
+            && seen_target == &notice.to_model
+        {
+            let _ = std::fs::remove_file(&notice_path);
+            return;
+        }
+
+        self.add_to_history(history_cell::new_info_event(
+            format!(
+                "Model upgrade available: {} -> {}. Use /model to switch.",
+                notice.from_model, notice.to_model
+            ),
+            None,
+        ));
+
+        // Best-effort: clear the one-shot file so it doesn't appear again.
+        let _ = std::fs::remove_file(&notice_path);
+
+        // Update in-memory state to prevent re-scheduling within this run, and persist so future
+        // runs don't re-show the notice.
+        self.config
+            .notices
+            .model_migrations
+            .insert(notice.from_model.clone(), notice.to_model.clone());
+        self.app_event_tx
+            .send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                from_model: notice.from_model,
+                to_model: notice.to_model,
+            });
+    }
+
+    fn maybe_schedule_model_migration_notice(&self, model: &str) {
+        let available_models = match self.models_manager.try_list_models(&self.config) {
+            Ok(models) => models,
+            Err(_) => return,
+        };
+
+        let Some(ModelUpgrade {
+            id: target_model,
+            migration_config_key,
+            ..
+        }) = available_models
+            .iter()
+            .find(|preset| preset.model == model)
+            .and_then(|preset| preset.upgrade.as_ref())
+        else {
+            return;
+        };
+
+        if Self::migration_prompt_hidden(&self.config, migration_config_key.as_str()) {
+            return;
+        }
+
+        if available_models
+            .iter()
+            .all(|preset| preset.model != target_model.as_str())
+        {
+            return;
+        }
+
+        if !Self::should_show_model_migration_notice(
+            model,
+            target_model.as_str(),
+            &self.config.notices.model_migrations,
+            &available_models,
+        ) {
+            return;
+        }
+
+        let notice_path = self.pending_model_migration_notice_path();
+        if notice_path.exists() {
+            return;
+        }
+
+        let notice = PendingModelMigrationNotice {
+            from_model: model.to_string(),
+            to_model: target_model.to_string(),
+            migration_config_key: Some(migration_config_key.to_string()),
+        };
+        let Ok(json_line) = serde_json::to_string(&notice).map(|json| format!("{json}\n")) else {
+            return;
+        };
+
+        if let Some(parent) = notice_path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            tracing::error!(
+                error = %err,
+                notice_path = %notice_path.display(),
+                "failed to create directory for pending model migration notice"
+            );
+            return;
+        }
+
+        if let Err(err) = std::fs::write(&notice_path, json_line) {
+            tracing::error!(
+                error = %err,
+                notice_path = %notice_path.display(),
+                "failed to persist pending model migration notice"
+            );
+        }
+    }
+
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -439,13 +650,14 @@ impl ChatWidget {
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
-        self.session_header.set_model(&model_for_header);
+        self.set_model(&model_for_header);
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             &model_for_header,
             event,
             self.show_welcome_banner,
         ));
+        self.maybe_show_pending_model_migration_notice();
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -457,7 +669,12 @@ impl ChatWidget {
         });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
+        } else {
+            // If the user queued messages while startup was still in progress, kick off the first
+            // turn now that we know the session is configured.
+            self.maybe_send_next_queued_input();
         }
+        self.maybe_schedule_model_migration_notice(&model_for_header);
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
@@ -1719,7 +1936,7 @@ impl ChatWidget {
                     return;
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                self.submit_user_message(INIT_PROMPT.to_string().into());
+                self.queue_user_message(INIT_PROMPT.to_string().into());
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -1900,7 +2117,7 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if self.bottom_pane.is_task_running() {
+        if !self.is_session_configured() || self.bottom_pane.is_task_running() {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
         } else {
@@ -1909,6 +2126,12 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        if !self.is_session_configured() {
+            self.queued_user_messages.push_back(user_message);
+            self.refresh_queued_user_messages();
+            return;
+        }
+
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
@@ -2211,6 +2434,9 @@ impl ChatWidget {
 
     // If idle and there are queued inputs, submit exactly one to start the next turn.
     fn maybe_send_next_queued_input(&mut self) {
+        if !self.is_session_configured() {
+            return;
+        }
         if self.bottom_pane.is_task_running() {
             return;
         }
@@ -2407,6 +2633,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Model selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+
         let presets: Vec<ModelPreset> =
             // todo(aibrahim): make this async function
             match self.models_manager.try_list_models(&self.config) {

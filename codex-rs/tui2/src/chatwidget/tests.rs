@@ -981,6 +981,7 @@ async fn alt_up_edits_most_recent_queued_message() {
 #[tokio::test]
 async fn enqueueing_history_prompt_multiple_times_is_stable() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.conversation_id = Some(ConversationId::new());
 
     // Submit an initial prompt to seed history.
     chat.bottom_pane.set_composer_text("repeat me".to_string());
@@ -1725,6 +1726,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
 #[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    chat.conversation_id = Some(ConversationId::new());
     chat.open_model_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1939,6 +1941,7 @@ async fn feedback_upload_consent_popup_snapshot() {
 #[tokio::test]
 async fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.conversation_id = Some(ConversationId::new());
     chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
