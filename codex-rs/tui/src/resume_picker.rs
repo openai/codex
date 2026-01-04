@@ -72,16 +72,17 @@ pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
-    show_all: bool,
+    show_all_flag: bool,
 ) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = default_provider.to_string();
-    let filter_cwd = if show_all {
+    let current_dir = std::env::current_dir().ok();
+    let filter_cwd = if show_all_flag {
         None
     } else {
-        std::env::current_dir().ok()
+        current_dir.clone()
     };
 
     let loader_tx = bg_tx.clone();
@@ -111,8 +112,9 @@ pub async fn run_resume_picker(
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
-        show_all,
+        show_all_flag,
         filter_cwd,
+        current_dir,
     );
     state.start_initial_load();
     state.request_frame();
@@ -134,7 +136,7 @@ pub async fn run_resume_picker(
                     }
                     TuiEvent::Draw => {
                         if let Ok(size) = alt.tui.terminal.size() {
-                            let list_height = size.height.saturating_sub(4) as usize;
+                            let list_height = size.height.saturating_sub(5) as usize;
                             state.update_view_rows(list_height);
                             state.ensure_minimum_rows_for_view(list_height);
                         }
@@ -188,8 +190,9 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     default_provider: String,
-    show_all: bool,
+    show_all_flag: bool,
     filter_cwd: Option<PathBuf>,
+    display_cwd: Option<PathBuf>,
 }
 
 struct PaginationState {
@@ -257,8 +260,9 @@ impl PickerState {
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
-        show_all: bool,
+        show_all_flag: bool,
         filter_cwd: Option<PathBuf>,
+        display_cwd: Option<PathBuf>,
     ) -> Self {
         Self {
             codex_home,
@@ -281,9 +285,20 @@ impl PickerState {
             page_loader,
             view_rows: None,
             default_provider,
-            show_all,
+            show_all_flag,
             filter_cwd,
+            display_cwd,
         }
+    }
+
+    /// Whether the picker is effectively unfiltered (i.e. showing sessions from all directories).
+    ///
+    /// `std::env::current_dir()` can fail (e.g. process started in a deleted or inaccessible CWD).
+    /// In that case we cannot apply the "filter to current directory" behavior (`filter_cwd` is
+    /// `None`), so the UI should behave like `--all` for layout and hints even if the `--all`
+    /// flag wasn't passed.
+    fn is_unfiltered(&self) -> bool {
+        self.show_all_flag || self.filter_cwd.is_none()
     }
 
     fn request_frame(&self) {
@@ -464,7 +479,7 @@ impl PickerState {
     }
 
     fn row_matches_filter(&self, row: &Row) -> bool {
-        if self.show_all {
+        if self.show_all_flag {
             return true;
         }
         let Some(filter_cwd) = self.filter_cwd.as_ref() else {
@@ -703,16 +718,62 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
         })
 }
 
+/// Render the status line describing whether the list is filtered to the current directory.
+///
+/// When the current directory is unavailable, filtering is disabled; this avoids a misleading
+/// "Filtering to current directory: unknown" hint while still allowing `--all` to override.
+fn render_filter_hint_line(state: &PickerState) -> Line<'static> {
+    let cwd = state
+        .display_cwd
+        .as_ref()
+        .map(|path| display_path_for(path, Path::new("/")))
+        .unwrap_or_else(|| String::from("unknown"));
+
+    if state.show_all_flag {
+        vec![
+            "Showing sessions from all directories ".dim(),
+            "(--all)".cyan(),
+            " · Current directory: ".dim(),
+            Span::from(cwd).cyan(),
+        ]
+        .into()
+    } else if state.filter_cwd.is_none() && state.display_cwd.is_none() {
+        vec![
+            "Showing sessions from all directories ".dim(),
+            "· ".dim(),
+            "Current directory unavailable".cyan(),
+        ]
+        .into()
+    } else if state.filter_cwd.is_none() {
+        vec![
+            "Showing sessions from all directories ".dim(),
+            "· Current directory: ".dim(),
+            Span::from(cwd).cyan(),
+        ]
+        .into()
+    } else {
+        vec![
+            "Filtering to current directory: ".dim(),
+            Span::from(cwd).cyan(),
+            " · Use ".dim(),
+            "--all".cyan(),
+            " to show sessions from all directories".dim(),
+        ]
+        .into()
+    }
+}
+
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     // Render full-screen overlay
     let height = tui.terminal.size()?.height;
     tui.draw(height, |frame| {
         let area = frame.area();
-        let [header, search, columns, list, hint] = Layout::vertical([
+        let [header, search, filter_hint, columns, list, hint] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Min(area.height.saturating_sub(4)),
+            Constraint::Length(1),
+            Constraint::Min(area.height.saturating_sub(5)),
             Constraint::Length(1),
         ])
         .areas(area);
@@ -731,7 +792,10 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         };
         frame.render_widget_ref(Line::from(q), search);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let filter_hint_line = render_filter_hint_line(state);
+        frame.render_widget_ref(filter_hint_line, filter_hint);
+
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.is_unfiltered());
 
         // Column headers and list
         render_column_headers(frame, columns, &metrics);
@@ -1200,6 +1264,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            None,
         );
 
         let now = Utc::now();
@@ -1236,7 +1301,7 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(3);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.is_unfiltered());
 
         let width: u16 = 80;
         let height: u16 = 6;
@@ -1349,6 +1414,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            Some(PathBuf::from("/tmp/project")),
         );
 
         let page = RolloutRecorder::list_conversations(
@@ -1370,7 +1436,7 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(4);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.is_unfiltered());
 
         let width: u16 = 80;
         let height: u16 = 9;
@@ -1381,11 +1447,12 @@ mod tests {
         {
             let mut frame = terminal.get_frame();
             let area = frame.area();
-            let [header, search, columns, list, hint] = Layout::vertical([
+            let [header, search, filter_hint, columns, list, hint] = Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
-                Constraint::Min(area.height.saturating_sub(4)),
+                Constraint::Length(1),
+                Constraint::Min(area.height.saturating_sub(5)),
                 Constraint::Length(1),
             ])
             .areas(area);
@@ -1396,6 +1463,9 @@ mod tests {
             );
 
             frame.render_widget_ref(Line::from("Type to search".dim()), search);
+
+            let filter_hint_line = render_filter_hint_line(&state);
+            frame.render_widget_ref(filter_hint_line, filter_hint);
 
             render_column_headers(&mut frame, columns, &metrics);
             render_list(&mut frame, list, &state, &metrics);
@@ -1419,6 +1489,243 @@ mod tests {
         assert_snapshot!("resume_picker_screen", snapshot);
     }
 
+    #[tokio::test]
+    async fn resume_picker_screen_filtered_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+        use uuid::Uuid;
+
+        // Create real rollout files so the snapshot uses the actual listing pipeline.
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let sessions_root = tempdir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_root).expect("mkdir sessions root");
+
+        let now = Utc::now();
+
+        // Helper to write a rollout file with minimal meta + one user message.
+        let write_rollout = |ts: DateTime<Utc>, cwd: &str, branch: &str, preview: &str| {
+            let dir = sessions_root
+                .join(ts.format("%Y").to_string())
+                .join(ts.format("%m").to_string())
+                .join(ts.format("%d").to_string());
+            std::fs::create_dir_all(&dir).expect("mkdir date dirs");
+            let filename = format!(
+                "rollout-{}-{}.jsonl",
+                ts.format("%Y-%m-%dT%H-%M-%S"),
+                Uuid::new_v4()
+            );
+            let path = dir.join(filename);
+            let meta = serde_json::json!({
+                "timestamp": ts.to_rfc3339(),
+                "item": {
+                    "SessionMeta": {
+                        "meta": {
+                            "id": Uuid::new_v4(),
+                            "timestamp": ts.to_rfc3339(),
+                            "cwd": cwd,
+                            "originator": "user",
+                            "cli_version": "0.0.0",
+                            "instructions": null,
+                            "source": "Cli",
+                            "model_provider": "openai",
+                        }
+                    }
+                }
+            });
+            let user = serde_json::json!({
+                "timestamp": ts.to_rfc3339(),
+                "item": {
+                    "EventMsg": {
+                        "UserMessage": {
+                            "message": preview,
+                            "images": null
+                        }
+                    }
+                }
+            });
+            let branch_meta = serde_json::json!({
+                "timestamp": ts.to_rfc3339(),
+                "item": {
+                    "EventMsg": {
+                        "SessionMeta": {
+                            "meta": {
+                                "git_branch": branch
+                            }
+                        }
+                    }
+                }
+            });
+            std::fs::write(&path, format!("{meta}\n{user}\n{branch_meta}\n"))
+                .expect("write rollout");
+        };
+
+        write_rollout(
+            now - Duration::seconds(42),
+            "/tmp/project",
+            "feature/resume",
+            "Fix resume picker timestamps",
+        );
+        write_rollout(
+            now - Duration::minutes(35),
+            "/tmp/other",
+            "main",
+            "Investigate lazy pagination cap",
+        );
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            false,
+            Some(PathBuf::from("/tmp/project")),
+            Some(PathBuf::from("/tmp/project")),
+        );
+
+        let page = RolloutRecorder::list_conversations(
+            &state.codex_home,
+            PAGE_SIZE,
+            None,
+            INTERACTIVE_SESSION_SOURCES,
+            Some(&[String::from("openai")]),
+            "openai",
+        )
+        .await
+        .expect("list conversations");
+
+        let rows = rows_from_items(page.items);
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+        state.view_rows = Some(4);
+        state.selected = 0;
+        state.scroll_top = 0;
+        state.update_view_rows(4);
+
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.is_unfiltered());
+
+        let width: u16 = 80;
+        let height: u16 = 9;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let [header, search, filter_hint, columns, list, hint] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(area.height.saturating_sub(5)),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+
+            frame.render_widget_ref(
+                Line::from(vec!["Resume a previous session".bold().cyan()]),
+                header,
+            );
+
+            frame.render_widget_ref(Line::from("Type to search".dim()), search);
+
+            let filter_hint_line = render_filter_hint_line(&state);
+            frame.render_widget_ref(filter_hint_line, filter_hint);
+
+            render_column_headers(&mut frame, columns, &metrics);
+            render_list(&mut frame, list, &state, &metrics);
+
+            let hint_line: Line = vec![
+                key_hint::plain(KeyCode::Enter).into(),
+                " to resume ".dim(),
+                "    ".dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to start new ".dim(),
+                "    ".dim(),
+                key_hint::ctrl(KeyCode::Char('c')).into(),
+                " to quit ".dim(),
+            ]
+            .into();
+            frame.render_widget_ref(hint_line, hint);
+        }
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_screen_filtered", snapshot);
+    }
+
+    #[test]
+    fn resume_picker_screen_cwd_unavailable_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            false,
+            None,
+            None,
+        );
+        state.view_rows = Some(4);
+        state.update_view_rows(4);
+
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.is_unfiltered());
+
+        let width: u16 = 80;
+        let height: u16 = 9;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let [header, search, filter_hint, columns, list, hint] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(area.height.saturating_sub(5)),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+
+            frame.render_widget_ref(
+                Line::from(vec!["Resume a previous session".bold().cyan()]),
+                header,
+            );
+
+            frame.render_widget_ref(Line::from("Type to search".dim()), search);
+
+            let filter_hint_line = render_filter_hint_line(&state);
+            frame.render_widget_ref(filter_hint_line, filter_hint);
+
+            render_column_headers(&mut frame, columns, &metrics);
+            render_list(&mut frame, list, &state, &metrics);
+
+            let hint_line: Line = vec![
+                key_hint::plain(KeyCode::Enter).into(),
+                " to resume ".dim(),
+                "    ".dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to start new ".dim(),
+                "    ".dim(),
+                key_hint::ctrl(KeyCode::Char('c')).into(),
+                " to quit ".dim(),
+            ]
+            .into();
+            frame.render_widget_ref(hint_line, hint);
+        }
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_screen_cwd_unavailable", snapshot);
+    }
+
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
@@ -1428,6 +1735,7 @@ mod tests {
             loader,
             String::from("openai"),
             true,
+            None,
             None,
         );
 
@@ -1497,6 +1805,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            None,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1527,6 +1836,7 @@ mod tests {
             loader,
             String::from("openai"),
             true,
+            None,
             None,
         );
 
@@ -1572,6 +1882,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            None,
         );
 
         let mut items = Vec::new();
@@ -1615,6 +1926,7 @@ mod tests {
             loader,
             String::from("openai"),
             true,
+            None,
             None,
         );
         state.reset_pagination();
