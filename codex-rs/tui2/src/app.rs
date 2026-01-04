@@ -1877,7 +1877,13 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } if self.transcript_copy_ui.is_copy_key(ch, modifiers) => {
-                let width = tui.terminal.last_known_screen_size.width;
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width == 0 || height == 0 {
+                    return;
+                }
+
                 let chat_height = self.chat_widget.desired_height(width);
                 if self.transcript_copy_action.copy_and_handle(
                     tui,
