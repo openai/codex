@@ -13,7 +13,7 @@ Bundles are stored under:
 
 Each bundle contains:
 
-- `manifest.json` - metadata about the capture (schema version, start marker, notes, repo base).
+- `manifest.json` - metadata about the capture (schema version, rollout start selector, repo git pointer).
 - `rollout.jsonl` - the full session rollout (multi-turn trajectory).
 - `repo.patch` - a git patch representing the repository state at the chosen start marker.
 - `codex-logs.log` - tracing logs to help maintainers debug the session.
@@ -22,6 +22,9 @@ Each bundle contains:
 
 Bundles include the entire rollout, but also record a start marker to indicate where an eval
 harness (or a human) should begin replaying/interpreting the trajectory.
+
+`manifest.json` also records a `rollout.start_selector`, which is the preferred way to find the
+intended starting turn when replaying/slicing (line numbers in `rollout.jsonl` are not stable).
 
 The repository patch must match that chosen start marker:
 
@@ -33,6 +36,17 @@ The repository patch must match that chosen start marker:
 
 For reproducibility outside your machine, the base commit recorded in `manifest.json` should be
 reachable by maintainers (for example, pushed and available on the default branch).
+
+## Reproducibility Contract
+
+Reproducing the repository state in a bundle must be possible using only:
+
+- `repo.git.canonical_remote` (clone URL)
+- `repo.git.commit` (base commit to `git checkout`)
+- `repo.patch` (apply if non-empty)
+
+The manifest may also include machine-local paths (like `repo.root` / `repo.cwd_rel`) as debugging
+hints, but repro should not depend on them.
 
 ## App-Server API (For Integrations)
 

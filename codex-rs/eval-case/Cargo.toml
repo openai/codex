@@ -11,10 +11,9 @@ workspace = true
 anyhow = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-time = { workspace = true, features = ["formatting"] }
+time = { workspace = true, features = ["formatting", "parsing"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-
