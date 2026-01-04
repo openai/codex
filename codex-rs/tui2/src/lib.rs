@@ -60,6 +60,7 @@ mod markdown_render;
 mod markdown_stream;
 #[cfg(test)]
 mod model_migration;
+mod model_migration_logic;
 mod notifications;
 pub mod onboarding;
 mod oss_selection;

@@ -1,8 +1,6 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,8 +15,6 @@ use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -82,8 +78,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use serde::Deserialize;
-use serde::Serialize;
 
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
@@ -148,23 +142,14 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
-const PENDING_MODEL_MIGRATION_NOTICE_FILENAME: &str = "pending_model_migration_notice.json";
+use crate::model_migration_logic;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PendingModelMigrationNotice {
-    from_model: String,
-    to_model: String,
-    // Used to respect hide flags even if config changes between scheduling and display.
-    #[serde(default)]
-    migration_config_key: Option<String>,
-}
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -424,98 +409,12 @@ impl ChatWidget {
         self.conversation_id.is_some()
     }
 
-    fn pending_model_migration_notice_path(&self) -> PathBuf {
-        self.config
-            .codex_home
-            .join(PENDING_MODEL_MIGRATION_NOTICE_FILENAME)
-    }
-
-    fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool {
-        match migration_config_key {
-            HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => config
-                .notices
-                .hide_gpt_5_1_codex_max_migration_prompt
-                .unwrap_or(false),
-            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => {
-                config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
-            }
-            _ => false,
-        }
-    }
-
-    fn should_show_model_migration_notice(
-        current_model: &str,
-        target_model: &str,
-        seen_migrations: &BTreeMap<String, String>,
-        available_models: &[ModelPreset],
-    ) -> bool {
-        if target_model == current_model {
-            return false;
-        }
-
-        if let Some(seen_target) = seen_migrations.get(current_model)
-            && seen_target == target_model
-        {
-            return false;
-        }
-
-        if available_models
-            .iter()
-            .any(|preset| preset.model == current_model && preset.upgrade.is_some())
-        {
-            return true;
-        }
-
-        if available_models
-            .iter()
-            .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
-        {
-            return true;
-        }
-
-        false
-    }
-
     fn maybe_show_pending_model_migration_notice(&mut self) {
-        let notice_path = self.pending_model_migration_notice_path();
-        let contents = match std::fs::read_to_string(&notice_path) {
-            Ok(contents) => contents,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return,
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    notice_path = %notice_path.display(),
-                    "failed to read pending model migration notice"
-                );
-                return;
-            }
-        };
-
-        let notice: PendingModelMigrationNotice = match serde_json::from_str(&contents) {
-            Ok(notice) => notice,
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    notice_path = %notice_path.display(),
-                    "failed to parse pending model migration notice"
-                );
-                return;
-            }
-        };
-
-        if let Some(migration_config_key) = notice.migration_config_key.as_deref()
-            && Self::migration_prompt_hidden(&self.config, migration_config_key)
-        {
-            let _ = std::fs::remove_file(&notice_path);
+        let Some(notice) =
+            model_migration_logic::take_pending_model_migration_notice(&mut self.config)
+        else {
             return;
-        }
-
-        if let Some(seen_target) = self.config.notices.model_migrations.get(&notice.from_model)
-            && seen_target == &notice.to_model
-        {
-            let _ = std::fs::remove_file(&notice_path);
-            return;
-        }
+        };
 
         self.add_to_history(history_cell::new_info_event(
             format!(
@@ -524,16 +423,6 @@ impl ChatWidget {
             ),
             None,
         ));
-
-        // Best-effort: clear the one-shot file so it doesn't appear again.
-        let _ = std::fs::remove_file(&notice_path);
-
-        // Update in-memory state to prevent re-scheduling within this run, and persist so future
-        // runs don't re-show the notice.
-        self.config
-            .notices
-            .model_migrations
-            .insert(notice.from_model.clone(), notice.to_model.clone());
         self.app_event_tx
             .send(AppEvent::PersistModelMigrationPromptAcknowledged {
                 from_model: notice.from_model,
@@ -547,70 +436,11 @@ impl ChatWidget {
             Err(_) => return,
         };
 
-        let Some(ModelUpgrade {
-            id: target_model,
-            migration_config_key,
-            ..
-        }) = available_models
-            .iter()
-            .find(|preset| preset.model == model)
-            .and_then(|preset| preset.upgrade.as_ref())
-        else {
-            return;
-        };
-
-        if Self::migration_prompt_hidden(&self.config, migration_config_key.as_str()) {
-            return;
-        }
-
-        if available_models
-            .iter()
-            .all(|preset| preset.model != target_model.as_str())
-        {
-            return;
-        }
-
-        if !Self::should_show_model_migration_notice(
+        model_migration_logic::maybe_schedule_model_migration_notice(
+            &self.config,
             model,
-            target_model.as_str(),
-            &self.config.notices.model_migrations,
             &available_models,
-        ) {
-            return;
-        }
-
-        let notice_path = self.pending_model_migration_notice_path();
-        if notice_path.exists() {
-            return;
-        }
-
-        let notice = PendingModelMigrationNotice {
-            from_model: model.to_string(),
-            to_model: target_model.to_string(),
-            migration_config_key: Some(migration_config_key.to_string()),
-        };
-        let Ok(json_line) = serde_json::to_string(&notice).map(|json| format!("{json}\n")) else {
-            return;
-        };
-
-        if let Some(parent) = notice_path.parent()
-            && let Err(err) = std::fs::create_dir_all(parent)
-        {
-            tracing::error!(
-                error = %err,
-                notice_path = %notice_path.display(),
-                "failed to create directory for pending model migration notice"
-            );
-            return;
-        }
-
-        if let Err(err) = std::fs::write(&notice_path, json_line) {
-            tracing::error!(
-                error = %err,
-                notice_path = %notice_path.display(),
-                "failed to persist pending model migration notice"
-            );
-        }
+        );
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
@@ -1634,7 +1464,12 @@ impl ChatWidget {
             model,
         } = common;
         let mut config = config;
-        config.model = Some(model.clone());
+        // `model` is an optional override provided by the app. Avoid clobbering the configured
+        // model with an empty string during startup; that would propagate to core and render as a
+        // blank model in the session header (/model current label, etc).
+        if !model.is_empty() {
+            config.model = Some(model.clone());
+        }
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
