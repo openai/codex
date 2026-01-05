@@ -866,4 +866,102 @@ mod tests {
         assert!(screen.is_done());
         assert!(matches!(screen.outcome(), ModelMigrationOutcome::Rejected));
     }
+
+    #[tokio::test]
+    async fn accept_migration_applies_reasoning_effort_mapping_and_drops_unsupported_effort() {
+        use super::ModelUpgrade;
+        use super::apply_reasoning_effort_mapping_for_upgrade;
+        use codex_core::config::ConfigBuilder;
+        use codex_protocol::openai_models::ModelPreset;
+        use codex_protocol::openai_models::ReasoningEffort;
+        use codex_protocol::openai_models::ReasoningEffortPreset;
+        use pretty_assertions::assert_eq;
+        use std::collections::HashMap;
+        use tempfile::TempDir;
+
+        fn effort_preset(effort: ReasoningEffort) -> ReasoningEffortPreset {
+            ReasoningEffortPreset {
+                effort,
+                description: String::new(),
+            }
+        }
+
+        fn preset(
+            model: &str,
+            supported_reasoning_efforts: Vec<ReasoningEffort>,
+            upgrade: Option<ModelUpgrade>,
+        ) -> ModelPreset {
+            ModelPreset {
+                id: model.to_string(),
+                model: model.to_string(),
+                display_name: model.to_string(),
+                description: String::new(),
+                default_reasoning_effort: ReasoningEffort::Medium,
+                supported_reasoning_efforts: supported_reasoning_efforts
+                    .into_iter()
+                    .map(effort_preset)
+                    .collect(),
+                is_default: false,
+                upgrade,
+                show_in_picker: true,
+                supported_in_api: true,
+            }
+        }
+
+        let temp_home = TempDir::new().expect("tempdir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(temp_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("build config");
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
+
+        let mut mapping = HashMap::new();
+        mapping.insert(ReasoningEffort::High, ReasoningEffort::Medium);
+        let upgrade = ModelUpgrade {
+            id: "to".to_string(),
+            reasoning_effort_mapping: Some(mapping),
+            migration_config_key: "k".to_string(),
+            model_link: None,
+            upgrade_copy: None,
+        };
+
+        let mapped_supported_presets = vec![
+            preset("from", vec![ReasoningEffort::High], Some(upgrade)),
+            preset("to", vec![ReasoningEffort::Medium], None),
+        ];
+
+        apply_reasoning_effort_mapping_for_upgrade(
+            &mut config,
+            "from",
+            "to",
+            &mapped_supported_presets,
+        );
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
+
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
+
+        let mut mapping = HashMap::new();
+        mapping.insert(ReasoningEffort::High, ReasoningEffort::Medium);
+        let upgrade = ModelUpgrade {
+            id: "to".to_string(),
+            reasoning_effort_mapping: Some(mapping),
+            migration_config_key: "k".to_string(),
+            model_link: None,
+            upgrade_copy: None,
+        };
+
+        let mapped_unsupported_presets = vec![
+            preset("from", vec![ReasoningEffort::High], Some(upgrade)),
+            preset("to", vec![ReasoningEffort::Low], None),
+        ];
+
+        apply_reasoning_effort_mapping_for_upgrade(
+            &mut config,
+            "from",
+            "to",
+            &mapped_unsupported_presets,
+        );
+        assert_eq!(config.model_reasoning_effort, None);
+    }
 }

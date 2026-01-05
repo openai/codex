@@ -735,6 +735,109 @@ mod prompt_ui {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use codex_core::config::ConfigBuilder;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::openai_models::ReasoningEffortPreset;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    async fn test_config(temp_home: &TempDir) -> Config {
+        ConfigBuilder::default()
+            .codex_home(temp_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("build config")
+    }
+
+    fn effort_preset(effort: ReasoningEffort) -> ReasoningEffortPreset {
+        ReasoningEffortPreset {
+            effort,
+            description: String::new(),
+        }
+    }
+
+    fn preset(
+        model: &str,
+        supported_reasoning_efforts: Vec<ReasoningEffort>,
+        upgrade: Option<ModelUpgrade>,
+    ) -> ModelPreset {
+        ModelPreset {
+            id: model.to_string(),
+            model: model.to_string(),
+            display_name: model.to_string(),
+            description: String::new(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: supported_reasoning_efforts
+                .into_iter()
+                .map(effort_preset)
+                .collect(),
+            is_default: false,
+            upgrade,
+            show_in_picker: true,
+            supported_in_api: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn accept_migration_applies_reasoning_effort_mapping_and_drops_unsupported_effort() {
+        let temp_home = TempDir::new().expect("tempdir");
+        let mut config = test_config(&temp_home).await;
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
+
+        let mut mapping = HashMap::new();
+        mapping.insert(ReasoningEffort::High, ReasoningEffort::Medium);
+        let upgrade = ModelUpgrade {
+            id: "to".to_string(),
+            reasoning_effort_mapping: Some(mapping),
+            migration_config_key: "k".to_string(),
+            model_link: None,
+            upgrade_copy: None,
+        };
+
+        let mapped_supported_presets = vec![
+            preset("from", vec![ReasoningEffort::High], Some(upgrade)),
+            preset("to", vec![ReasoningEffort::Medium], None),
+        ];
+
+        apply_reasoning_effort_mapping_for_upgrade(
+            &mut config,
+            "from",
+            "to",
+            &mapped_supported_presets,
+        );
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
+
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
+
+        let mut mapping = HashMap::new();
+        mapping.insert(ReasoningEffort::High, ReasoningEffort::Medium);
+        let upgrade = ModelUpgrade {
+            id: "to".to_string(),
+            reasoning_effort_mapping: Some(mapping),
+            migration_config_key: "k".to_string(),
+            model_link: None,
+            upgrade_copy: None,
+        };
+
+        let mapped_unsupported_presets = vec![
+            preset("from", vec![ReasoningEffort::High], Some(upgrade)),
+            preset("to", vec![ReasoningEffort::Low], None),
+        ];
+
+        apply_reasoning_effort_mapping_for_upgrade(
+            &mut config,
+            "from",
+            "to",
+            &mapped_unsupported_presets,
+        );
+        assert_eq!(config.model_reasoning_effort, None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
     use super::prompt_ui::ModelMigrationOutcome;
     use super::prompt_ui::ModelMigrationScreen;
     use super::prompt_ui::migration_copy_for_models;
