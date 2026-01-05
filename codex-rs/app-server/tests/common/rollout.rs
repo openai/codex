@@ -47,6 +47,7 @@ pub fn create_fake_rollout(
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         instructions: None,
+        name: None,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
     };

@@ -1728,6 +1728,9 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
+            SlashCommand::Name => {
+                self.open_name_popup();
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }
@@ -1914,6 +1917,30 @@ impl ChatWidget {
             return;
         }
 
+        // Intercept '/name <new name>' as a local rename command (no images allowed).
+        if image_paths.is_empty()
+            && let Some((cmd, rest)) = crate::bottom_pane::prompt_args::parse_slash_name(&text)
+            && cmd == "name"
+        {
+            let name = rest.trim();
+            if name.is_empty() {
+                // Provide a brief usage hint.
+                self.add_to_history(history_cell::new_info_event(
+                    "Usage: /name <new name>".to_string(),
+                    None,
+                ));
+                self.request_redraw();
+            } else {
+                let name_str = name.to_string();
+                self.codex_op_tx
+                    .send(Op::SetSessionName { name: name_str })
+                    .unwrap_or_else(|e| {
+                        tracing::error!("failed to send SetSessionName op: {e}");
+                    });
+            }
+            return;
+        }
+
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -2058,6 +2085,13 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
+            EventMsg::SessionRenamed(ev) => {
+                self.add_to_history(history_cell::new_info_event(
+                    format!("Named this chat: {}", ev.name),
+                    None,
+                ));
+                self.request_redraw();
+            }
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)
@@ -3499,6 +3533,33 @@ impl ChatWidget {
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_name_popup(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Name this chat".to_string(),
+            "Type a name and press Enter".to_string(),
+            None,
+            Box::new(move |name: String| {
+                let trimmed = name.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::SetSessionName(trimmed));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn begin_set_session_name(&mut self, name: String) {
+        let trimmed = name.trim().to_string();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.codex_op_tx
+            .send(Op::SetSessionName { name: trimmed })
+            .unwrap_or_else(|e| tracing::error!("failed to send SetSessionName op: {e}"));
     }
 
     pub(crate) fn token_usage(&self) -> TokenUsage {

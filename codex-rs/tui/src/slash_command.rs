@@ -17,6 +17,7 @@ pub enum SlashCommand {
     Experimental,
     Skills,
     Review,
+    Name,
     New,
     Resume,
     Init,
@@ -44,6 +45,7 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Name => "set a name for this chat",
             SlashCommand::Resume => "resume a saved chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
@@ -81,6 +83,8 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Logout => false,
+            // Naming is a local UI action; allow during tasks.
+            SlashCommand::Name => true,
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Skills

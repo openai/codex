@@ -583,6 +583,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ListSkillsResponse(_)
             | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
+            | EventMsg::SessionRenamed(_)
             | EventMsg::EnteredReviewMode(_)
             | EventMsg::ExitedReviewMode(_)
             | EventMsg::AgentMessageDelta(_)

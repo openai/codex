@@ -116,6 +116,7 @@ pub struct ConversationSummary {
     pub conversation_id: ConversationId,
     pub path: PathBuf,
     pub preview: String,
+    pub name: Option<String>,
     pub timestamp: Option<String>,
     pub model_provider: String,
     pub cwd: PathBuf,

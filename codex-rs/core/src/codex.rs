@@ -110,6 +110,7 @@ use crate::protocol::ReasoningRawContentDeltaEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SessionRenamedEvent;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
 use crate::protocol::StreamErrorEvent;
@@ -1319,6 +1320,17 @@ impl Session {
         }
     }
 
+    pub(crate) async fn set_session_name(&self, name: String) -> std::io::Result<()> {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        let Some(rec) = recorder else {
+            return Err(std::io::Error::other("rollout recorder unavailable"));
+        };
+        rec.set_session_name(name).await
+    }
+
     pub(crate) async fn clone_history(&self) -> ContextManager {
         let state = self.state.lock().await;
         state.clone_history()
@@ -1658,6 +1670,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
+            Op::SetSessionName { name } => {
+                handlers::set_session_name(&sess, sub.id.clone(), name).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -1714,6 +1729,7 @@ mod handlers {
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
+    use codex_protocol::protocol::SessionRenamedEvent;
     use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
@@ -2032,6 +2048,32 @@ mod handlers {
             CompactTask,
         )
         .await;
+    }
+
+    pub async fn set_session_name(sess: &Arc<Session>, sub_id: String, name: String) {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        if let Err(err) = sess.set_session_name(trimmed.to_string()).await {
+            let message = format!("Failed to update session name: {err}");
+            warn!("{message}");
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent { message }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
+
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::SessionRenamed(SessionRenamedEvent {
+                name: trimmed.to_string(),
+            }),
+        };
+        sess.send_event_raw(event).await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

@@ -207,6 +207,10 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Set a human-friendly name for the current session.
+    /// The agent will persist this to the rollout so UIs can surface it.
+    SetSessionName { name: String },
+
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
@@ -573,6 +577,9 @@ pub enum EventMsg {
     AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
     /// Signaled when the model begins a new reasoning summary section (e.g., a new titled block).
     AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
+
+    /// Session was given a human-friendly name by the user.
+    SessionRenamed(SessionRenamedEvent),
 
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
@@ -1150,6 +1157,11 @@ pub struct WebSearchEndEvent {
     pub query: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SessionRenamedEvent {
+    pub name: String,
+}
+
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1261,6 +1273,8 @@ pub struct SessionMeta {
     pub originator: String,
     pub cli_version: String,
     pub instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default)]
     pub source: SessionSource,
     pub model_provider: Option<String>,
@@ -1275,6 +1289,7 @@ impl Default for SessionMeta {
             originator: String::new(),
             cli_version: String::new(),
             instructions: None,
+            name: None,
             source: SessionSource::default(),
             model_provider: None,
         }

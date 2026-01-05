@@ -644,9 +644,12 @@ fn head_to_row(item: &ConversationItem) -> Row {
         .or(created_at);
 
     let (cwd, git_branch) = extract_session_meta_from_head(&item.head);
-    let preview = preview_from_head(&item.head)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let preview = extract_session_name_from_head(&item.head)
+        .or_else(|| {
+            preview_from_head(&item.head)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| String::from("(no message yet)"));
 
     Row {
@@ -668,6 +671,20 @@ fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf
         }
     }
     (None, None)
+}
+
+fn extract_session_name_from_head(head: &[serde_json::Value]) -> Option<String> {
+    for value in head {
+        if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
+            if let Some(name) = meta_line.meta.name {
+                let trimmed = name.trim().to_string();
+                if !trimmed.is_empty() {
+                    return Some(trimmed);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {

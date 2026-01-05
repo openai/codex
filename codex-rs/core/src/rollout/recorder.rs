@@ -11,6 +11,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
@@ -66,6 +67,11 @@ enum RolloutCmd {
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
         ack: oneshot::Sender<()>,
+    },
+    /// Update the session meta name stored at the head of the rollout file.
+    UpdateSessionName {
+        name: String,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
     Shutdown {
         ack: oneshot::Sender<()>,
@@ -146,6 +152,7 @@ impl RolloutRecorder {
                         originator: originator().value.clone(),
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
+                        name: None,
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                     }),
@@ -172,7 +179,7 @@ impl RolloutRecorder {
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
-        tokio::task::spawn(rollout_writer(file, rx, meta, cwd));
+        tokio::task::spawn(rollout_writer(file, rx, meta, cwd, rollout_path.clone()));
 
         Ok(Self { tx, rollout_path })
     }
@@ -205,6 +212,16 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout flush: {e}")))?;
         rx.await
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
+    }
+
+    pub async fn set_session_name(&self, name: String) -> std::io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::UpdateSessionName { name, ack: tx })
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue session name update: {e}")))?;
+        rx.await
+            .map_err(|e| IoError::other(format!("failed waiting for session name update: {e}")))?
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -351,6 +368,7 @@ async fn rollout_writer(
     mut rx: mpsc::Receiver<RolloutCmd>,
     mut meta: Option<SessionMeta>,
     cwd: std::path::PathBuf,
+    rollout_path: PathBuf,
 ) -> std::io::Result<()> {
     let mut writer = JsonlWriter { file };
 
@@ -389,6 +407,10 @@ async fn rollout_writer(
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
             }
+            RolloutCmd::UpdateSessionName { name, ack } => {
+                let result = update_session_name(&mut writer, &rollout_path, name).await;
+                let _ = ack.send(result);
+            }
         }
     }
 
@@ -421,4 +443,42 @@ impl JsonlWriter {
         self.file.flush().await?;
         Ok(())
     }
+}
+
+async fn update_session_name(
+    writer: &mut JsonlWriter,
+    rollout_path: &Path,
+    name: String,
+) -> std::io::Result<()> {
+    writer.file.flush().await?;
+    let contents = tokio::fs::read(rollout_path).await?;
+    let newline_idx = contents
+        .iter()
+        .position(|&b| b == b'\n')
+        .ok_or_else(|| IoError::other("rollout is missing a SessionMeta line"))?;
+    let first_line = std::str::from_utf8(&contents[..newline_idx])
+        .map_err(|e| IoError::other(format!("invalid utf8 in session meta line: {e}")))?;
+    let mut rollout_line: RolloutLine = serde_json::from_str(first_line)
+        .map_err(|e| IoError::other(format!("invalid session meta line: {e}")))?;
+
+    let RolloutItem::SessionMeta(mut session_meta_line) = rollout_line.item else {
+        return Err(IoError::other("first rollout line is not session metadata"));
+    };
+    let trimmed = name.trim();
+    session_meta_line.meta.name = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    rollout_line.item = RolloutItem::SessionMeta(session_meta_line);
+
+    let mut updated = serde_json::to_vec(&rollout_line)?;
+    updated.push(b'\n');
+    updated.extend_from_slice(&contents[newline_idx + 1..]);
+
+    writer.file.set_len(0).await?;
+    writer.file.seek(std::io::SeekFrom::Start(0)).await?;
+    writer.file.write_all(&updated).await?;
+    writer.file.flush().await?;
+    Ok(())
 }
