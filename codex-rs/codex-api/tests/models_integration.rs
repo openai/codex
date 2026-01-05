@@ -48,7 +48,16 @@ fn provider(base_url: &str) -> Provider {
 
 #[tokio::test]
 async fn models_client_hits_models_endpoint() {
-    let server = MockServer::start().await;
+    // Wiremock panics if it cannot bind a local port. In the Codex CLI sandbox,
+    // binding localhost ports may be disallowed, so treat that as a skip.
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!("Skipping test: failed to bind mock server port: {err}");
+            return;
+        }
+    };
+    let server = MockServer::builder().listener(listener).start().await;
     let base_url = format!("{}/api/codex", server.uri());
 
     let response = ModelsResponse {
@@ -76,7 +85,7 @@ async fn models_client_hits_models_endpoint() {
             supported_in_api: true,
             priority: 1,
             upgrade: None,
-            base_instructions: Some("base instructions".to_string()),
+            base_instructions: "base instructions".to_string(),
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
