@@ -31,28 +31,97 @@ pub trait HttpTransport: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct ReqwestTransport {
     client: CodexHttpClient,
+    enable_request_compression: bool,
 }
 
 impl ReqwestTransport {
     pub fn new(client: reqwest::Client) -> Self {
         Self {
             client: CodexHttpClient::new(client),
+            enable_request_compression: false,
         }
     }
 
+    pub fn with_request_compression(mut self, enabled: bool) -> Self {
+        self.enable_request_compression = enabled;
+        self
+    }
+
+    fn should_compress_request(&self, method: &Method, url: &str, headers: &HeaderMap) -> bool {
+        if !self.enable_request_compression {
+            return false;
+        }
+
+        if *method != Method::POST {
+            return false;
+        }
+
+        if headers.contains_key(http::header::CONTENT_ENCODING) {
+            return false;
+        }
+
+        let Ok(parsed) = reqwest::Url::parse(url) else {
+            return false;
+        };
+
+        let path = parsed.path().to_ascii_lowercase();
+        path.contains("/backend-api/codex") || path.contains("/api/codex")
+    }
+
     fn build(&self, req: Request) -> Result<CodexRequestBuilder, TransportError> {
-        let mut builder = self
-            .client
-            .request(
-                Method::from_bytes(req.method.as_str().as_bytes()).unwrap_or(Method::GET),
-                &req.url,
-            )
-            .headers(req.headers);
-        if let Some(timeout) = req.timeout {
+        let Request {
+            method,
+            url,
+            mut headers,
+            body,
+            timeout,
+        } = req;
+
+        let mut builder = self.client.request(
+            Method::from_bytes(method.as_str().as_bytes()).unwrap_or(Method::GET),
+            &url,
+        );
+
+        if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
         }
-        if let Some(body) = req.body {
-            builder = builder.json(&body);
+
+        if let Some(body) = body {
+            if self.should_compress_request(&method, &url, &headers) {
+                let json = serde_json::to_vec(&body)
+                    .map_err(|err| TransportError::Build(err.to_string()))?;
+                let pre_compression_bytes = json.len();
+                let compression_start = std::time::Instant::now();
+                let compressed = zstd::stream::encode_all(std::io::Cursor::new(json), 3)
+                    .map_err(|err| TransportError::Build(err.to_string()))?;
+                let post_compression_bytes = compressed.len();
+                let compression_duration = compression_start.elapsed();
+
+                // Ensure the server knows to unpack the request body.
+                headers.insert(
+                    http::header::CONTENT_ENCODING,
+                    http::HeaderValue::from_static("zstd"),
+                );
+                if !headers.contains_key(http::header::CONTENT_TYPE) {
+                    headers.insert(
+                        http::header::CONTENT_TYPE,
+                        http::HeaderValue::from_static("application/json"),
+                    );
+                }
+
+                tracing::info!(
+                    pre_compression_bytes,
+                    post_compression_bytes,
+                    compression_duration_ms = compression_duration.as_millis(),
+                    "Compressed request body with zstd"
+                );
+
+                builder = builder.headers(headers).body(compressed);
+            } else {
+                builder = builder.headers(headers).json(&body);
+            }
+        } else {
+            builder = builder.headers(headers);
         }
         Ok(builder)
     }
