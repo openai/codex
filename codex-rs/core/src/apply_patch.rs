@@ -40,7 +40,7 @@ pub(crate) async fn apply_patch(
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
     let session_patch_approved = {
-        let store = sess.services.patch_approvals.lock().await;
+        let store = sess.services.apply_patch_approvals.lock().await;
         store.is_action_approved(&action, &action.cwd)
     };
     match assess_patch_safety(
@@ -76,7 +76,7 @@ pub(crate) async fn apply_patch(
                 .await;
             let decision = rx_approve.await.unwrap_or_default();
             if matches!(decision, ReviewDecision::ApprovedForSession) {
-                let mut store = sess.services.patch_approvals.lock().await;
+                let mut store = sess.services.apply_patch_approvals.lock().await;
                 store.approve_action(&action, &action.cwd);
             }
             match decision {

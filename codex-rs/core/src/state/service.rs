@@ -6,7 +6,7 @@ use crate::agent::AgentControl;
 use crate::exec_policy::ExecPolicyManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
-use crate::patch_approval_store::PatchApprovalStore;
+use crate::apply_patch_approval_store::ApplyPatchApprovalStore;
 use crate::skills::SkillsManager;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecSessionManager;
@@ -29,7 +29,7 @@ pub(crate) struct SessionServices {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
-    pub(crate) patch_approvals: Mutex<PatchApprovalStore>,
+    pub(crate) apply_patch_approvals: Mutex<ApplyPatchApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) agent_control: AgentControl,
 }

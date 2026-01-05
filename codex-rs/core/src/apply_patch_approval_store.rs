@@ -6,11 +6,11 @@ use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, Default)]
-pub(crate) struct PatchApprovalStore {
+pub(crate) struct ApplyPatchApprovalStore {
     approved_paths: HashSet<AbsolutePathBuf>,
 }
 
-impl PatchApprovalStore {
+impl ApplyPatchApprovalStore {
     pub fn approve_action(&mut self, action: &ApplyPatchAction, cwd: &Path) {
         for (path, change) in action.changes() {
             if let Some(abs) = resolve_abs(cwd, path) {
@@ -75,7 +75,7 @@ mod tests {
 *** End Patch"#;
         let action = parse_action(cwd, patch_two_files);
 
-        let mut store = PatchApprovalStore::default();
+        let mut store = ApplyPatchApprovalStore::default();
         assert!(!store.is_action_approved(&action, cwd));
 
         store.approve_action(&action, cwd);
