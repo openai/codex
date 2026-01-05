@@ -374,39 +374,6 @@ impl ChatWidget {
         self.conversation_id.is_some()
     }
 
-    fn maybe_show_pending_model_migration_notice(&mut self) {
-        let Some(notice) = model_migration::take_pending_model_migration_notice(&mut self.config)
-        else {
-            return;
-        };
-
-        self.add_to_history(history_cell::new_info_event(
-            format!(
-                "Model upgrade available: {} -> {}. Use /model to switch.",
-                notice.from_model, notice.to_model
-            ),
-            None,
-        ));
-        self.app_event_tx
-            .send(AppEvent::PersistModelMigrationPromptAcknowledged {
-                from_model: notice.from_model,
-                to_model: notice.to_model,
-            });
-    }
-
-    fn maybe_schedule_model_migration_notice(&self, model: &str) {
-        let available_models = match self.models_manager.try_list_models(&self.config) {
-            Ok(models) => models,
-            Err(_) => return,
-        };
-
-        model_migration::maybe_schedule_model_migration_notice(
-            &self.config,
-            model,
-            &available_models,
-        );
-    }
-
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -781,6 +748,39 @@ impl ChatWidget {
             }
         }
         self.request_redraw();
+    }
+
+    fn maybe_show_pending_model_migration_notice(&mut self) {
+        let Some(notice) = model_migration::take_pending_model_migration_notice(&mut self.config)
+        else {
+            return;
+        };
+
+        self.add_to_history(history_cell::new_info_event(
+            format!(
+                "Model upgrade available: {} -> {}. Use /model to switch.",
+                notice.from_model, notice.to_model
+            ),
+            None,
+        ));
+        self.app_event_tx
+            .send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                from_model: notice.from_model,
+                to_model: notice.to_model,
+            });
+    }
+
+    fn maybe_schedule_model_migration_notice(&self, model: &str) {
+        let available_models = match self.models_manager.try_list_models(&self.config) {
+            Ok(models) => models,
+            Err(_) => return,
+        };
+
+        model_migration::maybe_schedule_model_migration_notice(
+            &self.config,
+            model,
+            &available_models,
+        );
     }
 
     fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
