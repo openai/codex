@@ -22,7 +22,7 @@ metadata:
 
 - **ワーカーの最終応答は JSON のみ**（説明文、コードフェンス、前置き、ログは禁止）
 - 変更は禁止（ファイル編集・削除・git操作・ネットワークアクセスをしない）
- - セッション冒頭の注入ブロック（`session_meta`、`<INSTRUCTIONS>`、`## Skills`、`<environment_context>` 等）からの引用だけで `top_hits` を埋めない。原則として `event_msg.user_message` / `response_item.message`（会話本文）/ `response_item.function_call_output` を根拠にする
+- セッション冒頭の注入ブロック（`session_meta`、`<INSTRUCTIONS>`、`## Skills`、`<environment_context>` 等）からの引用だけで `top_hits` を埋めない。原則として `event_msg.user_message` / `response_item.message`（会話本文）/ `response_item.function_call_output` を根拠にする
 
 ## 入力
 
