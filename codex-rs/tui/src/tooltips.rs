@@ -1,7 +1,13 @@
 use codex_core::features::FEATURES;
 use lazy_static::lazy_static;
 use rand::Rng;
+use std::sync::OnceLock;
+use std::time::Duration;
+use tokio::runtime::Handle;
+use tokio::task;
 
+const ANNOUNCEMENT_TIP_URL: &str = "https://raw.githubusercontent.com/openai/codex/main/announcement_tip";
+static ANNOUNCEMENT_TIP: OnceLock<Option<String>> = OnceLock::new();
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
 fn beta_tooltips() -> Vec<&'static str> {
@@ -25,9 +31,12 @@ lazy_static! {
     };
 }
 
-pub(crate) fn random_tooltip() -> Option<&'static str> {
+pub(crate) fn random_tooltip() -> Option<String> {
+    if let Some(announcement) = fetch_announcement_tip() {
+        return Some(announcement);
+    }
     let mut rng = rand::rng();
-    pick_tooltip(&mut rng)
+    pick_tooltip(&mut rng).map(str::to_string)
 }
 
 fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
@@ -38,6 +47,33 @@ fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
             .get(rng.random_range(0..ALL_TOOLTIPS.len()))
             .copied()
     }
+}
+
+fn fetch_announcement_tip() -> Option<String> {
+    let tip_ref = ANNOUNCEMENT_TIP.get_or_init(|| {
+        let handle = Handle::try_current().ok()?;
+        let text = task::block_in_place(|| {
+            handle.block_on(async {
+                let response = reqwest::Client::new()
+                    .get(ANNOUNCEMENT_TIP_URL)
+                    .timeout(Duration::from_millis(500))
+                    .send()
+                    .await
+                    .ok()?;
+                let text = response.error_for_status().ok()?.text().await.ok()?;
+                Some(text)
+            })
+        })?;
+
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    tip_ref.clone()
 }
 
 #[cfg(test)]
