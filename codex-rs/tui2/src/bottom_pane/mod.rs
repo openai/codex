@@ -165,6 +165,16 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
+        let esc_interrupt_candidate = matches!(key_event.code, KeyCode::Esc)
+            && self.is_task_running
+            && self.status.is_some()
+            && !self.composer.popup_active()
+            && self.view_stack.is_empty();
+
+        if !esc_interrupt_candidate && let Some(status) = self.status.as_mut() {
+            status.clear_esc_interrupt_prime();
+        }
+
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if let Some(view) = self.view_stack.last_mut() {
             if key_event.code == KeyCode::Esc
@@ -183,14 +193,12 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
-            if matches!(key_event.code, crossterm::event::KeyCode::Esc)
-                && self.is_task_running
-                && let Some(status) = &self.status
-            {
-                // Send Op::Interrupt
-                status.interrupt();
+            // If a task is running and a status line is visible, allow Esc-Esc to
+            // interrupt even while the composer has focus.
+            if esc_interrupt_candidate && let Some(status) = self.status.as_mut() {
+                if status.handle_esc_interrupt() {
+                    status.interrupt();
+                }
                 self.request_redraw();
                 return InputResult::None;
             }
@@ -840,5 +848,36 @@ mod tests {
             "status_and_queued_messages_snapshot",
             render_snapshot(&pane, area)
         );
+    }
+
+    #[test]
+    fn esc_twice_interrupts_task() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(rx.try_recv().is_err(), "expected no interrupt on first Esc");
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        match rx.try_recv() {
+            Ok(AppEvent::CodexOp(codex_core::protocol::Op::Interrupt)) => {}
+            other => panic!("expected Op::Interrupt, got {other:?}"),
+        }
     }
 }

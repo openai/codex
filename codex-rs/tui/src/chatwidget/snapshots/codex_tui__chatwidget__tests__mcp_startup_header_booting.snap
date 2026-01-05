@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests.rs
 expression: terminal.backend()
 ---
 "                                                                                "
-"• Booting MCP server: alpha (0s • esc to interrupt)                             "
+"• Booting MCP server: alpha (0s • esc esc to interrupt)                         "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

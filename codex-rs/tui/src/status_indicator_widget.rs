@@ -29,12 +29,14 @@ use crate::wrapping::word_wrap_lines;
 
 const DETAILS_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
+const ESC_INTERRUPT_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
     details: Option<String>,
     show_interrupt_hint: bool,
+    esc_interrupt_primed_at: Option<Instant>,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -71,6 +73,7 @@ impl StatusIndicatorWidget {
             header: String::from("Working"),
             details: None,
             show_interrupt_hint: true,
+            esc_interrupt_primed_at: None,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -83,6 +86,25 @@ impl StatusIndicatorWidget {
 
     pub(crate) fn interrupt(&self) {
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+    }
+
+    pub(crate) fn handle_esc_interrupt(&mut self) -> bool {
+        let now = Instant::now();
+        let primed = self.esc_interrupt_primed_at.is_some_and(|primed_at| {
+            now.saturating_duration_since(primed_at) <= ESC_INTERRUPT_CONFIRM_WINDOW
+        });
+
+        if primed {
+            self.esc_interrupt_primed_at = None;
+            true
+        } else {
+            self.esc_interrupt_primed_at = Some(now);
+            false
+        }
+    }
+
+    pub(crate) fn clear_esc_interrupt_prime(&mut self) {
+        self.esc_interrupt_primed_at = None;
     }
 
     /// Update the animated header label (left of the brackets).
@@ -217,11 +239,22 @@ impl Renderable for StatusIndicatorWidget {
         }
         spans.push(" ".into());
         if self.show_interrupt_hint {
+            let esc_primed = self.esc_interrupt_primed_at.is_some_and(|primed_at| {
+                now.saturating_duration_since(primed_at) <= ESC_INTERRUPT_CONFIRM_WINDOW
+            });
             spans.extend(vec![
                 format!("({pretty_elapsed} • ").dim(),
                 key_hint::plain(KeyCode::Esc).into(),
-                " to interrupt)".dim(),
             ]);
+            if esc_primed {
+                spans.push(" again to interrupt)".dim());
+            } else {
+                spans.extend(vec![
+                    " ".into(),
+                    key_hint::plain(KeyCode::Esc).into(),
+                    " to interrupt)".dim(),
+                ]);
+            }
         } else {
             spans.push(format!("({pretty_elapsed})").dim());
         }
