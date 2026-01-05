@@ -101,7 +101,16 @@ pub(crate) async fn maybe_run_startup_model_migration_prompt(
 
     match outcome {
         ModelMigrationOutcome::Accepted => {
+            let available_models = models_manager.try_list_models(config).ok();
             config.model = Some(notice.to_model.clone());
+            if let Some(available_models) = available_models.as_deref() {
+                apply_reasoning_effort_mapping_for_upgrade(
+                    config,
+                    notice.from_model.as_str(),
+                    notice.to_model.as_str(),
+                    available_models,
+                );
+            }
             config
                 .notices
                 .model_migrations
@@ -379,6 +388,54 @@ fn should_show_model_migration_notice(
     available_models
         .iter()
         .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
+}
+
+fn apply_reasoning_effort_mapping_for_upgrade(
+    config: &mut Config,
+    from_model: &str,
+    to_model: &str,
+    available_models: &[ModelPreset],
+) {
+    let Some(effort) = config.model_reasoning_effort else {
+        return;
+    };
+
+    let from_preset = available_models
+        .iter()
+        .find(|preset| preset.model == from_model);
+    let to_preset = available_models
+        .iter()
+        .find(|preset| preset.model == to_model);
+
+    let mapped = from_preset
+        .and_then(|preset| preset.upgrade.as_ref())
+        .filter(|upgrade| upgrade.id == to_model)
+        .and_then(|upgrade| upgrade.reasoning_effort_mapping.as_ref())
+        .and_then(|mapping| mapping.get(&effort))
+        .copied();
+
+    if let Some(mapped) = mapped {
+        let mapped_supported_by_target = to_preset.is_none_or(|preset| {
+            preset
+                .supported_reasoning_efforts
+                .iter()
+                .any(|preset| preset.effort == mapped)
+        });
+        config.model_reasoning_effort = mapped_supported_by_target.then_some(mapped);
+        return;
+    }
+
+    // If the old effort isn't supported by the target model, clear it so the model can
+    // fall back to its default reasoning effort.
+    let effort_supported_by_target = to_preset.is_some_and(|preset| {
+        preset
+            .supported_reasoning_efforts
+            .iter()
+            .any(|preset| preset.effort == effort)
+    });
+    if !effort_supported_by_target {
+        config.model_reasoning_effort = None;
+    }
 }
 
 mod prompt_ui {
