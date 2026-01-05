@@ -279,6 +279,12 @@ impl AuthModeWidget {
             lines.push("".into());
             lines.push(Line::from(state.auth_url.as_str().cyan().underlined()));
             lines.push("".into());
+            lines.push(Line::from(vec![
+                "  On a remote or headless machine? Use ".into(),
+                "codex login --device-auth".cyan(),
+                " instead".into(),
+            ]));
+            lines.push("".into());
         }
 
         lines.push("  Press Esc to cancel".dim().into());
