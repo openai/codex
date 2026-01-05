@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HistorySearchWorkerOutput",
+  "type": "object",
+  "required": ["query", "scope", "utility_model", "top_hits"],
+  "properties": {
+    "query": { "type": "string" },
+    "scope": {
+      "type": "object",
+      "required": [
+        "shard_id",
+        "since",
+        "until",
+        "recent_files",
+        "include_archived",
+        "project_root",
+        "kinds",
+        "max_hits",
+        "expand_window"
+      ],
+      "properties": {
+        "shard_id": { "type": "string" },
+        "since": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "until": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "recent_files": { "type": "integer", "minimum": 0 },
+        "include_archived": { "type": "boolean" },
+        "project_root": { "type": "string" },
+        "kinds": { "type": "array", "items": { "type": "string" } },
+        "max_hits": { "type": "integer", "minimum": 1 },
+        "expand_window": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "utility_model": {
+      "type": "object",
+      "required": ["version", "criteria"],
+      "properties": {
+        "version": { "type": "string" },
+        "criteria": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "top_hits": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["rank", "rollout_path", "line_no", "why", "snippet", "knowledge", "utility"],
+        "properties": {
+          "rank": { "type": "integer", "minimum": 1 },
+          "rollout_path": { "type": "string" },
+          "line_no": { "type": "integer", "minimum": 1 },
+          "why": { "type": "string" },
+          "snippet": { "type": "string" },
+          "knowledge": {
+            "type": "object",
+            "required": ["title", "type", "statement", "action"],
+            "properties": {
+              "title": { "type": "string" },
+              "type": { "type": "string" },
+              "statement": { "type": "string" },
+              "action": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "utility": {
+            "type": "object",
+            "required": ["score", "rationale", "evidence"],
+            "properties": {
+              "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+              "rationale": { "type": "string" },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["rollout_path", "line_no", "snippet"],
+                  "properties": {
+                    "rollout_path": { "type": "string" },
+                    "line_no": { "type": "integer", "minimum": 1 },
+                    "snippet": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

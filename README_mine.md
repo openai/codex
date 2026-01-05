@@ -175,3 +175,20 @@ hooks が発火しているかは `codex_core::hooks` の debug ログで追え�
 ```sh
 RUST_LOG=codex_core::hooks=debug codex-mine exec --json '...'
 ```
+
+## セッション履歴ナレッジ台帳（試作）
+
+一次情報をセッション履歴（`~/.codex/sessions/**/rollout-*.jsonl`）に限定して、「自分が過去にやったこと」を引き出して再利用する。
+
+- 方針:
+  - インデックスは作らない（常に履歴を直接探索する）
+  - `codex exec` を複数ワーカーで shard（期間）分割して探索し、JSON出力を統合して台帳候補を作る
+
+### 複数ワーカー（shard探索）で台帳候補を作る
+
+機械抽出だけで決め切らず、複数の `codex exec` ワーカーに shard（期間）を割り当てて探索させ、メイン側で統合・判断する。
+
+- shardワーカー実行（例: 4分割）:
+  - `python3 scripts/run_session_ledger_shards.py --since 2025-12-01 --until 2026-01-04 --workers 4 --include-archived --query "ナレッジ台帳に載せるべき運用ルール・反復コマンド・切り分け手順を抽出して。成功/失敗は必ず function_call_output を根拠に。"`
+- shard出力の統合（決定はしない）:
+  - `python3 scripts/merge_session_ledger_shards.py --in-dir .memo/history-search/shards`
