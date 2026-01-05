@@ -5,7 +5,8 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task;
 
-const ANNOUNCEMENT_TIP_URL: &str = "https://raw.githubusercontent.com/openai/codex/main/announcement_tip";
+const ANNOUNCEMENT_TIP_URL: &str =
+    "https://raw.githubusercontent.com/openai/codex/main/announcement_tip";
 static ANNOUNCEMENT_TIP: OnceLock<Option<String>> = OnceLock::new();
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
