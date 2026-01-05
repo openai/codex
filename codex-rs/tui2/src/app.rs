@@ -224,7 +224,7 @@ impl App {
 
         let mut config = config;
         let pending_model_migration_notice =
-            crate::model_migration::take_pending_model_migration_notice(&mut config);
+            crate::model_migration::maybe_show_pending_model_migration_notice(&config);
 
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
@@ -240,30 +240,53 @@ impl App {
             )
             .await?;
 
-            let mut edits = ConfigEditsBuilder::new(&config.codex_home)
-                .record_model_migration_seen(notice.from_model.as_str(), notice.to_model.as_str());
-            if matches!(
-                outcome,
-                crate::model_migration::ModelMigrationOutcome::Accepted
-            ) {
-                config.model = Some(notice.to_model.clone());
-                edits = edits.set_model(config.model.as_deref(), config.model_reasoning_effort);
-            }
+            match outcome {
+                crate::model_migration::ModelMigrationOutcome::Accepted => {
+                    config.model = Some(notice.to_model.clone());
+                    config
+                        .notices
+                        .model_migrations
+                        .insert(notice.from_model.clone(), notice.to_model.clone());
 
-            if let Err(err) = edits.apply().await {
-                tracing::error!(
-                    error = %err,
-                    "failed to persist model migration prompt outcome"
-                );
-            }
+                    let edits = ConfigEditsBuilder::new(&config.codex_home)
+                        .record_model_migration_seen(
+                            notice.from_model.as_str(),
+                            notice.to_model.as_str(),
+                        )
+                        .set_model(config.model.as_deref(), config.model_reasoning_effort);
+                    if let Err(err) = edits.apply().await {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist model migration prompt outcome"
+                        );
+                    }
+                }
+                crate::model_migration::ModelMigrationOutcome::Rejected => {
+                    config
+                        .notices
+                        .model_migrations
+                        .insert(notice.from_model.clone(), notice.to_model.clone());
 
-            if matches!(outcome, crate::model_migration::ModelMigrationOutcome::Exit) {
-                return Ok(AppExitInfo {
-                    token_usage: TokenUsage::default(),
-                    conversation_id: None,
-                    update_action: None,
-                    session_lines: Vec::new(),
-                });
+                    let edits = ConfigEditsBuilder::new(&config.codex_home)
+                        .record_model_migration_seen(
+                            notice.from_model.as_str(),
+                            notice.to_model.as_str(),
+                        );
+                    if let Err(err) = edits.apply().await {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist model migration prompt outcome"
+                        );
+                    }
+                }
+                crate::model_migration::ModelMigrationOutcome::Exit => {
+                    return Ok(AppExitInfo {
+                        token_usage: TokenUsage::default(),
+                        conversation_id: None,
+                        update_action: None,
+                        session_lines: Vec::new(),
+                    });
+                }
             }
         }
 

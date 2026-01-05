@@ -26,12 +26,9 @@ pub(crate) use prompt_ui::ModelMigrationOutcome;
 pub(crate) use prompt_ui::ModelMigrationScreen;
 pub(crate) use prompt_ui::migration_copy_for_models;
 
-/// Read and clear the one-shot migration notice file, returning the notice if it should be shown.
-///
-/// If the notice is returned, this also updates `config.notices.model_migrations` to prevent
-/// re-scheduling within the current process.
-pub(crate) fn take_pending_model_migration_notice(
-    config: &mut Config,
+/// Read the pending migration notice file, returning the notice if it should be shown.
+pub(crate) fn maybe_show_pending_model_migration_notice(
+    config: &Config,
 ) -> Option<PendingModelMigrationNotice> {
     let notice_path = pending_model_migration_notice_path(config);
     let contents = match std::fs::read_to_string(&notice_path) {
@@ -55,6 +52,7 @@ pub(crate) fn take_pending_model_migration_notice(
                 notice_path = %notice_path.display(),
                 "failed to parse pending model migration notice"
             );
+            let _ = std::fs::remove_file(&notice_path);
             return None;
         }
     };
@@ -77,14 +75,6 @@ pub(crate) fn take_pending_model_migration_notice(
         let _ = std::fs::remove_file(&notice_path);
         return None;
     }
-
-    // Best-effort: clear the one-shot file so it doesn't appear again.
-    let _ = std::fs::remove_file(&notice_path);
-
-    config
-        .notices
-        .model_migrations
-        .insert(notice.from_model.clone(), notice.to_model.clone());
 
     Some(notice)
 }
