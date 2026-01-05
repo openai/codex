@@ -10,9 +10,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
 use std::path::PathBuf;
 
-#[cfg(target_os = "linux")]
-use assert_cmd::cargo::cargo_bin;
-
 pub mod process;
 pub mod responses;
 pub mod streaming_sse;
@@ -87,7 +84,10 @@ pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
-        codex_linux_sandbox_exe: Some(cargo_bin("codex-linux-sandbox")),
+        codex_linux_sandbox_exe: Some(
+            codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+                .expect("should find binary for codex-linux-sandbox"),
+        ),
         ..ConfigOverrides::default()
     }
 }

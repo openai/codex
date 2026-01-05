@@ -62,6 +62,7 @@ ratatui = { workspace = true, features = [
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
+ratatui-core = { workspace = true }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
@@ -73,6 +74,7 @@ strum_macros = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
+tui-scrollbar = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",

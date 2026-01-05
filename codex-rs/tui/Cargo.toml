@@ -71,6 +71,7 @@ strum_macros = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -96,6 +97,14 @@ tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+which = { workspace = true }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+winsplit = "0.1"
 
 # Clipboard support via `arboard` is not available on Android/Termux.
 # Only include it for non-Android targets so the crate builds on Android.

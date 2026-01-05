@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::AuthManager;
 use crate::RolloutRecorder;
+use crate::exec_policy::ExecPolicyManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
@@ -21,6 +22,7 @@ pub(crate) struct SessionServices {
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) show_raw_agent_reasoning: bool,
+    pub(crate) exec_policy: ExecPolicyManager,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) otel_manager: OtelManager,

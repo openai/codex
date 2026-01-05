@@ -6,6 +6,7 @@ use crate::config::Config;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
 
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
@@ -13,6 +14,15 @@ const APPROX_BYTES_PER_TOKEN: usize = 4;
 pub enum TruncationPolicy {
     Bytes(usize),
     Tokens(usize),
+}
+
+impl From<TruncationPolicy> for ProtocolTruncationPolicy {
+    fn from(value: TruncationPolicy) -> Self {
+        match value {
+            TruncationPolicy::Bytes(bytes) => Self::Bytes(bytes),
+            TruncationPolicy::Tokens(tokens) => Self::Tokens(tokens),
+        }
+    }
 }
 
 impl From<TruncationPolicyConfig> for TruncationPolicy {

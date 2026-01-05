@@ -144,7 +144,6 @@ pub unsafe fn convert_string_sid_to_sid(s: &str) -> Option<*mut c_void> {
 
 /// # Safety
 /// Caller must close the returned token handle.
-#[allow(dead_code)]
 pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
     let desired = TOKEN_DUPLICATE
         | TOKEN_QUERY
@@ -285,7 +284,6 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
 
 /// # Safety
 /// Caller must close the returned token handle.
-#[allow(dead_code)]
 pub unsafe fn create_workspace_write_token_with_cap(
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
@@ -297,7 +295,6 @@ pub unsafe fn create_workspace_write_token_with_cap(
 
 /// # Safety
 /// Caller must close the returned token handle.
-#[allow(dead_code)]
 pub unsafe fn create_readonly_token_with_cap(
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {

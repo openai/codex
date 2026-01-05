@@ -556,6 +556,10 @@ fn override_message(layer: &ConfigLayerSource) -> String {
         ConfigLayerSource::System { file } => {
             format!("Overridden by managed config (system): {}", file.display())
         }
+        ConfigLayerSource::Project { dot_codex_folder } => format!(
+            "Overridden by project config: {}/{CONFIG_TOML_FILE}",
+            dot_codex_folder.display(),
+        ),
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),
         ConfigLayerSource::User { file } => {
             format!("Overridden by user config: {}", file.display())
@@ -751,6 +755,7 @@ remote_compaction = true
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -774,15 +779,41 @@ remote_compaction = true
             },
         );
         let layers = response.layers.expect("layers present");
-        assert_eq!(layers.len(), 2, "expected two layers");
-        assert_eq!(
-            layers.first().unwrap().name,
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
-        );
-        assert_eq!(
-            layers.get(1).unwrap().name,
-            ConfigLayerSource::User { file: user_file }
-        );
+        if cfg!(unix) {
+            let system_file = AbsolutePathBuf::from_absolute_path(
+                crate::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX,
+            )
+            .expect("system file");
+            assert_eq!(layers.len(), 3, "expected three layers on unix");
+            assert_eq!(
+                layers.first().unwrap().name,
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                    file: managed_file.clone()
+                }
+            );
+            assert_eq!(
+                layers.get(1).unwrap().name,
+                ConfigLayerSource::User {
+                    file: user_file.clone()
+                }
+            );
+            assert_eq!(
+                layers.get(2).unwrap().name,
+                ConfigLayerSource::System { file: system_file }
+            );
+        } else {
+            assert_eq!(layers.len(), 2, "expected two layers");
+            assert_eq!(
+                layers.first().unwrap().name,
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                    file: managed_file.clone()
+                }
+            );
+            assert_eq!(
+                layers.get(1).unwrap().name,
+                ConfigLayerSource::User { file: user_file }
+            );
+        }
     }
 
     #[tokio::test]
@@ -805,6 +836,7 @@ remote_compaction = true
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -907,6 +939,7 @@ remote_compaction = true
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -954,6 +987,7 @@ remote_compaction = true
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -999,6 +1033,7 @@ remote_compaction = true
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 

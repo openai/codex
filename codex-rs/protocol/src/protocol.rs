@@ -844,7 +844,7 @@ pub struct TaskStartedEvent {
     pub model_context_window: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsage {
     #[ts(type = "number")]
     pub input_tokens: i64,
@@ -858,7 +858,7 @@ pub struct TokenUsage {
     pub total_tokens: i64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
@@ -1324,6 +1324,23 @@ pub struct TurnContextItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub developer_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_output_json_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation_policy: Option<TruncationPolicy>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "mode", content = "limit", rename_all = "snake_case")]
+pub enum TruncationPolicy {
+    Bytes(usize),
+    Tokens(usize),
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
@@ -1583,6 +1600,11 @@ pub struct StreamErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+    /// Optional details about the underlying stream failure (often the same
+    /// human-readable message that is surfaced as the terminal error if retries
+    /// are exhausted).
+    #[serde(default)]
+    pub additional_details: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

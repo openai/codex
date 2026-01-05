@@ -32,14 +32,18 @@ pub async fn create_transport<P>(
 where
     P: AsRef<Path>,
 {
-    let mcp_executable = assert_cmd::Command::cargo_bin("codex-exec-mcp-server")?;
-    let execve_wrapper = assert_cmd::Command::cargo_bin("codex-execve-wrapper")?;
-    let bash = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("tests")
-        .join("suite")
-        .join("bash");
+    let mcp_executable = codex_utils_cargo_bin::cargo_bin("codex-exec-mcp-server")?;
+    let execve_wrapper = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")?;
+    // `bash` requires a special lookup when running under Buck because it is a
+    // _resource_ rather than a binary target.
+    let bash = if let Some(root) = codex_utils_cargo_bin::buck_project_root()? {
+        root.join("codex-rs/exec-server/tests/suite/bash")
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("suite")
+            .join("bash")
+    };
 
     // Need to ensure the artifact associated with the bash DotSlash file is
     // available before it is run in a read-only sandbox.
@@ -52,20 +56,19 @@ where
         .await?;
     assert!(status.success(), "dotslash fetch failed: {status:?}");
 
-    let transport =
-        TokioChildProcess::new(Command::new(mcp_executable.get_program()).configure(|cmd| {
-            cmd.arg("--bash").arg(bash);
-            cmd.arg("--execve").arg(execve_wrapper.get_program());
-            cmd.env("CODEX_HOME", codex_home.as_ref());
-            cmd.env("DOTSLASH_CACHE", dotslash_cache.as_ref());
+    let transport = TokioChildProcess::new(Command::new(&mcp_executable).configure(|cmd| {
+        cmd.arg("--bash").arg(bash);
+        cmd.arg("--execve").arg(&execve_wrapper);
+        cmd.env("CODEX_HOME", codex_home.as_ref());
+        cmd.env("DOTSLASH_CACHE", dotslash_cache.as_ref());
 
-            // Important: pipe stdio so rmcp can speak JSON-RPC over stdin/stdout
-            cmd.stdin(Stdio::piped());
-            cmd.stdout(Stdio::piped());
+        // Important: pipe stdio so rmcp can speak JSON-RPC over stdin/stdout
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
 
-            // Optional but very helpful while debugging:
-            cmd.stderr(Stdio::inherit());
-        }))?;
+        // Optional but very helpful while debugging:
+        cmd.stderr(Stdio::inherit());
+    }))?;
 
     Ok(transport)
 }

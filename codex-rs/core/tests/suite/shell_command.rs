@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::features::Feature;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -12,6 +13,7 @@ use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use serde_json::json;
+use test_case::test_case;
 
 fn shell_responses_with_timeout(
     call_id: &str,
@@ -201,7 +203,6 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
-
     let call_id = "shell-command-timeout";
     let command = if cfg!(windows) {
         "timeout /t 5"
@@ -221,6 +222,64 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
         .to_string();
     let expected_pattern = r"(?s)^Exit code: 124\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ncommand timed out after [0-9]+ milliseconds\n?$";
     assert_regex_match(expected_pattern, &normalized_output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(true ; "with_login")]
+#[test_case(false ; "without_login")]
+async fn unicode_output(login: bool) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = shell_command_harness_with(|builder| {
+        builder.with_model("gpt-5.2").with_config(|config| {
+            config.features.enable(Feature::PowershellUtf8);
+        })
+    })
+    .await?;
+
+    let call_id = "unicode_output";
+    mount_shell_responses(
+        &harness,
+        call_id,
+        "git -c alias.say='!printf \"%s\" \"naïve_café\"' say",
+        Some(login),
+    )
+    .await;
+    harness.submit("run the command without login").await?;
+
+    let output = harness.function_call_stdout(call_id).await;
+    assert_shell_command_output(&output, "naïve_café")?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(true ; "with_login")]
+#[test_case(false ; "without_login")]
+async fn unicode_output_with_newlines(login: bool) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = shell_command_harness_with(|builder| {
+        builder.with_model("gpt-5.2").with_config(|config| {
+            config.features.enable(Feature::PowershellUtf8);
+        })
+    })
+    .await?;
+
+    let call_id = "unicode_output";
+    mount_shell_responses(
+        &harness,
+        call_id,
+        "echo 'line1\nnaïve café\nline3'",
+        Some(login),
+    )
+    .await;
+    harness.submit("run the command without login").await?;
+
+    let output = harness.function_call_stdout(call_id).await;
+    assert_shell_command_output(&output, "line1\\nnaïve café\\nline3")?;
 
     Ok(())
 }

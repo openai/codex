@@ -13,6 +13,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
@@ -37,12 +38,12 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
 use serde::Deserialize;
+use serde::Serialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -93,6 +94,10 @@ pub(crate) fn test_config() -> Config {
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
+    /// Provenance for how this [`Config`] was derived (merged layers + enforced
+    /// requirements).
+    pub config_layer_stack: ConfigLayerStack,
+
     /// Optional override of model selection.
     pub model: Option<String>,
 
@@ -297,9 +302,6 @@ pub struct Config {
     /// Optional override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
-    /// Optional override to force reasoning summary format for the configured model.
-    pub model_reasoning_summary_format: Option<ReasoningSummaryFormat>,
-
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
@@ -411,11 +413,11 @@ impl ConfigBuilder {
         let config_toml: ConfigToml = merged_toml
             .try_into()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        Config::load_config_with_requirements(
+        Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
             codex_home,
-            config_layer_stack.requirements().clone(),
+            config_layer_stack,
         )
     }
 }
@@ -664,7 +666,7 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -780,9 +782,6 @@ pub struct ConfigToml {
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
-    /// Override to force reasoning summary format for the configured model.
-    pub model_reasoning_summary_format: Option<ReasoningSummaryFormat>,
-
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
@@ -798,6 +797,11 @@ pub struct ConfigToml {
     /// Settings for ghost snapshots (used for undo).
     #[serde(default)]
     pub ghost_snapshot: Option<GhostSnapshotToml>,
+
+    /// Markers used to detect the project root when searching parent
+    /// directories for `.codex` folders. Defaults to [".git"] when unset.
+    #[serde(default)]
+    pub project_root_markers: Option<Vec<String>>,
 
     /// When `true`, checks for Codex updates on startup and surfaces update prompts.
     /// Set to `false` only if your Codex updates are centrally managed.
@@ -853,7 +857,7 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
 }
@@ -868,7 +872,7 @@ impl ProjectConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,
@@ -887,7 +891,7 @@ impl From<ToolsToml> for Tools {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct GhostSnapshotToml {
     /// Exclude untracked files larger than this many bytes from ghost snapshots.
     #[serde(alias = "ignore_untracked_files_over_bytes")]
@@ -1062,16 +1066,17 @@ impl Config {
         codex_home: PathBuf,
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
-        let requirements = ConfigRequirements::default();
-        Self::load_config_with_requirements(cfg, overrides, codex_home, requirements)
+        let config_layer_stack = ConfigLayerStack::default();
+        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
     }
 
-    fn load_config_with_requirements(
+    fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
-        requirements: ConfigRequirements,
+        config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        let requirements = config_layer_stack.requirements().clone();
         let user_instructions = Self::load_instructions(Some(&codex_home));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -1349,6 +1354,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             codex_home,
+            config_layer_stack,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
@@ -1366,7 +1372,6 @@ impl Config {
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
-            model_reasoning_summary_format: cfg.model_reasoning_summary_format.clone(),
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
@@ -2045,6 +2050,7 @@ trust_level = "trusted"
             managed_config_path: Some(managed_path.clone()),
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
+            macos_managed_config_requirements_base64: None,
         };
 
         let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
@@ -2165,6 +2171,7 @@ trust_level = "trusted"
             managed_config_path: Some(managed_path),
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
+            macos_managed_config_requirements_base64: None,
         };
 
         let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
@@ -3167,6 +3174,7 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 codex_home: fixture.codex_home(),
+                config_layer_stack: Default::default(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
@@ -3175,7 +3183,6 @@ model_verbosity = "high"
                 model_reasoning_effort: Some(ReasoningEffort::High),
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
-                model_reasoning_summary_format: None,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
@@ -3250,6 +3257,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
+            config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3258,7 +3266,6 @@ model_verbosity = "high"
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
-            model_reasoning_summary_format: None,
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3348,6 +3355,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
+            config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3356,7 +3364,6 @@ model_verbosity = "high"
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
-            model_reasoning_summary_format: None,
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3432,6 +3439,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
+            config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3440,7 +3448,6 @@ model_verbosity = "high"
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
-            model_reasoning_summary_format: None,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,

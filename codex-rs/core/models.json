@@ -36,11 +36,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "list",
-      "minimal_client_version": [
-        0,
-        62,
-        0
-      ],
+      "minimal_client_version": "0.62.0",
       "supported_in_api": true,
       "upgrade": "gpt-5.2-codex",
       "priority": 1,
@@ -79,11 +75,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "hide",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": "gpt-5.2-codex",
       "priority": 2,
@@ -118,11 +110,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "list",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": "gpt-5.2-codex",
       "priority": 3,
@@ -165,11 +153,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "list",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": "gpt-5.2-codex",
       "priority": 4,
@@ -208,11 +192,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "hide",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": "gpt-5.2-codex",
       "priority": 5,
@@ -251,11 +231,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "hide",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": "gpt-5.2-codex",
       "priority": 6,
@@ -298,11 +274,7 @@
       ],
       "shell_type": "default",
       "visibility": "hide",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": "gpt-5.2-codex",
       "priority": 7,
@@ -337,11 +309,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "hide",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": "gpt-5.2-codex",
       "priority": 8,
@@ -380,11 +348,7 @@
       ],
       "shell_type": "local",
       "visibility": "hide",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": null,
       "priority": 9,
@@ -427,11 +391,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "hide",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": null,
       "priority": 10,
@@ -474,11 +434,7 @@
       ],
       "shell_type": "shell_command",
       "visibility": "hide",
-      "minimal_client_version": [
-        0,
-        60,
-        0
-      ],
+      "minimal_client_version": "0.60.0",
       "supported_in_api": true,
       "upgrade": null,
       "priority": 11,

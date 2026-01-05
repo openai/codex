@@ -227,6 +227,8 @@ pub enum ConfigLayerSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     System {
+        /// This is the path to the system config.toml file, though it is not
+        /// guaranteed to exist.
         file: AbsolutePathBuf,
     },
 
@@ -237,7 +239,17 @@ pub enum ConfigLayerSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     User {
+        /// This is the path to the user's config.toml file, though it is not
+        /// guaranteed to exist.
         file: AbsolutePathBuf,
+    },
+
+    /// Path to a .codex/ folder within a project. There could be multiple of
+    /// these between `cwd` and the project/repo root.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Project {
+        dot_codex_folder: AbsolutePathBuf,
     },
 
     /// Session-layer overrides supplied via `-c`/`--config`.
@@ -247,6 +259,8 @@ pub enum ConfigLayerSource {
     /// as the last layer on top of everything else. This scheme did not quite
     /// work out as intended, but we keep this variant as a "best effort" while
     /// we phase out `managed_config.toml` in favor of `requirements.toml`.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     LegacyManagedConfigTomlFromFile {
         file: AbsolutePathBuf,
     },
@@ -262,6 +276,7 @@ impl ConfigLayerSource {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::User { .. } => 20,
+            ConfigLayerSource::Project { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => 50,
@@ -1259,6 +1274,8 @@ pub struct Turn {
 pub struct TurnError {
     pub message: String,
     pub codex_error_info: Option<CodexErrorInfo>,
+    #[serde(default)]
+    pub additional_details: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -670,6 +670,25 @@ pub async fn mount_models_once(server: &MockServer, body: ModelsResponse) -> Mod
     models_mock
 }
 
+pub async fn mount_models_once_with_etag(
+    server: &MockServer,
+    body: ModelsResponse,
+    etag: &str,
+) -> ModelsMock {
+    let (mock, models_mock) = models_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            // ModelsClient reads the ETag header, not a JSON field.
+            .insert_header("ETag", etag)
+            .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    models_mock
+}
+
 pub async fn start_mock_server() -> MockServer {
     let server = MockServer::builder()
         .body_print_limit(BodyPrintLimit::Limited(80_000))
@@ -677,14 +696,7 @@ pub async fn start_mock_server() -> MockServer {
         .await;
 
     // Provide a default `/models` response so tests remain hermetic when the client queries it.
-    let _ = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: Vec::new(),
-            etag: String::new(),
-        },
-    )
-    .await;
+    let _ = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
     server
 }

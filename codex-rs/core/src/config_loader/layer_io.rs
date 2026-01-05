@@ -33,11 +33,13 @@ pub(super) async fn load_config_layers_internal(
     let LoaderOverrides {
         managed_config_path,
         managed_preferences_base64,
+        ..
     } = overrides;
 
     #[cfg(not(target_os = "macos"))]
     let LoaderOverrides {
         managed_config_path,
+        ..
     } = overrides;
 
     let managed_config_path = AbsolutePathBuf::from_absolute_path(

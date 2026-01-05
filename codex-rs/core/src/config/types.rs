@@ -221,7 +221,7 @@ mod option_duration_secs {
     }
 }
 
-#[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 pub enum UriBasedFileOpener {
     #[serde(rename = "vscode")]
     VsCode,
@@ -253,7 +253,7 @@ impl UriBasedFileOpener {
 }
 
 /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct History {
     /// If true, history entries will not be written to disk.
     pub persistence: HistoryPersistence,
@@ -263,7 +263,7 @@ pub struct History {
     pub max_bytes: Option<usize>,
 }
 
-#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum HistoryPersistence {
     /// Save all history entries to disk.
@@ -275,7 +275,7 @@ pub enum HistoryPersistence {
 
 // ===== OTEL configuration =====
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum OtelHttpProtocol {
     /// Binary payload
@@ -284,7 +284,7 @@ pub enum OtelHttpProtocol {
     Json,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct OtelTlsConfig {
     pub ca_certificate: Option<AbsolutePathBuf>,
@@ -293,7 +293,7 @@ pub struct OtelTlsConfig {
 }
 
 /// Which OTEL exporter to use.
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum OtelExporterKind {
     None,
@@ -315,7 +315,7 @@ pub enum OtelExporterKind {
 }
 
 /// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct OtelConfigToml {
     /// Log user prompt in traces
     pub log_user_prompt: Option<bool>,
@@ -350,7 +350,7 @@ impl Default for OtelConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub enum Notifications {
     Enabled(bool),
@@ -368,7 +368,7 @@ impl Default for Notifications {
 /// Terminals generally encode both mouse wheels and trackpads as the same "scroll up/down" mouse
 /// button events, without a magnitude. This setting controls whether Codex uses a heuristic to
 /// infer wheel vs trackpad per stream, or forces a specific behavior.
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScrollInputMode {
     /// Infer wheel vs trackpad behavior per scroll stream.
@@ -386,7 +386,7 @@ impl Default for ScrollInputMode {
 }
 
 /// Collection of settings that are specific to the TUI.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `true`.
@@ -514,7 +514,7 @@ const fn default_true() -> bool {
 /// Settings for notices we display to users via the tui and app-server clients
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,
@@ -537,7 +537,7 @@ impl Notice {
     pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub writable_roots: Vec<AbsolutePathBuf>,
@@ -560,7 +560,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {
     /// "Core" environment variables for the platform. On UNIX, this would
@@ -577,7 +577,7 @@ pub enum ShellEnvironmentPolicyInherit {
 
 /// Policy for building the `env` when spawning a process via either the
 /// `shell` or `local_shell` tool.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct ShellEnvironmentPolicyToml {
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
 
