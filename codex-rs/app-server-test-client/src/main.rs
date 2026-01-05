@@ -44,10 +44,13 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -287,6 +290,7 @@ fn get_account_rate_limits(codex_bin: String) -> Result<()> {
 }
 
 fn thread_rollback(codex_bin: String) -> Result<()> {
+    let codex_bin_resume = codex_bin.clone();
     let mut client = CodexClient::spawn(codex_bin)?;
 
     let initialize = client.initialize()?;
@@ -315,7 +319,111 @@ fn thread_rollback(codex_bin: String) -> Result<()> {
         println!("Rollback did not work as expected!");
     }
 
+    let mut resume_client = CodexClient::spawn(codex_bin_resume)?;
+    let initialize = resume_client.initialize()?;
+    println!("< initialize response (resume client): {initialize:?}");
+
+    let resume_response = resume_client.thread_resume(ThreadResumeParams {
+        thread_id: thread_id.clone(),
+        ..Default::default()
+    })?;
+    println!("< thread/resume response: {resume_response:?}");
+
+    verify_resumed_thread_after_rollback(
+        &resume_response,
+        "Say pineapple",
+        "Say banana",
+        "What was the last word you said?",
+        "pineapple",
+    )?;
+    println!("Resume verification success!");
+
     Ok(())
+}
+
+fn verify_resumed_thread_after_rollback(
+    resume: &ThreadResumeResponse,
+    expected_first_prompt: &str,
+    rolled_back_prompt: &str,
+    expected_follow_up_prompt: &str,
+    expected_word: &str,
+) -> Result<()> {
+    let mut saw_expected_first_turn = false;
+    let mut saw_expected_follow_up_turn = false;
+
+    for turn in &resume.thread.turns {
+        let user_messages = turn_user_messages(turn);
+        let agent_messages = turn_agent_messages(turn);
+
+        for user_message in &user_messages {
+            if user_message.contains(rolled_back_prompt) {
+                bail!(
+                    "thread/resume returned a rolled back prompt: {rolled_back_prompt:?} (thread {})",
+                    resume.thread.id
+                );
+            }
+        }
+
+        if user_messages
+            .iter()
+            .any(|message| message.contains(expected_first_prompt))
+            && agent_messages
+                .iter()
+                .any(|message| message.to_lowercase().contains(expected_word))
+        {
+            saw_expected_first_turn = true;
+        }
+
+        if user_messages
+            .iter()
+            .any(|message| message.contains(expected_follow_up_prompt))
+            && agent_messages
+                .iter()
+                .any(|message| message.to_lowercase().contains(expected_word))
+        {
+            saw_expected_follow_up_turn = true;
+        }
+    }
+
+    if !saw_expected_first_turn {
+        bail!(
+            "thread/resume did not include expected prompt {expected_first_prompt:?} with answer containing {expected_word:?}"
+        );
+    }
+
+    if !saw_expected_follow_up_turn {
+        bail!(
+            "thread/resume did not include expected prompt {expected_follow_up_prompt:?} with answer containing {expected_word:?}"
+        );
+    }
+
+    Ok(())
+}
+
+fn turn_user_messages(turn: &Turn) -> Vec<String> {
+    turn.items
+        .iter()
+        .filter_map(|item| match item {
+            ThreadItem::UserMessage { content, .. } => Some(content),
+            _ => None,
+        })
+        .flat_map(|content| {
+            content.iter().filter_map(|input| match input {
+                V2UserInput::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+fn turn_agent_messages(turn: &Turn) -> Vec<String> {
+    turn.items
+        .iter()
+        .filter_map(|item| match item {
+            ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 struct CodexClient {
@@ -437,6 +545,16 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "thread/start")
+    }
+
+    fn thread_resume(&mut self, params: ThreadResumeParams) -> Result<ThreadResumeResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ThreadResume {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "thread/resume")
     }
 
     fn turn_start(&mut self, params: TurnStartParams) -> Result<TurnStartResponse> {
