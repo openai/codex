@@ -75,6 +75,7 @@ use tracing::warn;
 
 use crate::ModelProviderInfo;
 use crate::WireApi;
+use crate::apply_patch_approval_store::ApplyPatchApprovalStore;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -95,7 +96,6 @@ use crate::feedback_tags;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
-use crate::apply_patch_approval_store::ApplyPatchApprovalStore;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
