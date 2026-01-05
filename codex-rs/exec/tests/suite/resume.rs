@@ -212,35 +212,6 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
 }
 
 #[test]
-fn exec_resume_allows_skip_git_repo_check_after_subcommand() -> anyhow::Result<()> {
-    let test = test_codex_exec();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
-
-    // First run to create a session file in the temp CODEX_HOME.
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("echo bootstrap-resume-session")
-        .assert()
-        .success();
-
-    // Resume using --skip-git-repo-check after the subcommand to ensure it is accepted.
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("resume")
-        .arg("--last")
-        .arg("--skip-git-repo-check")
-        .arg("echo resume-session-with-skip-after-subcommand")
-        .assert()
-        .success();
-
-    Ok(())
-}
-
-#[test]
 fn exec_resume_accepts_global_flags_after_subcommand() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let fixture =
