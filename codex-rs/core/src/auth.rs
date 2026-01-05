@@ -1440,44 +1440,27 @@ impl AuthManager {
             return Ok(None);
         }
 
+        let Some(auth) = self.auth() else {
+            return Ok(None);
+        };
+
         let expected_account_id = expected.chatgpt_account_id();
         let Some(expected_account_id) = expected_account_id.as_deref() else {
             // Cannot safely consult storage without a stable identity; fall back to current
             // in-memory refresh behavior.
-            let auth = match self.auth() {
-                Some(a) => a,
-                None => return Ok(None),
-            };
             let token = auth.refresh_token().await?;
             self.reload();
             return Ok(Some(token));
         };
 
-        let auth = match self.auth() {
-            Some(a) => a,
-            None => return Ok(None),
-        };
-
         let storage =
             create_auth_storage(self.codex_home.clone(), self.auth_credentials_store_mode);
-        let Some(stored) = load_auth_dot_json_with_retries(&storage)
-            .await
-            .map_err(RefreshTokenError::Transient)?
+        let Some(mut attempted_refresh_token) =
+            load_stored_refresh_token_if_identity_matches(&storage, expected_account_id).await?
         else {
             return Ok(None);
         };
 
-        let Some(tokens) = stored.tokens.clone() else {
-            return Ok(None);
-        };
-        let Some(stored_account_id) = tokens.id_token.chatgpt_account_id.as_deref() else {
-            return Ok(None);
-        };
-        if stored_account_id != expected_account_id {
-            return Ok(None);
-        }
-
-        let mut attempted_refresh_token = tokens.refresh_token.clone();
         let mut retried = false;
         loop {
             let refresh_response =
@@ -1520,25 +1503,16 @@ impl AuthManager {
                     // Another instance may have refreshed and rotated the refresh token while we
                     // were attempting our refresh. Reload and retry once if the stored refresh
                     // token differs and identity still matches.
-                    let Some(stored_again) = load_auth_dot_json_with_retries(&storage)
-                        .await
-                        .map_err(RefreshTokenError::Transient)?
+                    let Some(stored_refresh_token) = load_stored_refresh_token_if_identity_matches(
+                        &storage,
+                        expected_account_id,
+                    )
+                    .await?
                     else {
                         return Ok(None);
                     };
-                    let Some(tokens_again) = stored_again.tokens else {
-                        return Ok(None);
-                    };
-                    let Some(stored_account_id_again) =
-                        tokens_again.id_token.chatgpt_account_id.as_deref()
-                    else {
-                        return Ok(None);
-                    };
-                    if stored_account_id_again != expected_account_id {
-                        return Ok(None);
-                    }
-                    if tokens_again.refresh_token != attempted_refresh_token {
-                        attempted_refresh_token = tokens_again.refresh_token;
+                    if stored_refresh_token != attempted_refresh_token {
+                        attempted_refresh_token = stored_refresh_token;
                         retried = true;
                         continue;
                     }
@@ -1549,6 +1523,33 @@ impl AuthManager {
             }
         }
     }
+}
+
+async fn load_stored_refresh_token_if_identity_matches(
+    storage: &Arc<dyn AuthStorageBackend>,
+    expected_account_id: &str,
+) -> Result<Option<String>, RefreshTokenError> {
+    let Some(stored) = load_auth_dot_json_with_retries(storage)
+        .await
+        .map_err(RefreshTokenError::Transient)?
+    else {
+        return Ok(None);
+    };
+
+    let Some(tokens) = stored.tokens else {
+        return Ok(None);
+    };
+
+    if !tokens
+        .id_token
+        .chatgpt_account_id
+        .as_deref()
+        .is_some_and(|account_id| account_id == expected_account_id)
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(tokens.refresh_token))
 }
 
 async fn load_auth_dot_json_with_retries(
