@@ -83,6 +83,13 @@ pub(crate) fn maybe_show_pending_model_migration_notice(
         return None;
     }
 
+    if let Some(current_model) = config.model.as_deref().filter(|model| !model.is_empty())
+        && current_model != notice.from_model
+    {
+        let _ = std::fs::remove_file(&notice_path);
+        return None;
+    }
+
     Some(notice)
 }
 
