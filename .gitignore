@@ -1,3 +1,4 @@
+bazel-*
 # deps
 # Node.js dependencies
 node_modules

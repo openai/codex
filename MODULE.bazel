@@ -1,0 +1,58 @@
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.3.1")
+archive_override(
+    module_name = "toolchains_llvm_bootstrapped",
+    integrity = "sha256-dBvq3EBkK0YWeYLZz+lPGT1EP5jKdpvZ7VJ6iy//ADM=",
+    strip_prefix = "toolchains_llvm_bootstrapped-ae1f72282fbe8695c5641eda171d6b7b73e475b6",
+    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/ae1f72282fbe8695c5641eda171d6b7b73e475b6/master.tar.gz"],
+)
+
+register_toolchains(
+    "@toolchains_llvm_bootstrapped//toolchain:all",
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.16")
+bazel_dep(name = "rules_rust", version = "0.68.1")
+
+single_version_override(
+    module_name = "rules_rust",
+    patch_strip = 1,
+    patches = [
+        "//:rules_rust.patch",
+        "//:rules_rust_windows_gnu.patch",
+    ],
+)
+
+RUST_TRIPLES = [
+    "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-gnullvm",
+    "x86_64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnullvm",
+]
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_target_triples = RUST_TRIPLES,
+    versions = ["1.89.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+bazel_dep(name = "rules_rs", version = "0.0.20")
+local_path_override(
+    module_name = "rules_rs",
+    path = "../rules_rs",
+)
+crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
+
+crate.from_cargo(
+    cargo_lock = "//codex-rs:Cargo.lock",
+    cargo_toml = "//codex-rs:Cargo.toml",
+    platform_triples = RUST_TRIPLES,
+)
+
+use_repo(crate, "crates")
