@@ -2,7 +2,8 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
-use crate::wrapping::word_wrap_lines_borrowed;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -22,6 +23,46 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+fn line_contains_url(line: &Line<'_>) -> bool {
+    let mut text = String::new();
+    for span in &line.spans {
+        text.push_str(span.content.as_ref());
+    }
+    text.contains("https://") || text.contains("http://")
+}
+
+fn wrap_history_lines<'a>(lines: &'a [Line<'a>], width: u16) -> Vec<Line<'a>> {
+    let base_opts = RtOptions::new(width.max(1) as usize);
+    let mut wrapped: Vec<Line<'a>> = Vec::new();
+    let mut first = true;
+    for line in lines {
+        if line_contains_url(line) {
+            wrapped.push(line.clone());
+        } else {
+            let opts = if first {
+                base_opts.clone()
+            } else {
+                base_opts
+                    .clone()
+                    .initial_indent(base_opts.subsequent_indent.clone())
+            };
+            wrapped.extend(word_wrap_line(line, opts));
+        }
+        first = false;
+    }
+    wrapped
+}
+
+fn wrapped_row_count(lines: &[Line<'_>], width: u16) -> u16 {
+    let width = width.max(1) as usize;
+    let mut rows = 0usize;
+    for line in lines {
+        let line_width = line.width().max(1);
+        rows = rows.saturating_add(line_width.div_ceil(width));
+    }
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub fn insert_history_lines<B>(
@@ -40,8 +81,8 @@ where
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
-    let wrapped = word_wrap_lines_borrowed(&lines, area.width.max(1) as usize);
-    let wrapped_lines = wrapped.len() as u16;
+    let wrapped = wrap_history_lines(&lines, area.width);
+    let wrapped_lines = wrapped_row_count(&wrapped, area.width);
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
         // Don't scroll it past the bottom of the screen.
@@ -287,6 +328,7 @@ mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
     use crate::test_backend::VT100Backend;
+    use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
 
@@ -316,6 +358,41 @@ mod tests {
             String::from_utf8(actual).unwrap(),
             String::from_utf8(expected).unwrap()
         );
+    }
+
+    #[test]
+    fn wrap_history_lines_preserves_long_url() {
+        let url = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:thread-1";
+        let line: Line<'static> = Line::from(vec!["  ".into(), url.into()]);
+
+        let lines = [line];
+        let wrapped = wrap_history_lines(&lines, 20);
+        let rendered: Vec<String> = wrapped
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(rendered, vec![format!("  {url}")]);
+    }
+
+    #[test]
+    fn wrapped_row_count_accounts_for_long_url() {
+        let url = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:thread-1";
+        let line: Line<'static> = Line::from(vec!["  ".into(), url.into()]);
+        let width = 20u16;
+
+        let lines = [line];
+        let wrapped = wrap_history_lines(&lines, width);
+        let rows = wrapped_row_count(&wrapped, width);
+        let line_width = 2 + url.len();
+        let expected_rows = line_width.div_ceil(width as usize);
+
+        assert_eq!(rows, expected_rows as u16);
     }
 
     #[test]
