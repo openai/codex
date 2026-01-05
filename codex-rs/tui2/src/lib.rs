@@ -77,6 +77,7 @@ mod terminal_palette;
 mod text_formatting;
 mod tooltips;
 mod transcript_copy;
+mod transcript_copy_action;
 mod transcript_copy_ui;
 mod transcript_multi_click;
 mod transcript_render;

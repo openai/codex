@@ -3096,12 +3096,14 @@ impl ChatWidget {
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
         copy_selection_key: crate::key_hint::KeyBinding,
+        copy_feedback: Option<crate::transcript_copy_action::TranscriptCopyFeedback>,
     ) {
         self.bottom_pane.set_transcript_ui_state(
             scrolled,
             selection_active,
             scroll_position,
             copy_selection_key,
+            copy_feedback,
         );
     }
 

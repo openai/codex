@@ -3,7 +3,6 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
-use crate::clipboard_copy;
 use crate::custom_terminal::Frame;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -17,6 +16,8 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
+use crate::transcript_copy_action::TranscriptCopyAction;
+use crate::transcript_copy_action::TranscriptCopyFeedback;
 use crate::transcript_copy_ui::TranscriptCopyUi;
 use crate::transcript_multi_click::TranscriptMultiClick;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
@@ -335,6 +336,7 @@ pub(crate) struct App {
     transcript_view_top: usize,
     transcript_total_lines: usize,
     transcript_copy_ui: TranscriptCopyUi,
+    transcript_copy_action: TranscriptCopyAction,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -500,6 +502,7 @@ impl App {
             transcript_view_top: 0,
             transcript_total_lines: 0,
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
+            transcript_copy_action: TranscriptCopyAction::default(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -667,11 +670,14 @@ impl App {
                             self.transcript_total_lines,
                         ))
                     };
+                    let copy_selection_key = self.copy_selection_key();
+                    let copy_feedback = self.transcript_copy_feedback_for_footer();
                     self.chat_widget.set_transcript_ui_state(
                         transcript_scrolled,
                         selection_active,
                         scroll_position,
-                        self.copy_selection_key(),
+                        copy_selection_key,
+                        copy_feedback,
                     );
                 }
             }
@@ -893,7 +899,14 @@ impl App {
                 .transcript_copy_ui
                 .hit_test(mouse_event.column, mouse_event.row)
         {
-            self.copy_transcript_selection(tui);
+            if self.transcript_copy_action.copy_and_handle(
+                tui,
+                chat_height,
+                &self.transcript_cells,
+                self.transcript_selection,
+            ) {
+                self.transcript_selection = TranscriptSelection::default();
+            }
             return;
         }
 
@@ -1239,46 +1252,8 @@ impl App {
         }
     }
 
-    /// Copy the currently selected transcript region to the system clipboard.
-    ///
-    /// The selection is defined in terms of flattened wrapped transcript line
-    /// indices and columns, and this method reconstructs the same wrapped
-    /// transcript used for on-screen rendering so the copied text closely
-    /// matches the highlighted region.
-    ///
-    /// Important: copy operates on the selection's full content-relative range,
-    /// not just the current viewport. A selection can extend outside the visible
-    /// region (for example, by scrolling after selecting, or by selecting while
-    /// autoscrolling), and we still want the clipboard payload to reflect the
-    /// entire selected transcript.
-    fn copy_transcript_selection(&mut self, tui: &tui::Tui) {
-        let size = tui.terminal.last_known_screen_size;
-        let width = size.width;
-        let height = size.height;
-        if width == 0 || height == 0 {
-            return;
-        }
-
-        let chat_height = self.chat_widget.desired_height(width);
-        if chat_height >= height {
-            return;
-        }
-
-        let transcript_height = height.saturating_sub(chat_height);
-        if transcript_height == 0 {
-            return;
-        }
-
-        let Some(text) = crate::transcript_copy::selection_to_copy_text_for_cells(
-            &self.transcript_cells,
-            self.transcript_selection,
-            width,
-        ) else {
-            return;
-        };
-        if let Err(err) = clipboard_copy::copy_text(text) {
-            tracing::error!(error = %err, "failed to copy selection to clipboard");
-        }
+    fn transcript_copy_feedback_for_footer(&mut self) -> Option<TranscriptCopyFeedback> {
+        self.transcript_copy_action.footer_feedback()
     }
 
     fn copy_selection_key(&self) -> crate::key_hint::KeyBinding {
@@ -1902,7 +1877,22 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } if self.transcript_copy_ui.is_copy_key(ch, modifiers) => {
-                self.copy_transcript_selection(tui);
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width == 0 || height == 0 {
+                    return;
+                }
+
+                let chat_height = self.chat_widget.desired_height(width);
+                if self.transcript_copy_action.copy_and_handle(
+                    tui,
+                    chat_height,
+                    &self.transcript_cells,
+                    self.transcript_selection,
+                ) {
+                    self.transcript_selection = TranscriptSelection::default();
+                }
             }
             KeyEvent {
                 code: KeyCode::PageUp,
@@ -2093,6 +2083,7 @@ mod tests {
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
                 CopySelectionShortcut::CtrlShiftC,
             ),
+            transcript_copy_action: TranscriptCopyAction::default(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -2144,6 +2135,7 @@ mod tests {
                 transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
                     CopySelectionShortcut::CtrlShiftC,
                 ),
+                transcript_copy_action: TranscriptCopyAction::default(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
