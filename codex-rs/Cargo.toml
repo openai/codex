@@ -145,7 +145,7 @@ ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
 include_dir = "0.7.4"
 indexmap = "2.12.0"
-insta = "1.44.3"
+insta = "1.46.0"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
