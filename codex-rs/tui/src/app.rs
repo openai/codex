@@ -238,6 +238,11 @@ impl App {
             }
         };
 
+        // Startup-only: show any previously scheduled model migration notice, then refresh the
+        // schedule to reflect the current config + model presets (at most one scheduled notice).
+        chat_widget.maybe_show_pending_model_migration_notice();
+        chat_widget.refresh_pending_model_migration_notice();
+
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());

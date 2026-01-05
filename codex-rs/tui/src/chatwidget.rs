@@ -453,7 +453,6 @@ impl ChatWidget {
             event,
             self.show_welcome_banner,
         ));
-        self.maybe_show_pending_model_migration_notice();
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -470,7 +469,6 @@ impl ChatWidget {
             // turn now that we know the session is configured.
             self.maybe_send_next_queued_input();
         }
-        self.maybe_schedule_model_migration_notice(&model_for_header);
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
@@ -808,7 +806,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn maybe_show_pending_model_migration_notice(&mut self) {
+    pub(crate) fn maybe_show_pending_model_migration_notice(&mut self) {
         let Some(notice) = model_migration::take_pending_model_migration_notice(&mut self.config)
         else {
             return;
@@ -828,17 +826,13 @@ impl ChatWidget {
             });
     }
 
-    fn maybe_schedule_model_migration_notice(&self, model: &str) {
+    pub(crate) fn refresh_pending_model_migration_notice(&self) {
         let available_models = match self.models_manager.try_list_models(&self.config) {
             Ok(models) => models,
             Err(_) => return,
         };
 
-        model_migration::maybe_schedule_model_migration_notice(
-            &self.config,
-            model,
-            &available_models,
-        );
+        model_migration::refresh_pending_model_migration_notice(&self.config, &available_models);
     }
 
     /// Handle a turn aborted due to user interrupt (Esc).

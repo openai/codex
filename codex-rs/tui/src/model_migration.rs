@@ -15,6 +15,9 @@ pub(crate) struct PendingModelMigrationNotice {
     // Used to respect hide flags even if config changes between scheduling and display.
     #[serde(default)]
     pub(crate) migration_config_key: Option<String>,
+    /// Unix timestamp (seconds) when this notice was scheduled. Used to expire stale notices.
+    #[serde(default)]
+    pub(crate) scheduled_at_unix_seconds: Option<u64>,
 }
 
 /// Read and clear the one-shot migration notice file, returning the notice if it should be shown.
@@ -50,6 +53,11 @@ pub(crate) fn take_pending_model_migration_notice(
         }
     };
 
+    if notice_expired(&notice) {
+        let _ = std::fs::remove_file(&notice_path);
+        return None;
+    }
+
     if let Some(migration_config_key) = notice.migration_config_key.as_deref()
         && migration_prompt_hidden(config, migration_config_key)
     {
@@ -75,11 +83,30 @@ pub(crate) fn take_pending_model_migration_notice(
     Some(notice)
 }
 
-pub(crate) fn maybe_schedule_model_migration_notice(
+/// Persist the migration notice for the next startup, replacing any existing scheduled notice.
+///
+/// Scheduling is intentionally independent of session configuration: it uses the user's config
+/// (or the default model preset) to determine what to schedule.
+pub(crate) fn refresh_pending_model_migration_notice(
     config: &Config,
-    current_model: &str,
     available_models: &[ModelPreset],
 ) {
+    let current_model = config
+        .model
+        .as_deref()
+        .filter(|model| !model.is_empty())
+        .or_else(|| {
+            available_models
+                .iter()
+                .find(|preset| preset.is_default)
+                .map(|preset| preset.model.as_str())
+        });
+
+    let Some(current_model) = current_model else {
+        clear_pending_model_migration_notice(config);
+        return;
+    };
+
     let Some(ModelUpgrade {
         id: target_model,
         migration_config_key,
@@ -89,10 +116,12 @@ pub(crate) fn maybe_schedule_model_migration_notice(
         .find(|preset| preset.model == current_model)
         .and_then(|preset| preset.upgrade.as_ref())
     else {
+        clear_pending_model_migration_notice(config);
         return;
     };
 
     if migration_prompt_hidden(config, migration_config_key.as_str()) {
+        clear_pending_model_migration_notice(config);
         return;
     }
 
@@ -100,6 +129,7 @@ pub(crate) fn maybe_schedule_model_migration_notice(
         .iter()
         .all(|preset| preset.model != target_model.as_str())
     {
+        clear_pending_model_migration_notice(config);
         return;
     }
 
@@ -109,18 +139,17 @@ pub(crate) fn maybe_schedule_model_migration_notice(
         available_models,
         config,
     ) {
+        clear_pending_model_migration_notice(config);
         return;
     }
 
     let notice_path = pending_model_migration_notice_path(config);
-    if notice_path.exists() {
-        return;
-    }
 
     let notice = PendingModelMigrationNotice {
         from_model: current_model.to_string(),
         to_model: target_model.to_string(),
         migration_config_key: Some(migration_config_key.to_string()),
+        scheduled_at_unix_seconds: now_unix_seconds(),
     };
     let Ok(json_line) = serde_json::to_string(&notice).map(|json| format!("{json}\n")) else {
         return;
@@ -165,6 +194,29 @@ fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool 
         }
         _ => false,
     }
+}
+
+fn clear_pending_model_migration_notice(config: &Config) {
+    let _ = std::fs::remove_file(pending_model_migration_notice_path(config));
+}
+
+fn now_unix_seconds() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
+}
+
+fn notice_expired(notice: &PendingModelMigrationNotice) -> bool {
+    let Some(scheduled_at) = notice.scheduled_at_unix_seconds else {
+        return false;
+    };
+    let Some(now) = now_unix_seconds() else {
+        return false;
+    };
+
+    const WEEK_SECONDS: u64 = 7 * 24 * 60 * 60;
+    now.saturating_sub(scheduled_at) > WEEK_SECONDS
 }
 
 fn should_show_model_migration_notice(
