@@ -26,14 +26,16 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         supported_in_api: true,
         priority,
         upgrade: preset.upgrade.as_ref().map(|u| u.id.clone()),
-        base_instructions: None,
+        base_instructions: Some("base instructions".to_string()),
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
-        context_window: None,
+        context_window: 272_000,
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
 }

@@ -86,7 +86,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .await?;
     let base_instructions = conversation_manager
         .get_models_manager()
-        .construct_model_family(
+        .construct_model_info(
             config
                 .model
                 .as_deref()
@@ -95,7 +95,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         )
         .await
         .base_instructions
-        .clone();
+        .clone()
+        .expect("model base_instructions must be set");
 
     codex
         .submit(Op::UserInput {
@@ -132,7 +133,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         base_instructions
     } else {
         [
-            base_instructions.clone(),
+            base_instructions,
             include_str!("../../../apply-patch/apply_patch_tool_instructions.md").to_string(),
         ]
         .join("\n")
@@ -140,7 +141,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
 
     assert_eq!(
         body0["instructions"],
-        serde_json::json!(expected_instructions),
+        serde_json::json!(expected_instructions.clone()),
     );
     assert_tool_names(&body0, &expected_tools_names);
 

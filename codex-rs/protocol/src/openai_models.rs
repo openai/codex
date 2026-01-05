@@ -159,6 +159,10 @@ impl TruncationPolicyConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 pub struct ClientVersion(pub i32, pub i32, pub i32);
 
+const fn default_effective_context_window_percent() -> i64 {
+    95
+}
+
 /// Model metadata returned by the Codex backend `/models` endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
@@ -172,14 +176,30 @@ pub struct ModelInfo {
     pub supported_in_api: bool,
     pub priority: i32,
     pub upgrade: Option<String>,
-    pub base_instructions: Option<String>,
+    /// Server-provided base system instructions for the model.
+    ///
+    /// This field is required; if it is missing from `/models` or cached JSON,
+    /// we prefer to fail loudly rather than silently degrade behavior.
+    pub base_instructions: String,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
-    pub context_window: Option<i64>,
+    /// Maximum supported context window.
+    ///
+    /// This field is required; if it is missing from `/models` or cached JSON,
+    /// we prefer to fail loudly rather than silently degrade behavior.
+    pub context_window: i64,
+    /// Token threshold for automatic compaction. When omitted, core derives it
+    /// from `context_window` (90%).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_token_limit: Option<i64>,
+    /// Percentage of the context window considered usable for inputs, after
+    /// reserving headroom for system prompts, tool overhead, and model output.
+    #[serde(default = "default_effective_context_window_percent")]
+    pub effective_context_window_percent: i64,
     pub experimental_supported_tools: Vec<String>,
 }
 

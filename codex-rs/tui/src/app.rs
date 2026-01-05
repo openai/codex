@@ -555,10 +555,10 @@ impl App {
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
-        let model_family = self
+        let model_info = self
             .server
             .get_models_manager()
-            .construct_model_family(self.current_model.as_str(), &self.config)
+            .construct_model_info(self.current_model.as_str(), &self.config)
             .await;
         match event {
             AppEvent::NewSession => {
@@ -581,7 +581,7 @@ impl App {
                     model: self.current_model.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.current_model = model_family.get_model_slug().to_string();
+                self.current_model = model_info.slug.clone();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -635,7 +635,7 @@ impl App {
                                     resumed.conversation,
                                     resumed.session_configured,
                                 );
-                                self.current_model = model_family.get_model_slug().to_string();
+                                self.current_model = model_info.slug.clone();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
