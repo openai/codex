@@ -67,6 +67,11 @@ enum RolloutCmd {
     Flush {
         ack: oneshot::Sender<()>,
     },
+    /// Rewrite the first SessionMeta line in the rollout file to include a title.
+    SetSessionTitle {
+        title: String,
+        ack: oneshot::Sender<std::io::Result<()>>,
+    },
     Shutdown {
         ack: oneshot::Sender<()>,
     },
@@ -143,6 +148,7 @@ impl RolloutRecorder {
                         id: session_id,
                         timestamp,
                         cwd: config.cwd.clone(),
+                        title: None,
                         originator: originator().value.clone(),
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
@@ -172,7 +178,7 @@ impl RolloutRecorder {
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
-        tokio::task::spawn(rollout_writer(file, rx, meta, cwd));
+        tokio::task::spawn(rollout_writer(file, rx, meta, cwd, rollout_path.clone()));
 
         Ok(Self { tx, rollout_path })
     }
@@ -205,6 +211,16 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout flush: {e}")))?;
         rx.await
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
+    }
+
+    pub async fn set_session_title(&self, title: String) -> std::io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::SetSessionTitle { title, ack: tx })
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue session title update: {e}")))?;
+        rx.await
+            .map_err(|e| IoError::other(format!("failed waiting for session title update: {e}")))?
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -351,6 +367,7 @@ async fn rollout_writer(
     mut rx: mpsc::Receiver<RolloutCmd>,
     mut meta: Option<SessionMeta>,
     cwd: std::path::PathBuf,
+    rollout_path: PathBuf,
 ) -> std::io::Result<()> {
     let mut writer = JsonlWriter { file };
 
@@ -386,10 +403,110 @@ async fn rollout_writer(
                 }
                 let _ = ack.send(());
             }
+            RolloutCmd::SetSessionTitle { title, ack } => {
+                let result = rewrite_session_title(&mut writer, &rollout_path, &title).await;
+                let _ = ack.send(result);
+            }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
             }
         }
+    }
+
+    Ok(())
+}
+
+async fn rewrite_session_title(
+    writer: &mut JsonlWriter,
+    rollout_path: &Path,
+    title: &str,
+) -> std::io::Result<()> {
+    // Flush and close the writer's file handle before swapping the on-disk file,
+    // otherwise subsequent appends would keep writing to the old inode/handle.
+    writer.file.flush().await?;
+
+    // Close the active handle using a portable placeholder.
+    let placeholder = tokio::fs::File::from_std(tempfile::tempfile()?);
+    let old_file = std::mem::replace(&mut writer.file, placeholder);
+    drop(old_file);
+
+    update_first_session_meta_line_title(rollout_path, title).await?;
+
+    // Re-open the rollout for appends and drop the placeholder handle.
+    let reopened = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(rollout_path)
+        .await?;
+    let placeholder = std::mem::replace(&mut writer.file, reopened);
+    drop(placeholder);
+
+    Ok(())
+}
+
+async fn update_first_session_meta_line_title(
+    rollout_path: &Path,
+    title: &str,
+) -> std::io::Result<()> {
+    let text = tokio::fs::read_to_string(rollout_path).await?;
+    let mut rewritten = false;
+
+    // Rewrite the first non-empty line only. Since 43809a454 ("Introduce rollout items",
+    // 2025-09-09), rollouts we write always start with a RolloutLine wrapping
+    // RolloutItem::SessionMeta(_).
+    let mut out = String::with_capacity(text.len() + 32);
+    for line in text.lines() {
+        if !rewritten && !line.trim().is_empty() {
+            out.push_str(&rewrite_session_meta_line_title(line, title)?);
+            rewritten = true;
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+
+    if !rewritten {
+        return Err(IoError::other(
+            "failed to set session title: rollout has no SessionMeta line",
+        ));
+    }
+
+    replace_rollout_file(rollout_path, out).await
+}
+
+fn rewrite_session_meta_line_title(line: &str, title: &str) -> std::io::Result<String> {
+    let mut rollout_line = serde_json::from_str::<RolloutLine>(line).map_err(IoError::other)?;
+    let RolloutItem::SessionMeta(meta_line) = &mut rollout_line.item else {
+        return Err(IoError::other(
+            "failed to set session title: rollout has no SessionMeta line",
+        ));
+    };
+
+    meta_line.meta.title = Some(title.to_string());
+    serde_json::to_string(&rollout_line).map_err(IoError::other)
+}
+
+async fn replace_rollout_file(path: &Path, contents: String) -> std::io::Result<()> {
+    let Some(dir) = path.parent() else {
+        return Err(IoError::other("rollout path has no parent directory"));
+    };
+
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    use std::io::Write as _;
+    tmp.write_all(contents.as_bytes())?;
+    tmp.flush()?;
+
+    let (_file, tmp_path) = tmp.keep()?;
+    drop(_file);
+
+    #[cfg(windows)]
+    {
+        let _ = std::fs::remove_file(path);
+        std::fs::rename(&tmp_path, path)?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(&tmp_path, path)?;
     }
 
     Ok(())
@@ -419,6 +536,39 @@ impl JsonlWriter {
         json.push('\n');
         self.file.write_all(json.as_bytes()).await?;
         self.file.flush().await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn set_session_title_rewrites_first_session_meta_line() -> std::io::Result<()> {
+        let config = crate::config::test_config();
+
+        let conversation_id =
+            ConversationId::from_string(&Uuid::new_v4().to_string()).expect("uuid should parse");
+        let recorder = RolloutRecorder::new(
+            &config,
+            RolloutRecorderParams::new(conversation_id, None, SessionSource::Cli),
+        )
+        .await?;
+
+        recorder
+            .set_session_title("My Session Title".to_string())
+            .await?;
+
+        let text = tokio::fs::read_to_string(&recorder.rollout_path).await?;
+        let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        let rollout_line: RolloutLine = serde_json::from_str(first_line)?;
+        let RolloutItem::SessionMeta(meta_line) = rollout_line.item else {
+            panic!("expected SessionMeta as first rollout line");
+        };
+        assert_eq!(meta_line.meta.title.as_deref(), Some("My Session Title"));
         Ok(())
     }
 }

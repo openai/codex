@@ -1658,6 +1658,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
+            Op::SetSessionTitle { title } => {
+                handlers::set_session_title(&sess, sub.id.clone(), title).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -2023,6 +2026,48 @@ mod handlers {
             CompactTask,
         )
         .await;
+    }
+
+    pub async fn set_session_title(sess: &Arc<Session>, sub_id: String, title: String) {
+        let title = title.trim().to_string();
+        if title.is_empty() {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Session title cannot be empty.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
+
+        let recorder = {
+            let guard = sess.services.rollout.lock().await;
+            guard.clone()
+        };
+        let Some(recorder) = recorder else {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Session persistence is disabled; cannot rename session.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        };
+
+        if let Err(e) = recorder.set_session_title(title).await {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("Failed to set session title: {e}"),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+        }
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

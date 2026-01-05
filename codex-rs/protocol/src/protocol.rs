@@ -204,6 +204,11 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Set a user-facing session title in the persisted rollout metadata.
+    /// This is a local-only operation handled by codex-core; it does not
+    /// involve the model.
+    SetSessionTitle { title: String },
+
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
@@ -1255,6 +1260,8 @@ pub struct SessionMeta {
     pub id: ConversationId,
     pub timestamp: String,
     pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub originator: String,
     pub cli_version: String,
     pub instructions: Option<String>,
@@ -1269,6 +1276,7 @@ impl Default for SessionMeta {
             id: ConversationId::default(),
             timestamp: String::new(),
             cwd: PathBuf::new(),
+            title: None,
             originator: String::new(),
             cli_version: String::new(),
             instructions: None,

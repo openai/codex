@@ -18,6 +18,7 @@ pub enum SlashCommand {
     Review,
     New,
     Resume,
+    Rename,
     Init,
     Compact,
     // Undo,
@@ -43,6 +44,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Rename => "rename the current session",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -78,6 +80,7 @@ impl SlashCommand {
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention
+            | SlashCommand::Rename
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::Mcp
