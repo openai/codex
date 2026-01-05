@@ -41,7 +41,7 @@ fn fetch_announcement_tip() -> Option<String> {
             handle.block_on(async {
                 let response = reqwest::Client::new()
                     .get(ANNOUNCEMENT_TIP_URL)
-                    .timeout(Duration::from_millis(500))
+                    .timeout(Duration::from_millis(100))
                     .send()
                     .await
                     .ok()?;
