@@ -8,30 +8,30 @@ help:
 # `codex`
 alias c := codex
 codex *args:
-    cargo run --bin codex -- "{{args}}"
+    cargo run --bin codex -- {{args}}
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex -- exec "{{args}}"
+    cargo run --bin codex -- exec {{args}}
 
 # Run the CLI version of the file-search crate.
 file-search *args:
-    cargo run --bin codex-file-search -- "{{args}}"
+    cargo run --bin codex-file-search -- {{args}}
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
     cargo build -p codex-cli
-    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "{{args}}"
+    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex {{args}}
 
 # format code
 fmt:
     cargo fmt -- --config imports_granularity=Item
 
 fix *args:
-    cargo clippy --fix --all-features --tests --allow-dirty "{{args}}"
+    cargo clippy --fix --all-features --tests --allow-dirty {{args}}
 
-clippy:
-    cargo clippy --all-features --tests "{{args}}"
+clippy *args:
+    cargo clippy --all-features --tests {{args}}
 
 install:
     rustup show active-toolchain
@@ -46,4 +46,4 @@ test:
 
 # Run the MCP server
 mcp-server-run *args:
-    cargo run -p codex-mcp-server -- "{{args}}"
+    cargo run -p codex-mcp-server -- {{args}}
