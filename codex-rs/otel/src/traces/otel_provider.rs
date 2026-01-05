@@ -19,6 +19,10 @@ use opentelemetry_otlp::SpanExporter;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
+use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
+use opentelemetry_otlp::tonic_types::transport::Certificate as TonicCertificate;
+use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
+use opentelemetry_otlp::tonic_types::transport::Identity as TonicIdentity;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
@@ -31,6 +35,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::sync::OnceLock;
+use std::time::Duration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::ClientTlsConfig;
 use tracing::debug;
@@ -108,7 +113,7 @@ impl OtelProvider {
             .map(|provider| provider.tracer(settings.service_name.clone()));
 
         if let Some(provider) = tracer_provider.clone() {
-            let _ = global::set_tracer_provider(provider);
+            global::set_tracer_provider(provider);
             global::set_text_map_propagator(TraceContextPropagator::new());
         }
         if tracer.is_some() {
