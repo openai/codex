@@ -55,7 +55,7 @@ use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_originator;
-use codex_core::find_conversation_path_by_id_str;
+use codex_core::find_conversation_path_by_selector;
 
 enum InitialOperation {
     UserTurn {
@@ -501,8 +501,7 @@ async fn resolve_resume_path(
             }
         }
     } else if let Some(id_str) = args.session_id.as_deref() {
-        let path = find_conversation_path_by_id_str(&config.codex_home, id_str).await?;
-        Ok(path)
+        Ok(find_conversation_path_by_selector(&config.codex_home, id_str).await?)
     } else {
         Ok(None)
     }

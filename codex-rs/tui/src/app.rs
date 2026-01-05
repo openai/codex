@@ -71,20 +71,21 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
+    /// Preferred selector for `codex resume`: title when set, otherwise UUID.
+    pub resume_selector: Option<String>,
     pub update_action: Option<UpdateAction>,
 }
 
 fn session_summary(
     token_usage: TokenUsage,
-    conversation_id: Option<ConversationId>,
+    resume_selector: Option<&str>,
 ) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command =
-        conversation_id.map(|conversation_id| format!("codex resume {conversation_id}"));
+    let resume_command = resume_selector.map(|selector| format!("codex resume {selector}"));
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -276,6 +277,7 @@ async fn handle_model_migration_prompt_if_needed(
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
                     conversation_id: None,
+                    resume_selector: None,
                     update_action: None,
                 });
             }
@@ -499,9 +501,23 @@ impl App {
             }
         } {}
         tui.terminal.clear()?;
+        let conversation_id = app.chat_widget.conversation_id();
+        let mut resume_selector = conversation_id.as_ref().map(ToString::to_string);
+        if let Some(conversation_id) = &conversation_id
+            && let Ok(Some(path)) = codex_core::find_conversation_path_by_id_str(
+                &app.config.codex_home,
+                &conversation_id.to_string(),
+            )
+            .await
+            && let Ok(Some(title)) = codex_core::read_rollout_session_title(&path).await
+            && !title.trim().is_empty()
+        {
+            resume_selector = Some(title);
+        }
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            conversation_id: app.chat_widget.conversation_id(),
+            conversation_id,
+            resume_selector,
             update_action: app.pending_update_action,
         })
     }
@@ -562,10 +578,13 @@ impl App {
             .await;
         match event {
             AppEvent::NewSession => {
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.conversation_id(),
-                );
+                let resume_selector = self
+                    .chat_widget
+                    .conversation_id()
+                    .as_ref()
+                    .map(ToString::to_string);
+                let summary =
+                    session_summary(self.chat_widget.token_usage(), resume_selector.as_deref());
                 self.shutdown_current_conversation().await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
@@ -602,9 +621,14 @@ impl App {
                 .await?
                 {
                     ResumeSelection::Resume(path) => {
+                        let resume_selector = self
+                            .chat_widget
+                            .conversation_id()
+                            .as_ref()
+                            .map(ToString::to_string);
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
-                            self.chat_widget.conversation_id(),
+                            resume_selector.as_deref(),
                         );
                         match self
                             .server
@@ -1643,10 +1667,8 @@ mod tests {
             total_tokens: 12,
             ..Default::default()
         };
-        let conversation =
-            ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
-
-        let summary = session_summary(usage, Some(conversation)).expect("summary");
+        let summary =
+            session_summary(usage, Some("123e4567-e89b-12d3-a456-426614174000")).expect("summary");
         assert_eq!(
             summary.usage_line,
             "Token usage: total=12 input=10 output=2"

@@ -87,6 +87,8 @@ use crate::history_cell::UpdateAvailableHistoryCell;
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
+    /// Preferred selector for `codex resume`: title when set, otherwise UUID.
+    pub resume_selector: Option<String>,
     pub update_action: Option<UpdateAction>,
     /// ANSI-styled transcript lines to print after the TUI exits.
     ///
@@ -101,6 +103,7 @@ impl From<AppExitInfo> for codex_tui::AppExitInfo {
         codex_tui::AppExitInfo {
             token_usage: info.token_usage,
             conversation_id: info.conversation_id,
+            resume_selector: info.resume_selector,
             update_action: info.update_action.map(Into::into),
         }
     }
@@ -304,6 +307,7 @@ async fn handle_model_migration_prompt_if_needed(
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
                     conversation_id: None,
+                    resume_selector: None,
                     update_action: None,
                     session_lines: Vec::new(),
                 });
@@ -581,9 +585,23 @@ impl App {
         };
 
         tui.terminal.clear()?;
+        let conversation_id = app.chat_widget.conversation_id();
+        let mut resume_selector = conversation_id.as_ref().map(ToString::to_string);
+        if let Some(conversation_id) = &conversation_id
+            && let Ok(Some(path)) = codex_core::find_conversation_path_by_id_str(
+                &app.config.codex_home,
+                &conversation_id.to_string(),
+            )
+            .await
+            && let Ok(Some(title)) = codex_core::read_rollout_session_title(&path).await
+            && !title.trim().is_empty()
+        {
+            resume_selector = Some(title);
+        }
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            conversation_id: app.chat_widget.conversation_id(),
+            conversation_id,
+            resume_selector,
             update_action: app.pending_update_action,
             session_lines,
         })

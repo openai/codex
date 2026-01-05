@@ -284,6 +284,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         conversation_id,
+        resume_selector,
         ..
     } = exit_info;
 
@@ -296,8 +297,10 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         codex_core::protocol::FinalOutput::from(token_usage)
     )];
 
-    if let Some(session_id) = conversation_id {
-        let resume_cmd = format!("codex resume {session_id}");
+    let selector = resume_selector.or_else(|| conversation_id.as_ref().map(ToString::to_string));
+    if let Some(selector) = selector {
+        let selector = format_resume_selector_arg(&selector);
+        let resume_cmd = format!("codex resume {selector}");
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -307,6 +310,15 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     }
 
     lines
+}
+
+fn format_resume_selector_arg(selector: &str) -> String {
+    if !selector.contains(char::is_whitespace) && !selector.contains('"') {
+        return selector.to_string();
+    }
+
+    let escaped = selector.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
@@ -823,11 +835,13 @@ mod tests {
             total_tokens: 2,
             ..Default::default()
         };
+        let resume_selector = conversation.map(ToString::to_string);
         AppExitInfo {
             token_usage,
             conversation_id: conversation
                 .map(ConversationId::from_string)
                 .map(Result::unwrap),
+            resume_selector,
             update_action: None,
         }
     }
@@ -837,6 +851,7 @@ mod tests {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
             conversation_id: None,
+            resume_selector: None,
             update_action: None,
         };
         let lines = format_exit_messages(exit_info, false);
@@ -863,6 +878,32 @@ mod tests {
         let lines = format_exit_messages(exit_info, true);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
+    }
+
+    #[test]
+    fn format_exit_messages_prefers_resume_selector_when_present() {
+        let token_usage = TokenUsage {
+            output_tokens: 2,
+            total_tokens: 2,
+            ..Default::default()
+        };
+        let exit_info = AppExitInfo {
+            token_usage,
+            conversation_id: Some(
+                ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap(),
+            ),
+            resume_selector: Some("pap".to_string()),
+            update_action: None,
+        };
+
+        let lines = format_exit_messages(exit_info, false);
+        assert_eq!(
+            lines,
+            vec![
+                "Token usage: total=2 input=0 output=2".to_string(),
+                "To continue this session, run codex resume pap".to_string(),
+            ]
+        );
     }
 
     #[test]

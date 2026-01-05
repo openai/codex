@@ -158,88 +158,65 @@ async fn traverse_directories_for_paths(
     };
     let mut more_matches_available = false;
 
-    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
-
-    'outer: for (_year, year_path) in year_dirs.iter() {
+    let day_dirs = collect_day_dirs_desc(&root).await?;
+    'outer: for day_path in day_dirs {
         if scanned_files >= MAX_SCAN_FILES {
             break;
         }
-        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
-        for (_month, month_path) in month_dirs.iter() {
+        let day_files = collect_rollout_files_desc(&day_path).await?;
+        for (ts, sid, path) in day_files {
+            scanned_files += 1;
+            if items.len() == page_size {
+                more_matches_available = true;
+                break 'outer;
+            }
             if scanned_files >= MAX_SCAN_FILES {
                 break 'outer;
             }
-            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
-            for (_day, day_path) in day_dirs.iter() {
-                if scanned_files >= MAX_SCAN_FILES {
-                    break 'outer;
+            if !anchor_passed {
+                if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
+                    anchor_passed = true;
+                } else {
+                    continue;
                 }
-                let mut day_files = collect_files(day_path, |name_str, path| {
-                    if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
-                        return None;
-                    }
+            }
 
-                    parse_timestamp_uuid_from_filename(name_str)
-                        .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
-                })
-                .await?;
-                // Stable ordering within the same second: (timestamp desc, uuid desc)
-                day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
-                for (ts, sid, _name_str, path) in day_files.into_iter() {
-                    scanned_files += 1;
-                    if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
-                        more_matches_available = true;
-                        break 'outer;
-                    }
-                    if !anchor_passed {
-                        if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
-                            anchor_passed = true;
-                        } else {
-                            continue;
-                        }
-                    }
-                    if items.len() == page_size {
-                        more_matches_available = true;
-                        break 'outer;
-                    }
-                    // Read head and detect message events; stop once meta + user are found.
-                    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
+            // Read head and detect message events; stop once meta + user are found.
+            let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
+                .await
+                .unwrap_or_default();
+            if !allowed_sources.is_empty()
+                && !summary
+                    .source
+                    .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+            {
+                continue;
+            }
+            if let Some(matcher) = provider_matcher
+                && !matcher.matches(summary.model_provider.as_deref())
+            {
+                continue;
+            }
+            // Apply filters: must have session meta and at least one user message event
+            if summary.saw_session_meta && summary.saw_user_event {
+                let HeadTailSummary {
+                    head,
+                    created_at,
+                    mut updated_at,
+                    ..
+                } = summary;
+                if updated_at.is_none() {
+                    updated_at = file_modified_rfc3339(&path)
                         .await
-                        .unwrap_or_default();
-                    if !allowed_sources.is_empty()
-                        && !summary
-                            .source
-                            .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
-                    {
-                        continue;
-                    }
-                    if let Some(matcher) = provider_matcher
-                        && !matcher.matches(summary.model_provider.as_deref())
-                    {
-                        continue;
-                    }
-                    // Apply filters: must have session meta and at least one user message event
-                    if summary.saw_session_meta && summary.saw_user_event {
-                        let HeadTailSummary {
-                            head,
-                            created_at,
-                            mut updated_at,
-                            ..
-                        } = summary;
-                        if updated_at.is_none() {
-                            updated_at = file_modified_rfc3339(&path)
-                                .await
-                                .unwrap_or(None)
-                                .or_else(|| created_at.clone());
-                        }
-                        items.push(ConversationItem {
-                            path,
-                            head,
-                            created_at,
-                            updated_at,
-                        });
-                    }
+                        .unwrap_or(None)
+                        .or_else(|| created_at.clone());
                 }
+                items.push(ConversationItem {
+                    path,
+                    head,
+                    created_at,
+                    updated_at,
+                });
             }
         }
     }
@@ -348,6 +325,35 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
     Some((ts, uuid))
+}
+
+async fn collect_day_dirs_desc(sessions_root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut day_dirs: Vec<PathBuf> = Vec::new();
+    let year_dirs = collect_dirs_desc(sessions_root, |s| s.parse::<u16>().ok()).await?;
+    for (_year, year_path) in year_dirs {
+        let month_dirs = collect_dirs_desc(&year_path, |s| s.parse::<u8>().ok()).await?;
+        for (_month, month_path) in month_dirs {
+            let days = collect_dirs_desc(&month_path, |s| s.parse::<u8>().ok()).await?;
+            for (_day, day_path) in days {
+                day_dirs.push(day_path);
+            }
+        }
+    }
+    Ok(day_dirs)
+}
+
+async fn collect_rollout_files_desc(
+    day_path: &Path,
+) -> io::Result<Vec<(OffsetDateTime, Uuid, PathBuf)>> {
+    let mut day_files = collect_files(day_path, |name_str, path| {
+        if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+            return None;
+        }
+        parse_timestamp_uuid_from_filename(name_str).map(|(ts, id)| (ts, id, path.to_path_buf()))
+    })
+    .await?;
+    day_files.sort_by_key(|(ts, sid, _path)| (Reverse(*ts), Reverse(*sid)));
+    Ok(day_files)
 }
 
 struct ProviderMatcher<'a> {
@@ -499,4 +505,82 @@ pub async fn find_conversation_path_by_id_str(
         .into_iter()
         .next()
         .map(|m| root.join(m.path)))
+}
+
+/// Locate a recorded conversation rollout file by either UUID (fast path) or by matching
+/// `SessionMeta.title` in the first JSONL line of each rollout file.
+///
+/// Assumes the invariant that the first rollout line is always the `session_meta` record.
+/// If multiple sessions share the same title, returns the newest matching rollout.
+pub async fn find_conversation_path_by_selector(
+    codex_home: &Path,
+    selector: &str,
+) -> io::Result<Option<PathBuf>> {
+    if let Some(path) = find_conversation_path_by_id_str(codex_home, selector).await? {
+        return Ok(Some(path));
+    }
+
+    let normalized = selector.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+
+    let mut root = codex_home.to_path_buf();
+    root.push(SESSIONS_SUBDIR);
+    if !root.exists() {
+        return Ok(None);
+    }
+
+    use tokio::io::AsyncBufReadExt;
+
+    let day_dirs = collect_day_dirs_desc(&root).await?;
+    for day_path in day_dirs {
+        let day_files = collect_rollout_files_desc(&day_path).await?;
+        for (_ts, _sid, path) in day_files {
+            let file = tokio::fs::File::open(&path).await?;
+            let mut lines = tokio::io::BufReader::new(file).lines();
+            let first_line = lines.next_line().await?;
+            let Some(first_line) = first_line else {
+                continue;
+            };
+
+            let rollout_line: RolloutLine = match serde_json::from_str(first_line.trim()) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let RolloutItem::SessionMeta(meta_line) = rollout_line.item else {
+                continue;
+            };
+            let Some(title) = meta_line.meta.title.as_deref() else {
+                continue;
+            };
+            if title.trim().to_lowercase() == normalized {
+                return Ok(Some(path));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Read the `SessionMeta.title` from a rollout file.
+///
+/// Rollout files are expected to begin with a `session_meta` line.
+pub async fn read_rollout_session_title(path: &Path) -> io::Result<Option<String>> {
+    use tokio::io::AsyncBufReadExt;
+
+    let file = tokio::fs::File::open(path).await?;
+    let mut lines = tokio::io::BufReader::new(file).lines();
+    let first_line = lines.next_line().await?;
+    let Some(first_line) = first_line else {
+        return Ok(None);
+    };
+
+    let rollout_line: RolloutLine =
+        serde_json::from_str(first_line.trim()).map_err(|e| io::Error::other(e))?;
+    let RolloutItem::SessionMeta(meta_line) = rollout_line.item else {
+        return Ok(None);
+    };
+
+    Ok(meta_line.meta.title)
 }
