@@ -49,6 +49,7 @@ pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_TOKENS: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 4;
 pub(crate) const MAX_UNIFIED_EXEC_SESSIONS: usize = 64;
+pub(crate) const MAX_LONG_RUNNING_UNIFIED_EXEC_SESSIONS: usize = 8;
 
 // Send a warning message to the models when it reaches this number of sessions.
 pub(crate) const WARNING_UNIFIED_EXEC_SESSIONS: usize = 60;
@@ -96,6 +97,7 @@ pub(crate) struct ExecCommandRequest {
     pub workdir: Option<PathBuf>,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
+    pub long_running: bool,
 }
 
 #[derive(Debug)]
@@ -153,6 +155,7 @@ struct SessionEntry {
     process_id: String,
     command: Vec<String>,
     last_used: tokio::time::Instant,
+    long_running: bool,
 }
 
 pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {
@@ -220,6 +223,7 @@ mod tests {
                     workdir: None,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
+                    long_running: false,
                 },
                 &context,
             )

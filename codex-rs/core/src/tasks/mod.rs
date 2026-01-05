@@ -206,7 +206,7 @@ impl Session {
     async fn close_unified_exec_sessions(&self) {
         self.services
             .unified_exec_manager
-            .terminate_all_sessions()
+            .terminate_turn_sessions()
             .await;
     }
 

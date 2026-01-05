@@ -8,6 +8,10 @@ pub(crate) enum UnifiedExecError {
     // Called "session" in the model's training.
     #[error("Unknown session id {process_id}")]
     UnknownSessionId { process_id: String },
+    #[error(
+        "Too many long-running unified exec sessions (max {max}). Close an existing one before starting another."
+    )]
+    TooManyLongRunningSessions { max: usize },
     #[error("failed to write to stdin")]
     WriteToStdin,
     #[error("missing command line for unified exec request")]

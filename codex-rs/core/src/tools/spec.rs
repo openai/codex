@@ -196,6 +196,15 @@ fn create_exec_command_tool() -> ToolSpec {
             ),
         },
     );
+    properties.insert(
+        "long_running".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to keep the process running across turns. Max 8 long-running processes; long-running processes do not stream output deltas or end events."
+                    .to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -1491,6 +1500,28 @@ mod tests {
             subset.push(shell_tool);
         }
         assert_contains_tool_names(&tools, &subset);
+    }
+
+    #[test]
+    fn test_exec_command_schema_includes_long_running() {
+        let config = test_config();
+        let model_family = ModelsManager::construct_model_family_offline("o3", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+
+        let tool = find_tool(&tools, "exec_command");
+        let ToolSpec::Function(tool) = &tool.spec else {
+            panic!("expected exec_command to be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = &tool.parameters else {
+            panic!("expected exec_command schema parameters to be an object");
+        };
+        assert!(properties.contains_key("long_running"));
     }
 
     #[test]

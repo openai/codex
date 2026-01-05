@@ -36,6 +36,8 @@ struct ExecCommandArgs {
     shell: Option<String>,
     #[serde(default = "default_login")]
     login: bool,
+    #[serde(default)]
+    long_running: bool,
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -135,6 +137,7 @@ impl ToolHandler for UnifiedExecHandler {
                     max_output_tokens,
                     sandbox_permissions,
                     justification,
+                    long_running,
                     ..
                 } = args;
 
@@ -196,6 +199,7 @@ impl ToolHandler for UnifiedExecHandler {
                             workdir,
                             sandbox_permissions,
                             justification,
+                            long_running,
                         },
                         &context,
                     )

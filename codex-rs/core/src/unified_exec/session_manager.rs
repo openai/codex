@@ -28,6 +28,7 @@ use crate::truncate::formatted_truncate_text;
 
 use super::CommandTranscript;
 use super::ExecCommandRequest;
+use super::MAX_LONG_RUNNING_UNIFIED_EXEC_SESSIONS;
 use super::MAX_UNIFIED_EXEC_SESSIONS;
 use super::SessionEntry;
 use super::SessionStore;
@@ -74,6 +75,7 @@ struct PreparedSessionHandles {
     turn_ref: Arc<TurnContext>,
     command: Vec<String>,
     process_id: String,
+    long_running: bool,
 }
 
 impl UnifiedExecSessionManager {
@@ -140,7 +142,9 @@ impl UnifiedExecSessionManager {
         };
 
         let transcript = Arc::new(tokio::sync::Mutex::new(CommandTranscript::default()));
-        start_streaming_output(&session, context, Arc::clone(&transcript));
+        if !request.long_running {
+            start_streaming_output(&session, context, Arc::clone(&transcript));
+        }
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
@@ -175,23 +179,35 @@ impl UnifiedExecSessionManager {
             // same helper as the background watcher, so all end events share
             // one implementation.
             let exit = exit_code.unwrap_or(-1);
-            emit_exec_end_for_unified_exec(
-                Arc::clone(&context.session),
-                Arc::clone(&context.turn),
-                context.call_id.clone(),
-                request.command.clone(),
-                cwd,
-                Some(process_id),
-                Arc::clone(&transcript),
-                output.clone(),
-                exit,
-                wall_time,
-            )
-            .await;
+            if !request.long_running {
+                emit_exec_end_for_unified_exec(
+                    Arc::clone(&context.session),
+                    Arc::clone(&context.turn),
+                    context.call_id.clone(),
+                    request.command.clone(),
+                    cwd,
+                    Some(process_id),
+                    Arc::clone(&transcript),
+                    output.clone(),
+                    exit,
+                    wall_time,
+                )
+                .await;
+            }
 
             self.release_process_id(&request.process_id).await;
             session.check_for_sandbox_denial_with_text(&text).await?;
         } else {
+            if request.long_running
+                && self.active_long_running_session_count().await
+                    >= MAX_LONG_RUNNING_UNIFIED_EXEC_SESSIONS
+            {
+                session.terminate();
+                self.release_process_id(&request.process_id).await;
+                return Err(UnifiedExecError::TooManyLongRunningSessions {
+                    max: MAX_LONG_RUNNING_UNIFIED_EXEC_SESSIONS,
+                });
+            }
             // Long‑lived command: persist the session so write_stdin can reuse
             // it, and register a background watcher that will emit
             // ExecCommandEnd when the PTY eventually exits (even if no further
@@ -204,6 +220,7 @@ impl UnifiedExecSessionManager {
                 start,
                 process_id,
                 Arc::clone(&transcript),
+                request.long_running,
             )
             .await;
 
@@ -245,6 +262,7 @@ impl UnifiedExecSessionManager {
             turn_ref,
             command: session_command,
             process_id,
+            long_running,
             ..
         } = self.prepare_session_handles(process_id.as_str()).await?;
 
@@ -307,7 +325,7 @@ impl UnifiedExecSessionManager {
             session_command: Some(session_command.clone()),
         };
 
-        if response.process_id.is_some() {
+        if response.process_id.is_some() && !long_running {
             Self::emit_waiting_status(&session_ref, &turn_ref, &session_command).await;
         }
 
@@ -368,6 +386,7 @@ impl UnifiedExecSessionManager {
             turn_ref: Arc::clone(&entry.turn_ref),
             command: entry.command.clone(),
             process_id: entry.process_id.clone(),
+            long_running: entry.long_running,
         })
     }
 
@@ -391,6 +410,7 @@ impl UnifiedExecSessionManager {
         started_at: Instant,
         process_id: String,
         transcript: Arc<tokio::sync::Mutex<CommandTranscript>>,
+        long_running: bool,
     ) {
         let entry = SessionEntry {
             session: Arc::clone(&session),
@@ -400,6 +420,7 @@ impl UnifiedExecSessionManager {
             process_id: process_id.clone(),
             command: command.to_vec(),
             last_used: started_at,
+            long_running,
         };
         let number_sessions = {
             let mut store = self.session_store.lock().await;
@@ -418,17 +439,19 @@ impl UnifiedExecSessionManager {
                 .await;
         };
 
-        spawn_exit_watcher(
-            Arc::clone(&session),
-            Arc::clone(&context.session),
-            Arc::clone(&context.turn),
-            context.call_id.clone(),
-            command.to_vec(),
-            cwd,
-            process_id,
-            transcript,
-            started_at,
-        );
+        if !long_running {
+            spawn_exit_watcher(
+                Arc::clone(&session),
+                Arc::clone(&context.session),
+                Arc::clone(&context.turn),
+                context.call_id.clone(),
+                command.to_vec(),
+                cwd,
+                process_id,
+                transcript,
+                started_at,
+            );
+        }
     }
 
     async fn emit_waiting_status(
@@ -583,13 +606,19 @@ impl UnifiedExecSessionManager {
     }
 
     fn prune_sessions_if_needed(store: &mut SessionStore) -> bool {
-        if store.sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
+        let non_long_running = store
+            .sessions
+            .values()
+            .filter(|entry| !entry.long_running)
+            .count();
+        if non_long_running < MAX_UNIFIED_EXEC_SESSIONS {
             return false;
         }
 
         let meta: Vec<(String, Instant, bool)> = store
             .sessions
             .iter()
+            .filter(|(_, entry)| !entry.long_running)
             .map(|(id, entry)| (id.clone(), entry.last_used, entry.session.has_exited()))
             .collect();
 
@@ -644,6 +673,38 @@ impl UnifiedExecSessionManager {
         for entry in entries {
             entry.session.terminate();
         }
+    }
+
+    pub(crate) async fn terminate_turn_sessions(&self) {
+        let entries: Vec<SessionEntry> = {
+            let mut sessions = self.session_store.lock().await;
+            let mut keep = HashMap::new();
+            let mut to_terminate = Vec::new();
+            let drained: Vec<(String, SessionEntry)> = sessions.sessions.drain().collect();
+            for (process_id, entry) in drained {
+                if entry.long_running {
+                    keep.insert(process_id, entry);
+                } else {
+                    sessions.reserved_sessions_id.remove(&process_id);
+                    to_terminate.push(entry);
+                }
+            }
+            sessions.sessions = keep;
+            to_terminate
+        };
+
+        for entry in entries {
+            entry.session.terminate();
+        }
+    }
+
+    async fn active_long_running_session_count(&self) -> usize {
+        let store = self.session_store.lock().await;
+        store
+            .sessions
+            .values()
+            .filter(|entry| entry.long_running && !entry.session.has_exited())
+            .count()
     }
 }
 
