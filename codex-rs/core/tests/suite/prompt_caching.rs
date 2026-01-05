@@ -95,8 +95,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         )
         .await
         .base_instructions
-        .clone()
-        .expect("model base_instructions must be set");
+        .clone();
 
     codex
         .submit(Op::UserInput {
