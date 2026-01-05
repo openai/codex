@@ -1,5 +1,8 @@
 # TUI2 Scroll Input: Model and Implementation
 
+Note: This doc is historical. For the current architecture/status/roadmap, see
+`tui2/docs/tui2_viewport_history_architecture.md`.
+
 This is the single "scrolling doc of record" for TUI2.
 
 It describes what we implemented, why it works, and what we tried before this approach.
@@ -307,51 +310,51 @@ Analysis of 16 scroll-probe logs (13,734 events) across 8 terminals shows large 
 
 | Terminal                                | Scenario        | Median Dt (ms) | P95 Dt (ms) | Typical burst | Notes       |
 | --------------------------------------- | --------------- | -------------: | ----------: | ------------: | ----------- |
-| Apple_Terminal 455.1                    | wheel_single    |           0.14 |       97.68 |             3 |
-| Apple_Terminal 455.1                    | wheel_small     |           0.12 |       23.81 |            19 |
-| Apple_Terminal 455.1                    | wheel_long      |           0.03 |       15.93 |            48 |
-| Apple_Terminal 455.1                    | trackpad_single |          92.35 |      213.15 |             2 |
-| Apple_Terminal 455.1                    | trackpad_slow   |          11.30 |       75.46 |            14 |
-| Apple_Terminal 455.1                    | trackpad_fast   |           0.13 |        8.92 |            96 |
-| WarpTerminal v0.2025.12.17.17.stable_02 | wheel_single    |           0.07 |        0.34 |             9 |
-| WarpTerminal v0.2025.12.17.17.stable_02 | wheel_small     |           0.05 |        5.04 |            65 |
-| WarpTerminal v0.2025.12.17.17.stable_02 | wheel_long      |           0.01 |        0.42 |           166 |
-| WarpTerminal v0.2025.12.17.17.stable_02 | trackpad_single |           9.77 |       32.64 |            10 |
-| WarpTerminal v0.2025.12.17.17.stable_02 | trackpad_slow   |           7.93 |       16.44 |            74 |
-| WarpTerminal v0.2025.12.17.17.stable_02 | trackpad_fast   |           5.40 |       10.04 |            74 |
-| WezTerm 20240203-110809-5046fc22        | wheel_single    |         416.07 |      719.64 |             1 |
-| WezTerm 20240203-110809-5046fc22        | wheel_small     |          19.41 |       50.19 |             6 |
-| WezTerm 20240203-110809-5046fc22        | wheel_long      |          13.19 |       29.96 |            10 |
-| WezTerm 20240203-110809-5046fc22        | trackpad_single |         237.56 |      237.56 |             1 |
+| Apple_Terminal 455.1                    | wheel_single    |           0.14 |       97.68 |             3 |             |
+| Apple_Terminal 455.1                    | wheel_small     |           0.12 |       23.81 |            19 |             |
+| Apple_Terminal 455.1                    | wheel_long      |           0.03 |       15.93 |            48 |             |
+| Apple_Terminal 455.1                    | trackpad_single |          92.35 |      213.15 |             2 |             |
+| Apple_Terminal 455.1                    | trackpad_slow   |          11.30 |       75.46 |            14 |             |
+| Apple_Terminal 455.1                    | trackpad_fast   |           0.13 |        8.92 |            96 |             |
+| WarpTerminal v0.2025.12.17.17.stable_02 | wheel_single    |           0.07 |        0.34 |             9 |             |
+| WarpTerminal v0.2025.12.17.17.stable_02 | wheel_small     |           0.05 |        5.04 |            65 |             |
+| WarpTerminal v0.2025.12.17.17.stable_02 | wheel_long      |           0.01 |        0.42 |           166 |             |
+| WarpTerminal v0.2025.12.17.17.stable_02 | trackpad_single |           9.77 |       32.64 |            10 |             |
+| WarpTerminal v0.2025.12.17.17.stable_02 | trackpad_slow   |           7.93 |       16.44 |            74 |             |
+| WarpTerminal v0.2025.12.17.17.stable_02 | trackpad_fast   |           5.40 |       10.04 |            74 |             |
+| WezTerm 20240203-110809-5046fc22        | wheel_single    |         416.07 |      719.64 |             1 |             |
+| WezTerm 20240203-110809-5046fc22        | wheel_small     |          19.41 |       50.19 |             6 |             |
+| WezTerm 20240203-110809-5046fc22        | wheel_long      |          13.19 |       29.96 |            10 |             |
+| WezTerm 20240203-110809-5046fc22        | trackpad_single |         237.56 |      237.56 |             1 |             |
 | WezTerm 20240203-110809-5046fc22        | trackpad_slow   |          23.54 |       76.10 |            10 | 12.5% horiz |
 | WezTerm 20240203-110809-5046fc22        | trackpad_fast   |           7.10 |       24.86 |            32 | 12.6% horiz |
-| alacritty                               | wheel_single    |           0.09 |        0.33 |             3 |
-| alacritty                               | wheel_small     |           0.11 |       37.24 |            24 |
-| alacritty                               | wheel_long      |           0.01 |       15.96 |            56 |
-| alacritty                               | trackpad_single |            n/a |         n/a |             1 |
-| alacritty                               | trackpad_slow   |          41.90 |       97.36 |            11 |
-| alacritty                               | trackpad_fast   |           3.07 |       25.13 |            62 |
-| ghostty 1.2.3                           | wheel_single    |           0.05 |        0.20 |             9 |
-| ghostty 1.2.3                           | wheel_small     |           0.05 |        7.18 |            52 |
-| ghostty 1.2.3                           | wheel_long      |           0.02 |        1.16 |           146 |
+| alacritty                               | wheel_single    |           0.09 |        0.33 |             3 |             |
+| alacritty                               | wheel_small     |           0.11 |       37.24 |            24 |             |
+| alacritty                               | wheel_long      |           0.01 |       15.96 |            56 |             |
+| alacritty                               | trackpad_single |            n/a |         n/a |             1 |             |
+| alacritty                               | trackpad_slow   |          41.90 |       97.36 |            11 |             |
+| alacritty                               | trackpad_fast   |           3.07 |       25.13 |            62 |             |
+| ghostty 1.2.3                           | wheel_single    |           0.05 |        0.20 |             9 |             |
+| ghostty 1.2.3                           | wheel_small     |           0.05 |        7.18 |            52 |             |
+| ghostty 1.2.3                           | wheel_long      |           0.02 |        1.16 |           146 |             |
 | ghostty 1.2.3                           | trackpad_single |          61.28 |      124.28 |             3 | 23.5% horiz |
 | ghostty 1.2.3                           | trackpad_slow   |          23.10 |       76.30 |            14 | 34.7% horiz |
 | ghostty 1.2.3                           | trackpad_fast   |           3.84 |       37.72 |            47 | 23.4% horiz |
-| iTerm.app 3.6.6                         | wheel_single    |          74.96 |       80.61 |             1 |
-| iTerm.app 3.6.6                         | wheel_small     |          20.79 |       84.83 |             6 |
-| iTerm.app 3.6.6                         | wheel_long      |          16.70 |       50.91 |             9 |
-| iTerm.app 3.6.6                         | trackpad_single |            n/a |         n/a |             1 |
-| iTerm.app 3.6.6                         | trackpad_slow   |          17.25 |       94.05 |             9 |
-| iTerm.app 3.6.6                         | trackpad_fast   |           7.12 |       24.54 |            33 |
-| vscode 1.107.1                          | wheel_single    |          58.01 |       58.01 |             1 |
-| vscode 1.107.1                          | wheel_small     |          16.76 |       66.79 |             5 |
-| vscode 1.107.1                          | wheel_long      |           9.86 |       32.12 |             8 |
-| vscode 1.107.1                          | trackpad_single |            n/a |         n/a |             1 |
-| vscode 1.107.1                          | trackpad_slow   |         164.19 |      266.90 |             3 |
-| vscode 1.107.1                          | trackpad_fast   |          16.78 |       61.05 |            11 |
-| xterm-kitty                             | wheel_single    |           0.16 |       51.74 |             3 |
-| xterm-kitty                             | wheel_small     |           0.10 |       24.12 |            26 |
-| xterm-kitty                             | wheel_long      |           0.01 |       16.10 |            56 |
+| iTerm.app 3.6.6                         | wheel_single    |          74.96 |       80.61 |             1 |             |
+| iTerm.app 3.6.6                         | wheel_small     |          20.79 |       84.83 |             6 |             |
+| iTerm.app 3.6.6                         | wheel_long      |          16.70 |       50.91 |             9 |             |
+| iTerm.app 3.6.6                         | trackpad_single |            n/a |         n/a |             1 |             |
+| iTerm.app 3.6.6                         | trackpad_slow   |          17.25 |       94.05 |             9 |             |
+| iTerm.app 3.6.6                         | trackpad_fast   |           7.12 |       24.54 |            33 |             |
+| vscode 1.107.1                          | wheel_single    |          58.01 |       58.01 |             1 |             |
+| vscode 1.107.1                          | wheel_small     |          16.76 |       66.79 |             5 |             |
+| vscode 1.107.1                          | wheel_long      |           9.86 |       32.12 |             8 |             |
+| vscode 1.107.1                          | trackpad_single |            n/a |         n/a |             1 |             |
+| vscode 1.107.1                          | trackpad_slow   |         164.19 |      266.90 |             3 |             |
+| vscode 1.107.1                          | trackpad_fast   |          16.78 |       61.05 |            11 |             |
+| xterm-kitty                             | wheel_single    |           0.16 |       51.74 |             3 |             |
+| xterm-kitty                             | wheel_small     |           0.10 |       24.12 |            26 |             |
+| xterm-kitty                             | wheel_long      |           0.01 |       16.10 |            56 |             |
 | xterm-kitty                             | trackpad_single |         155.65 |      289.87 |             1 | 12.5% horiz |
 | xterm-kitty                             | trackpad_slow   |          16.89 |       67.04 |            16 | 30.4% horiz |
 | xterm-kitty                             | trackpad_fast   |           0.23 |       16.37 |            78 | 20.6% horiz |

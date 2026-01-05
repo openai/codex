@@ -1,5 +1,8 @@
 # TUI2 Viewport, Transcript, and History – Design Notes
 
+Note: This doc is historical. For the current architecture/status/roadmap, see
+`tui2/docs/tui2_viewport_history_architecture.md`.
+
 This document describes the viewport and history model we are implementing in the new
 `codex-rs/tui2` crate. It builds on lessons from the legacy TUI and explains why we moved away
 from directly writing history into terminal scrollback.

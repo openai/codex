@@ -1,5 +1,8 @@
 # Streaming Markdown Wrapping & Animation – TUI2 Notes
 
+Note: This doc is historical. For the current architecture/status/roadmap, see
+`tui2/docs/tui2_viewport_history_architecture.md`.
+
 This document mirrors the original `tui/streaming_wrapping_design.md` and
 captures how the same concerns apply to the new `tui2` crate. It exists so that
 future viewport and streaming work in TUI2 can rely on the same context without
@@ -82,4 +85,3 @@ the legacy behavior while the viewport work (scrolling, selection, exit
 transcripts) is being ported. This document exists to make that trade‑off
 explicit for TUI2 and to provide a natural home for any TUI2‑specific streaming
 wrapping notes as the design evolves.
-
