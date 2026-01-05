@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 
 use mcp_types::JSONRPCMessage;
 use tokio::io::AsyncBufReadExt;
@@ -90,7 +89,7 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
+    let config = Config::load_with_cli_overrides(cli_kv_overrides)
         .await
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))

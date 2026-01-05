@@ -135,7 +135,9 @@ pub async fn process_exec_tool_call(
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
     let sandbox_type = match &sandbox_policy {
-        SandboxPolicy::DangerFullAccess => SandboxType::None,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+            SandboxType::None
+        }
         _ => get_platform_sandbox().unwrap_or(SandboxType::None),
     };
     tracing::debug!("Sandbox type: {sandbox_type:?}");
@@ -523,7 +525,10 @@ async fn exec(
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
     if sandbox == SandboxType::WindowsRestrictedToken
-        && !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+        && !matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        )
     {
         return exec_windows_sandbox(params, sandbox_policy).await;
     }

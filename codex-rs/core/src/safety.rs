@@ -91,7 +91,10 @@ pub fn assess_patch_safety(
     if is_write_patch_constrained_to_writable_paths(action, sandbox_policy, cwd)
         || policy == AskForApproval::OnFailure
     {
-        if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        if matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ) {
             // DangerFullAccess is intended to bypass sandboxing entirely.
             SafetyCheck::AutoApprove {
                 sandbox_type: SandboxType::None,
@@ -147,7 +150,7 @@ fn is_write_patch_constrained_to_writable_paths(
         SandboxPolicy::ReadOnly => {
             return false;
         }
-        SandboxPolicy::DangerFullAccess => {
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             return true;
         }
         SandboxPolicy::WorkspaceWrite { .. } => sandbox_policy.get_writable_roots_with_cwd(cwd),
@@ -261,5 +264,24 @@ mod tests {
             &policy_with_parent,
             &cwd,
         ));
+    }
+
+    #[test]
+    fn external_sandbox_auto_approves_in_on_request() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let add_inside = ApplyPatchAction::new_add_for_test(&cwd.join("inner.txt"), "".to_string());
+
+        let policy = SandboxPolicy::ExternalSandbox {
+            network_access: codex_protocol::protocol::NetworkAccess::Enabled,
+        };
+
+        assert_eq!(
+            assess_patch_safety(&add_inside, AskForApproval::OnRequest, &policy, &cwd,),
+            SafetyCheck::AutoApprove {
+                sandbox_type: SandboxType::None,
+                user_explicitly_approved: false,
+            }
+        );
     }
 }

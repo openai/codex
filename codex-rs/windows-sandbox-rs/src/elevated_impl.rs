@@ -2,13 +2,11 @@ mod windows_impl {
     use crate::acl::allow_null_device;
     use crate::allow::compute_allow_paths;
     use crate::allow::AllowDenyPaths;
-    use crate::cap::cap_sid_file;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
     use crate::identity::require_logon_sandbox_creds;
-    use crate::logging::debug_log;
     use crate::logging::log_failure;
     use crate::logging::log_note;
     use crate::logging::log_start;
@@ -16,7 +14,6 @@ mod windows_impl {
     use crate::policy::parse_policy;
     use crate::policy::SandboxPolicy;
     use crate::token::convert_string_sid_to_sid;
-    use crate::winutil::format_last_error;
     use crate::winutil::quote_windows_arg;
     use crate::winutil::to_wide;
     use anyhow::Result;
@@ -53,13 +50,6 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
     /// Ensures the parent directory of a path exists before writing to it.
-    fn ensure_dir(p: &Path) -> Result<()> {
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        Ok(())
-    }
-
     /// Walks upward from `start` to locate the git worktree root, following gitfile redirects.
     fn find_git_root(start: &Path) -> Option<PathBuf> {
         let mut cur = dunce::canonicalize(start).ok()?;
@@ -102,7 +92,7 @@ mod windows_impl {
     fn inject_git_safe_directory(
         env_map: &mut HashMap<String, String>,
         cwd: &Path,
-        logs_base_dir: Option<&Path>,
+        _logs_base_dir: Option<&Path>,
     ) {
         if let Some(git_root) = find_git_root(cwd) {
             let mut cfg_count: usize = env_map
@@ -117,10 +107,6 @@ mod windows_impl {
             env_map.insert(format!("GIT_CONFIG_VALUE_{cfg_count}"), git_path);
             cfg_count += 1;
             env_map.insert("GIT_CONFIG_COUNT".to_string(), cfg_count.to_string());
-            log_note(
-                &format!("injected git safe.directory for {}", git_root.display()),
-                logs_base_dir,
-            );
         }
     }
 
@@ -245,45 +231,31 @@ mod windows_impl {
         log_start(&command, logs_base_dir);
         let sandbox_creds =
             require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
-        log_note("cli creds ready", logs_base_dir);
-        let cap_sid_path = cap_sid_file(codex_home);
-
         // Build capability SID for ACL grants.
+        if matches!(
+            &policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
+        }
+        let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sid_str) = match &policy {
-            SandboxPolicy::ReadOnly => {
-                let caps = load_or_create_cap_sids(codex_home);
-                ensure_dir(&cap_sid_path)?;
-                fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
-                (
-                    unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
-                    caps.readonly.clone(),
-                )
-            }
-            SandboxPolicy::WorkspaceWrite { .. } => {
-                let caps = load_or_create_cap_sids(codex_home);
-                ensure_dir(&cap_sid_path)?;
-                fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
-                (
-                    unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                    caps.workspace.clone(),
-                )
-            }
-            SandboxPolicy::DangerFullAccess => {
-                anyhow::bail!("DangerFullAccess is not supported for sandboxing")
+            SandboxPolicy::ReadOnly => (
+                unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
+                caps.readonly.clone(),
+            ),
+            SandboxPolicy::WorkspaceWrite { .. } => (
+                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
+                caps.workspace.clone(),
+            ),
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                unreachable!("DangerFullAccess handled above")
             }
         };
 
-        let AllowDenyPaths { allow, deny } =
+        let AllowDenyPaths { allow: _, deny: _ } =
             compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         // Deny/allow ACEs are now applied during setup; avoid per-command churn.
-        log_note(
-            &format!(
-                "cli skipping per-command ACL grants (allow_count={} deny_count={})",
-                allow.len(),
-                deny.len()
-            ),
-            logs_base_dir,
-        );
         unsafe {
             allow_null_device(psid_to_use);
         }
@@ -304,13 +276,6 @@ mod windows_impl {
             &stderr_name,
             PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         )?;
-        log_note(
-            &format!(
-                "cli pipes created stdin={} stdout={} stderr={}",
-                stdin_name, stdout_name, stderr_name
-            ),
-            logs_base_dir,
-        );
 
         // Launch runner as sandbox user via CreateProcessWithLogonW.
         let runner_exe = find_runner_exe();
@@ -347,10 +312,6 @@ mod windows_impl {
             );
             return Err(e.into());
         }
-        log_note(
-            &format!("cli request file written path={}", req_file.display()),
-            logs_base_dir,
-        );
         let runner_full_cmd = format!(
             "{} {}",
             quote_windows_arg(&runner_cmdline),
@@ -359,14 +320,6 @@ mod windows_impl {
         let mut cmdline_vec: Vec<u16> = to_wide(&runner_full_cmd);
         let exe_w: Vec<u16> = to_wide(&runner_cmdline);
         let cwd_w: Vec<u16> = to_wide(cwd);
-        log_note(
-            &format!("cli prep done request_file={}", req_file.display()),
-            logs_base_dir,
-        );
-        log_note(
-            &format!("cli about to launch runner cmd={}", runner_full_cmd),
-            logs_base_dir,
-        );
 
         // Minimal CPWL launch: inherit env, no desktop override, no handle inheritance.
         let env_block: Option<Vec<u16>> = None;
@@ -401,23 +354,8 @@ mod windows_impl {
         };
         if spawn_res == 0 {
             let err = unsafe { GetLastError() } as i32;
-            let dbg = format!(
-                "CreateProcessWithLogonW failed: {} ({}) | cwd={} | cmd={} | req_file={} | env=inherit | si_flags={}",
-                err,
-                format_last_error(err),
-                cwd.display(),
-                runner_full_cmd,
-                req_file.display(),
-                si.dwFlags,
-            );
-            debug_log(&dbg, logs_base_dir);
-            log_note(&dbg, logs_base_dir);
             return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
         }
-        log_note(
-            &format!("cli runner launched pid={}", pi.hProcess),
-            logs_base_dir,
-        );
 
         // Pipes are no longer passed as std handles; no stdin payload is sent.
         connect_pipe(h_stdin_pipe)?;

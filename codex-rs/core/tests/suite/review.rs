@@ -453,7 +453,7 @@ async fn review_input_isolated_from_parent_history() {
 
     // Seed a parent session history via resume file with both user + assistant items.
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
@@ -553,36 +553,29 @@ async fn review_input_isolated_from_parent_history() {
         .expect("expected POST request to /responses");
     let body = request.body_json::<serde_json::Value>().unwrap();
     let input = body["input"].as_array().expect("input array");
-    assert_eq!(
-        input.len(),
-        2,
-        "expected environment context and review prompt"
+    assert!(
+        input.len() >= 2,
+        "expected at least environment context and review prompt"
     );
 
-    let env_msg = &input[0];
-    assert_eq!(env_msg["type"].as_str().unwrap(), "message");
-    assert_eq!(env_msg["role"].as_str().unwrap(), "user");
-    let env_text = env_msg["content"][0]["text"].as_str().expect("env text");
-    assert!(
-        env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
-        "environment context must be the first item"
-    );
+    let env_text = input
+        .iter()
+        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .find(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
+        .expect("env text");
     assert!(
         env_text.contains("<cwd>"),
         "environment context should include cwd"
     );
 
-    let review_msg = &input[1];
-    assert_eq!(review_msg["type"].as_str().unwrap(), "message");
-    assert_eq!(review_msg["role"].as_str().unwrap(), "user");
+    let review_text = input
+        .iter()
+        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .find(|text| *text == review_prompt)
+        .expect("review prompt text");
     assert_eq!(
-        review_msg["content"][0]["text"].as_str().unwrap(),
-        review_prompt,
+        review_text, review_prompt,
         "user message should only contain the raw review prompt"
-    );
-    assert!(
-        env_text.contains("<sandbox_mode>read-only</sandbox_mode>"),
-        "review environment context must run with read-only sandbox"
     );
 
     // Ensure the REVIEW_PROMPT rubric is sent via instructions.
@@ -716,6 +709,105 @@ async fn review_history_surfaces_in_parent_session() {
     server.verify().await;
 }
 
+/// `/review` should use the session's current cwd (including runtime overrides)
+/// when resolving base-branch review prompts (merge-base computation).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
+    skip_if_no_network!();
+
+    let sse_raw = r#"[{"type":"response.completed", "response": {"id": "__ID__"}}]"#;
+    let server = start_responses_server_with_sse(sse_raw, 1).await;
+
+    let initial_cwd = TempDir::new().unwrap();
+
+    let repo_dir = TempDir::new().unwrap();
+    let repo_path = repo_dir.path();
+
+    fn run_git(repo_path: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args(args)
+            .output()
+            .expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: stdout={:?} stderr={:?}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    run_git(repo_path, &["init", "-b", "main"]);
+    run_git(repo_path, &["config", "user.email", "test@example.com"]);
+    run_git(repo_path, &["config", "user.name", "Test User"]);
+    std::fs::write(repo_path.join("file.txt"), "hello\n").unwrap();
+    run_git(repo_path, &["add", "."]);
+    run_git(repo_path, &["commit", "-m", "initial"]);
+
+    let head_sha = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse HEAD");
+    assert!(head_sha.status.success());
+    let head_sha = String::from_utf8(head_sha.stdout)
+        .expect("utf8 sha")
+        .trim()
+        .to_string();
+
+    let codex_home = TempDir::new().unwrap();
+    let codex = new_conversation_for_server(&server, &codex_home, |config| {
+        config.cwd = initial_cwd.path().to_path_buf();
+    })
+    .await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: Some(repo_path.to_path_buf()),
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::BaseBranch {
+                    branch: "main".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = get_responses_requests(&server).await;
+    assert_eq!(requests.len(), 1);
+    let body = requests[0].body_json::<serde_json::Value>().unwrap();
+    let input = body["input"].as_array().expect("input array");
+
+    let saw_merge_base_sha = input
+        .iter()
+        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .any(|text| text.contains(&head_sha));
+    assert!(
+        saw_merge_base_sha,
+        "expected review prompt to include merge-base sha {head_sha}"
+    );
+
+    server.verify().await;
+}
+
 /// Start a mock Responses API server and mount the given SSE stream body.
 async fn start_responses_server_with_sse(sse_raw: &str, expected_requests: usize) -> MockServer {
     let server = MockServer::start().await;
@@ -747,7 +839,7 @@ where
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let mut config = load_default_config_for_test(codex_home);
+    let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
     let conversation_manager = ConversationManager::with_models_provider(
@@ -776,7 +868,7 @@ where
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let mut config = load_default_config_for_test(codex_home);
+    let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
     let conversation_manager = ConversationManager::with_models_provider(

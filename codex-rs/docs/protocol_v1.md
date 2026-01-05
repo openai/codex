@@ -68,7 +68,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `Op::UserInput` – Any input from the user to kick off a `Task`
   - `Op::Interrupt` – Interrupts a running task
   - `Op::ExecApproval` – Approve or deny code execution
-  - `Op::ListSkills` – Request skills for one or more cwd values
+  - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
 - `EventMsg`
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command

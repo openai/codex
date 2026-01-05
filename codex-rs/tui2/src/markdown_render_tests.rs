@@ -1,4 +1,5 @@
 use pretty_assertions::assert_eq;
+use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -382,34 +383,20 @@ fn blockquote_heading_inherits_heading_style() {
 fn blockquote_with_code_block() {
     let md = "> ```\n> code\n> ```\n";
     let text = render_markdown_text(md);
-    let lines: Vec<String> = text
-        .lines
-        .iter()
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>()
-        })
-        .collect();
-    assert_eq!(lines, vec!["> code".to_string()]);
+    assert_eq!(text.lines, [Line::from_iter(["> ", "", "code"]).cyan()]);
 }
 
 #[test]
 fn blockquote_with_multiline_code_block() {
     let md = "> ```\n> first\n> second\n> ```\n";
     let text = render_markdown_text(md);
-    let lines: Vec<String> = text
-        .lines
-        .iter()
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>()
-        })
-        .collect();
-    assert_eq!(lines, vec!["> first", "> second"]);
+    assert_eq!(
+        text.lines,
+        [
+            Line::from_iter(["> ", "", "first"]).cyan(),
+            Line::from_iter(["> ", "", "second"]).cyan(),
+        ]
+    );
 }
 
 #[test]
@@ -453,6 +440,12 @@ fn nested_blockquote_with_inline_and_fenced_code() {
             "> > echo \"hello from a quote\"".to_string(),
         ]
     );
+
+    // Fenced code inside nested blockquotes should keep code styling so copy logic can treat it as
+    // preformatted.
+    for idx in [4usize, 5usize] {
+        assert_eq!(text.lines[idx].style.fg, Some(Color::Cyan));
+    }
 }
 
 #[test]
@@ -654,7 +647,7 @@ fn link() {
 #[test]
 fn code_block_unhighlighted() {
     let text = render_markdown_text("```rust\nfn main() {}\n```\n");
-    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"])]);
+    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"]).cyan()]);
     assert_eq!(text, expected);
 }
 
@@ -663,8 +656,8 @@ fn code_block_multiple_lines_root() {
     let md = "```\nfirst\nsecond\n```\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["", "first"]),
-        Line::from_iter(["", "second"]),
+        Line::from_iter(["", "first"]).cyan(),
+        Line::from_iter(["", "second"]).cyan(),
     ]);
     assert_eq!(text, expected);
 }
@@ -674,9 +667,9 @@ fn code_block_indented() {
     let md = "    function greet() {\n      console.log(\"Hi\");\n    }\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["    ", "function greet() {"]),
-        Line::from_iter(["    ", "  console.log(\"Hi\");"]),
-        Line::from_iter(["    ", "}"]),
+        Line::from_iter(["    ", "function greet() {"]).cyan(),
+        Line::from_iter(["    ", "  console.log(\"Hi\");"]).cyan(),
+        Line::from_iter(["    ", "}"]).cyan(),
     ]);
     assert_eq!(text, expected);
 }

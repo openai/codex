@@ -393,6 +393,7 @@ pub(crate) async fn run_onboarding_app(
     while !onboarding_screen.is_done() {
         if let Some(event) = tui_events.next().await {
             match event {
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Key(key_event) => {
                     onboarding_screen.handle_key_event(key_event);
                 }

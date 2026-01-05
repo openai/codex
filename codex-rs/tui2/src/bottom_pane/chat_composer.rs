@@ -1,4 +1,7 @@
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
+use crate::transcript_copy_action::TranscriptCopyFeedback;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -118,6 +121,11 @@ pub(crate) struct ChatComposer {
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    transcript_scrolled: bool,
+    transcript_selection_active: bool,
+    transcript_scroll_position: Option<(usize, usize)>,
+    transcript_copy_selection_key: KeyBinding,
+    transcript_copy_feedback: Option<TranscriptCopyFeedback>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
 }
@@ -166,6 +174,11 @@ impl ChatComposer {
             footer_hint_override: None,
             context_window_percent: None,
             context_window_used_tokens: None,
+            transcript_scrolled: false,
+            transcript_selection_active: false,
+            transcript_scroll_position: None,
+            transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+            transcript_copy_feedback: None,
             skills: None,
             dismissed_skill_popup_token: None,
         };
@@ -1531,6 +1544,11 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            transcript_scrolled: self.transcript_scrolled,
+            transcript_selection_active: self.transcript_selection_active,
+            transcript_scroll_position: self.transcript_scroll_position,
+            transcript_copy_selection_key: self.transcript_copy_selection_key,
+            transcript_copy_feedback: self.transcript_copy_feedback,
         }
     }
 
@@ -1549,6 +1567,37 @@ impl ChatComposer {
         self.footer_hint_override
             .as_ref()
             .map(|items| if items.is_empty() { 0 } else { 1 })
+    }
+
+    /// Update the footer's view of transcript scroll state for the inline viewport.
+    ///
+    /// This state is derived from the main `App`'s transcript viewport and passed
+    /// through the bottom pane so the footer can indicate when the transcript is
+    /// scrolled away from the bottom, whether a selection is active, and the
+    /// current `(visible_top, total)` position.
+    pub(crate) fn set_transcript_ui_state(
+        &mut self,
+        scrolled: bool,
+        selection_active: bool,
+        scroll_position: Option<(usize, usize)>,
+        copy_selection_key: KeyBinding,
+        copy_feedback: Option<TranscriptCopyFeedback>,
+    ) -> bool {
+        if self.transcript_scrolled == scrolled
+            && self.transcript_selection_active == selection_active
+            && self.transcript_scroll_position == scroll_position
+            && self.transcript_copy_selection_key == copy_selection_key
+            && self.transcript_copy_feedback == copy_feedback
+        {
+            return false;
+        }
+
+        self.transcript_scrolled = scrolled;
+        self.transcript_selection_active = selection_active;
+        self.transcript_scroll_position = scroll_position;
+        self.transcript_copy_selection_key = copy_selection_key;
+        self.transcript_copy_feedback = copy_feedback;
+        true
     }
 
     fn sync_popups(&mut self) {

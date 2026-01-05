@@ -862,7 +862,7 @@ async fn start_test_conversation(
         ..built_in_model_providers()["openai"].clone()
     };
     let home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
     if let Some(model) = model {

@@ -14,7 +14,6 @@ use crate::bash::extract_bash_command;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::sandboxing::ExecEnv;
@@ -175,7 +174,6 @@ impl UnifiedExecSessionManager {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
             // one implementation.
-            self.release_process_id(&request.process_id).await;
             let exit = exit_code.unwrap_or(-1);
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
@@ -191,6 +189,7 @@ impl UnifiedExecSessionManager {
             )
             .await;
 
+            self.release_process_id(&request.process_id).await;
             session.check_for_sandbox_denial_with_text(&text).await?;
         } else {
             // Long‑lived command: persist the session so write_stdin can reuse
@@ -484,15 +483,18 @@ impl UnifiedExecSessionManager {
         let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let exec_approval_requirement = create_exec_approval_requirement_for_command(
-            &context.turn.exec_policy,
-            &features,
-            command,
-            context.turn.approval_policy,
-            &context.turn.sandbox_policy,
-            sandbox_permissions,
-        )
-        .await;
+        let exec_approval_requirement = context
+            .session
+            .services
+            .exec_policy
+            .create_exec_approval_requirement_for_command(
+                &features,
+                command,
+                context.turn.approval_policy,
+                &context.turn.sandbox_policy,
+                sandbox_permissions,
+            )
+            .await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,

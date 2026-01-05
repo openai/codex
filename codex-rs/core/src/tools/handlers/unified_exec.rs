@@ -77,16 +77,15 @@ impl ToolHandler for UnifiedExecHandler {
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(
-            payload,
-            ToolPayload::Function { .. } | ToolPayload::UnifiedExec { .. }
-        )
+        matches!(payload, ToolPayload::Function { .. })
     }
 
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let (ToolPayload::Function { arguments } | ToolPayload::UnifiedExec { arguments }) =
-            &invocation.payload
-        else {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            tracing::error!(
+                "This should never happen, invocation payload is wrong: {:?}",
+                invocation.payload
+            );
             return true;
         };
 
@@ -110,7 +109,6 @@ impl ToolHandler for UnifiedExecHandler {
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
-            ToolPayload::UnifiedExec { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "unified_exec handler received unsupported payload".to_string(),

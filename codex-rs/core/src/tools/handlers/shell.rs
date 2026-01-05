@@ -6,7 +6,6 @@ use std::sync::Arc;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -252,15 +251,17 @@ impl ShellHandler {
         emitter.begin(event_ctx).await;
 
         let features = session.features();
-        let exec_approval_requirement = create_exec_approval_requirement_for_command(
-            &turn.exec_policy,
-            &features,
-            &exec_params.command,
-            turn.approval_policy,
-            &turn.sandbox_policy,
-            exec_params.sandbox_permissions,
-        )
-        .await;
+        let exec_approval_requirement = session
+            .services
+            .exec_policy
+            .create_exec_approval_requirement_for_command(
+                &features,
+                &exec_params.command,
+                turn.approval_policy,
+                &turn.sandbox_policy,
+                exec_params.sandbox_permissions,
+            )
+            .await;
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
@@ -358,9 +359,9 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
-        let (session, turn_context) = make_session_and_context();
+    #[tokio::test]
+    async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
+        let (session, turn_context) = make_session_and_context().await;
 
         let command = "echo hello".to_string();
         let workdir = Some("subdir".to_string());

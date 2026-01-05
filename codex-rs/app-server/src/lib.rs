@@ -2,7 +2,6 @@
 
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -18,13 +17,11 @@ use tokio::io::BufReader;
 use tokio::io::{self};
 use tokio::sync::mpsc;
 use toml::Value as TomlValue;
-use tracing::Level;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
-use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -81,12 +78,11 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config =
-        Config::load_with_cli_overrides(cli_kv_overrides.clone(), ConfigOverrides::default())
-            .await
-            .map_err(|e| {
-                std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-            })?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides.clone())
+        .await
+        .map_err(|e| {
+            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+        })?;
 
     let feedback = CodexFeedback::new();
 
@@ -105,11 +101,8 @@ pub async fn run_main(
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
         .with_filter(EnvFilter::from_default_env());
 
-    let feedback_layer = tracing_subscriber::fmt::layer()
-        .with_writer(feedback.make_writer())
-        .with_ansi(false)
-        .with_target(false)
-        .with_filter(Targets::new().with_default(Level::TRACE));
+    let feedback_layer = feedback.logger_layer();
+    let feedback_metadata_layer = feedback.metadata_layer();
 
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
@@ -118,6 +111,7 @@ pub async fn run_main(
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
         .with(feedback_layer)
+        .with(feedback_metadata_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();

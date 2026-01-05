@@ -52,6 +52,8 @@ pub struct ModelUpgrade {
     pub id: String,
     pub reasoning_effort_mapping: Option<HashMap<ReasoningEffort, ReasoningEffort>>,
     pub migration_config_key: String,
+    pub model_link: Option<String>,
+    pub upgrade_copy: Option<String>,
 }
 
 /// Metadata describing a Codex-supported model.
@@ -75,6 +77,8 @@ pub struct ModelPreset {
     pub upgrade: Option<ModelUpgrade>,
     /// Whether this preset should appear in the picker UI.
     pub show_in_picker: bool,
+    /// whether this model is supported in the api
+    pub supported_in_api: bool,
 }
 
 /// Visibility of a model in the picker or APIs.
@@ -121,14 +125,6 @@ pub enum ApplyPatchToolType {
     Function,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash, TS, JsonSchema, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningSummaryFormat {
-    #[default]
-    None,
-    Experimental,
-}
-
 /// Server-provided truncation policy metadata for a model.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -173,7 +169,6 @@ pub struct ModelInfo {
     pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
     pub shell_type: ConfigShellToolType,
     pub visibility: ModelVisibility,
-    pub minimal_client_version: ClientVersion,
     pub supported_in_api: bool,
     pub priority: i32,
     pub upgrade: Option<String>,
@@ -185,7 +180,6 @@ pub struct ModelInfo {
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
     pub context_window: Option<i64>,
-    pub reasoning_summary_format: ReasoningSummaryFormat,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -193,8 +187,6 @@ pub struct ModelInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
 pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
-    #[serde(default)]
-    pub etag: String,
 }
 
 // convert ModelInfo to ModelPreset
@@ -214,8 +206,12 @@ impl From<ModelInfo> for ModelPreset {
                     &info.supported_reasoning_levels,
                 ),
                 migration_config_key: info.slug.clone(),
+                // todo(aibrahim): add the model link here.
+                model_link: None,
+                upgrade_copy: None,
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
+            supported_in_api: info.supported_in_api,
         }
     }
 }

@@ -51,6 +51,7 @@ ts-rs = { workspace = true, features = [
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 libc = { workspace = true }
 mcp-types = { workspace = true }
