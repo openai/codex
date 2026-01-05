@@ -819,7 +819,7 @@ pub struct ConfigToml {
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
     /// Defaults to `true`.
-    pub analytics: Option<bool>,
+    pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
@@ -1398,7 +1398,12 @@ impl Config {
             notices: cfg.notice.unwrap_or_default(),
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
-            analytics: cfg.analytics.unwrap_or(true),
+            analytics: config_profile
+                .analytics
+                .as_ref()
+                .and_then(|a| a.enabled)
+                .or(cfg.analytics.as_ref().and_then(|a| a.enabled))
+                .unwrap_or(true),
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -3048,6 +3053,9 @@ approval_policy = "untrusted"
 # `ConfigOverrides`.
 profile = "gpt3"
 
+[analytics]
+enabled = true
+
 [model_providers.openai-chat-completions]
 name = "OpenAI using Chat Completions"
 base_url = "https://api.openai.com/v1"
@@ -3072,7 +3080,9 @@ model_provider = "openai-chat-completions"
 model = "o3"
 model_provider = "openai"
 approval_policy = "on-failure"
-analytics = false
+
+[profiles.zdr.analytics]
+enabled = false
 
 [profiles.gpt5]
 model = "gpt-5.1"
