@@ -1,0 +1,39 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+
+_DEPS = all_crate_deps(normal = True)
+_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+
+rust_library(
+    name = "exec-server",
+    crate_name = "codex_exec_server",
+    deps = _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_binary(
+    name = "codex-execve-wrapper",
+    crate_name = "codex_execve_wrapper",
+    crate_root = "src/bin/main_execve_wrapper.rs",
+    deps = [":exec-server"] + _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_binary(
+    name = "codex-exec-mcp-server",
+    crate_name = "codex_exec_mcp_server",
+    crate_root = "src/bin/main_mcp_server.rs",
+    deps = [":exec-server"] + _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_test(
+    name = "exec-server-tests",
+    crate = ":exec-server",
+    deps = all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)

@@ -1,0 +1,40 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+
+_DEPS = all_crate_deps(normal = True)
+_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+
+rust_library(
+    name = "windows-sandbox-rs",
+    crate_name = "codex_windows_sandbox",
+    edition = "2021",
+    deps = _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_binary(
+    name = "codex-windows-sandbox-setup",
+    crate_name = "codex_windows_sandbox_setup",
+    crate_root = "src/bin/setup_main.rs",
+    deps = [":windows-sandbox-rs"] + _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_binary(
+    name = "codex-command-runner",
+    crate_name = "codex_command_runner",
+    crate_root = "src/bin/command_runner.rs",
+    deps = [":windows-sandbox-rs"] + _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_test(
+    name = "windows-sandbox-rs-tests",
+    crate = ":windows-sandbox-rs",
+    deps = all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)

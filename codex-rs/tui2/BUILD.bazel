@@ -1,0 +1,51 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+
+_DEPS = all_crate_deps(normal = True)
+_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+_SRCS = glob(["src/**/*.rs"])
+_DATA = glob([
+    "frames/**/*.txt",
+    "prompt_for_init_command.md",
+    "tooltips.txt",
+])
+
+rust_library(
+    name = "tui2",
+    crate_name = "codex_tui2",
+    compile_data = _DATA,
+    deps = _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = _SRCS,
+)
+
+rust_binary(
+    name = "codex-tui2",
+    crate_name = "codex_tui2",
+    compile_data = _DATA,
+    deps = [":tui2"] + _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = _SRCS,
+)
+
+rust_binary(
+    name = "md-events2",
+    crate_name = "md_events2",
+    compile_data = _DATA,
+    deps = [":tui2"] + _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = _SRCS,
+)
+
+rust_test(
+    name = "tui2-tests",
+    crate = ":tui2",
+    data = glob(["src/**/snapshots/**"]),
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+        "INSTA_SNAPSHOT_PATH": "src",
+    },
+    deps = all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)
