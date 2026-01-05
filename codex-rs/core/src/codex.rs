@@ -88,6 +88,7 @@ use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
+use crate::feedback_tags;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
@@ -246,7 +247,9 @@ impl Codex {
 
         let config = Arc::new(config);
         if config.features.enabled(Feature::RemoteModels)
-            && let Err(err) = models_manager.refresh_available_models(&config).await
+            && let Err(err) = models_manager
+                .refresh_available_models_with_cache(&config)
+                .await
         {
             error!("failed to refresh available models: {err:?}");
         }
@@ -808,6 +811,13 @@ impl Session {
                         .await;
                 }
 
+                // Seed usage info from the recorded rollout so UIs can show token counts
+                // immediately on resume/fork.
+                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                    let mut state = self.state.lock().await;
+                    state.set_token_info(Some(info));
+                }
+
                 // If persisting, persist all rollout items as-is (recorder filters)
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
@@ -816,6 +826,13 @@ impl Session {
                 self.flush_rollout().await;
             }
         }
+    }
+
+    fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
+        rollout_items.iter().rev().find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
+            _ => None,
+        })
     }
 
     pub(crate) async fn update_settings(
@@ -1422,12 +1439,14 @@ impl Session {
         message: impl Into<String>,
         codex_error: CodexErr,
     ) {
+        let additional_details = codex_error.to_string();
         let codex_error_info = CodexErrorInfo::ResponseStreamDisconnected {
             http_status_code: codex_error.http_status_code_value(),
         };
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
             codex_error_info: Some(codex_error_info),
+            additional_details: Some(additional_details),
         });
         self.send_event(turn_context, event).await;
     }
@@ -2049,7 +2068,7 @@ mod handlers {
         review_request: ReviewRequest,
     ) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
-        match resolve_review_request(review_request, config.cwd.as_path()) {
+        match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
                     Arc::clone(sess),
@@ -2521,6 +2540,15 @@ async fn try_run_turn(
         truncation_policy: Some(turn_context.truncation_policy.into()),
     });
 
+    feedback_tags!(
+        model = turn_context.client.get_model(),
+        approval_policy = turn_context.approval_policy,
+        sandbox_policy = turn_context.sandbox_policy,
+        effort = turn_context.client.get_reasoning_effort(),
+        auth_mode = sess.services.auth_manager.get_auth_mode(),
+        features = sess.features.enabled_features(),
+    );
+
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context
         .client
@@ -2610,6 +2638,13 @@ async fn try_run_turn(
                 // Update internal state with latest rate limits, but defer sending until
                 // token usage is available to avoid duplicate TokenCount events.
                 sess.update_rate_limits(&turn_context, snapshot).await;
+            }
+            ResponseEvent::ModelsEtag(etag) => {
+                // Update internal state with latest models etag
+                sess.services
+                    .models_manager
+                    .refresh_if_new_etag(etag, sess.features.enabled(Feature::RemoteModels))
+                    .await;
             }
             ResponseEvent::Completed {
                 response_id: _,
@@ -2751,6 +2786,9 @@ mod tests {
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
+    use crate::protocol::TokenCountEvent;
+    use crate::protocol::TokenUsage;
+    use crate::protocol::TokenUsageInfo;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -2803,6 +2841,83 @@ mod tests {
 
         let actual = session.state.lock().await.clone_history().get_history();
         assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_seeds_token_info_from_rollout() {
+        let (session, turn_context) = make_session_and_context().await;
+        let (mut rollout_items, _expected) = sample_rollout(&session, &turn_context);
+
+        let info1 = TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 10,
+                cached_input_tokens: 0,
+                output_tokens: 20,
+                reasoning_output_tokens: 0,
+                total_tokens: 30,
+            },
+            last_token_usage: TokenUsage {
+                input_tokens: 3,
+                cached_input_tokens: 0,
+                output_tokens: 4,
+                reasoning_output_tokens: 0,
+                total_tokens: 7,
+            },
+            model_context_window: Some(1_000),
+        };
+        let info2 = TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 50,
+                output_tokens: 200,
+                reasoning_output_tokens: 25,
+                total_tokens: 375,
+            },
+            last_token_usage: TokenUsage {
+                input_tokens: 10,
+                cached_input_tokens: 0,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 35,
+            },
+            model_context_window: Some(2_000),
+        };
+
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: Some(info1),
+                rate_limits: None,
+            },
+        )));
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            },
+        )));
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: Some(info2.clone()),
+                rate_limits: None,
+            },
+        )));
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            },
+        )));
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ConversationId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        let actual = session.state.lock().await.token_info();
+        assert_eq!(actual, Some(info2));
     }
 
     #[tokio::test]
@@ -3138,7 +3253,7 @@ mod tests {
             exec_policy,
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
-            models_manager,
+            models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
         };
@@ -3225,7 +3340,7 @@ mod tests {
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
-            models_manager,
+            models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
         };

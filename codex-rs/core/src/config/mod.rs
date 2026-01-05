@@ -2050,6 +2050,7 @@ trust_level = "trusted"
             managed_config_path: Some(managed_path.clone()),
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
+            macos_managed_config_requirements_base64: None,
         };
 
         let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
@@ -2170,6 +2171,7 @@ trust_level = "trusted"
             managed_config_path: Some(managed_path),
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
+            macos_managed_config_requirements_base64: None,
         };
 
         let cwd = AbsolutePathBuf::try_from(codex_home.path())?;

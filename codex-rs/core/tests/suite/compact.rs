@@ -8,11 +8,14 @@ use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WarningEvent;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_local_shell_call;
@@ -1225,6 +1228,117 @@ async fn auto_compact_runs_after_token_limit_hit() {
             .iter()
             .any(|text| text.contains(prefixed_auto_summary)),
         "auto compact follow-up request should include the summary message"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let limit = 200_000;
+    let over_limit_tokens = 250_000;
+    let remote_summary = "REMOTE_COMPACT_SUMMARY";
+
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: remote_summary.to_string(),
+            }],
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    let mut builder = test_codex().with_config(move |config| {
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(limit);
+        config.features.enable(Feature::RemoteCompaction);
+    });
+    let initial = builder.build(&server).await.unwrap();
+    let home = initial.home.clone();
+    let rollout_path = initial.session_configured.rollout_path.clone();
+
+    // A single over-limit completion should not auto-compact until the next user message.
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("m1", FIRST_REPLY),
+            ev_completed_with_tokens("r1", over_limit_tokens),
+        ]),
+    )
+    .await;
+    initial.submit_turn("OVER_LIMIT_TURN").await.unwrap();
+
+    assert!(
+        compact_mock.requests().is_empty(),
+        "remote compaction should not run before the next user message"
+    );
+
+    let mut resume_builder = test_codex().with_config(move |config| {
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(limit);
+        config.features.enable(Feature::RemoteCompaction);
+    });
+    let resumed = resume_builder
+        .resume(&server, home, rollout_path)
+        .await
+        .unwrap();
+
+    let follow_up_user = "AFTER_RESUME_USER";
+    let sse_follow_up = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed("r2"),
+    ]);
+
+    let follow_up_matcher = move |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(follow_up_user) && body.contains(remote_summary)
+    };
+    mount_sse_once_match(&server, follow_up_matcher, sse_follow_up).await;
+
+    resumed
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: follow_up_user.into(),
+            }],
+            final_output_json_schema: None,
+            cwd: resumed.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: resumed.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::ContextCompacted(_))
+    })
+    .await;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TaskComplete(_))
+    })
+    .await;
+
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        1,
+        "remote compaction should run once after resume"
+    );
+    assert_eq!(
+        compact_requests[0].path(),
+        "/v1/responses/compact",
+        "remote compaction should hit the compact endpoint"
     );
 }
 

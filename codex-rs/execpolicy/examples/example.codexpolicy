@@ -4,6 +4,7 @@
 prefix_rule(
     pattern = ["git", "reset", "--hard"],
     decision = "forbidden",
+    forbidden_reason = "destructive operation",
     match = [
         ["git", "reset", "--hard"],
     ],

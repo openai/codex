@@ -1,9 +1,10 @@
 # codex-execpolicy
 
 ## Overview
-- Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, match?, not_match?)`.
+- Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, forbidden_reason?, match?, not_match?)`.
 - This release covers the prefix-rule subset of the execpolicy language; a richer language will follow.
 - Tokens are matched in order; any `pattern` element may be a list to denote alternatives. `decision` defaults to `allow`; valid values: `allow`, `prompt`, `forbidden`.
+- When `decision = "forbidden"`, an optional `forbidden_reason` can be provided to explain why the command is blocked.
 - `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests); examples can be token arrays or strings (strings are tokenized with `shlex`).
 - The CLI always prints the JSON serialization of the evaluation result.
 - The legacy rule matcher lives in `codex-execpolicy-legacy`.
@@ -14,6 +15,7 @@
 prefix_rule(
     pattern = ["cmd", ["alt1", "alt2"]], # ordered tokens; list entries denote alternatives
     decision = "prompt",                 # allow | prompt | forbidden; defaults to allow
+    forbidden_reason = "explain why this is forbidden", # only valid when decision="forbidden"
     match = [["cmd", "alt1"], "cmd alt2"],           # examples that must match this rule
     not_match = [["cmd", "oops"], "cmd alt3"],       # examples that must not match this rule
 )
@@ -40,7 +42,8 @@ cargo run -p codex-execpolicy -- check --rules path/to/policy.rules git status
     {
       "prefixRuleMatch": {
         "matchedPrefix": ["<token>", "..."],
-        "decision": "allow|prompt|forbidden"
+        "decision": "allow|prompt|forbidden",
+        "forbiddenReason": "..."
       }
     }
   ],
