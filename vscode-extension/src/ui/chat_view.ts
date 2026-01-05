@@ -132,6 +132,11 @@ export type ChatViewState = {
   }>;
 };
 
+type RewindRequest = {
+  turnIndex: number;
+  scope: "code" | "conversation" | "both";
+};
+
 let sessionModelState: {
   model: string | null;
   provider: string | null;
@@ -178,6 +183,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly onSend: (
       text: string,
       images?: Array<{ name: string; url: string }>,
+      rewind?: RewindRequest | null,
     ) => Promise<void>,
     private readonly onFileSearch: (
       sessionId: string,
@@ -241,14 +247,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (type === "send") {
       const text = anyMsg["text"];
+      const rewind = anyMsg["rewind"];
       if (typeof text !== "string") return;
-      await this.onSend(text, []);
+      await this.onSend(text, [], (rewind as any) ?? null);
       return;
     }
 
     if (type === "sendWithImages") {
       const text = anyMsg["text"];
       const images = anyMsg["images"];
+      const rewind = anyMsg["rewind"];
       if (typeof text !== "string") return;
       if (!Array.isArray(images)) return;
       const normalized = images
@@ -262,7 +270,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           name: typeof (img as any).name === "string" ? (img as any).name : "",
           url: (img as any).url as string,
         }));
-      await this.onSend(text, normalized);
+      await this.onSend(text, normalized, (rewind as any) ?? null);
       return;
     }
 
@@ -302,6 +310,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (type === "stop") {
       await vscode.commands.executeCommand("codexMine.interruptTurn");
+      return;
+    }
+
+    if (type === "reloadSession") {
+      await vscode.commands.executeCommand("codexMine.reloadSession");
       return;
     }
 
@@ -626,12 +639,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // CSP nonce must match the CSP nonce grammar (base64 charset).
     // NOTE: UUID contains '-' which is not valid for CSP nonces and will block scripts.
     const nonce = crypto.randomBytes(16).toString("base64");
-	    const csp = [
-	      "default-src 'none'",
-	      "img-src " + webview.cspSource + " data: blob:",
-	      "style-src 'unsafe-inline'",
-	      `script-src ${webview.cspSource} 'nonce-${nonce}'`,
-	    ].join("; ");
+    const csp = [
+      "default-src 'none'",
+      "img-src " + webview.cspSource + " data: blob:",
+      "style-src 'unsafe-inline'",
+      `script-src ${webview.cspSource} 'nonce-${nonce}'`,
+    ].join("; ");
 
     const clientScriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(
@@ -702,6 +715,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .approval { border: 1px solid rgba(127,127,127,0.25); border-radius: 10px; padding: 10px 12px; background: rgba(255, 120, 0, 0.10); }
       .approvalTitle { font-weight: 600; margin-bottom: 6px; }
       .approvalActions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+      .editBanner { border: 1px solid rgba(127,127,127,0.25); border-radius: 10px; padding: 8px 10px; margin: 0 0 8px; background: rgba(0, 120, 212, 0.10); display: flex; align-items: center; gap: 10px; }
+      .editBannerText { flex: 1 1 auto; min-width: 0; font-size: 12px; opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .editBanner button { padding: 4px 8px; font-size: 12px; border-radius: 8px; }
       .msg { margin: 10px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,0.25); }
       .note { margin: 8px 2px; font-size: 12px; opacity: 0.7; color: var(--vscode-descriptionForeground, inherit); }
       /* Keep user distinct from webSearch (both were blue-ish in dark themes). */
@@ -744,6 +760,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .webSearchRow { position: relative; }
       .statusIcon { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; opacity: 0.9; }
       .statusIcon::before, .statusIcon::after { content: ""; display: block; box-sizing: border-box; }
+      .msgHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+      .msgHeaderTitle { font-size: 12px; opacity: 0.7; }
+      .msgActions { display: flex; gap: 8px; }
+      .msgActionBtn { padding: 2px 8px; font-size: 12px; border-radius: 999px; }
 
       /* inProgress: spinner */
       .statusIcon.status-inProgress::before { width: 14px; height: 14px; border: 2px solid rgba(180, 180, 180, 0.95); border-top-color: rgba(180, 180, 180, 0.15); border-radius: 50%; animation: cmSpin 0.9s linear infinite; margin: 1px; }
@@ -815,38 +835,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <div class="top">
       <div class="topRow">
         <div id="title" class="title">Codex UI</div>
-	        <div class="actions">
-	          <button id="new">New</button>
-            <button id="resume">Resume</button>
-	          <button id="status">Status</button>
-	          <button id="diff" disabled>Open Latest Diff</button>
-            <button id="settings" class="iconBtn settingsBtn" aria-label="Settings" title="Settings"></button>
-	        </div>
-	      </div>
+        <div class="actions">
+          <button id="new">New</button>
+          <button id="resume">Resume</button>
+          <button id="reload" title="Reload session (codex-mine only)" disabled>Reload</button>
+          <button id="status">Status</button>
+          <button id="diff" disabled>Open Latest Diff</button>
+          <button id="settings" class="iconBtn settingsBtn" aria-label="Settings" title="Settings"></button>
+        </div>
+      </div>
       <div id="tabs" class="tabs"></div>
     </div>
     <div id="approvals" class="approvals" style="display:none"></div>
     <div id="log" class="log"></div>
     <div id="composer" class="composer">
+      <div id="editBanner" class="editBanner" style="display:none"></div>
       <div id="attachments" class="attachments"></div>
       <button id="returnToBottom" class="returnToBottomBtn" title="Scroll to bottom">Return to Bottom</button>
       <div id="inputRow" class="inputRow">
         <input id="imageInput" type="file" accept="image/*" multiple style="display:none" />
-	        <button id="attach" class="iconBtn attachBtn" aria-label="Attach image" title="Attach image"></button>
-	        <textarea id="input" rows="1" placeholder="Type a message"></textarea>
-	        <button id="send" class="iconBtn" data-mode="send" aria-label="Send" title="Send (Esc: stop)"></button>
-	      </div>
-	      <div id="suggest" class="suggest"></div>
-	    </div>
-		    <div class="footerBar">
-		      <div id="modelBar" class="modelBar"></div>
-		      <div id="statusText" class="footerStatus" style="display:none"></div>
+        <button id="attach" class="iconBtn attachBtn" aria-label="Attach image" title="Attach image"></button>
+        <textarea id="input" rows="1" placeholder="Type a message"></textarea>
+        <button id="send" class="iconBtn" data-mode="send" aria-label="Send" title="Send (Esc: stop)"></button>
+      </div>
+      <div id="suggest" class="suggest"></div>
+    </div>
+    <div class="footerBar">
+      <div id="modelBar" class="modelBar"></div>
+      <div id="statusText" class="footerStatus" style="display:none"></div>
           <div id="statusPopover" class="statusPopover" style="display:none"></div>
-		    </div>
-			    <script nonce="${nonce}" src="${markdownItUriV}"></script>
-			    <script nonce="${nonce}" src="${clientScriptUriV}"></script>
-			  </body>
-			</html>`;
+    </div>
+    <script nonce="${nonce}" src="${markdownItUriV}"></script>
+    <script nonce="${nonce}" src="${clientScriptUriV}"></script>
+  </body>
+</html>`;
   }
 }
 

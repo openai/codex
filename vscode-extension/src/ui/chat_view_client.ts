@@ -178,6 +178,7 @@ function main(): void {
   const logEl = mustGet("log");
   const approvalsEl = mustGet("approvals");
   const composerEl = mustGet("composer");
+  const editBannerEl = mustGet("editBanner");
   const inputRowEl = mustGet("inputRow");
   const inputEl = mustGet<HTMLTextAreaElement>("input");
   const imageInput = mustGet<HTMLInputElement>("imageInput");
@@ -188,6 +189,7 @@ function main(): void {
   const diffBtn = mustGet<HTMLButtonElement>("diff");
   const newBtn = mustGet<HTMLButtonElement>("new");
   const resumeBtn = mustGet<HTMLButtonElement>("resume");
+  const reloadBtn = mustGet<HTMLButtonElement>("reload");
   const statusBtn = mustGet<HTMLButtonElement>("status");
   const settingsBtn = mustGet<HTMLButtonElement>("settings");
   const tabsEl = mustGet("tabs");
@@ -753,6 +755,7 @@ function main(): void {
   };
 
   let domSessionId: string | null = null;
+  let rewindTurnIndex: number | null = null;
   const blockElByKey = new Map<string, HTMLElement>();
   let tabsSig: string | null = null;
   const tabElBySessionId = new Map<string, HTMLDivElement>();
@@ -1978,6 +1981,11 @@ function main(): void {
     resumeBtn.disabled = s.sending;
     attachBtn.disabled = !s.activeSession;
     const variant = s.capabilities?.cliVariant ?? "unknown";
+    reloadBtn.disabled = !s.activeSession || s.sending || variant !== "codex-mine";
+    reloadBtn.title =
+      variant === "codex-mine"
+        ? "Reload session (re-read config.toml, agents, etc.)"
+        : "Reload session (codex-mine only)";
     settingsBtn.disabled = false;
     settingsBtn.title =
       variant === "codex-mine"
@@ -2060,6 +2068,7 @@ function main(): void {
       saveComposerState();
       domSessionId = nextSessionId;
       restoreComposerState(domSessionId);
+      setEditMode(null);
       blockElByKey.clear();
       logEl.replaceChildren();
       // New session / fresh log should start pinned.
@@ -2194,6 +2203,7 @@ function main(): void {
       return;
     }
 
+    let userTurnIndex = 0;
     for (const block of s.blocks || []) {
       if (block.type === "divider") {
         const key = "b:" + block.id;
@@ -2363,6 +2373,65 @@ function main(): void {
           key,
           "msg " + (block.type === "user" ? "user" : "assistant"),
         );
+
+        if (block.type === "user") {
+          userTurnIndex += 1;
+          div.dataset.turnIndex = String(userTurnIndex);
+
+          const header =
+            (div.querySelector(
+              ':scope > div[data-k="header"]',
+            ) as HTMLDivElement | null) ??
+            (() => {
+              const h = document.createElement("div");
+              h.dataset.k = "header";
+              h.className = "msgHeader";
+              div.prepend(h);
+              return h;
+            })();
+
+          const title =
+            (header.querySelector(
+              ':scope > div[data-k="title"]',
+            ) as HTMLDivElement | null) ??
+            (() => {
+              const t = document.createElement("div");
+              t.dataset.k = "title";
+              t.className = "msgHeaderTitle";
+              header.appendChild(t);
+              return t;
+            })();
+          title.textContent = `Turn #${userTurnIndex}`;
+
+          const actions =
+            (header.querySelector(
+              ':scope > div[data-k="actions"]',
+            ) as HTMLDivElement | null) ??
+            (() => {
+              const a = document.createElement("div");
+              a.dataset.k = "actions";
+              a.className = "msgActions";
+              header.appendChild(a);
+              return a;
+            })();
+
+          actions.replaceChildren();
+
+          const editBtn = document.createElement("button");
+          editBtn.className = "msgActionBtn";
+          editBtn.textContent = "Edit";
+          editBtn.disabled = Boolean(state.sending);
+          editBtn.addEventListener("click", () => {
+            if (state.sending) return;
+            setEditMode(userTurnIndex, block.text);
+            inputEl.focus();
+          });
+          actions.appendChild(editBtn);
+        } else {
+          const header = div.querySelector(':scope > div[data-k="header"]');
+          if (header) header.remove();
+        }
+
         if (block.type === "assistant" && block.streaming) {
           const mdEl = div.querySelector(`div.md[data-k="body"]`);
           if (mdEl) mdEl.remove();
@@ -2697,6 +2766,34 @@ function main(): void {
     }
   }
 
+  function setEditMode(next: number | null, presetText?: string): void {
+    rewindTurnIndex = next;
+
+    if (typeof presetText === "string") {
+      inputEl.value = presetText;
+      autosizeInput();
+      updateSuggestions();
+      saveComposerState();
+    }
+
+    if (!rewindTurnIndex) {
+      editBannerEl.style.display = "none";
+      editBannerEl.replaceChildren();
+      return;
+    }
+
+    editBannerEl.replaceChildren();
+    const text = document.createElement("div");
+    text.className = "editBannerText";
+    text.textContent = `Editing turn #${rewindTurnIndex}. Sending will rewind and replace subsequent messages.`;
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => setEditMode(null));
+    editBannerEl.appendChild(text);
+    editBannerEl.appendChild(cancel);
+    editBannerEl.style.display = "";
+  }
+
   function sendCurrentInput(): void {
     if (!state.activeSession) return;
     if (state.sending) return;
@@ -2708,11 +2805,16 @@ function main(): void {
         type: "sendWithImages",
         text,
         images: pendingImages.map((img) => ({ name: img.name, url: img.url })),
+        rewind: rewindTurnIndex ? { turnIndex: rewindTurnIndex, scope: "both" } : null,
       });
       pendingImages.splice(0, pendingImages.length);
       renderAttachments();
     } else {
-      vscode.postMessage({ type: "send", text });
+      vscode.postMessage({
+        type: "send",
+        text,
+        rewind: rewindTurnIndex ? { turnIndex: rewindTurnIndex, scope: "both" } : null,
+      });
     }
 
     // Keep a simple history for navigating with Up/Down.
@@ -2727,6 +2829,7 @@ function main(): void {
     autosizeInput();
     updateSuggestions();
     saveComposerState();
+    setEditMode(null);
   }
 
   function renderAttachments(): void {
@@ -2858,6 +2961,9 @@ function main(): void {
   );
   resumeBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "resumeFromHistory" }),
+  );
+  reloadBtn.addEventListener("click", () =>
+    vscode.postMessage({ type: "reloadSession" }),
   );
   statusBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "showStatus" }),

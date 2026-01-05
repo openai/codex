@@ -21,6 +21,7 @@
     "onCommand:codexMine.startBackend",
     "onCommand:codexMine.newSession",
     "onCommand:codexMine.sendMessage",
+    "onCommand:codexMine.revert",
     "onCommand:codexMine.openSession",
     "onCommand:codexMine.openSessionPanel",
     "onCommand:codexMine.clearRuntimeCache",
@@ -33,6 +34,7 @@
     "onCommand:codexMine.respondApproval",
     "onCommand:codexMine.showStatus",
     "onCommand:codexMine.interruptTurn",
+    "onCommand:codexMine.reloadSession",
     "onCommand:codexMine.showSkills",
     "onCommand:codexMine.showAgents",
     "onCommand:codexMine.selectCliVariant",
@@ -53,6 +55,10 @@
       {
         "command": "codexMine.sendMessage",
         "title": "Codex UI: Send Message"
+      },
+      {
+        "command": "codexMine.revert",
+        "title": "Codex UI: Revert (Undo last snapshot)"
       },
       {
         "command": "codexMine.openSession",
@@ -101,6 +107,10 @@
       {
         "command": "codexMine.interruptTurn",
         "title": "Codex UI: Interrupt Turn"
+      },
+      {
+        "command": "codexMine.reloadSession",
+        "title": "Codex UI: Reload Session (Config)"
       },
       {
         "command": "codexMine.showSkills",

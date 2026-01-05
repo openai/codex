@@ -362,7 +362,7 @@ export function activate(context: vscode.ExtensionContext): void {
   chatView = new ChatViewProvider(
     context,
     () => buildChatState(),
-    async (text, images = []) => {
+    async (text, images = [], rewind = null) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
 
@@ -375,6 +375,12 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       const trimmed = text.trim();
+      if (rewind && trimmed.startsWith("/")) {
+        void vscode.window.showErrorMessage(
+          "Rewind is not supported for slash commands.",
+        );
+        return;
+      }
       if (trimmed.startsWith("/") && images.length > 0) {
         void vscode.window.showErrorMessage(
           "Slash commands do not support images yet.",
@@ -391,6 +397,52 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showErrorMessage(expanded.error);
         return;
       }
+
+      if (rewind) {
+        const turnIndexRaw = (rewind as any).turnIndex;
+        const scopeRaw = (rewind as any).scope;
+        const turnIndex =
+          typeof turnIndexRaw === "number" && Number.isFinite(turnIndexRaw)
+            ? Math.trunc(turnIndexRaw)
+            : 0;
+        const scope =
+          scopeRaw === "code" ||
+          scopeRaw === "conversation" ||
+          scopeRaw === "both"
+            ? scopeRaw
+            : null;
+
+        if (!turnIndex || turnIndex < 1 || !scope) {
+          void vscode.window.showErrorMessage("Invalid rewind request.");
+          return;
+        }
+
+        const rt = ensureRuntime(session.id);
+        if (rt.sending) {
+          void vscode.window.showErrorMessage(
+            "Cannot rewind while a turn is in progress.",
+          );
+          return;
+        }
+
+        upsertBlock(session.id, {
+          id: newLocalId("info"),
+          type: "info",
+          title: "Rewind requested",
+          text: `Rewinding to turn #${turnIndex} (${scope})…`,
+        });
+        chatView?.refresh();
+
+        await backendManager.threadRewind(session, { turnIndex, scope });
+
+        const reloaded = await backendManager.reloadSession(
+          session,
+          getSessionModelState(),
+        );
+        hydrateRuntimeFromThread(session.id, reloaded.thread, { force: true });
+        chatView?.refresh();
+      }
+
       await sendUserInput(session, expanded.text, images);
     },
     async (sessionId, query, cancellationToken) => {
@@ -745,6 +797,46 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.reloadSession", async () => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+
+      const session = activeSessionId
+        ? sessions.getById(activeSessionId)
+        : null;
+      if (!session) return;
+
+      const rt = ensureRuntime(session.id);
+      if (rt.sending) {
+        void vscode.window.showErrorMessage(
+          "Cannot reload while a turn is in progress.",
+        );
+        return;
+      }
+
+      output.appendLine(`[session] Reload requested: threadId=${session.threadId}`);
+      try {
+        const res = await backendManager.reloadSession(
+          session,
+          getSessionModelState(),
+        );
+        hydrateRuntimeFromThread(session.id, res.thread, { force: true });
+        schedulePersistRuntime(session.id);
+        chatView?.refresh();
+      } catch (err) {
+        output.appendLine(`[session] Reload failed: ${String(err)}`);
+        upsertBlock(session.id, {
+          id: newLocalId("error"),
+          type: "error",
+          title: "Reload failed",
+          text: String(err),
+        });
+        chatView?.refresh();
+      }
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexMine.showStatus", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
@@ -1091,6 +1183,7 @@ export function activate(context: vscode.ExtensionContext): void {
           [
             { label: "Rename", action: "rename" as const },
             { label: "Open in Editor Tab", action: "openPanel" as const },
+            { label: "Revert (Undo last snapshot)", action: "revert" as const },
             { label: "Close Tab (Hide)", action: "hide" as const },
           ],
           { title: session.title },
@@ -1106,6 +1199,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
         if (picked.action === "openPanel") {
           await vscode.commands.executeCommand("codexMine.openSessionPanel", {
+            sessionId: session.id,
+          });
+          return;
+        }
+
+        if (picked.action === "revert") {
+          await vscode.commands.executeCommand("codexMine.revert", {
             sessionId: session.id,
           });
           return;
@@ -1292,6 +1392,52 @@ export function activate(context: vscode.ExtensionContext): void {
         await vscode.window.showTextDocument(doc, { preview: true });
       },
     ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.revert", async (args?: unknown) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+
+      const session =
+        parseSessionArg(args, sessions) ??
+        (activeSessionId ? sessions.getById(activeSessionId) : null);
+      if (!session) {
+        void vscode.window.showErrorMessage("Session not found.");
+        return;
+      }
+
+      const rt = ensureRuntime(session.id);
+      if (rt.sending) {
+        void vscode.window.showErrorMessage(
+          "Cannot revert while a turn is in progress.",
+        );
+        return;
+      }
+
+      // Optimistic UI feedback; completion and errors should arrive via server notifications.
+      upsertBlock(session.id, {
+        id: newLocalId("info"),
+        type: "info",
+        title: "Revert requested",
+        text: "Undo requested. Waiting for backend…",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+
+      try {
+        await backendManager.threadUndo(session);
+      } catch (err) {
+        outputChannel?.appendLine(`[undo] Failed to request undo: ${String(err)}`);
+        upsertBlock(session.id, {
+          id: newLocalId("error"),
+          type: "error",
+          title: "Revert failed",
+          text: String(err),
+        });
+        chatView?.refresh();
+      }
+    }),
   );
 
   context.subscriptions.push(
@@ -2736,6 +2882,33 @@ function applyServerNotification(
         id: `compacted:${turnId || Date.now()}`,
         type: "divider",
         text: `${line}\n• Context compacted`,
+      });
+      chatView?.refresh();
+      return;
+    }
+    case "thread/undo/started": {
+      const p = (n as any).params as any;
+      const turnId = String(p?.turnId ?? p?.turn_id ?? "") || "";
+      const message = typeof p?.message === "string" ? p.message : null;
+      upsertBlock(rt, {
+        id: `undoStarted:${turnId || Date.now()}`,
+        type: "info",
+        title: "Revert started",
+        text: message || "Undo in progress…",
+      });
+      chatView?.refresh();
+      return;
+    }
+    case "thread/undo/completed": {
+      const p = (n as any).params as any;
+      const turnId = String(p?.turnId ?? p?.turn_id ?? "") || "";
+      const message = typeof p?.message === "string" ? p.message : null;
+      const success = Boolean(p?.success);
+      upsertBlock(rt, {
+        id: `undoCompleted:${turnId || Date.now()}`,
+        type: success ? "info" : "error",
+        title: success ? "Revert completed" : "Revert failed",
+        text: message || (success ? "Undo completed." : "Undo failed."),
       });
       chatView?.refresh();
       return;

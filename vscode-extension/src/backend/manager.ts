@@ -364,6 +364,45 @@ export class BackendManager implements vscode.Disposable {
     return await proc.threadResume(params);
   }
 
+  public async reloadSession(
+    session: Session,
+    modelSettings?: ModelSettings,
+  ): Promise<ThreadResumeResponse> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    // Clear per-thread caches so the UI can rehydrate from the refreshed thread state.
+    this.itemsByThreadId.delete(session.threadId);
+    this.latestDiffByThreadId.delete(session.threadId);
+    this.streamState.set(session.threadId, { activeTurnId: null });
+
+    const params: ThreadResumeParams = {
+      threadId: session.threadId,
+      history: null,
+      path: null,
+      model: modelSettings?.model ?? null,
+      modelProvider: modelSettings?.provider ?? null,
+      cwd: folder.uri.fsPath,
+      approvalPolicy: null,
+      sandbox: null,
+      config: modelSettings?.reasoning
+        ? { reasoning_effort: modelSettings.reasoning }
+        : null,
+      baseInstructions: null,
+      developerInstructions: null,
+    };
+    return await proc.threadReload(params);
+  }
+
   public async archiveSession(session: Session): Promise<void> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
@@ -489,6 +528,45 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("Backend is not running for this workspace folder");
 
     await proc.turnInterrupt({ threadId: session.threadId, turnId });
+  }
+
+  public async threadUndo(session: Session): Promise<void> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    await proc.threadUndo({ threadId: session.threadId });
+  }
+
+  public async threadRewind(
+    session: Session,
+    args: { turnIndex: number; scope: "code" | "conversation" | "both" },
+  ): Promise<void> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    await proc.threadRewind({
+      threadId: session.threadId,
+      turnIndex: args.turnIndex,
+      scope: args.scope,
+    });
   }
 
   private toReasoningEffort(effort: string | null): ReasoningEffort | null {

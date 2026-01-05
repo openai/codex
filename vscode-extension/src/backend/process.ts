@@ -20,6 +20,10 @@ import type { ModelListParams } from "../generated/v2/ModelListParams";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse";
+import type { ThreadUndoParams } from "../generated/v2/ThreadUndoParams";
+import type { ThreadUndoResponse } from "../generated/v2/ThreadUndoResponse";
+import type { ThreadRewindParams } from "../generated/v2/ThreadRewindParams";
+import type { ThreadRewindResponse } from "../generated/v2/ThreadRewindResponse";
 import type { ThreadListParams } from "../generated/v2/ThreadListParams";
 import type { ThreadListResponse } from "../generated/v2/ThreadListResponse";
 import type { GetAccountParams } from "../generated/v2/GetAccountParams";
@@ -156,11 +160,36 @@ export class BackendProcess implements vscode.Disposable {
     });
   }
 
+  public async threadReload(
+    params: ThreadResumeParams,
+  ): Promise<ThreadResumeResponse> {
+    return this.rpc.request<ThreadResumeResponse>({
+      method: "thread/reload",
+      params,
+    });
+  }
+
   public async threadArchive(
     params: ThreadArchiveParams,
   ): Promise<ThreadArchiveResponse> {
     return this.rpc.request<ThreadArchiveResponse>({
       method: "thread/archive",
+      params,
+    });
+  }
+
+  public async threadUndo(params: ThreadUndoParams): Promise<ThreadUndoResponse> {
+    return this.rpc.request<ThreadUndoResponse>({
+      method: "thread/undo",
+      params,
+    });
+  }
+
+  public async threadRewind(
+    params: ThreadRewindParams,
+  ): Promise<ThreadRewindResponse> {
+    return this.rpc.request<ThreadRewindResponse>({
+      method: "thread/rewind",
       params,
     });
   }
