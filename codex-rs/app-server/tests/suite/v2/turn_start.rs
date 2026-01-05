@@ -8,9 +8,10 @@ use app_test_support::create_mock_chat_completions_server_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
-use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -426,7 +427,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(CommandExecutionRequestApprovalResponse {
-            decision: ApprovalDecision::Decline,
+            decision: CommandExecutionApprovalDecision::Decline,
         })?,
     )
     .await?;
@@ -722,7 +723,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(FileChangeRequestApprovalResponse {
-            decision: ApprovalDecision::Accept,
+            decision: FileChangeApprovalDecision::Accept,
         })?,
     )
     .await?;
@@ -883,7 +884,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     mcp.send_response(
         request_id,
         serde_json::to_value(FileChangeRequestApprovalResponse {
-            decision: ApprovalDecision::AcceptForSession,
+            decision: FileChangeApprovalDecision::AcceptForSession,
         })?,
     )
     .await?;
@@ -1072,7 +1073,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(FileChangeRequestApprovalResponse {
-            decision: ApprovalDecision::Decline,
+            decision: FileChangeApprovalDecision::Decline,
         })?,
     )
     .await?;
