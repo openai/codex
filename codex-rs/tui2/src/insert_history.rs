@@ -30,11 +30,10 @@ use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
+use crossterm::style::Colors;
 use crossterm::style::Print;
 use crossterm::style::SetAttribute;
-use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
-use crossterm::style::SetForegroundColor;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
 use ratatui::layout::Size;
@@ -280,9 +279,6 @@ where
         if next_fg != fg || next_bg != bg {
             queue!(writer, SetColors(Colors::new(next_fg, next_bg)))?;
             fg = next_fg;
-        }
-        if next_bg != bg {
-            queue!(writer, SetBackgroundColor(next_bg.into()))?;
             bg = next_bg;
         }
 

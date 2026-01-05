@@ -35,7 +35,6 @@ pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
 pub mod models_manager;
-pub mod openai_models;
 mod patch_approval_store;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;

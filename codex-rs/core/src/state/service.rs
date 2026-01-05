@@ -6,7 +6,6 @@ use crate::agent::AgentControl;
 use crate::exec_policy::ExecPolicyManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
-use crate::openai_models::models_manager::ModelsManager;
 use crate::patch_approval_store::PatchApprovalStore;
 use crate::skills::SkillsManager;
 use crate::tools::sandboxing::ApprovalStore;
