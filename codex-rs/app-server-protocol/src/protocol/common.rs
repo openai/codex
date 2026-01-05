@@ -109,9 +109,21 @@ client_request_definitions! {
         params: v2::ThreadResumeParams,
         response: v2::ThreadResumeResponse,
     },
+    ThreadReload => "thread/reload" {
+        params: v2::ThreadResumeParams,
+        response: v2::ThreadResumeResponse,
+    },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
+    },
+    ThreadUndo => "thread/undo" {
+        params: v2::ThreadUndoParams,
+        response: v2::ThreadUndoResponse,
+    },
+    ThreadRewind => "thread/rewind" {
+        params: v2::ThreadRewindParams,
+        response: v2::ThreadRewindResponse,
     },
     ThreadList => "thread/list" {
         params: v2::ThreadListParams,
@@ -522,6 +534,8 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    UndoStarted => "thread/undo/started" (v2::UndoStartedNotification),
+    UndoCompleted => "thread/undo/completed" (v2::UndoCompletedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),

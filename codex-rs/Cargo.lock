@@ -1002,6 +1002,7 @@ dependencies = [
  "codex-core",
  "codex-feedback",
  "codex-file-search",
+ "codex-git",
  "codex-login",
  "codex-protocol",
  "codex-rmcp-client",

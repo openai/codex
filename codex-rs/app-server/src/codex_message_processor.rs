@@ -93,9 +93,14 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadRewindParams;
+use codex_app_server_protocol::ThreadRewindResponse;
+use codex_app_server_protocol::ThreadRewindScope;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadUndoParams;
+use codex_app_server_protocol::ThreadUndoResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -142,6 +147,7 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_feedback::CodexFeedback;
+use codex_git::GhostCommit;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -153,6 +159,7 @@ use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -179,6 +186,14 @@ use uuid::Uuid;
 
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
+
+type AutoListenerKey = (ConversationId, ApiVersion);
+pub(crate) type ActiveTurns = Arc<Mutex<HashMap<ConversationId, String>>>;
+
+#[derive(Clone, Copy, Debug)]
+struct AutoListener {
+    subscription_id: Uuid,
+}
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
@@ -219,15 +234,17 @@ pub(crate) struct CodexMessageProcessor {
     config: Arc<Config>,
     cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    auto_listeners: HashMap<AutoListenerKey, AutoListener>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
     turn_summary_store: TurnSummaryStore,
+    active_turns: ActiveTurns,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum ApiVersion {
     V1,
     V2,
@@ -275,9 +292,11 @@ impl CodexMessageProcessor {
             config,
             cli_overrides,
             conversation_listeners: HashMap::new(),
+            auto_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
+            active_turns: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
@@ -364,8 +383,17 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadResume { request_id, params } => {
                 self.thread_resume(request_id, params).await;
             }
+            ClientRequest::ThreadReload { request_id, params } => {
+                self.thread_reload(request_id, params).await;
+            }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
+            }
+            ClientRequest::ThreadUndo { request_id, params } => {
+                self.thread_undo(request_id, params).await;
+            }
+            ClientRequest::ThreadRewind { request_id, params } => {
+                self.thread_rewind(request_id, params).await;
             }
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
@@ -1398,20 +1426,12 @@ impl CodexMessageProcessor {
 
                 // Auto-attach a conversation listener when starting a thread.
                 // Use the same behavior as the v1 API, with opt-in support for raw item events.
-                if let Err(err) = self
-                    .attach_conversation_listener(
-                        conversation_id,
-                        params.experimental_raw_events,
-                        ApiVersion::V2,
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        "failed to attach listener for conversation {}: {}",
-                        conversation_id,
-                        err.message
-                    );
-                }
+                self.attach_auto_listener(
+                    conversation_id,
+                    params.experimental_raw_events,
+                    ApiVersion::V2,
+                )
+                .await;
 
                 self.outgoing.send_response(request_id, response).await;
 
@@ -1509,6 +1529,196 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, err).await;
             }
         }
+    }
+
+    async fn thread_undo(&mut self, request_id: RequestId, params: ThreadUndoParams) {
+        let (conversation_id, conversation) =
+            match self.conversation_from_thread_id(&params.thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let active_turn_id = {
+            self.active_turns
+                .lock()
+                .await
+                .get(&conversation_id)
+                .cloned()
+        };
+        if let Some(turn_id) = active_turn_id {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread/undo is not allowed while a turn is in progress: {turn_id}"),
+            )
+            .await;
+            return;
+        }
+
+        if let Err(err) = conversation.submit(Op::Undo).await {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to submit undo: {err}"),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadUndoResponse {})
+            .await;
+    }
+
+    async fn thread_rewind(&mut self, request_id: RequestId, params: ThreadRewindParams) {
+        let ThreadRewindParams {
+            thread_id,
+            turn_index,
+            scope,
+        } = params;
+
+        let (conversation_id, _conversation) =
+            match self.conversation_from_thread_id(&thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let active_turn_id = {
+            self.active_turns
+                .lock()
+                .await
+                .get(&conversation_id)
+                .cloned()
+        };
+        if let Some(turn_id) = active_turn_id {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread/rewind is not allowed while a turn is in progress: {turn_id}"),
+            )
+            .await;
+            return;
+        }
+
+        if turn_index == 0 {
+            self.send_invalid_request_error(request_id, "turn_index must be >= 1".to_string())
+                .await;
+            return;
+        }
+
+        let rollout_path = match find_conversation_path_by_id_str(
+            &self.config.codex_home,
+            &conversation_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("no rollout found for conversation id {conversation_id}"),
+                )
+                .await;
+                return;
+            }
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to locate conversation id {conversation_id}: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let latest_config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let (truncated, restore_target) =
+            match build_rewind_plan(&rollout_path, turn_index as usize).await {
+                Ok(v) => v,
+                Err(err) => {
+                    self.send_invalid_request_error(request_id, err).await;
+                    return;
+                }
+            };
+
+        let mut restored_snapshot: Option<String> = None;
+        if matches!(scope, ThreadRewindScope::Code | ThreadRewindScope::Both) {
+            let Some((cwd, ghost_commit)) = restore_target else {
+                self.send_invalid_request_error(
+                    request_id,
+                    "no ghost snapshot available for requested turn; ensure undo is enabled and a snapshot was captured".to_string(),
+                )
+                .await;
+                return;
+            };
+
+            let ghost_snapshot_config = latest_config.ghost_snapshot.clone();
+            let restored_commit_id = ghost_commit.id().to_string();
+            let ghost_commit_for_restore = ghost_commit.clone();
+            let restore_result = tokio::task::spawn_blocking(move || {
+                let options = codex_git::RestoreGhostCommitOptions::new(&cwd)
+                    .ghost_snapshot(ghost_snapshot_config);
+                codex_git::restore_ghost_commit_with_options(&options, &ghost_commit_for_restore)
+            })
+            .await;
+
+            match restore_result {
+                Ok(Ok(())) => {
+                    restored_snapshot = Some(restored_commit_id);
+                }
+                Ok(Err(err)) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to restore ghost snapshot: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("ghost snapshot restore task panicked: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+
+        if matches!(
+            scope,
+            ThreadRewindScope::Conversation | ThreadRewindScope::Both
+        ) && let Err(err) = tokio::fs::write(&rollout_path, truncated).await
+        {
+            self.send_internal_error(
+                request_id,
+                format!(
+                    "failed to rewrite rollout `{}`: {err}",
+                    rollout_path.display()
+                ),
+            )
+            .await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadRewindResponse { restored_snapshot })
+            .await;
     }
 
     async fn thread_list(&self, request_id: RequestId, params: ThreadListParams) {
@@ -1686,16 +1896,8 @@ impl CodexMessageProcessor {
                     ..
                 } = session_configured;
                 // Auto-attach a conversation listener when resuming a thread.
-                if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
-                    .await
-                {
-                    tracing::warn!(
-                        "failed to attach listener for conversation {}: {}",
-                        conversation_id,
-                        err.message
-                    );
-                }
+                self.attach_auto_listener(conversation_id, false, ApiVersion::V2)
+                    .await;
 
                 let mut thread = match read_summary_from_rollout(
                     rollout_path.as_path(),
@@ -1736,6 +1938,220 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("error resuming thread: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn thread_reload(&mut self, request_id: RequestId, params: ThreadResumeParams) {
+        let ThreadResumeParams {
+            thread_id,
+            history,
+            path,
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            config: cli_overrides,
+            base_instructions,
+            developer_instructions,
+        } = params;
+
+        if history.is_some() || path.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "thread/reload does not support `history` or `path`; use thread_id only"
+                    .to_string(),
+            )
+            .await;
+            return;
+        }
+
+        let conversation_id = match ConversationId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let active_turn_id = {
+            self.active_turns
+                .lock()
+                .await
+                .get(&conversation_id)
+                .cloned()
+        };
+        if let Some(turn_id) = active_turn_id {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread/reload is not allowed while a turn is in progress: {turn_id}"),
+            )
+            .await;
+            return;
+        }
+
+        let rollout_path = match find_conversation_path_by_id_str(
+            &self.config.codex_home,
+            &conversation_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("no rollout found for conversation id {conversation_id}"),
+                )
+                .await;
+                return;
+            }
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to locate conversation id {conversation_id}: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let conversation_history = match RolloutRecorder::get_rollout_history(&rollout_path).await {
+            Ok(initial_history) => initial_history,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let overrides = self.build_thread_config_overrides(
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            base_instructions,
+            developer_instructions,
+        );
+
+        let config = match derive_config_from_params(overrides, cli_overrides).await {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        self.cancel_auto_listener(conversation_id, ApiVersion::V2);
+        if let Some(old) = self
+            .conversation_manager
+            .remove_conversation(&conversation_id)
+            .await
+        {
+            let _ = old.submit(Op::Shutdown).await;
+        }
+        {
+            self.pending_interrupts
+                .lock()
+                .await
+                .remove(&conversation_id);
+            self.turn_summary_store
+                .lock()
+                .await
+                .remove(&conversation_id);
+            self.active_turns.lock().await.remove(&conversation_id);
+        }
+
+        let fallback_model_provider = config.model_provider_id.clone();
+        match self
+            .conversation_manager
+            .resume_conversation_with_history(
+                config,
+                conversation_history,
+                self.auth_manager.clone(),
+            )
+            .await
+        {
+            Ok(NewConversation {
+                conversation_id: new_conversation_id,
+                session_configured,
+                ..
+            }) => {
+                if new_conversation_id != conversation_id {
+                    self.send_internal_error(
+                        request_id,
+                        format!(
+                            "thread/reload produced mismatched conversation id: expected {conversation_id}, got {new_conversation_id}"
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+
+                self.attach_auto_listener(conversation_id, false, ApiVersion::V2)
+                    .await;
+
+                let SessionConfiguredEvent {
+                    rollout_path,
+                    initial_messages,
+                    ..
+                } = session_configured;
+
+                let mut thread = match read_summary_from_rollout(
+                    rollout_path.as_path(),
+                    fallback_model_provider.as_str(),
+                )
+                .await
+                {
+                    Ok(summary) => summary_to_thread(summary),
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+                thread.turns = initial_messages
+                    .as_deref()
+                    .map_or_else(Vec::new, build_turns_from_event_msgs);
+
+                let response = ThreadResumeResponse {
+                    thread,
+                    model: session_configured.model,
+                    model_provider: session_configured.model_provider_id,
+                    cwd: session_configured.cwd,
+                    approval_policy: session_configured.approval_policy.into(),
+                    sandbox: session_configured.sandbox_policy.into(),
+                    reasoning_effort: session_configured.reasoning_effort,
+                };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("error reloading thread: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
@@ -2757,13 +3173,14 @@ impl CodexMessageProcessor {
     }
 
     async fn turn_start(&self, request_id: RequestId, params: TurnStartParams) {
-        let (_, conversation) = match self.conversation_from_thread_id(&params.thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let (conversation_id, conversation) =
+            match self.conversation_from_thread_id(&params.thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -2802,6 +3219,11 @@ impl CodexMessageProcessor {
 
         match turn_id {
             Ok(turn_id) => {
+                self.active_turns
+                    .lock()
+                    .await
+                    .insert(conversation_id, turn_id.clone());
+
                 let turn = Turn {
                     id: turn_id.clone(),
                     items: vec![],
@@ -2859,6 +3281,13 @@ impl CodexMessageProcessor {
         parent_thread_id: String,
         review_thread_id: String,
     ) {
+        if let Ok(conversation_id) = ConversationId::from_string(&parent_thread_id) {
+            self.active_turns
+                .lock()
+                .await
+                .insert(conversation_id, turn.id.clone());
+        }
+
         let response = ReviewStartResponse {
             turn: turn.clone(),
             review_thread_id,
@@ -3130,6 +3559,9 @@ impl CodexMessageProcessor {
         params: RemoveConversationListenerParams,
     ) {
         let RemoveConversationListenerParams { subscription_id } = params;
+        self.auto_listeners
+            .retain(|_, v| v.subscription_id != subscription_id);
+
         match self.conversation_listeners.remove(&subscription_id) {
             Some(sender) => {
                 // Signal the spawned task to exit and acknowledge.
@@ -3177,6 +3609,7 @@ impl CodexMessageProcessor {
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
         let turn_summary_store = self.turn_summary_store.clone();
+        let active_turns = self.active_turns.clone();
         let api_version_for_task = api_version;
         tokio::spawn(async move {
             loop {
@@ -3242,6 +3675,7 @@ impl CodexMessageProcessor {
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
                             turn_summary_store.clone(),
+                            active_turns.clone(),
                             api_version_for_task,
                         )
                         .await;
@@ -3250,6 +3684,48 @@ impl CodexMessageProcessor {
             }
         });
         Ok(subscription_id)
+    }
+
+    fn cancel_listener(&mut self, subscription_id: Uuid) {
+        if let Some(sender) = self.conversation_listeners.remove(&subscription_id) {
+            let _ = sender.send(());
+        }
+    }
+
+    fn cancel_auto_listener(&mut self, conversation_id: ConversationId, api_version: ApiVersion) {
+        let key: AutoListenerKey = (conversation_id, api_version);
+        if let Some(existing) = self.auto_listeners.remove(&key) {
+            self.cancel_listener(existing.subscription_id);
+        }
+    }
+
+    async fn attach_auto_listener(
+        &mut self,
+        conversation_id: ConversationId,
+        experimental_raw_events: bool,
+        api_version: ApiVersion,
+    ) {
+        let key: AutoListenerKey = (conversation_id, api_version);
+        match self
+            .attach_conversation_listener(conversation_id, experimental_raw_events, api_version)
+            .await
+        {
+            Ok(subscription_id) => {
+                if let Some(existing) = self
+                    .auto_listeners
+                    .insert(key, AutoListener { subscription_id })
+                {
+                    self.cancel_listener(existing.subscription_id);
+                }
+            }
+            Err(err) => {
+                // Keep any existing auto-listener in place so streaming doesn't silently stop.
+                tracing::warn!(
+                    "failed to attach listener for conversation {conversation_id}: {}",
+                    err.message
+                );
+            }
+        }
     }
 
     async fn git_diff_to_origin(&self, request_id: RequestId, cwd: PathBuf) {
@@ -3629,6 +4105,88 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         git_info,
         turns: Vec::new(),
     }
+}
+
+async fn build_rewind_plan(
+    rollout_path: &Path,
+    turn_index: usize,
+) -> Result<(String, Option<(PathBuf, GhostCommit)>), String> {
+    let text = tokio::fs::read_to_string(rollout_path)
+        .await
+        .map_err(|err| format!("failed to read rollout `{}`: {err}", rollout_path.display()))?;
+
+    let mut lines: Vec<RolloutLine> = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let parsed: RolloutLine = serde_json::from_str(line).map_err(|err| {
+            format!(
+                "failed to parse rollout `{}` at line {}: {err}",
+                rollout_path.display(),
+                idx + 1
+            )
+        })?;
+        lines.push(parsed);
+    }
+
+    let mut user_positions: Vec<usize> = Vec::new();
+    let mut snapshot_by_user_index: HashMap<usize, GhostCommit> = HashMap::new();
+    let mut cwd_by_user_index: HashMap<usize, PathBuf> = HashMap::new();
+    let mut current_user_index: usize = 0;
+    let mut current_cwd: Option<PathBuf> = None;
+
+    for (idx, rollout_line) in lines.iter().enumerate() {
+        match &rollout_line.item {
+            RolloutItem::TurnContext(tc) => {
+                current_cwd = Some(tc.cwd.clone());
+            }
+            RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) if role == "user" => {
+                current_user_index += 1;
+                user_positions.push(idx);
+                if let Some(cwd) = current_cwd.clone() {
+                    cwd_by_user_index.insert(current_user_index, cwd);
+                }
+            }
+            RolloutItem::ResponseItem(ResponseItem::GhostSnapshot { ghost_commit }) => {
+                if current_user_index > 0 {
+                    snapshot_by_user_index.insert(current_user_index, ghost_commit.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if user_positions.len() < turn_index {
+        return Err(format!(
+            "turn_index out of range: requested {turn_index}, but only {} turns exist",
+            user_positions.len()
+        ));
+    }
+
+    let cut_idx = user_positions[turn_index - 1];
+    let mut truncated_lines = Vec::new();
+    for line in lines.into_iter().take(cut_idx) {
+        let serialized = serde_json::to_string(&line)
+            .map_err(|err| format!("failed to serialize rollout line: {err}"))?;
+        truncated_lines.push(serialized);
+    }
+
+    let truncated = if truncated_lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", truncated_lines.join("\n"))
+    };
+
+    let restore_target = match (
+        cwd_by_user_index.get(&turn_index),
+        snapshot_by_user_index.get(&turn_index),
+    ) {
+        (Some(cwd), Some(commit)) => Some((cwd.clone(), commit.clone())),
+        _ => None,
+    };
+
+    Ok((truncated, restore_target))
 }
 
 #[cfg(test)]

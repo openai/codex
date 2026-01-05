@@ -50,6 +50,8 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UndoCompletedNotification;
+use codex_app_server_protocol::UndoStartedNotification;
 use codex_core::CodexConversation;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -86,6 +88,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
     turn_summary_store: TurnSummaryStore,
+    active_turns: crate::codex_message_processor::ActiveTurns,
     api_version: ApiVersion,
 ) {
     let Event {
@@ -93,7 +96,35 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
+        EventMsg::UndoStarted(ev) => {
+            if matches!(api_version, ApiVersion::V2) {
+                outgoing
+                    .send_server_notification(ServerNotification::UndoStarted(
+                        UndoStartedNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: event_turn_id.clone(),
+                            message: ev.message,
+                        },
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::UndoCompleted(ev) => {
+            if matches!(api_version, ApiVersion::V2) {
+                outgoing
+                    .send_server_notification(ServerNotification::UndoCompleted(
+                        UndoCompletedNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: event_turn_id.clone(),
+                            success: ev.success,
+                            message: ev.message,
+                        },
+                    ))
+                    .await;
+            }
+        }
         EventMsg::TaskComplete(_ev) => {
+            active_turns.lock().await.remove(&conversation_id);
             handle_turn_complete(
                 conversation_id,
                 event_turn_id,
@@ -668,6 +699,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
+            active_turns.lock().await.remove(&conversation_id);
             let pending = {
                 let mut map = pending_interrupts.lock().await;
                 map.remove(&conversation_id).unwrap_or_default()
