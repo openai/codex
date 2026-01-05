@@ -363,6 +363,12 @@ impl AuthModeWidget {
         } else {
             lines.push("  Requesting a one-time code...".dim().into());
             lines.push("".into());
+            lines.push(Line::from(vec![
+                "  On a remote or headless machine? Use ".into(),
+                "codex login --device-auth".cyan(),
+                " instead".into(),
+            ]));
+            lines.push("".into());
         }
 
         lines.push("  Press Esc to cancel".dim().into());

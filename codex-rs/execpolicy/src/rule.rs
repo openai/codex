@@ -63,6 +63,12 @@ pub enum RuleMatch {
         #[serde(rename = "matchedPrefix")]
         matched_prefix: Vec<String>,
         decision: Decision,
+        /// Optional rationale for why this rule exists.
+        ///
+        /// This can be supplied for any decision and may be surfaced in different contexts
+        /// (e.g., prompt reasons or rejection messages).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        justification: Option<String>,
     },
     HeuristicsRuleMatch {
         command: Vec<String>,
@@ -83,6 +89,7 @@ impl RuleMatch {
 pub struct PrefixRule {
     pub pattern: PrefixPattern,
     pub decision: Decision,
+    pub justification: Option<String>,
 }
 
 pub trait Rule: Any + Debug + Send + Sync {
@@ -104,6 +111,7 @@ impl Rule for PrefixRule {
             .map(|matched_prefix| RuleMatch::PrefixRuleMatch {
                 matched_prefix,
                 decision: self.decision,
+                justification: self.justification.clone(),
             })
     }
 }

@@ -9,6 +9,7 @@ use base64::Engine;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
+use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
@@ -448,6 +449,11 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.online_username,
             log,
         )?;
+        let users = vec![
+            payload.offline_username.clone(),
+            payload.online_username.clone(),
+        ];
+        hide_newly_created_users(&users, sbx_dir);
     }
     let offline_sid = resolve_sid(&payload.offline_username)?;
     let offline_sid_str = string_from_sid_bytes(&offline_sid).map_err(anyhow::Error::msg)?;
