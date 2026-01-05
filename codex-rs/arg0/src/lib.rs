@@ -149,7 +149,20 @@ where
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
 pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
-    let temp_dir = TempDir::new()?;
+    let codex_home = codex_core::config::find_codex_home()?;
+    let temp_root = std::env::temp_dir();
+    if codex_home.starts_with(&temp_root) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Refusing to create helper binaries under temporary dir {temp_root:?} (codex_home: {codex_home:?})"
+            ),
+        ));
+    }
+    std::fs::create_dir_all(&codex_home)?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix("codex-arg0")
+        .tempdir_in(codex_home)?;
     let path = temp_dir.path();
 
     for filename in &[
@@ -190,7 +203,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     let path_element = path.display();
     let updated_path_env_var = match std::env::var("PATH") {
         Ok(existing_path) => {
-            format!("{path_element}{PATH_SEPARATOR}{existing_path}")
+            format!("{existing_path}{PATH_SEPARATOR}{path_element}")
         }
         Err(_) => {
             format!("{path_element}")
