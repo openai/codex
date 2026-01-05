@@ -1,5 +1,5 @@
 set working-directory := "codex-rs"
-set positional-arguments
+set windows-shell := ["powershell.exe", "-NoProfile", "-Command"]
 
 # Display help
 help:
@@ -8,30 +8,30 @@ help:
 # `codex`
 alias c := codex
 codex *args:
-    cargo run --bin codex -- "$@"
+    cargo run --bin codex -- "{{args}}"
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex -- exec "$@"
+    cargo run --bin codex -- exec "{{args}}"
 
 # Run the CLI version of the file-search crate.
 file-search *args:
-    cargo run --bin codex-file-search -- "$@"
+    cargo run --bin codex-file-search -- "{{args}}"
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
     cargo build -p codex-cli
-    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
+    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "{{args}}"
 
 # format code
 fmt:
     cargo fmt -- --config imports_granularity=Item
 
 fix *args:
-    cargo clippy --fix --all-features --tests --allow-dirty "$@"
+    cargo clippy --fix --all-features --tests --allow-dirty "{{args}}"
 
 clippy:
-    cargo clippy --all-features --tests "$@"
+    cargo clippy --all-features --tests "{{args}}"
 
 install:
     rustup show active-toolchain
@@ -46,4 +46,4 @@ test:
 
 # Run the MCP server
 mcp-server-run *args:
-    cargo run -p codex-mcp-server -- "$@"
+    cargo run -p codex-mcp-server -- "{{args}}"
