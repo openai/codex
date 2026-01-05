@@ -17,7 +17,6 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::with_cached_approval;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
@@ -35,12 +34,6 @@ pub struct ApplyPatchRequest {
 
 #[derive(Default)]
 pub struct ApplyPatchRuntime;
-
-#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct ApprovalKey {
-    patch: String,
-    cwd: PathBuf,
-}
 
 impl ApplyPatchRuntime {
     pub fn new() -> Self {
@@ -87,21 +80,15 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = ApprovalKey;
+    type ApprovalKey = ();
 
-    fn approval_key(&self, req: &ApplyPatchRequest) -> Self::ApprovalKey {
-        ApprovalKey {
-            patch: req.patch.clone(),
-            cwd: req.cwd.clone(),
-        }
-    }
+    fn approval_key(&self, _req: &ApplyPatchRequest) -> Self::ApprovalKey {}
 
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
-        let key = self.approval_key(req);
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -109,25 +96,22 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let retry_reason = ctx.retry_reason.clone();
         let user_explicitly_approved = req.user_explicitly_approved;
         Box::pin(async move {
-            with_cached_approval(&session.services, key, move || async move {
-                if let Some(reason) = retry_reason {
-                    session
-                        .request_command_approval(
-                            turn,
-                            call_id,
-                            vec!["apply_patch".to_string()],
-                            cwd,
-                            Some(reason),
-                            None,
-                        )
-                        .await
-                } else if user_explicitly_approved {
-                    ReviewDecision::ApprovedForSession
-                } else {
-                    ReviewDecision::Approved
-                }
-            })
-            .await
+            if let Some(reason) = retry_reason {
+                session
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        vec!["apply_patch".to_string()],
+                        cwd,
+                        Some(reason),
+                        None,
+                    )
+                    .await
+            } else if user_explicitly_approved {
+                ReviewDecision::ApprovedForSession
+            } else {
+                ReviewDecision::Approved
+            }
         })
     }
 
