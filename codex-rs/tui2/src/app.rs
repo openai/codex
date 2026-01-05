@@ -222,6 +222,10 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
+        let mut config = config;
+        let pending_model_migration_notice =
+            crate::model_migration::take_pending_model_migration_notice(&mut config);
+
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
             SessionSource::Cli,
@@ -279,10 +283,9 @@ impl App {
             }
         };
 
-        // Startup-only: show any previously scheduled model migration notice, then refresh the
-        // schedule to reflect the current config + model presets (at most one scheduled notice).
-        chat_widget.maybe_show_pending_model_migration_notice();
-        chat_widget.refresh_pending_model_migration_notice();
+        if let Some(notice) = pending_model_migration_notice {
+            chat_widget.show_model_migration_notice(notice);
+        }
 
         chat_widget.maybe_prompt_windows_sandbox_enable();
 

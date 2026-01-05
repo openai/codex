@@ -434,6 +434,7 @@ impl ChatWidget {
             // turn now that we know the session is configured.
             self.maybe_send_next_queued_input();
         }
+        self.refresh_pending_model_migration_notice();
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
@@ -748,12 +749,10 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn maybe_show_pending_model_migration_notice(&mut self) {
-        let Some(notice) = model_migration::take_pending_model_migration_notice(&mut self.config)
-        else {
-            return;
-        };
-
+    pub(crate) fn show_model_migration_notice(
+        &mut self,
+        notice: model_migration::PendingModelMigrationNotice,
+    ) {
         self.add_to_history(history_cell::new_info_event(
             format!(
                 "Model upgrade available: {} -> {}. Use /model to switch.",
@@ -768,7 +767,7 @@ impl ChatWidget {
             });
     }
 
-    pub(crate) fn refresh_pending_model_migration_notice(&self) {
+    fn refresh_pending_model_migration_notice(&self) {
         let available_models = match self.models_manager.try_list_models(&self.config) {
             Ok(models) => models,
             Err(_) => return,
