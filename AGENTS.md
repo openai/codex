@@ -52,6 +52,12 @@ See `codex-rs/tui/styles.md`.
 - If you need to indent wrapped lines, use the initial_indent / subsequent_indent options from RtOptions if you can, rather than writing custom logic.
 - If you have a list of lines and you need to prefix them all with some prefix (optionally different on the first vs subsequent lines), use the `prefix_lines` helper from line_utils.
 
+## Code
+
+### Coding conventions
+
+Keep functions relatively simple. Do not produce functions with dozens of return statements. Create helper functions if needed to keep code flow easy to understand.
+
 ## Tests
 
 ### Snapshot tests
