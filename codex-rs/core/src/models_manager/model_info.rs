@@ -82,11 +82,7 @@ pub(crate) fn merge_remote_overrides(mut model: ModelInfo, remote: Option<ModelI
 pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     let mut model = default_model_info(slug);
 
-    if slug.starts_with("o3") {
-        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
-        model.supports_reasoning_summaries = true;
-        model.context_window = 200_000;
-    } else if slug.starts_with("o4-mini") {
+    if slug.starts_with("o3") || slug.starts_with("o4-mini") {
         model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.supports_reasoning_summaries = true;
         model.context_window = 200_000;
@@ -139,16 +135,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model.shell_type = ConfigShellToolType::UnifiedExec;
         model.supports_parallel_tool_calls = true;
         model.context_window = CONTEXT_WINDOW_272K;
-    } else if slug.starts_with("gpt-5.2-codex") {
-        model.supports_reasoning_summaries = true;
-        model.base_instructions = GPT_5_2_CODEX_INSTRUCTIONS.to_string();
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = true;
-        model.support_verbosity = false;
-        model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
-        model.context_window = CONTEXT_WINDOW_272K;
-    } else if slug.starts_with("bengalfox") {
+    } else if slug.starts_with("gpt-5.2-codex") || slug.starts_with("bengalfox") {
         model.supports_reasoning_summaries = true;
         model.base_instructions = GPT_5_2_CODEX_INSTRUCTIONS.to_string();
         model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
@@ -178,17 +165,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model.support_verbosity = false;
         model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
         model.context_window = CONTEXT_WINDOW_272K;
-    } else if slug.starts_with("gpt-5.2") {
-        model.supports_reasoning_summaries = true;
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.support_verbosity = true;
-        model.default_verbosity = Some(Verbosity::Low);
-        model.base_instructions = GPT_5_2_INSTRUCTIONS.to_string();
-        model.truncation_policy = TruncationPolicyConfig::bytes(10_000);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = true;
-        model.context_window = CONTEXT_WINDOW_272K;
-    } else if slug.starts_with("boomslang") {
+    } else if slug.starts_with("gpt-5.2") || slug.starts_with("boomslang") {
         model.supports_reasoning_summaries = true;
         model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
         model.support_verbosity = true;
