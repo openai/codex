@@ -64,11 +64,62 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git", "status"]),
                 decision: Decision::Allow,
+                forbidden_reason: None,
             }],
         },
         evaluation
     );
     Ok(())
+}
+
+#[test]
+fn forbidden_reason_is_attached_to_forbidden_matches() -> Result<()> {
+    let policy_src = r#"
+prefix_rule(
+    pattern = ["rm"],
+    decision = "forbidden",
+    forbidden_reason = "destructive command",
+)
+    "#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+
+    let evaluation = policy.check(
+        &tokens(&["rm", "-rf", "/some/important/folder"]),
+        &allow_all,
+    );
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Forbidden,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["rm"]),
+                decision: Decision::Forbidden,
+                forbidden_reason: Some("destructive command".to_string()),
+            }],
+        },
+        evaluation
+    );
+    Ok(())
+}
+
+#[test]
+fn forbidden_reason_requires_forbidden_decision() {
+    let policy_src = r#"
+prefix_rule(
+    pattern = ["ls"],
+    decision = "allow",
+    forbidden_reason = "not allowed here",
+)
+    "#;
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", policy_src)
+        .expect_err("expected parse error");
+    assert!(
+        err.to_string()
+            .contains("invalid rule: forbidden_reason requires decision=\"forbidden\"")
+    );
 }
 
 #[test]
@@ -84,17 +135,19 @@ fn add_prefix_rule_extends_policy() -> Result<()> {
                 rest: vec![PatternToken::Single(String::from("-l"))].into(),
             },
             decision: Decision::Prompt,
+            forbidden_reason: None,
         })],
         rules
     );
 
-    let evaluation = policy.check(&tokens(&["ls", "-l", "/tmp"]), &allow_all);
+    let evaluation = policy.check(&tokens(&["ls", "-l", "/some/important/folder"]), &allow_all);
     assert_eq!(
         Evaluation {
             decision: Decision::Prompt,
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["ls", "-l"]),
                 decision: Decision::Prompt,
+                forbidden_reason: None,
             }],
         },
         evaluation
@@ -142,6 +195,7 @@ prefix_rule(
                     rest: Vec::<PatternToken>::new().into(),
                 },
                 decision: Decision::Prompt,
+                forbidden_reason: None,
             }),
             RuleSnapshot::Prefix(PrefixRule {
                 pattern: PrefixPattern {
@@ -149,6 +203,7 @@ prefix_rule(
                     rest: vec![PatternToken::Single("commit".to_string())].into(),
                 },
                 decision: Decision::Forbidden,
+                forbidden_reason: None,
             }),
         ],
         git_rules
@@ -161,6 +216,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git"]),
                 decision: Decision::Prompt,
+                forbidden_reason: None,
             }],
         },
         status_eval
@@ -174,10 +230,12 @@ prefix_rule(
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
+                    forbidden_reason: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
+                    forbidden_reason: None,
                 },
             ],
         },
@@ -211,6 +269,7 @@ prefix_rule(
                 rest: vec![PatternToken::Alts(vec!["-c".to_string(), "-l".to_string()])].into(),
             },
             decision: Decision::Allow,
+            forbidden_reason: None,
         })],
         bash_rules
     );
@@ -221,6 +280,7 @@ prefix_rule(
                 rest: vec![PatternToken::Alts(vec!["-c".to_string(), "-l".to_string()])].into(),
             },
             decision: Decision::Allow,
+            forbidden_reason: None,
         })],
         sh_rules
     );
@@ -232,6 +292,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["bash", "-c"]),
                 decision: Decision::Allow,
+                forbidden_reason: None,
             }],
         },
         bash_eval
@@ -244,6 +305,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["sh", "-l"]),
                 decision: Decision::Allow,
+                forbidden_reason: None,
             }],
         },
         sh_eval
@@ -277,6 +339,7 @@ prefix_rule(
                 .into(),
             },
             decision: Decision::Allow,
+            forbidden_reason: None,
         })],
         rules
     );
@@ -288,6 +351,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["npm", "i", "--legacy-peer-deps"]),
                 decision: Decision::Allow,
+                forbidden_reason: None,
             }],
         },
         npm_i
@@ -303,6 +367,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["npm", "install", "--no-save"]),
                 decision: Decision::Allow,
+                forbidden_reason: None,
             }],
         },
         npm_install
@@ -332,6 +397,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git", "status"]),
                 decision: Decision::Allow,
+                forbidden_reason: None,
             }],
         },
         match_eval
@@ -378,10 +444,12 @@ prefix_rule(
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
+                    forbidden_reason: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
+                    forbidden_reason: None,
                 },
             ],
         },
@@ -419,14 +487,17 @@ prefix_rule(
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
+                    forbidden_reason: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
+                    forbidden_reason: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
+                    forbidden_reason: None,
                 },
             ],
         },

@@ -46,6 +46,7 @@ impl Policy {
                     .into(),
             },
             decision,
+            forbidden_reason: None,
         });
 
         self.rules_by_program.insert(first_token.clone(), rule);

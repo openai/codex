@@ -212,12 +212,30 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         decision: Option<&'v str>,
         r#match: Option<UnpackList<Value<'v>>>,
         not_match: Option<UnpackList<Value<'v>>>,
+        forbidden_reason: Option<&'v str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let decision = match decision {
             Some(raw) => Decision::parse(raw)?,
             None => Decision::Allow,
         };
+
+        let forbidden_reason = match forbidden_reason {
+            Some(raw) if raw.trim().is_empty() => {
+                return Err(
+                    Error::InvalidRule("forbidden_reason cannot be empty".to_string()).into(),
+                );
+            }
+            Some(raw) => Some(raw.to_string()),
+            None => None,
+        };
+
+        if forbidden_reason.is_some() && decision != Decision::Forbidden {
+            return Err(Error::InvalidRule(format!(
+                "forbidden_reason requires decision=\"forbidden\" (got {decision:?})"
+            ))
+            .into());
+        }
 
         let pattern_tokens = parse_pattern(pattern)?;
 
@@ -246,6 +264,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                         rest: rest.clone(),
                     },
                     decision,
+                    forbidden_reason: forbidden_reason.clone(),
                 }) as RuleRef
             })
             .collect();

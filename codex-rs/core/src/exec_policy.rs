@@ -28,8 +28,8 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use shlex::try_join as shlex_try_join;
 
-const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
 const PROMPT_CONFLICT_REASON: &str =
     "execpolicy requires approval for this command, but AskForApproval is set to Never";
 const PROMPT_REASON: &str = "execpolicy requires approval for this command";
@@ -128,7 +128,7 @@ impl ExecPolicyManager {
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {
-                reason: FORBIDDEN_REASON.to_string(),
+                reason: derive_forbidden_reason(command, &evaluation),
             },
             Decision::Prompt => {
                 if matches!(approval_policy, AskForApproval::Never) {
@@ -310,6 +310,53 @@ fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
     })
 }
 
+fn render_shlex_command(args: &[String]) -> String {
+    shlex_try_join(args.iter().map(String::as_str)).unwrap_or_else(|_| args.join(" "))
+}
+
+fn derive_forbidden_reason(command_args: &[String], evaluation: &Evaluation) -> String {
+    let command = render_shlex_command(command_args);
+
+    let forbidden_reason = evaluation
+        .matched_rules
+        .iter()
+        .filter_map(|rule_match| match rule_match {
+            RuleMatch::PrefixRuleMatch {
+                matched_prefix,
+                decision: Decision::Forbidden,
+                forbidden_reason: Some(reason),
+            } => Some((matched_prefix.len(), reason.as_str())),
+            _ => None,
+        })
+        .max_by_key(|(matched_prefix_len, _)| *matched_prefix_len)
+        .map(|(_, reason)| reason);
+
+    if let Some(forbidden_reason) = forbidden_reason {
+        return format!("{command} rejected: {forbidden_reason}");
+    }
+
+    let matched_prefix = evaluation
+        .matched_rules
+        .iter()
+        .filter_map(|rule_match| match rule_match {
+            RuleMatch::PrefixRuleMatch {
+                matched_prefix,
+                decision: Decision::Forbidden,
+                ..
+            } => Some(matched_prefix),
+            _ => None,
+        })
+        .max_by_key(|matched_prefix| matched_prefix.len());
+
+    match matched_prefix {
+        Some(prefix) => {
+            let prefix = render_shlex_command(prefix);
+            format!("{command} rejected: policy forbids commands starting with `{prefix}`")
+        }
+        None => format!("{command} rejected: blocked by policy"),
+    }
+}
+
 async fn collect_policy_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, ExecPolicyError> {
     let dir = dir.as_ref();
     let mut read_dir = match fs::read_dir(dir).await {
@@ -450,7 +497,8 @@ mod tests {
                 decision: Decision::Forbidden,
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
-                    decision: Decision::Forbidden
+                    decision: Decision::Forbidden,
+                    forbidden_reason: None,
                 }],
             },
             policy.check_multiple(command.iter(), &|_| Decision::Allow)
@@ -528,7 +576,8 @@ mod tests {
                 decision: Decision::Forbidden,
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
-                    decision: Decision::Forbidden
+                    decision: Decision::Forbidden,
+                    forbidden_reason: None,
                 }],
             },
             policy.check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
@@ -538,7 +587,8 @@ mod tests {
                 decision: Decision::Prompt,
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["ls".to_string()],
-                    decision: Decision::Prompt
+                    decision: Decision::Prompt,
+                    forbidden_reason: None,
                 }],
             },
             policy.check_multiple([vec!["ls".to_string()]].iter(), &|_| Decision::Allow)
@@ -560,7 +610,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let forbidden_script = vec![
             "bash".to_string(),
             "-lc".to_string(),
-            "rm -rf /tmp".to_string(),
+            "rm -rf /some/important/folder".to_string(),
         ];
 
         let manager = ExecPolicyManager::new(policy);
@@ -574,10 +624,52 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             )
             .await;
 
+        let forbidden_script_rendered =
+            shlex::try_join(forbidden_script.iter().map(String::as_str)).expect("shlex join");
         assert_eq!(
             requirement,
             ExecApprovalRequirement::Forbidden {
-                reason: FORBIDDEN_REASON.to_string()
+                reason: format!(
+                    "{forbidden_script_rendered} rejected: policy forbids commands starting with `rm`"
+                )
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn forbidden_reason_is_included_in_forbidden_exec_approval_requirement() {
+        let policy_src = r#"
+prefix_rule(
+    pattern=["rm"],
+    decision="forbidden",
+    forbidden_reason="destructive command",
+)
+"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(parser.build());
+
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &[
+                    "rm".to_string(),
+                    "-rf".to_string(),
+                    "/some/important/folder".to_string(),
+                ],
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Forbidden {
+                reason: "rm -rf /some/important/folder rejected: destructive command".to_string()
             }
         );
     }

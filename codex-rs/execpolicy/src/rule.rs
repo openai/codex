@@ -63,6 +63,11 @@ pub enum RuleMatch {
         #[serde(rename = "matchedPrefix")]
         matched_prefix: Vec<String>,
         decision: Decision,
+        /// Optional explanation for why a matching rule forbids this command.
+        ///
+        /// Only present when provided in the policy and `decision == forbidden`.
+        #[serde(rename = "forbiddenReason", skip_serializing_if = "Option::is_none")]
+        forbidden_reason: Option<String>,
     },
     HeuristicsRuleMatch {
         command: Vec<String>,
@@ -83,6 +88,7 @@ impl RuleMatch {
 pub struct PrefixRule {
     pub pattern: PrefixPattern,
     pub decision: Decision,
+    pub forbidden_reason: Option<String>,
 }
 
 pub trait Rule: Any + Debug + Send + Sync {
@@ -104,6 +110,7 @@ impl Rule for PrefixRule {
             .map(|matched_prefix| RuleMatch::PrefixRuleMatch {
                 matched_prefix,
                 decision: self.decision,
+                forbidden_reason: self.forbidden_reason.clone(),
             })
     }
 }
