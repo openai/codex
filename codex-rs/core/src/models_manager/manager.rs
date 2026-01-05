@@ -82,6 +82,7 @@ impl ModelsManager {
 
     /// Fetch the latest remote models, using the on-disk cache when still fresh.
     pub async fn refresh_available_models_with_cache(&self, config: &Config) -> CoreResult<()> {
+        let _refresh_guard = self.refresh_lock.lock().await;
         if !config.features.enabled(Feature::RemoteModels)
             || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey)
         {
@@ -93,11 +94,10 @@ impl ModelsManager {
         self.refresh_available_models_no_cache().await
     }
 
-    pub(crate) async fn refresh_available_models_no_cache(&self) -> CoreResult<()> {
+    async fn refresh_available_models_no_cache(&self) -> CoreResult<()> {
         if self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
             return Ok(());
         }
-        let _refresh_guard = self.refresh_lock.lock().await;
         let auth = self.auth_manager.auth();
         let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;

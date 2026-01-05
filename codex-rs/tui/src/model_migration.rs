@@ -8,8 +8,6 @@ use serde::Serialize;
 use std::io;
 use std::path::PathBuf;
 
-const PENDING_MODEL_MIGRATION_NOTICE_FILENAME: &str = "pending_model_migration_notice.json";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PendingModelMigrationNotice {
     pub(crate) from_model: String,
@@ -17,53 +15,6 @@ pub(crate) struct PendingModelMigrationNotice {
     // Used to respect hide flags even if config changes between scheduling and display.
     #[serde(default)]
     pub(crate) migration_config_key: Option<String>,
-}
-
-fn pending_model_migration_notice_path(config: &Config) -> PathBuf {
-    config
-        .codex_home
-        .join(PENDING_MODEL_MIGRATION_NOTICE_FILENAME)
-}
-
-fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool {
-    match migration_config_key {
-        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => config
-            .notices
-            .hide_gpt_5_1_codex_max_migration_prompt
-            .unwrap_or(false),
-        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => {
-            config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
-        }
-        _ => false,
-    }
-}
-
-fn should_show_model_migration_notice(
-    current_model: &str,
-    target_model: &str,
-    available_models: &[ModelPreset],
-    config: &Config,
-) -> bool {
-    if target_model == current_model {
-        return false;
-    }
-
-    if let Some(seen_target) = config.notices.model_migrations.get(current_model)
-        && seen_target == target_model
-    {
-        return false;
-    }
-
-    if available_models
-        .iter()
-        .any(|preset| preset.model == current_model && preset.upgrade.is_some())
-    {
-        return true;
-    }
-
-    available_models
-        .iter()
-        .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
 }
 
 /// Read and clear the one-shot migration notice file, returning the notice if it should be shown.
@@ -195,6 +146,55 @@ pub(crate) fn maybe_schedule_model_migration_notice(
     }
 }
 
+const PENDING_MODEL_MIGRATION_NOTICE_FILENAME: &str = "pending_model_migration_notice.json";
+
+fn pending_model_migration_notice_path(config: &Config) -> PathBuf {
+    config
+        .codex_home
+        .join(PENDING_MODEL_MIGRATION_NOTICE_FILENAME)
+}
+
+fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool {
+    match migration_config_key {
+        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => config
+            .notices
+            .hide_gpt_5_1_codex_max_migration_prompt
+            .unwrap_or(false),
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => {
+            config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn should_show_model_migration_notice(
+    current_model: &str,
+    target_model: &str,
+    available_models: &[ModelPreset],
+    config: &Config,
+) -> bool {
+    if target_model == current_model {
+        return false;
+    }
+
+    if let Some(seen_target) = config.notices.model_migrations.get(current_model)
+        && seen_target == target_model
+    {
+        return false;
+    }
+
+    if available_models
+        .iter()
+        .any(|preset| preset.model == current_model && preset.upgrade.is_some())
+    {
+        return true;
+    }
+
+    available_models
+        .iter()
+        .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
+}
+
 #[cfg(test)]
 mod prompt_ui {
     use crate::key_hint;
@@ -232,23 +232,12 @@ mod prompt_ui {
         pub can_opt_out: bool,
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum MigrationMenuOption {
-        TryNewModel,
-        UseExistingModel,
-    }
-
-    impl MigrationMenuOption {
-        fn all() -> [Self; 2] {
-            [Self::TryNewModel, Self::UseExistingModel]
-        }
-
-        fn label(self) -> &'static str {
-            match self {
-                Self::TryNewModel => "Try new model",
-                Self::UseExistingModel => "Use existing model",
-            }
-        }
+    pub(crate) struct ModelMigrationScreen {
+        request_frame: FrameRequester,
+        copy: ModelMigrationCopy,
+        done: bool,
+        outcome: ModelMigrationOutcome,
+        highlighted_option: MigrationMenuOption,
     }
 
     pub(crate) fn migration_copy_for_models(
@@ -312,12 +301,23 @@ mod prompt_ui {
         }
     }
 
-    pub(crate) struct ModelMigrationScreen {
-        request_frame: FrameRequester,
-        copy: ModelMigrationCopy,
-        done: bool,
-        outcome: ModelMigrationOutcome,
-        highlighted_option: MigrationMenuOption,
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum MigrationMenuOption {
+        TryNewModel,
+        UseExistingModel,
+    }
+
+    impl MigrationMenuOption {
+        fn all() -> [Self; 2] {
+            [Self::TryNewModel, Self::UseExistingModel]
+        }
+
+        fn label(self) -> &'static str {
+            match self {
+                Self::TryNewModel => "Try new model",
+                Self::UseExistingModel => "Use existing model",
+            }
+        }
     }
 
     impl ModelMigrationScreen {
