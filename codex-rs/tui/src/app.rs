@@ -182,70 +182,26 @@ impl App {
         let app_event_tx = AppEventSender::new(app_event_tx);
 
         let mut config = config;
-        let pending_model_migration_notice =
-            crate::model_migration::maybe_show_pending_model_migration_notice(&config);
 
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
             SessionSource::Cli,
         ));
 
-        if let Some(notice) = &pending_model_migration_notice {
-            let outcome = crate::model_migration::run_startup_model_migration_prompt(
+        if matches!(
+            crate::model_migration::maybe_run_startup_model_migration_prompt(
                 tui,
-                &config,
+                &mut config,
                 conversation_manager.get_models_manager().as_ref(),
-                notice,
             )
-            .await?;
-
-            match outcome {
-                crate::model_migration::ModelMigrationOutcome::Accepted => {
-                    config.model = Some(notice.to_model.clone());
-                    config
-                        .notices
-                        .model_migrations
-                        .insert(notice.from_model.clone(), notice.to_model.clone());
-
-                    let edits = ConfigEditsBuilder::new(&config.codex_home)
-                        .record_model_migration_seen(
-                            notice.from_model.as_str(),
-                            notice.to_model.as_str(),
-                        )
-                        .set_model(config.model.as_deref(), config.model_reasoning_effort);
-                    if let Err(err) = edits.apply().await {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist model migration prompt outcome"
-                        );
-                    }
-                }
-                crate::model_migration::ModelMigrationOutcome::Rejected => {
-                    config
-                        .notices
-                        .model_migrations
-                        .insert(notice.from_model.clone(), notice.to_model.clone());
-
-                    let edits = ConfigEditsBuilder::new(&config.codex_home)
-                        .record_model_migration_seen(
-                            notice.from_model.as_str(),
-                            notice.to_model.as_str(),
-                        );
-                    if let Err(err) = edits.apply().await {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist model migration prompt outcome"
-                        );
-                    }
-                }
-                crate::model_migration::ModelMigrationOutcome::Exit => {
-                    return Ok(AppExitInfo {
-                        token_usage: TokenUsage::default(),
-                        conversation_id: None,
-                        update_action: None,
-                    });
-                }
-            }
+            .await?,
+            crate::model_migration::StartupModelMigrationAction::Exit
+        ) {
+            return Ok(AppExitInfo {
+                token_usage: TokenUsage::default(),
+                conversation_id: None,
+                update_action: None,
+            });
         }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();

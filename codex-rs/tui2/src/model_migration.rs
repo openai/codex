@@ -1,4 +1,6 @@
 use codex_core::config::Config;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_protocol::openai_models::ModelPreset;
@@ -25,6 +27,11 @@ pub(crate) use prompt_ui::ModelMigrationCopy;
 pub(crate) use prompt_ui::ModelMigrationOutcome;
 pub(crate) use prompt_ui::ModelMigrationScreen;
 pub(crate) use prompt_ui::migration_copy_for_models;
+
+pub(crate) enum StartupModelMigrationAction {
+    Continue,
+    Exit,
+}
 
 /// Read the pending migration notice file, returning the notice if it should be shown.
 pub(crate) fn maybe_show_pending_model_migration_notice(
@@ -77,6 +84,60 @@ pub(crate) fn maybe_show_pending_model_migration_notice(
     }
 
     Some(notice)
+}
+
+pub(crate) async fn maybe_run_startup_model_migration_prompt(
+    tui: &mut crate::tui::Tui,
+    config: &mut Config,
+    models_manager: &ModelsManager,
+) -> Result<StartupModelMigrationAction> {
+    let pending_model_migration_notice = maybe_show_pending_model_migration_notice(config);
+
+    let Some(notice) = &pending_model_migration_notice else {
+        return Ok(StartupModelMigrationAction::Continue);
+    };
+
+    let outcome = run_startup_model_migration_prompt(tui, config, models_manager, notice).await?;
+
+    match outcome {
+        ModelMigrationOutcome::Accepted => {
+            config.model = Some(notice.to_model.clone());
+            config
+                .notices
+                .model_migrations
+                .insert(notice.from_model.clone(), notice.to_model.clone());
+
+            let edits = ConfigEditsBuilder::new(&config.codex_home)
+                .record_model_migration_seen(notice.from_model.as_str(), notice.to_model.as_str())
+                .set_model(config.model.as_deref(), config.model_reasoning_effort);
+            if let Err(err) = edits.apply().await {
+                tracing::error!(
+                    error = %err,
+                    "failed to persist model migration prompt outcome"
+                );
+            }
+
+            Ok(StartupModelMigrationAction::Continue)
+        }
+        ModelMigrationOutcome::Rejected => {
+            config
+                .notices
+                .model_migrations
+                .insert(notice.from_model.clone(), notice.to_model.clone());
+
+            let edits = ConfigEditsBuilder::new(&config.codex_home)
+                .record_model_migration_seen(notice.from_model.as_str(), notice.to_model.as_str());
+            if let Err(err) = edits.apply().await {
+                tracing::error!(
+                    error = %err,
+                    "failed to persist model migration prompt outcome"
+                );
+            }
+
+            Ok(StartupModelMigrationAction::Continue)
+        }
+        ModelMigrationOutcome::Exit => Ok(StartupModelMigrationAction::Exit),
+    }
 }
 
 /// Persist the migration notice for the next startup, replacing any existing scheduled notice.
