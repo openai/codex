@@ -1907,6 +1907,23 @@ impl ChatWidget {
         }
     }
 
+    fn show_rename_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Rename session".to_string(),
+            "Type a new name and press Enter".to_string(),
+            None,
+            Box::new(move |title: String| {
+                tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_info_event(format!("Session renamed to \"{title}\""), None),
+                )));
+                tx.send(AppEvent::CodexOp(Op::SetSessionTitle { title }));
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
     }
