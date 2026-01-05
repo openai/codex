@@ -274,12 +274,27 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    /// Update the animated header shown to the left of the brackets in the
-    /// status indicator (defaults to "Working"). No-ops if the status
-    /// indicator is not active.
-    pub(crate) fn update_status_header(&mut self, header: String) {
+    pub(crate) fn composer_text_with_pending(&self) -> String {
+        self.composer.current_text_with_pending()
+    }
+
+    pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.composer.apply_external_edit(text);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.composer.set_footer_hint_override(items);
+        self.request_redraw();
+    }
+
+    /// Update the status indicator header (defaults to "Working") and details below it.
+    ///
+    /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
+    pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
+            status.update_details(details);
             self.request_redraw();
         }
     }
@@ -426,6 +441,11 @@ impl BottomPane {
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+    }
+
+    /// Return true when no popups or modal views are active, regardless of task state.
+    pub(crate) fn can_launch_external_editor(&self) -> bool {
+        self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {

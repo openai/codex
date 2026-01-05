@@ -183,17 +183,27 @@ Mouse interaction is a first‑class part of the new design:
     that we use for bullets/prefixes.
 
 - **Copy.**
-  - When the user triggers copy, the TUI re‑renders just the transcript region off‑screen using the
-    same wrapping as the visible view.
-  - It then walks the selected lines and columns in that off‑screen buffer to reconstruct the exact
-    text region the user highlighted (including internal spaces and empty lines).
-  - That text is sent to the system clipboard and a status footer indicates success or failure.
+  - When the user triggers copy, the TUI reconstructs the wrapped transcript lines using the same
+    flattening/wrapping rules as the visible view.
+  - It then reconstructs a high‑fidelity clipboard string from the selected logical lines:
+    - Preserves meaningful indentation (especially for code blocks).
+    - Treats soft-wrapped prose as a single logical line by joining wrap continuations instead of
+      inserting hard newlines.
+    - Emits Markdown source markers (e.g. backticks and fences) for copy/paste, even if the UI
+      chooses to render those constructs without showing the literal markers.
+  - Copy operates on the full selection range, even if the selection extends outside the current
+    viewport.
+  - The resulting text is sent to the system clipboard and a status footer indicates success or
+    failure.
 
 Because scrolling, selection, and copy all operate on the same flattened transcript representation,
 they remain consistent even as the viewport resizes or the chat composer grows/shrinks. Owning our
 own scrolling also means we must own mouse interactions end‑to‑end: if we left scrolling entirely
 to the terminal, we could not reliably line up selections with transcript content or avoid
 accidentally copying gutter/margin characters instead of just the conversation text.
+
+Scroll normalization details and the data behind it live in
+`codex-rs/tui2/docs/scroll_input_model.md`.
 
 ---
 
@@ -389,8 +399,8 @@ The main app struct (`codex-rs/tui2/src/app.rs`) tracks the transcript and viewp
 - `transcript_cells: Vec<Arc<dyn HistoryCell>>` – the logical history.
 - `transcript_scroll: TranscriptScroll` – whether the viewport is pinned to the bottom or
   anchored at a specific cell/line pair.
-- `transcript_selection: TranscriptSelection` – a selection expressed in screen coordinates over
-  the flattened transcript region.
+- `transcript_selection: TranscriptSelection` – a selection expressed in content-relative
+  coordinates over the flattened, wrapped transcript (line index + column).
 - `transcript_view_top` / `transcript_total_lines` – the current viewport’s top line index and
   total number of wrapped lines for the inline transcript area.
 
@@ -407,8 +417,9 @@ Streaming wrapping details live in `codex-rs/tui2/docs/streaming_wrapping_design
 
 Mouse handling lives in `App::handle_mouse_event`, keyboard scrolling in
 `App::handle_key_event`, selection rendering in `App::apply_transcript_selection`, and copy in
-`App::copy_transcript_selection` plus `codex-rs/tui2/src/clipboard_copy.rs`. Scroll/selection UI
-state is forwarded through `ChatWidget::set_transcript_ui_state`,
+`App::copy_transcript_selection` plus `codex-rs/tui2/src/transcript_selection.rs` and
+`codex-rs/tui2/src/clipboard_copy.rs`. Scroll/selection UI state is forwarded through
+`ChatWidget::set_transcript_ui_state`,
 `BottomPane::set_transcript_ui_state`, and `ChatComposer::footer_props`, with footer text
 assembled in `codex-rs/tui2/src/bottom_pane/footer.rs`.
 
@@ -428,9 +439,14 @@ feedback are already implemented:
 
 - Bottom pane positioning is pegged high with an empty transcript and moves down as the transcript
   fills (including on resume).
-- Wheel-based transcript scrolling is enabled on top of the new scroll model.
+- Wheel-based transcript scrolling uses the stream-based normalization model derived from scroll
+  probe data (see `codex-rs/tui2/docs/scroll_input_model.md`).
 - While a selection is active, streaming stops “follow latest output” so the selection remains
   stable, and follow mode resumes after the selection is cleared.
+- Copy operates on the full selection range (including offscreen lines), using the same wrapping as
+  on-screen rendering.
+- Copy selection uses `Ctrl+Shift+C` (VS Code uses `Ctrl+Y` because `Ctrl+Shift+C` is unavailable in
+  the terminal) and shows an on-screen “copy” affordance near the selection.
 
 ### 10.2 Roadmap (prioritized)
 
@@ -440,13 +456,11 @@ Vim) behavior as we can while still owning the viewport.
 
 **P0 — must-have (usability/correctness):**
 
-- **Scrolling behavior.** Default to small scroll increments (ideally 1 line per wheel tick) with
+- **Scrolling behavior.** Default to a classic multi-line wheel tick (3 lines, configurable) with
   acceleration/velocity for faster navigation, and ensure we stop scrolling when the user stops
   input (avoid redraw/event-loop backlog that makes scrolling feel “janky”).
 - **Mouse event bounds.** Ignore mouse events outside the transcript region so clicks in the
   composer/footer don’t start or mutate transcript selection state.
-- **Copy includes offscreen lines.** Make copy operate on the full selection range even when part (or
-  all) of the selection is outside the current viewport.
 - **Copy fidelity.** Preserve meaningful indentation (especially code blocks), treat soft-wrapped
   prose as a single logical line when copying, and copy markdown _source_ (including backticks and
   heading markers) even if we render it differently.
@@ -455,9 +469,6 @@ Vim) behavior as we can while still owning the viewport.
 
 - **Streaming wrapping polish.** Ensure all streaming paths use display-time wrapping only, and add
   tests that cover resizing after streaming has started.
-- **Copy shortcut and discoverability.** Switch copy from `Ctrl+Y` to `Ctrl+Shift+C`, and add an
-  on-screen copy affordance (e.g. a small button near the selection) that also displays the
-  shortcut.
 - **Selection semantics.** Define and implement selection behavior across multi-step output (and
   whether step boundaries should be copy boundaries), while continuing to exclude the left gutter
   from copied text.
@@ -525,9 +536,9 @@ explicit discussion before we commit to further UI changes.
 
 - **Selection affordances.**
 
-  - Today, the primary hint that selection is active is the reversed text and the “Ctrl+Y copy
-    selection” footer text. Do we want an explicit “Selecting… (Esc to cancel)” status while a drag
-    is in progress, or would that be redundant/clutter for most users?
+  - Today, the primary hint that selection is active is the reversed text plus the on-screen “copy”
+    affordance (`Ctrl+Shift+C`) and the footer hint. Do we want an explicit “Selecting… (Esc to
+    cancel)” status while a drag is in progress, or would that be redundant/clutter for most users?
 
 - **Suspend banners in scrollback.**
 

@@ -10,7 +10,7 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -311,7 +311,6 @@ async fn helpers_are_available_and_do_not_panic() {
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
     let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
-    let model_family = ModelsManager::construct_model_family_offline(&resolved_model, &cfg);
     let conversation_manager = Arc::new(ConversationManager::with_models_provider(
         CodexAuth::from_api_key("test"),
         cfg.model_provider.clone(),
@@ -328,7 +327,7 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: conversation_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model_family,
+        model: resolved_model,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -369,11 +368,11 @@ async fn make_chatwidget_manual(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_cell: None,
-        config: cfg.clone(),
-        model_family: ModelsManager::construct_model_family_offline(&resolved_model, &cfg),
+        config: cfg,
+        model: resolved_model.clone(),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(auth_manager)),
-        session_header: SessionHeader::new(resolved_model.clone()),
+        session_header: SessionHeader::new(resolved_model),
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
@@ -1288,18 +1287,6 @@ async fn slash_resume_opens_picker() {
     chat.dispatch_command(SlashCommand::Resume);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
-}
-
-#[tokio::test]
-async fn slash_undo_sends_op() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.dispatch_command(SlashCommand::Undo);
-
-    match rx.try_recv() {
-        Ok(AppEvent::CodexOp(Op::Undo)) => {}
-        other => panic!("expected AppEvent::CodexOp(Op::Undo), got {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -2887,11 +2874,13 @@ async fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.bottom_pane.set_task_running(true);
     let msg = "Reconnecting... 2/5";
+    let details = "Idle timeout waiting for SSE";
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some(details.to_string()),
         }),
     });
 
@@ -2905,6 +2894,7 @@ async fn stream_error_updates_status_indicator() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), msg);
+    assert_eq!(status.details(), Some(details));
 }
 
 #[tokio::test]
@@ -2941,6 +2931,7 @@ async fn stream_recovery_restores_previous_status_header() {
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: "Reconnecting... 1/5".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
         }),
     });
     drain_insert_history(&mut rx);
@@ -2956,6 +2947,7 @@ async fn stream_recovery_restores_previous_status_header() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
+    assert_eq!(status.details(), None);
     assert!(chat.retry_status_header.is_none());
 }
 

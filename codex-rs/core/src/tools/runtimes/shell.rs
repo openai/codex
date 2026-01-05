@@ -5,8 +5,11 @@ Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
 use crate::exec::ExecToolCallOutput;
+use crate::features::Feature;
+use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
+use crate::shell::ShellType;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
@@ -144,6 +147,13 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
+        let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
+            && ctx.session.features().enabled(Feature::PowershellUtf8)
+        {
+            prefix_powershell_script_with_utf8(&command)
+        } else {
+            command
+        };
 
         let spec = build_command_spec(
             &command,

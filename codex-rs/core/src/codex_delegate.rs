@@ -25,7 +25,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
-use crate::openai_models::models_manager::ModelsManager;
+use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
 
 /// Start an interactive sub-Codex conversation and return IO channels.
@@ -118,7 +118,11 @@ pub(crate) async fn run_codex_conversation_one_shot(
     .await?;
 
     // Send the initial input to kick off the one-shot turn.
-    io.submit(Op::UserInput { items: input }).await?;
+    io.submit(Op::UserInput {
+        items: input,
+        final_output_json_schema: None,
+    })
+    .await?;
 
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -183,6 +187,10 @@ async fn forward_events(
                     Event {
                         id: _,
                         msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
+                    } => {}
+                    Event {
+                        id: _,
+                        msg: EventMsg::TokenCount(_),
                     } => {}
                     Event {
                         id: _,

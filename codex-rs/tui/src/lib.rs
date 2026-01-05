@@ -23,12 +23,12 @@ use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
 mod additional_dirs;
@@ -46,6 +46,7 @@ pub mod custom_terminal;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
+mod external_editor;
 mod file_search;
 mod frames;
 mod get_git_diff;
@@ -152,15 +153,26 @@ pub async fn run_main(
         }
     };
 
+    let cwd = cli.cwd.clone();
+    let config_cwd = match cwd.as_deref() {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+
     #[allow(clippy::print_stderr)]
-    let config_toml =
-        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides.clone()).await {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                eprintln!("Error loading config.toml: {err}");
-                std::process::exit(1);
-            }
-        };
+    let config_toml = match load_config_as_toml_with_cli_overrides(
+        &codex_home,
+        &config_cwd,
+        cli_kv_overrides.clone(),
+    )
+    .await
+    {
+        Ok(config_toml) => config_toml,
+        Err(err) => {
+            eprintln!("Error loading config.toml: {err}");
+            std::process::exit(1);
+        }
+    };
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -198,8 +210,6 @@ pub async fn run_main(
         None // No model specified, will use the default.
     };
 
-    // canonicalize the cwd
-    let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
     let additional_dirs = cli.add_dir.clone();
 
     let overrides = ConfigOverrides {
@@ -262,19 +272,17 @@ pub async fn run_main(
 
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
-        .with_target(false)
+        // `with_target(true)` is the default, but we previously disabled it for file output.
+        // Keep it enabled so we can selectively enable targets via `RUST_LOG=...` and then
+        // grep for a specific module/target while troubleshooting.
+        .with_target(true)
         .with_ansi(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
         .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
-    let targets = Targets::new().with_default(tracing::Level::TRACE);
-
-    let feedback_layer = tracing_subscriber::fmt::layer()
-        .with_writer(feedback.make_writer())
-        .with_ansi(false)
-        .with_target(false)
-        .with_filter(targets);
+    let feedback_layer = feedback.logger_layer();
+    let feedback_metadata_layer = feedback.metadata_layer();
 
     if cli.oss && model_provider_override.is_some() {
         // We're in the oss section, so provider_id should be Some
@@ -309,6 +317,7 @@ pub async fn run_main(
     let _ = tracing_subscriber::registry()
         .with(file_layer)
         .with(feedback_layer)
+        .with(feedback_metadata_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();

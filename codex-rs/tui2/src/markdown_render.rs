@@ -468,11 +468,19 @@ where
             .indent_stack
             .iter()
             .any(|ctx| ctx.prefix.iter().any(|s| s.content.contains('>')));
-        let style = if blockquote_active {
+        let mut style = if blockquote_active {
             self.styles.blockquote
         } else {
             line.style
         };
+        // Code blocks are "preformatted": we want them to keep code styling even when they appear
+        // within other structures like blockquotes (which otherwise apply a line-level style).
+        //
+        // This matters for copy fidelity: downstream copy logic uses code styling as a cue to
+        // preserve indentation and to fence code runs with Markdown markers.
+        if self.in_code_block {
+            style = style.patch(self.styles.code);
+        }
         let was_pending = self.pending_marker_line;
 
         self.current_initial_indent = self.prefix_spans(was_pending);

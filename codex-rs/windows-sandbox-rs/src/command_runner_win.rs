@@ -33,6 +33,12 @@ use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::System::Threading::INFINITE;
 
+#[path = "cwd_junction.rs"]
+mod cwd_junction;
+
+#[allow(dead_code)]
+mod read_acl_mutex;
+
 #[derive(Debug, Deserialize)]
 struct RunnerRequest {
     policy_json_or_preset: String,
@@ -146,16 +152,52 @@ pub fn main() -> Result<()> {
     let h_stdin = open_pipe(&req.stdin_pipe, FILE_GENERIC_READ)?;
     let h_stdout = open_pipe(&req.stdout_pipe, FILE_GENERIC_WRITE)?;
     let h_stderr = open_pipe(&req.stderr_pipe, FILE_GENERIC_WRITE)?;
+    let stdio = Some((h_stdin, h_stdout, h_stderr));
+
+    // While the read-ACL helper is running, PowerShell can fail to start in the requested CWD due
+    // to unreadable ancestors. Use a junction CWD for that window; once the helper finishes, go
+    // back to using the real requested CWD (no probing, no extra state).
+    let use_junction = match read_acl_mutex::read_acl_mutex_exists() {
+        Ok(exists) => exists,
+        Err(err) => {
+            // Fail-safe: if we can't determine the state, assume the helper might be running and
+            // use the junction path to avoid CWD failures on unreadable ancestors.
+            log_note(
+                &format!("junction: read_acl_mutex_exists failed: {err}; assuming read ACL helper is running"),
+                log_dir,
+            );
+            true
+        }
+    };
+    if use_junction {
+        log_note(
+            "junction: read ACL helper running; using junction CWD",
+            log_dir,
+        );
+    }
+    let effective_cwd = if use_junction {
+        cwd_junction::create_cwd_junction(&req.cwd, log_dir).unwrap_or_else(|| req.cwd.clone())
+    } else {
+        req.cwd.clone()
+    };
+    log_note(
+        &format!(
+            "runner: effective cwd={} (requested {})",
+            effective_cwd.display(),
+            req.cwd.display()
+        ),
+        log_dir,
+    );
 
     // Build command and env, spawn with CreateProcessAsUserW.
     let spawn_result = unsafe {
         create_process_as_user(
             h_token,
             &req.command,
-            &req.cwd,
+            &effective_cwd,
             &req.env_map,
             Some(&req.codex_home),
-            Some((h_stdin, h_stdout, h_stderr)),
+            stdio,
         )
     };
     let (proc_info, _si) = match spawn_result {
@@ -219,9 +261,5 @@ pub fn main() -> Result<()> {
     if exit_code != 0 {
         eprintln!("runner child exited with code {}", exit_code);
     }
-    log_note(
-        &format!("runner exit pid={} code={}", proc_info.hProcess, exit_code),
-        log_dir,
-    );
     std::process::exit(exit_code);
 }

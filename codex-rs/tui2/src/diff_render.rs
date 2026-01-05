@@ -300,6 +300,17 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
 }
 
 pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
+    // Prefer a stable, user-local relative path when the file is under the current working
+    // directory. This keeps output deterministic in jj-only repos (no `.git`) and matches user
+    // expectations for "files in this project".
+    if let Some(rel) = pathdiff::diff_paths(path, cwd)
+        && !rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return rel.display().to_string();
+    }
+
     let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
         (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
         _ => false,
@@ -557,23 +568,15 @@ mod tests {
 
     #[test]
     fn ui_snapshot_apply_delete_block() {
-        // Write a temporary file so the delete renderer can read original content
-        let tmp_path = PathBuf::from("tmp_delete_example.txt");
-        std::fs::write(&tmp_path, "first\nsecond\nthird\n").expect("write tmp file");
-
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(
-            tmp_path.clone(),
+            PathBuf::from("tmp_delete_example.txt"),
             FileChange::Delete {
                 content: "first\nsecond\nthird\n".to_string(),
             },
         );
 
         let lines = diff_summary_for_tests(&changes);
-
-        // Cleanup best-effort; rendering has already read the file
-        let _ = std::fs::remove_file(&tmp_path);
-
         snapshot_lines("apply_delete_block", lines, 80, 12);
     }
 

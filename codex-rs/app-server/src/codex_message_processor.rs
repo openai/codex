@@ -1992,16 +1992,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        if !config.features.enabled(Feature::RmcpClient) {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "OAuth login is only supported when [features].rmcp_client is true in config.toml".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
-
         let McpServerOauthLoginParams {
             name,
             scopes,
@@ -2589,6 +2579,7 @@ impl CodexMessageProcessor {
         let _ = conversation
             .submit(Op::UserInput {
                 items: mapped_items,
+                final_output_json_schema: None,
             })
             .await;
 
@@ -2608,6 +2599,7 @@ impl CodexMessageProcessor {
             model,
             effort,
             summary,
+            output_schema,
         } = params;
 
         let Ok(conversation) = self
@@ -2642,7 +2634,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
-                final_output_json_schema: None,
+                final_output_json_schema: output_schema,
             })
             .await;
 
@@ -2751,6 +2743,7 @@ impl CodexMessageProcessor {
         let turn_id = conversation
             .submit(Op::UserInput {
                 items: mapped_items,
+                final_output_json_schema: params.output_schema,
             })
             .await;
 

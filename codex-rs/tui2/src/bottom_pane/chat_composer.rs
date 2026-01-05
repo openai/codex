@@ -1,4 +1,7 @@
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
+use crate::transcript_copy_action::TranscriptCopyFeedback;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -121,6 +124,8 @@ pub(crate) struct ChatComposer {
     transcript_scrolled: bool,
     transcript_selection_active: bool,
     transcript_scroll_position: Option<(usize, usize)>,
+    transcript_copy_selection_key: KeyBinding,
+    transcript_copy_feedback: Option<TranscriptCopyFeedback>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
 }
@@ -172,6 +177,8 @@ impl ChatComposer {
             transcript_scrolled: false,
             transcript_selection_active: false,
             transcript_scroll_position: None,
+            transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+            transcript_copy_feedback: None,
             skills: None,
             dismissed_skill_popup_token: None,
         };
@@ -1540,6 +1547,8 @@ impl ChatComposer {
             transcript_scrolled: self.transcript_scrolled,
             transcript_selection_active: self.transcript_selection_active,
             transcript_scroll_position: self.transcript_scroll_position,
+            transcript_copy_selection_key: self.transcript_copy_selection_key,
+            transcript_copy_feedback: self.transcript_copy_feedback,
         }
     }
 
@@ -1571,10 +1580,24 @@ impl ChatComposer {
         scrolled: bool,
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
-    ) {
+        copy_selection_key: KeyBinding,
+        copy_feedback: Option<TranscriptCopyFeedback>,
+    ) -> bool {
+        if self.transcript_scrolled == scrolled
+            && self.transcript_selection_active == selection_active
+            && self.transcript_scroll_position == scroll_position
+            && self.transcript_copy_selection_key == copy_selection_key
+            && self.transcript_copy_feedback == copy_feedback
+        {
+            return false;
+        }
+
         self.transcript_scrolled = scrolled;
         self.transcript_selection_active = selection_active;
         self.transcript_scroll_position = scroll_position;
+        self.transcript_copy_selection_key = copy_selection_key;
+        self.transcript_copy_feedback = copy_feedback;
+        true
     }
 
     fn sync_popups(&mut self) {

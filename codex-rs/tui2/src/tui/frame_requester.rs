@@ -18,6 +18,8 @@ use std::time::Instant;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
+use super::frame_rate_limiter::FrameRateLimiter;
+
 /// A requester for scheduling future frame draws on the TUI event loop.
 ///
 /// This is the handler side of an actor/handler pair with `FrameScheduler`, which coalesces
@@ -68,15 +70,23 @@ impl FrameRequester {
 /// A scheduler for coalescing frame draw requests and notifying the TUI event loop.
 ///
 /// This type is internal to `FrameRequester` and is spawned as a task to handle scheduling logic.
+///
+/// To avoid wasted redraw work, draw notifications are clamped to a maximum of 60 FPS (see
+/// [`FrameRateLimiter`]).
 struct FrameScheduler {
     receiver: mpsc::UnboundedReceiver<Instant>,
     draw_tx: broadcast::Sender<()>,
+    rate_limiter: FrameRateLimiter,
 }
 
 impl FrameScheduler {
     /// Create a new FrameScheduler with the provided receiver and draw notification sender.
     fn new(receiver: mpsc::UnboundedReceiver<Instant>, draw_tx: broadcast::Sender<()>) -> Self {
-        Self { receiver, draw_tx }
+        Self {
+            receiver,
+            draw_tx,
+            rate_limiter: FrameRateLimiter::default(),
+        }
     }
 
     /// Run the scheduling loop, coalescing frame requests and notifying the TUI event loop.
@@ -97,6 +107,7 @@ impl FrameScheduler {
                         // All senders dropped; exit the scheduler.
                         break
                     };
+                    let draw_at = self.rate_limiter.clamp_deadline(draw_at);
                     next_deadline = Some(next_deadline.map_or(draw_at, |cur| cur.min(draw_at)));
 
                     // Do not send a draw immediately here. By continuing the loop,
@@ -107,6 +118,7 @@ impl FrameScheduler {
                 _ = &mut deadline => {
                     if next_deadline.is_some() {
                         next_deadline = None;
+                        self.rate_limiter.mark_emitted(target);
                         let _ = self.draw_tx.send(());
                     }
                 }
@@ -116,6 +128,7 @@ impl FrameScheduler {
 }
 #[cfg(test)]
 mod tests {
+    use super::super::frame_rate_limiter::MIN_FRAME_INTERVAL;
     use super::*;
     use tokio::time;
     use tokio_util::time::FutureExt;
@@ -216,6 +229,98 @@ mod tests {
         // The later delayed request should have been coalesced into the earlier one; no second draw.
         let second = draw_rx.recv().timeout(Duration::from_millis(120)).await;
         assert!(second.is_err(), "unexpected extra draw received");
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn test_limits_draw_notifications_to_60fps() {
+        let (draw_tx, mut draw_rx) = broadcast::channel(16);
+        let requester = FrameRequester::new(draw_tx);
+
+        requester.schedule_frame();
+        time::advance(Duration::from_millis(1)).await;
+        let first = draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for first draw");
+        assert!(first.is_ok(), "broadcast closed unexpectedly");
+
+        requester.schedule_frame();
+        time::advance(Duration::from_millis(1)).await;
+        let early = draw_rx.recv().timeout(Duration::from_millis(1)).await;
+        assert!(
+            early.is_err(),
+            "draw fired too early; expected max 60fps (min interval {MIN_FRAME_INTERVAL:?})"
+        );
+
+        time::advance(MIN_FRAME_INTERVAL).await;
+        let second = draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for second draw");
+        assert!(second.is_ok(), "broadcast closed unexpectedly");
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn test_rate_limit_clamps_early_delayed_requests() {
+        let (draw_tx, mut draw_rx) = broadcast::channel(16);
+        let requester = FrameRequester::new(draw_tx);
+
+        requester.schedule_frame();
+        time::advance(Duration::from_millis(1)).await;
+        let first = draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for first draw");
+        assert!(first.is_ok(), "broadcast closed unexpectedly");
+
+        requester.schedule_frame_in(Duration::from_millis(1));
+
+        time::advance(Duration::from_millis(10)).await;
+        let too_early = draw_rx.recv().timeout(Duration::from_millis(1)).await;
+        assert!(
+            too_early.is_err(),
+            "draw fired too early; expected max 60fps (min interval {MIN_FRAME_INTERVAL:?})"
+        );
+
+        time::advance(MIN_FRAME_INTERVAL).await;
+        let second = draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for clamped draw");
+        assert!(second.is_ok(), "broadcast closed unexpectedly");
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn test_rate_limit_does_not_delay_future_draws() {
+        let (draw_tx, mut draw_rx) = broadcast::channel(16);
+        let requester = FrameRequester::new(draw_tx);
+
+        requester.schedule_frame();
+        time::advance(Duration::from_millis(1)).await;
+        let first = draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for first draw");
+        assert!(first.is_ok(), "broadcast closed unexpectedly");
+
+        requester.schedule_frame_in(Duration::from_millis(50));
+
+        time::advance(Duration::from_millis(49)).await;
+        let early = draw_rx.recv().timeout(Duration::from_millis(1)).await;
+        assert!(early.is_err(), "draw fired too early");
+
+        time::advance(Duration::from_millis(1)).await;
+        let second = draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for delayed draw");
+        assert!(second.is_ok(), "broadcast closed unexpectedly");
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
