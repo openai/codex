@@ -1,5 +1,13 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
+static DEFAULT_PALETTE_VERSION: AtomicU64 = AtomicU64::new(0);
+
+fn bump_palette_version() {
+    DEFAULT_PALETTE_VERSION.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
@@ -27,6 +35,7 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
 
 pub fn requery_default_colors() {
     imp::requery_default_colors();
+    bump_palette_version();
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +54,10 @@ pub fn default_fg() -> Option<(u8, u8, u8)> {
 
 pub fn default_bg() -> Option<(u8, u8, u8)> {
     default_colors().map(|c| c.bg)
+}
+
+pub fn palette_version() -> u64 {
+    DEFAULT_PALETTE_VERSION.load(Ordering::Relaxed)
 }
 
 #[cfg(all(unix, not(test)))]

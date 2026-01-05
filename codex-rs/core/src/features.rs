@@ -255,6 +255,10 @@ impl Features {
 
         features
     }
+
+    pub fn enabled_features(&self) -> Vec<Feature> {
+        self.enabled.iter().copied().collect()
+    }
 }
 
 /// Keys accepted in `[features]` tables.

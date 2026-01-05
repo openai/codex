@@ -9,6 +9,31 @@ use tracing::error;
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;
 
+/// Emit structured feedback metadata as key/value pairs.
+///
+/// This logs a tracing event with `target: "feedback_tags"`. If
+/// `codex_feedback::CodexFeedback::metadata_layer()` is installed, these fields are captured and
+/// later attached as tags when feedback is uploaded.
+///
+/// Values are wrapped with [`tracing::field::DebugValue`], so the expression only needs to
+/// implement [`std::fmt::Debug`].
+///
+/// Example:
+///
+/// ```rust
+/// codex_core::feedback_tags!(model = "gpt-5", cached = true);
+/// codex_core::feedback_tags!(provider = provider_id, request_id = request_id);
+/// ```
+#[macro_export]
+macro_rules! feedback_tags {
+    ($( $key:ident = $value:expr ),+ $(,)?) => {
+        ::tracing::info!(
+            target: "feedback_tags",
+            $( $key = ::tracing::field::debug(&$value) ),+
+        );
+    };
+}
+
 pub(crate) fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);
     let base = (INITIAL_DELAY_MS as f64 * exp) as u64;
@@ -73,5 +98,13 @@ mod tests {
         let text = r#"{"message": "test"}"#;
         let message = try_parse_error_message(text);
         assert_eq!(message, r#"{"message": "test"}"#);
+    }
+
+    #[test]
+    fn feedback_tags_macro_compiles() {
+        #[derive(Debug)]
+        struct OnlyDebug;
+
+        feedback_tags!(model = "gpt-5", cached = true, debug_only = OnlyDebug);
     }
 }

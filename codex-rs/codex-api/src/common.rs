@@ -59,6 +59,7 @@ pub enum ResponseEvent {
         summary_index: i64,
     },
     RateLimits(RateLimitSnapshot),
+    ModelsEtag(String),
 }
 
 #[derive(Debug, Serialize, Clone)]

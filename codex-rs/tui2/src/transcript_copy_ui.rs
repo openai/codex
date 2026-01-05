@@ -275,8 +275,8 @@ impl TranscriptCopyUi {
         };
 
         let pill_area = Rect::new(x, y, pill_width, 1);
-        let base_style = Style::new().bg(Color::DarkGray);
-        let icon_style = base_style.fg(Color::Cyan);
+        let base_style = Style::new().bg(Color::DarkGray).fg(Color::White);
+        let icon_style = base_style.add_modifier(Modifier::BOLD).fg(Color::LightCyan);
         let bold_style = base_style.add_modifier(Modifier::BOLD);
 
         let mut spans: Vec<Span<'static>> = vec![
