@@ -148,7 +148,7 @@ use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
-use crate::model_migration_logic;
+use crate::model_migration;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -410,8 +410,7 @@ impl ChatWidget {
     }
 
     fn maybe_show_pending_model_migration_notice(&mut self) {
-        let Some(notice) =
-            model_migration_logic::take_pending_model_migration_notice(&mut self.config)
+        let Some(notice) = model_migration::take_pending_model_migration_notice(&mut self.config)
         else {
             return;
         };
@@ -436,7 +435,7 @@ impl ChatWidget {
             Err(_) => return,
         };
 
-        model_migration_logic::maybe_schedule_model_migration_notice(
+        model_migration::maybe_schedule_model_migration_notice(
             &self.config,
             model,
             &available_models,
