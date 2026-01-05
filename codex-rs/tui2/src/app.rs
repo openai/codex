@@ -22,6 +22,9 @@ use crate::transcript_copy_ui::TranscriptCopyUi;
 use crate::transcript_multi_click::TranscriptMultiClick;
 use crate::transcript_scrollbar::render_transcript_scrollbar_if_active;
 use crate::transcript_scrollbar::split_transcript_area;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarMouseEvent;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarMouseHandling;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarUi;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
@@ -339,6 +342,7 @@ pub(crate) struct App {
     transcript_total_lines: usize,
     transcript_copy_ui: TranscriptCopyUi,
     transcript_copy_action: TranscriptCopyAction,
+    transcript_scrollbar_ui: TranscriptScrollbarUi,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -505,6 +509,7 @@ impl App {
             transcript_total_lines: 0,
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
             transcript_copy_action: TranscriptCopyAction::default(),
+            transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -872,17 +877,38 @@ impl App {
             width,
             height: transcript_height,
         };
-        let (transcript_area, _) = split_transcript_area(transcript_full_area);
+        let (transcript_area, transcript_scrollbar_area) =
+            split_transcript_area(transcript_full_area);
         let base_x = transcript_area.x.saturating_add(TRANSCRIPT_GUTTER_COLS);
         let max_x = transcript_area.right().saturating_sub(1);
+
+        if matches!(
+            self.transcript_scrollbar_ui
+                .handle_mouse_event(TranscriptScrollbarMouseEvent {
+                    tui,
+                    mouse_event,
+                    transcript_area,
+                    scrollbar_area: transcript_scrollbar_area,
+                    transcript_cells: &self.transcript_cells,
+                    transcript_view_cache: &mut self.transcript_view_cache,
+                    transcript_scroll: &mut self.transcript_scroll,
+                    transcript_view_top: &mut self.transcript_view_top,
+                    transcript_total_lines: &mut self.transcript_total_lines,
+                    mouse_scroll_state: &mut self.scroll_state,
+                }),
+            TranscriptScrollbarMouseHandling::Handled
+        ) {
+            return;
+        }
 
         // Treat the transcript as the only interactive region for transcript selection.
         //
         // This prevents clicks in the composer/footer from starting or extending a transcript
         // selection, while still allowing a left-click outside the transcript to clear an
         // existing highlight.
-        if mouse_event.row < transcript_full_area.y
-            || mouse_event.row >= transcript_full_area.bottom()
+        if !self.transcript_scrollbar_ui.pointer_capture_active()
+            && (mouse_event.row < transcript_full_area.y
+                || mouse_event.row >= transcript_full_area.bottom())
         {
             if matches!(
                 mouse_event.kind,
@@ -1277,56 +1303,6 @@ impl App {
 
     fn transcript_copy_feedback_for_footer(&mut self) -> Option<TranscriptCopyFeedback> {
         self.transcript_copy_action.footer_feedback()
-    }
-
-    /// Copy the currently selected transcript region to the system clipboard.
-    ///
-    /// The selection is defined in terms of flattened wrapped transcript line
-    /// indices and columns, and this method reconstructs the same wrapped
-    /// transcript used for on-screen rendering so the copied text closely
-    /// matches the highlighted region.
-    ///
-    /// Important: copy operates on the selection's full content-relative range,
-    /// not just the current viewport. A selection can extend outside the visible
-    /// region (for example, by scrolling after selecting, or by selecting while
-    /// autoscrolling), and we still want the clipboard payload to reflect the
-    /// entire selected transcript.
-    fn copy_transcript_selection(&mut self, tui: &tui::Tui) {
-        let size = tui.terminal.last_known_screen_size;
-        let width = size.width;
-        let height = size.height;
-        if width == 0 || height == 0 {
-            return;
-        }
-
-        let chat_height = self.chat_widget.desired_height(width);
-        if chat_height >= height {
-            return;
-        }
-
-        let transcript_height = height.saturating_sub(chat_height);
-        if transcript_height == 0 {
-            return;
-        }
-
-        let transcript_full_area = Rect {
-            x: 0,
-            y: 0,
-            width,
-            height: transcript_height,
-        };
-        let (transcript_area, _) = split_transcript_area(transcript_full_area);
-
-        let Some(text) = crate::transcript_copy::selection_to_copy_text_for_cells(
-            &self.transcript_cells,
-            self.transcript_selection,
-            transcript_area.width,
-        ) else {
-            return;
-        };
-        if let Err(err) = clipboard_copy::copy_text(text) {
-            tracing::error!(error = %err, "failed to copy selection to clipboard");
-        }
     }
 
     fn copy_selection_key(&self) -> crate::key_hint::KeyBinding {
@@ -2157,6 +2133,7 @@ mod tests {
                 CopySelectionShortcut::CtrlShiftC,
             ),
             transcript_copy_action: TranscriptCopyAction::default(),
+            transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -2209,6 +2186,7 @@ mod tests {
                     CopySelectionShortcut::CtrlShiftC,
                 ),
                 transcript_copy_action: TranscriptCopyAction::default(),
+                transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
