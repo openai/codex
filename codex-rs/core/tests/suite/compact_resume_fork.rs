@@ -884,6 +884,7 @@ async fn user_turn(conversation: &Arc<CodexConversation>, text: &str) {
     conversation
         .submit(Op::UserInput {
             items: vec![UserInput::Text { text: text.into() }],
+            final_output_json_schema: None,
         })
         .await
         .expect("submit user turn");
