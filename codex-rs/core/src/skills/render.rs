@@ -7,7 +7,7 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
 
     let mut lines: Vec<String> = Vec::new();
     lines.push("## Skills".to_string());
-    lines.push("A skill is a local instruction bundle rooted at a `SKILL.md` file. Each entry below includes a name, description, and file path so you can open the source for full instructions when using a specific skill.".to_string());
+    lines.push("A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.".to_string());
     lines.push("### Available skills".to_string());
 
     for skill in skills {
