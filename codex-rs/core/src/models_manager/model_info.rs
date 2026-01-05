@@ -78,44 +78,34 @@ pub(crate) fn merge_remote_overrides(mut model: ModelInfo, remote: Option<ModelI
     model
 }
 
+// todo(aibrahim): remove most of the entries here when enabling models.json
 pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     let mut model = default_model_info(slug);
 
-    // Models that historically required special instructions for the virtual
-    // `apply_patch` CLI get a dedicated prompt file with those instructions
-    // included.
-    if slug.starts_with("o3")
-        || slug.starts_with("o4-mini")
-        || slug.starts_with("codex-mini-latest")
-        || slug.starts_with("gpt-4.1")
-        || slug.starts_with("gpt-4o")
-        || slug.starts_with("gpt-3.5")
-        || slug == "gpt-5"
-        || (slug.starts_with("gpt-5")
-            && !slug.starts_with("gpt-5.1")
-            && !slug.starts_with("gpt-5.2"))
-    {
-        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
-    }
-
     if slug.starts_with("o3") {
+        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.supports_reasoning_summaries = true;
         model.context_window = 200_000;
     } else if slug.starts_with("o4-mini") {
+        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.supports_reasoning_summaries = true;
         model.context_window = 200_000;
     } else if slug.starts_with("codex-mini-latest") {
+        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.supports_reasoning_summaries = true;
         model.shell_type = ConfigShellToolType::Local;
         model.context_window = 200_000;
     } else if slug.starts_with("gpt-4.1") {
+        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.context_window = 1_047_576;
     } else if slug.starts_with("gpt-oss") || slug.starts_with("openai/gpt-oss") {
         model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
         model.context_window = 96_000;
     } else if slug.starts_with("gpt-4o") {
+        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.context_window = 128_000;
     } else if slug.starts_with("gpt-3.5") {
+        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.context_window = 16_385;
     } else if slug.starts_with("test-gpt-5") {
         model.supports_reasoning_summaries = true;
@@ -220,6 +210,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model.context_window = CONTEXT_WINDOW_272K;
     } else if slug.starts_with("gpt-5") {
         model.supports_reasoning_summaries = true;
+        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.shell_type = ConfigShellToolType::Default;
         model.support_verbosity = true;
         model.truncation_policy = TruncationPolicyConfig::bytes(10_000);

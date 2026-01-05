@@ -140,7 +140,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
 
     assert_eq!(
         body0["instructions"],
-        serde_json::json!(expected_instructions.clone()),
+        serde_json::json!(expected_instructions),
     );
     assert_tool_names(&body0, &expected_tools_names);
 
