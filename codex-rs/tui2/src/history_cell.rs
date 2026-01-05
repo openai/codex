@@ -442,24 +442,6 @@ impl HistoryCell for AgentMessageCell {
                     Line::from(spans)
                 };
 
-            // Preformatted lines are rendered as a single visual line (no wrapping).
-            // This preserves code-block whitespace and keeps code copy behavior stable.
-            if logical.is_preformatted {
-                let mut spans = gutter_first_visual_line.spans.clone();
-                spans.extend(logical.initial_indent.spans.iter().cloned());
-                spans.extend(logical.content.spans.iter().cloned());
-                out_lines.push(Line::from(spans).style(logical.line_style));
-                joiner_before.push(None);
-                at_cell_start = false;
-                continue;
-            }
-
-            // Prose path: wrap to current width and capture joiners.
-            //
-            // `word_wrap_line_with_joiners` guarantees:
-            // - `wrapped.len() == wrapped_joiners.len()`
-            // - `wrapped_joiners[0] == None` (first visual segment of a logical line is a hard break)
-            // - subsequent entries are `Some(joiner)` (soft-wrap continuations).
             let opts = RtOptions::new(width as usize)
                 .initial_indent(compose_indent(
                     &gutter_first_visual_line,
@@ -470,6 +452,25 @@ impl HistoryCell for AgentMessageCell {
                     &logical.subsequent_indent,
                 ));
 
+            // Preformatted lines still wrap visually, but we capture joiners so copy/paste can
+            // reconstruct the original logical line without inserting hard breaks.
+            if logical.is_preformatted {
+                let (wrapped, wrapped_joiners) =
+                    crate::wrapping::word_wrap_line_with_joiners(&logical.content, opts);
+                for (visual, joiner) in wrapped.into_iter().zip(wrapped_joiners) {
+                    out_lines.push(line_to_static(&visual).style(logical.line_style));
+                    joiner_before.push(joiner);
+                    at_cell_start = false;
+                }
+                continue;
+            }
+
+            // Prose path: wrap to current width and capture joiners.
+            //
+            // `word_wrap_line_with_joiners` guarantees:
+            // - `wrapped.len() == wrapped_joiners.len()`
+            // - `wrapped_joiners[0] == None` (first visual segment of a logical line is a hard break)
+            // - subsequent entries are `Some(joiner)` (soft-wrap continuations).
             let (wrapped, wrapped_joiners) =
                 crate::wrapping::word_wrap_line_with_joiners(&logical.content, opts);
             for (visual, joiner) in wrapped.into_iter().zip(wrapped_joiners) {
@@ -1914,6 +1915,44 @@ mod tests {
         insta::assert_snapshot!(
             "agent_message_cell_reflow_on_resize_vt100",
             format!("narrow:\n{narrow}\n\nwide:\n{wide}")
+        );
+    }
+
+    #[test]
+    fn agent_message_cell_wraps_preformatted_lines_with_joiners() {
+        let logical_lines = vec![crate::markdown_render::MarkdownLogicalLine {
+            content: Line::from(
+                "let long_code_line = call_with_many_arguments(1, 2, 3, 4); and_more_tokens();",
+            ),
+            initial_indent: Line::from("    "),
+            subsequent_indent: Line::from("    "),
+            line_style: Style::new().fg(ratatui::style::Color::Cyan),
+            is_preformatted: true,
+        }];
+        let cell = AgentMessageCell::new_logical(logical_lines, true);
+
+        let rendered = cell.transcript_lines_with_joiners(40);
+
+        assert!(
+            rendered.lines.len() > 1,
+            "expected wrapped output, got {:?}",
+            render_lines(&rendered.lines)
+        );
+        assert_eq!(rendered.joiner_before.first(), Some(&None));
+        assert!(
+            rendered
+                .joiner_before
+                .iter()
+                .skip(1)
+                .all(std::option::Option::is_some),
+            "expected soft-wrap joiners for continuations: {:?}",
+            rendered.joiner_before
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| line.style.fg == Some(ratatui::style::Color::Cyan))
         );
     }
 

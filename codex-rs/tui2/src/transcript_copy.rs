@@ -152,6 +152,7 @@ pub(crate) fn selection_to_copy_text(
         }
 
         let line = lines.get(line_index)?;
+        let joiner = joiner_before.get(line_index).cloned().unwrap_or(None);
 
         // Code blocks (and other preformatted content) are detected via styling and copied as
         // "verbatim lines" (no inline Markdown re-encoding). This also enables special handling for
@@ -213,7 +214,7 @@ pub(crate) fn selection_to_copy_text(
         // Convert the selected `Line` into Markdown source:
         // - For prose: wrap inline-code spans in backticks.
         // - For code blocks: return the raw flat text so we preserve indentation/spacing.
-        let line_text = line_to_markdown(&selected_line, is_code_block_line);
+        let mut line_text = line_to_markdown(&selected_line, is_code_block_line);
 
         // Track transitions into/out of code/preformatted runs and emit triple-backtick fences.
         // We always separate a code run from prior prose with a newline.
@@ -236,11 +237,23 @@ pub(crate) fn selection_to_copy_text(
         }
 
         // When copying inside a code run, every selected visual line becomes a literal line inside
-        // the fence (no soft-wrap joining). We preserve explicit blank lines by writing empty
-        // strings as a line.
+        // the fence. We preserve explicit blank lines by writing empty strings as a line. When the
+        // on-screen line is a soft-wrap continuation, we join with the recorded wrap joiner instead
+        // of inserting a hard newline so long logical lines stay intact.
         if in_code_run {
-            if wrote_any && (!out.ends_with('\n') || prev_selected_line.is_some()) {
-                out.push('\n');
+            let is_continuation =
+                prev_selected_line == Some(line_index.saturating_sub(1)) && joiner.is_some();
+            if wrote_any {
+                if prev_selected_line == Some(line_index.saturating_sub(1))
+                    && let Some(joiner) = &joiner
+                {
+                    out.push_str(joiner.as_str());
+                } else if !out.ends_with('\n') || prev_selected_line.is_some() {
+                    out.push('\n');
+                }
+            }
+            if is_continuation {
+                line_text = line_text.trim_start_matches(' ').to_string();
             }
             out.push_str(line_text.as_str());
             prev_selected_line = Some(line_index);
@@ -253,7 +266,6 @@ pub(crate) fn selection_to_copy_text(
         //   recorded joiner (often spaces) instead of a newline.
         // - Otherwise, insert a newline to preserve hard breaks.
         if wrote_any {
-            let joiner = joiner_before.get(line_index).cloned().unwrap_or(None);
             if prev_selected_line == Some(line_index.saturating_sub(1))
                 && let Some(joiner) = joiner
             {
@@ -749,6 +761,34 @@ mod tests {
             .expect("expected text");
 
         assert_eq!(out, "```\n    fn main() {}\n    println!(\"hi\");\n```");
+    }
+
+    #[test]
+    fn copy_selection_soft_wrapped_code_joins_segments() {
+        let style = Style::new().fg(Color::Cyan);
+        let lines = vec![
+            Line::from("•     let very_long_code_line = call_with_many_arguments(1, 2, 3, 4);")
+                .style(style),
+            Line::from("      // trailing comment continues here").style(style),
+        ];
+        let joiner_before = vec![None, Some(" ".to_string())];
+
+        let start = TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        };
+        let end = TranscriptSelectionPoint {
+            line_index: 1,
+            column: 120,
+        };
+
+        let out = selection_to_copy_text(&lines, &joiner_before, start, end, 0, lines.len(), 80)
+            .expect("expected text");
+
+        assert_eq!(
+            out,
+            "```\n    let very_long_code_line = call_with_many_arguments(1, 2, 3, 4); // trailing comment continues here\n```"
+        );
     }
 
     #[test]

@@ -199,8 +199,8 @@ pub(crate) fn append_wrapped_transcript_cell(
                 line_in_cell: visual_line_in_cell,
             });
             visual_line_in_cell = visual_line_in_cell.saturating_add(1);
-            // Preformatted lines are treated as hard breaks; we keep the cell-provided joiner
-            // (which is typically `None`).
+            // Preformatted lines are treated as hard breaks; we keep the cell-provided joiner (which
+            // may describe an earlier soft wrap inside the cell).
             out.joiner_before.push(
                 rendered
                     .joiner_before

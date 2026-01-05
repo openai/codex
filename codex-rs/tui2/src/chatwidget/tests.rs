@@ -3226,7 +3226,8 @@ printf 'fenced within fenced\n'
 {
   // comment allowed in jsonc
   "path": "C:\\Program Files\\App",
-  "regex": "^foo.*(bar)?$"
+  "regex": "^foo.*(bar)?$",
+  "long": "this code line is intentionally very very long so that it wraps inside the viewport without being truncated on the right side"
 }
 ```
 "#;
