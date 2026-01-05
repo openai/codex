@@ -2123,6 +2123,45 @@ async fn approval_modal_exec_without_reason_snapshot() {
     );
 }
 
+// Snapshot test: approval modal with a proposed execpolicy prefix that is long enough
+// to trigger truncation in the selection label.
+#[tokio::test]
+async fn approval_modal_exec_multiline_prefix_truncates_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+
+    let long = format!("python - <<'PY'\n{}\nPY\n", "x".repeat(500));
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-cmd-multiline-trunc".into(),
+        turn_id: "turn-approve-cmd-multiline-trunc".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "bash".into(),
+            "-lc".into(),
+            long,
+        ])),
+        parsed_cmd: vec![],
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve-multiline-trunc".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    let width = 100;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw approval modal (multiline prefix truncation)");
+    let contents = terminal.backend().vt100().screen().contents();
+    assert!(contents.contains("(truncated)"));
+    assert_snapshot!("approval_modal_exec_multiline_prefix_truncates", contents);
+}
+
 // Snapshot test: patch approval modal
 #[tokio::test]
 async fn approval_modal_patch_snapshot() {

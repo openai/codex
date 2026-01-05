@@ -5,6 +5,9 @@ use codex_core::parse_command::extract_shell_command;
 use dirs::home_dir;
 use shlex::try_join;
 
+const APPROVAL_LABEL_MAX_LEN: usize = 80;
+const APPROVAL_LABEL_TRUNCATED_SUFFIX: &str = "... (truncated)";
+
 pub(crate) fn escape_command(command: &[String]) -> String {
     try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
@@ -14,6 +17,21 @@ pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
         return script.to_string();
     }
     escape_command(command)
+}
+
+pub(crate) fn render_for_approval_prefix_label(command: &[String]) -> String {
+    let rendered = strip_bash_lc_and_escape(command);
+
+    // Approval choices are rendered inline in a list; ensure we never introduce
+    // multi-line labels due to heredocs or embedded newlines.
+    let collapsed = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let prefix: String = chars.by_ref().take(APPROVAL_LABEL_MAX_LEN).collect();
+    if chars.next().is_some() {
+        format!("{}{APPROVAL_LABEL_TRUNCATED_SUFFIX}", prefix.trim_end())
+    } else {
+        prefix
+    }
 }
 
 /// If `path` is absolute and inside $HOME, return the part *after* the home
@@ -66,5 +84,14 @@ mod tests {
         let args = vec!["/bin/bash".into(), "-lc".into(), "echo hello".into()];
         let cmdline = strip_bash_lc_and_escape(&args);
         assert_eq!(cmdline, "echo hello");
+    }
+
+    #[test]
+    fn approval_prefix_label_is_single_line_and_truncated() {
+        let long = format!("python - <<'PY'\n{}\nPY\n", "x".repeat(500));
+        let args = vec!["bash".into(), "-lc".into(), long];
+        let label = render_for_approval_prefix_label(&args);
+        assert!(!label.contains('\n'));
+        assert!(label.ends_with(APPROVAL_LABEL_TRUNCATED_SUFFIX));
     }
 }
