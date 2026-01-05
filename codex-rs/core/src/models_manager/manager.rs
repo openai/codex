@@ -334,9 +334,11 @@ mod tests {
     use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
+    use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::tempdir;
+    use wiremock::MockServer;
 
     fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
         remote_model_with_visibility(slug, display, priority, "list")
@@ -360,14 +362,14 @@ mod tests {
             "supported_in_api": true,
             "priority": priority,
             "upgrade": null,
-            "base_instructions": "base instructions",
+            "base_instructions": null,
             "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
             "truncation_policy": {"mode": "bytes", "limit": 10_000},
             "supports_parallel_tool_calls": false,
-            "context_window": 272_000,
+            "context_window": null,
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
@@ -391,20 +393,41 @@ mod tests {
         }
     }
 
-    #[test]
-    fn build_available_models_sorts_and_marks_default() {
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let provider = provider_for("http://example.test".to_string());
-        let manager = ModelsManager::with_provider(auth_manager, provider);
-
+    #[tokio::test]
+    async fn refresh_available_models_sorts_and_marks_default() {
+        let server = MockServer::start().await;
         let remote_models = vec![
             remote_model("priority-low", "Low", 1),
             remote_model("priority-high", "High", 0),
         ];
-        let available = manager.build_available_models(remote_models);
+        let models_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: remote_models.clone(),
+            },
+        )
+        .await;
 
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.features.enable(Feature::RemoteModels);
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let provider = provider_for(server.uri());
+        let manager = ModelsManager::with_provider(auth_manager, provider);
+
+        manager
+            .refresh_available_models_with_cache(&config)
+            .await
+            .expect("refresh succeeds");
+        let cached_remote = manager.remote_models(&config).await;
+        assert_eq!(cached_remote, remote_models);
+
+        let available = manager.list_models(&config).await;
         let high_idx = available
             .iter()
             .position(|model| model.model == "priority-high")
@@ -422,14 +445,25 @@ mod tests {
             "highest priority should be default"
         );
         assert!(!available[low_idx].is_default);
-
-        // Keep `codex_home` alive for the duration of the test even though it is
-        // unused; some `AuthManager` implementations may reference it.
-        drop(codex_home);
+        assert_eq!(
+            models_mock.requests().len(),
+            1,
+            "expected a single /models request"
+        );
     }
 
     #[tokio::test]
-    async fn try_load_cache_uses_cache_when_fresh() {
+    async fn refresh_available_models_uses_cache_when_fresh() {
+        let server = MockServer::start().await;
+        let remote_models = vec![remote_model("cached", "Cached", 5)];
+        let models_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: remote_models.clone(),
+            },
+        )
+        .await;
+
         let codex_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
@@ -437,38 +471,53 @@ mod tests {
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
-
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
-        let provider = provider_for("http://example.test".to_string());
+        let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(auth_manager, provider);
 
-        let remote_models = vec![remote_model("cached", "Cached", 5)];
         manager
-            .persist_cache(&remote_models, Some("etag-1".to_string()))
-            .await;
-
-        assert!(
-            manager.try_load_cache().await,
-            "fresh cache should be loaded"
-        );
+            .refresh_available_models_with_cache(&config)
+            .await
+            .expect("first refresh succeeds");
         assert_eq!(
             manager.remote_models(&config).await,
             remote_models,
             "remote cache should store fetched models"
         );
+
+        // Second call should read from cache and avoid the network.
+        manager
+            .refresh_available_models_with_cache(&config)
+            .await
+            .expect("cached refresh succeeds");
         assert_eq!(
-            manager.get_etag().await.as_deref(),
-            Some("etag-1"),
-            "etag should be restored from cache"
+            manager.remote_models(&config).await,
+            remote_models,
+            "cache path should not mutate stored models"
+        );
+        assert_eq!(
+            models_mock.requests().len(),
+            1,
+            "cache hit should avoid a second /models request"
         );
     }
 
     #[tokio::test]
-    async fn try_load_cache_returns_false_when_cache_stale() {
+    async fn refresh_available_models_refetches_when_cache_stale() {
+        let server = MockServer::start().await;
+        let initial_models = vec![remote_model("stale", "Stale", 1)];
+        let initial_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: initial_models.clone(),
+            },
+        )
+        .await;
+
         let codex_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
@@ -476,60 +525,125 @@ mod tests {
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
-
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
-        let provider = provider_for("http://example.test".to_string());
-        let mut manager = ModelsManager::with_provider(auth_manager, provider);
-        manager.cache_ttl = Duration::from_secs(10);
-        manager.apply_remote_models(Vec::new()).await;
+        let provider = provider_for(server.uri());
+        let manager = ModelsManager::with_provider(auth_manager, provider);
 
-        let cache_path = codex_home.path().join(MODEL_CACHE_FILE);
-        let cache = ModelsCache {
-            fetched_at: Utc::now() - chrono::Duration::hours(1),
-            etag: Some("etag-old".to_string()),
-            models: vec![remote_model("stale", "Stale", 1)],
-        };
-        cache::save_cache(&cache_path, &cache)
+        manager
+            .refresh_available_models_with_cache(&config)
             .await
-            .expect("cache write succeeds");
+            .expect("initial refresh succeeds");
 
-        assert!(
-            !manager.try_load_cache().await,
-            "stale cache should not load"
-        );
+        // Rewrite cache with an old timestamp so it is treated as stale.
+        let cache_path = codex_home.path().join(MODEL_CACHE_FILE);
+        let contents =
+            std::fs::read_to_string(&cache_path).expect("cache file should exist after refresh");
+        let mut cache: ModelsCache =
+            serde_json::from_str(&contents).expect("cache should deserialize");
+        cache.fetched_at = Utc::now() - chrono::Duration::hours(1);
+        std::fs::write(&cache_path, serde_json::to_string_pretty(&cache).unwrap())
+            .expect("cache rewrite succeeds");
+
+        let updated_models = vec![remote_model("fresh", "Fresh", 9)];
+        server.reset().await;
+        let refreshed_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: updated_models.clone(),
+            },
+        )
+        .await;
+
+        manager
+            .refresh_available_models_with_cache(&config)
+            .await
+            .expect("second refresh succeeds");
         assert_eq!(
             manager.remote_models(&config).await,
-            Vec::<ModelInfo>::new(),
-            "stale cache should not update remote models"
+            updated_models,
+            "stale cache should trigger refetch"
+        );
+        assert_eq!(
+            initial_mock.requests().len(),
+            1,
+            "initial refresh should only hit /models once"
+        );
+        assert_eq!(
+            refreshed_mock.requests().len(),
+            1,
+            "stale cache refresh should fetch /models once"
         );
     }
 
-    #[test]
-    fn build_available_models_drops_removed_remote_models() {
+    #[tokio::test]
+    async fn refresh_available_models_drops_removed_remote_models() {
+        let server = MockServer::start().await;
+        let initial_models = vec![remote_model("remote-old", "Remote Old", 1)];
+        let initial_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: initial_models,
+            },
+        )
+        .await;
+
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let provider = provider_for("http://example.test".to_string());
+        let provider = provider_for(server.uri());
         let mut manager = ModelsManager::with_provider(auth_manager, provider);
-        manager.local_models = Vec::new();
+        manager.cache_ttl = Duration::ZERO;
 
-        let available0 = manager.build_available_models(vec![remote_model("remote-old", "Old", 1)]);
-        assert!(
-            available0.iter().any(|preset| preset.model == "remote-old"),
-            "initial remote model should be listed"
-        );
+        manager
+            .refresh_available_models_with_cache(&config)
+            .await
+            .expect("initial refresh succeeds");
 
-        let available1 = manager.build_available_models(vec![remote_model("remote-new", "New", 1)]);
+        server.reset().await;
+        let refreshed_models = vec![remote_model("remote-new", "Remote New", 1)];
+        let refreshed_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: refreshed_models,
+            },
+        )
+        .await;
+
+        manager
+            .refresh_available_models_with_cache(&config)
+            .await
+            .expect("second refresh succeeds");
+
+        let available = manager
+            .try_list_models(&config)
+            .expect("models should be available");
         assert!(
-            available1.iter().any(|preset| preset.model == "remote-new"),
+            available.iter().any(|preset| preset.model == "remote-new"),
             "new remote model should be listed"
         );
         assert!(
-            !available1.iter().any(|preset| preset.model == "remote-old"),
+            !available.iter().any(|preset| preset.model == "remote-old"),
             "removed remote model should not be listed"
+        );
+        assert_eq!(
+            initial_mock.requests().len(),
+            1,
+            "initial refresh should only hit /models once"
+        );
+        assert_eq!(
+            refreshed_mock.requests().len(),
+            1,
+            "second refresh should only hit /models once"
         );
     }
 
