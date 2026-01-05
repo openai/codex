@@ -7,6 +7,8 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::Sleep;
 
+use super::UnifiedExecContext;
+use super::session::UnifiedExecSession;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
@@ -19,10 +21,7 @@ use crate::protocol::ExecOutputStream;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
-
-use super::CommandTranscript;
-use super::UnifiedExecContext;
-use super::session::UnifiedExecSession;
+use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 
 pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
 
@@ -40,7 +39,7 @@ const UNIFIED_EXEC_OUTPUT_DELTA_MAX_BYTES: usize = 8192;
 pub(crate) fn start_streaming_output(
     session: &UnifiedExecSession,
     context: &UnifiedExecContext,
-    transcript: Arc<Mutex<CommandTranscript>>,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
 ) {
     let mut receiver = session.output_receiver();
     let output_drained = session.output_drained_notify();
@@ -112,7 +111,7 @@ pub(crate) fn spawn_exit_watcher(
     command: Vec<String>,
     cwd: PathBuf,
     process_id: String,
-    transcript: Arc<Mutex<CommandTranscript>>,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
 ) {
     let exit_token = session.cancellation_token();
@@ -142,7 +141,7 @@ pub(crate) fn spawn_exit_watcher(
 
 async fn process_chunk(
     pending: &mut Vec<u8>,
-    transcript: &Arc<Mutex<CommandTranscript>>,
+    transcript: &Arc<Mutex<HeadTailBuffer>>,
     call_id: &str,
     session_ref: &Arc<Session>,
     turn_ref: &Arc<TurnContext>,
@@ -153,7 +152,7 @@ async fn process_chunk(
     while let Some(prefix) = split_valid_utf8_prefix(pending) {
         {
             let mut guard = transcript.lock().await;
-            guard.append(&prefix);
+            guard.push_chunk(prefix.to_vec());
         }
 
         if *emitted_deltas >= MAX_EXEC_OUTPUT_DELTAS_PER_CALL {
@@ -183,7 +182,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     command: Vec<String>,
     cwd: PathBuf,
     process_id: Option<String>,
-    transcript: Arc<Mutex<CommandTranscript>>,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
     fallback_output: String,
     exit_code: i32,
     duration: Duration,
@@ -240,15 +239,15 @@ fn split_valid_utf8_prefix_with_max(buffer: &mut Vec<u8>, max_bytes: usize) -> O
 }
 
 async fn resolve_aggregated_output(
-    transcript: &Arc<Mutex<CommandTranscript>>,
+    transcript: &Arc<Mutex<HeadTailBuffer>>,
     fallback: String,
 ) -> String {
     let guard = transcript.lock().await;
-    if guard.data.is_empty() {
+    if guard.retained_bytes() == 0 {
         return fallback;
     }
 
-    String::from_utf8_lossy(&guard.data).to_string()
+    String::from_utf8_lossy(&guard.to_bytes()).to_string()
 }
 
 #[cfg(test)]

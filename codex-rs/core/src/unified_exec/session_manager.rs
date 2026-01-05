@@ -1,32 +1,3 @@
-use rand::Rng;
-use std::cmp::Reverse;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Notify;
-use tokio::sync::mpsc;
-use tokio::time::Duration;
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
-
-use crate::bash::extract_bash_command;
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::exec_env::create_env;
-use crate::protocol::BackgroundEventEvent;
-use crate::protocol::EventMsg;
-use crate::sandboxing::ExecEnv;
-use crate::sandboxing::SandboxPermissions;
-use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
-use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
-use crate::tools::sandboxing::ToolCtx;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::approx_token_count;
-use crate::truncate::formatted_truncate_text;
-
-use super::CommandTranscript;
 use super::ExecCommandRequest;
 use super::MAX_UNIFIED_EXEC_SESSIONS;
 use super::SessionEntry;
@@ -46,6 +17,33 @@ use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::OutputHandles;
 use super::session::UnifiedExecSession;
+use crate::bash::extract_bash_command;
+use crate::codex::Session;
+use crate::codex::TurnContext;
+use crate::exec_env::create_env;
+use crate::protocol::BackgroundEventEvent;
+use crate::protocol::EventMsg;
+use crate::sandboxing::ExecEnv;
+use crate::sandboxing::SandboxPermissions;
+use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
+use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::sandboxing::ToolCtx;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
+use crate::truncate::formatted_truncate_text;
+use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
+use rand::Rng;
+use std::cmp::Reverse;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Notify;
+use tokio::sync::mpsc;
+use tokio::time::Duration;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
     ("NO_COLOR", "1"),
@@ -139,7 +137,7 @@ impl UnifiedExecSessionManager {
             }
         };
 
-        let transcript = Arc::new(tokio::sync::Mutex::new(CommandTranscript::default()));
+        let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         start_streaming_output(&session, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
@@ -390,7 +388,7 @@ impl UnifiedExecSessionManager {
         cwd: PathBuf,
         started_at: Instant,
         process_id: String,
-        transcript: Arc<tokio::sync::Mutex<CommandTranscript>>,
+        transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
         let entry = SessionEntry {
             session: Arc::clone(&session),
@@ -532,11 +530,11 @@ impl UnifiedExecSessionManager {
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let mut exit_signal_received = cancellation_token.is_cancelled();
         loop {
-            let drained_chunks;
+            let drained_chunks: Vec<Vec<u8>>;
             let mut wait_for_output = None;
             {
                 let mut guard = output_buffer.lock().await;
-                drained_chunks = guard.drain();
+                drained_chunks = guard.drain_chunks();
                 if drained_chunks.is_empty() {
                     wait_for_output = Some(output_notify.notified());
                 }

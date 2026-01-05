@@ -37,6 +37,7 @@ use crate::sandboxing::SandboxPermissions;
 
 mod async_watcher;
 mod errors;
+mod head_tail_buffer;
 mod session;
 mod session_manager;
 
@@ -52,24 +53,6 @@ pub(crate) const MAX_UNIFIED_EXEC_SESSIONS: usize = 64;
 
 // Send a warning message to the models when it reaches this number of sessions.
 pub(crate) const WARNING_UNIFIED_EXEC_SESSIONS: usize = 60;
-
-#[derive(Debug, Default)]
-pub(crate) struct CommandTranscript {
-    pub data: Vec<u8>,
-}
-
-impl CommandTranscript {
-    pub fn append(&mut self, bytes: &[u8]) {
-        self.data.extend_from_slice(bytes);
-        if self.data.len() > UNIFIED_EXEC_OUTPUT_MAX_BYTES {
-            let excess = self
-                .data
-                .len()
-                .saturating_sub(UNIFIED_EXEC_OUTPUT_MAX_BYTES);
-            self.data.drain(..excess);
-        }
-    }
-}
 
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
@@ -173,6 +156,7 @@ pub(crate) fn generate_chunk_id() -> String {
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
+    use super::head_tail_buffer::HeadTailBuffer;
     use super::*;
     use crate::codex::Session;
     use crate::codex::TurnContext;
@@ -184,8 +168,6 @@ mod tests {
     use core_test_support::skip_if_sandbox;
     use std::sync::Arc;
     use tokio::time::Duration;
-
-    use super::session::OutputBufferState;
 
     async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
         let (session, mut turn) = make_session_and_context().await;
@@ -245,21 +227,36 @@ mod tests {
     }
 
     #[test]
-    fn push_chunk_trims_only_excess_bytes() {
-        let mut buffer = OutputBufferState::default();
+    fn push_chunk_preserves_prefix_and_suffix() {
+        let mut buffer = HeadTailBuffer::default();
         buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
         buffer.push_chunk(vec![b'b']);
         buffer.push_chunk(vec![b'c']);
 
-        assert_eq!(buffer.total_bytes, UNIFIED_EXEC_OUTPUT_MAX_BYTES);
-        let snapshot = buffer.snapshot();
-        assert_eq!(snapshot.len(), 3);
+        assert_eq!(buffer.retained_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+        let snapshot = buffer.snapshot_chunks();
+
+        let first = snapshot.first().expect("expected at least one chunk");
+        assert_eq!(first.first(), Some(&b'a'));
+        assert!(snapshot.iter().any(|chunk| chunk.as_slice() == b"b"));
         assert_eq!(
-            snapshot.first().unwrap().len(),
-            UNIFIED_EXEC_OUTPUT_MAX_BYTES - 2
+            snapshot
+                .last()
+                .expect("expected at least one chunk")
+                .as_slice(),
+            b"c"
         );
-        assert_eq!(snapshot.get(2).unwrap(), &vec![b'c']);
-        assert_eq!(snapshot.get(1).unwrap(), &vec![b'b']);
+    }
+
+    #[test]
+    fn head_tail_buffer_default_preserves_prefix_and_suffix() {
+        let mut buffer = HeadTailBuffer::default();
+        buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
+        buffer.push_chunk(b"bc".to_vec());
+
+        let rendered = buffer.to_bytes();
+        assert_eq!(rendered.first(), Some(&b'a'));
+        assert!(rendered.ends_with(b"bc"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
