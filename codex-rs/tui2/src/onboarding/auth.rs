@@ -347,7 +347,10 @@ impl AuthModeWidget {
                 device_code.verification_url.as_str().cyan().underlined(),
             ]));
             lines.push("".into());
-            lines.push("  2. Enter this one-time code (expires in 15 minutes)".into());
+            lines.push(
+                "  2. Enter this one-time code after you are signed in (expires in 15 minutes)"
+                    .into(),
+            );
             lines.push("".into());
             lines.push(Line::from(vec![
                 "  ".into(),

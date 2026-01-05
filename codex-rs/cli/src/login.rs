@@ -14,6 +14,19 @@ use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
 
+const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
+    "ChatGPT login is disabled. Use API key login instead.";
+const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
+    "API key login is disabled. Use ChatGPT login instead.";
+const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+
+fn print_login_server_start(actual_port: u16, auth_url: &str) {
+    eprintln!(
+        "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
+        actual_port, auth_url,
+    );
+}
+
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<String>,
@@ -27,10 +40,7 @@ pub async fn login_with_chatgpt(
     );
     let server = run_login_server(opts)?;
 
-    eprintln!(
-        "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
-        server.actual_port, server.auth_url,
-    );
+    print_login_server_start(server.actual_port, &server.auth_url);
 
     server.block_until_done().await
 }
@@ -39,7 +49,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     let config = load_config_or_exit(cli_config_overrides).await;
 
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-        eprintln!("ChatGPT login is disabled. Use API key login instead.");
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
 
@@ -53,7 +63,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     .await
     {
         Ok(_) => {
-            eprintln!("Successfully logged in");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -70,7 +80,7 @@ pub async fn run_login_with_api_key(
     let config = load_config_or_exit(cli_config_overrides).await;
 
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
-        eprintln!("API key login is disabled. Use ChatGPT login instead.");
+        eprintln!("{API_KEY_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
 
@@ -80,7 +90,7 @@ pub async fn run_login_with_api_key(
         config.cli_auth_credentials_store_mode,
     ) {
         Ok(_) => {
-            eprintln!("Successfully logged in");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -125,7 +135,7 @@ pub async fn run_login_with_device_code(
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-        eprintln!("ChatGPT login is disabled. Use API key login instead.");
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
@@ -140,7 +150,7 @@ pub async fn run_login_with_device_code(
     }
     match run_device_code_login(opts).await {
         Ok(()) => {
-            eprintln!("Successfully logged in");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -157,7 +167,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-        eprintln!("ChatGPT login is disabled. Use API key login instead.");
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
 
@@ -175,7 +185,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
     match run_device_code_login(opts.clone()).await {
         Ok(()) => {
-            eprintln!("Successfully logged in");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -183,13 +193,10 @@ pub async fn run_login_with_device_code_fallback_to_browser(
                 eprintln!("Device code login is not enabled; falling back to browser login.");
                 match run_login_server(opts) {
                     Ok(server) => {
-                        eprintln!(
-                            "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
-                            server.actual_port, server.auth_url,
-                        );
+                        print_login_server_start(server.actual_port, &server.auth_url);
                         match server.block_until_done().await {
                             Ok(()) => {
-                                eprintln!("Successfully logged in");
+                                eprintln!("{LOGIN_SUCCESS_MESSAGE}");
                                 std::process::exit(0);
                             }
                             Err(e) => {
