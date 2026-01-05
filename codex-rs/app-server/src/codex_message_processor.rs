@@ -1278,18 +1278,21 @@ impl CodexMessageProcessor {
             );
         }
 
-        let config = match derive_config_from_params(overrides, Some(cli_overrides)).await {
-            Ok(config) => config,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config =
+            match derive_config_from_params(&self.cli_overrides, overrides, Some(cli_overrides))
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("error deriving config: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -1328,18 +1331,19 @@ impl CodexMessageProcessor {
             params.developer_instructions,
         );
 
-        let config = match derive_config_from_params(overrides, params.config).await {
-            Ok(config) => config,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config =
+            match derive_config_from_params(&self.cli_overrides, overrides, params.config).await {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("error deriving config: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
@@ -1567,7 +1571,7 @@ impl CodexMessageProcessor {
                 base_instructions,
                 developer_instructions,
             );
-            match derive_config_from_params(overrides, cli_overrides).await {
+            match derive_config_from_params(&self.cli_overrides, overrides, cli_overrides).await {
                 Ok(config) => config,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -2228,7 +2232,7 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 };
 
-                derive_config_from_params(overrides, Some(cli_overrides)).await
+                derive_config_from_params(&self.cli_overrides, overrides, Some(cli_overrides)).await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -3344,16 +3348,21 @@ fn errors_to_info(
 }
 
 async fn derive_config_from_params(
+    base_cli_overrides: &[(String, TomlValue)],
     overrides: ConfigOverrides,
     cli_overrides: Option<HashMap<String, serde_json::Value>>,
 ) -> std::io::Result<Config> {
-    let cli_overrides = cli_overrides
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(k, v)| (k, json_to_toml(v)))
-        .collect();
+    // Apply the app server's startup `--config` overrides, then apply request-scoped
+    // overrides with higher precedence.
+    let mut merged_cli_overrides: Vec<(String, TomlValue)> = base_cli_overrides.to_vec();
+    merged_cli_overrides.extend(
+        cli_overrides
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, json_to_toml(v))),
+    );
 
-    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
+    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, overrides).await
 }
 
 async fn read_summary_from_rollout(
