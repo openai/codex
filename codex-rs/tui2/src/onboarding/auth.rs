@@ -302,7 +302,10 @@ impl AuthModeWidget {
         {
             lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
             lines.push("".into());
-            lines.push(Line::from(state.auth_url.as_str().cyan().underlined()));
+            lines.push(Line::from(vec![
+                "  ".into(),
+                state.auth_url.as_str().cyan().underlined(),
+            ]));
             lines.push("".into());
         }
 
@@ -339,13 +342,17 @@ impl AuthModeWidget {
         if let Some(device_code) = &state.device_code {
             lines.push("  1. Open this link in your browser and sign in".into());
             lines.push("".into());
-            lines.push(Line::from(
+            lines.push(Line::from(vec![
+                "  ".into(),
                 device_code.verification_url.as_str().cyan().underlined(),
-            ));
+            ]));
             lines.push("".into());
             lines.push("  2. Enter this one-time code (expires in 15 minutes)".into());
             lines.push("".into());
-            lines.push(Line::from(device_code.user_code.as_str().cyan().bold()));
+            lines.push(Line::from(vec![
+                "  ".into(),
+                device_code.user_code.as_str().cyan().bold(),
+            ]));
             lines.push("".into());
             lines.push(
                 "  Device codes are a common phishing target. Never share this code."
