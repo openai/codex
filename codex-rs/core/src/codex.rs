@@ -2068,7 +2068,7 @@ mod handlers {
         review_request: ReviewRequest,
     ) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
-        match resolve_review_request(review_request, config.cwd.as_path()) {
+        match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
                     Arc::clone(sess),
