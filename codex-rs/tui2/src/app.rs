@@ -344,10 +344,22 @@ pub(crate) struct App {
     transcript_copy_action: TranscriptCopyAction,
     transcript_scrollbar_ui: TranscriptScrollbarUi,
 
-    // Pager overlay state (Transcript or Static like Diff)
+    // Pager overlay state (Transcript or Static like Diff).
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
-    has_emitted_history_lines: bool,
+    /// History cells received while an overlay is active.
+    ///
+    /// While in an alt-screen overlay, the normal terminal buffer is not visible.
+    /// Instead we queue the incoming cells here and, on overlay close, render them at the *current*
+    /// width and queue them in one batch via `Tui::insert_history_lines`.
+    ///
+    /// This matters for correctness if/when scrollback printing is enabled: if we deferred
+    /// already-rendered `Vec<Line>`, we'd bake viewport-width wrapping based on the width at the
+    /// time the cell arrived (which may differ from the width when the overlay closes).
+    pub(crate) deferred_history_cells: Vec<Arc<dyn HistoryCell>>,
+    /// True once at least one history cell has been inserted into terminal scrollback.
+    ///
+    /// Used to decide whether to insert an extra blank separator line when flushing deferred cells.
+    pub(crate) has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -511,7 +523,7 @@ impl App {
             transcript_copy_action: TranscriptCopyAction::default(),
             transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
+            deferred_history_cells: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             scroll_config,
@@ -1449,21 +1461,8 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    }
+                if self.overlay.is_some() {
+                    self.deferred_history_cells.push(cell);
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -2135,7 +2134,7 @@ mod tests {
             transcript_copy_action: TranscriptCopyAction::default(),
             transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
+            deferred_history_cells: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
@@ -2188,7 +2187,7 @@ mod tests {
                 transcript_copy_action: TranscriptCopyAction::default(),
                 transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
                 overlay: None,
-                deferred_history_lines: Vec::new(),
+                deferred_history_cells: Vec::new(),
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
