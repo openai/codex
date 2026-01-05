@@ -182,9 +182,9 @@ writable_roots = [{}]
 
     let managed_path_str = managed_path.display().to_string();
 
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = McpProcess::new_with_args(
         codex_home.path(),
-        &[("CODEX_MANAGED_CONFIG_PATH", Some(&managed_path_str))],
+        &["--managed-config-path", &managed_path_str],
     )
     .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

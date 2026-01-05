@@ -20,6 +20,7 @@ use codex_app_server_protocol::RequestId;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_feedback::CodexFeedback;
@@ -41,6 +42,7 @@ impl MessageProcessor {
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
         cli_overrides: Vec<(String, TomlValue)>,
+        loader_overrides: LoaderOverrides,
         feedback: CodexFeedback,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
@@ -62,7 +64,7 @@ impl MessageProcessor {
             cli_overrides.clone(),
             feedback,
         );
-        let config_api = ConfigApi::new(config.codex_home.clone(), cli_overrides);
+        let config_api = ConfigApi::new(config.codex_home.clone(), cli_overrides, loader_overrides);
 
         Self {
             outgoing,

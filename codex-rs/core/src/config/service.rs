@@ -114,8 +114,9 @@ impl ConfigService {
         }
     }
 
-    #[cfg(test)]
-    fn with_overrides(
+    /// Construct a service with custom loader overrides (primarily for tests
+    /// and embedding callers that need to control managed config sources).
+    pub fn with_overrides(
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
