@@ -81,16 +81,25 @@ use tracing::error;
 
 type JsonValue = serde_json::Value;
 
-pub(crate) async fn apply_bespoke_event_handling(
-    event: Event,
-    conversation_id: ConversationId,
-    conversation: Arc<CodexConversation>,
-    outgoing: Arc<OutgoingMessageSender>,
-    pending_interrupts: PendingInterrupts,
-    turn_summary_store: TurnSummaryStore,
-    active_turns: crate::codex_message_processor::ActiveTurns,
-    api_version: ApiVersion,
-) {
+pub(crate) struct BespokeEventContext {
+    pub(crate) conversation_id: ConversationId,
+    pub(crate) conversation: Arc<CodexConversation>,
+    pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) pending_interrupts: PendingInterrupts,
+    pub(crate) turn_summary_store: TurnSummaryStore,
+    pub(crate) active_turns: crate::codex_message_processor::ActiveTurns,
+    pub(crate) api_version: ApiVersion,
+}
+
+pub(crate) async fn apply_bespoke_event_handling(event: Event, ctx: &BespokeEventContext) {
+    let conversation_id = ctx.conversation_id;
+    let conversation = ctx.conversation.clone();
+    let outgoing = ctx.outgoing.clone();
+    let pending_interrupts = ctx.pending_interrupts.clone();
+    let turn_summary_store = ctx.turn_summary_store.clone();
+    let active_turns = ctx.active_turns.clone();
+    let api_version = ctx.api_version;
+
     let Event {
         id: event_turn_id,
         msg,

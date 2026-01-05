@@ -264,11 +264,13 @@ impl HookRunner {
         self.on_generic_tool_call_event(
             sess,
             turn,
-            "tool.call.begin",
-            tool_name,
-            call_id,
-            Some(payload),
-            None,
+            ToolCallHookEvent {
+                kind: "tool.call.begin",
+                tool_name,
+                call_id,
+                tool_payload: Some(payload),
+                end_fields: None,
+            },
         );
     }
 
@@ -284,11 +286,13 @@ impl HookRunner {
         self.on_generic_tool_call_event(
             sess,
             turn,
-            "tool.call.end",
-            tool_name,
-            call_id,
-            None,
-            Some((success, error)),
+            ToolCallHookEvent {
+                kind: "tool.call.end",
+                tool_name,
+                call_id,
+                tool_payload: None,
+                end_fields: Some(ToolCallEndFields { success, error }),
+            },
         );
     }
 
@@ -303,11 +307,16 @@ impl HookRunner {
         self.on_generic_tool_call_event(
             sess,
             turn,
-            "tool.call.end",
-            tool_name,
-            call_id,
-            None,
-            Some((Some(false), Some(error.to_string()))),
+            ToolCallHookEvent {
+                kind: "tool.call.end",
+                tool_name,
+                call_id,
+                tool_payload: None,
+                end_fields: Some(ToolCallEndFields {
+                    success: Some(false),
+                    error: Some(error.to_string()),
+                }),
+            },
         );
     }
 
@@ -315,12 +324,15 @@ impl HookRunner {
         &self,
         sess: &Session,
         turn: &TurnContext,
-        kind: &'static str,
-        tool_name: &str,
-        call_id: &str,
-        tool_payload: Option<&ToolPayload>,
-        end_fields: Option<(Option<bool>, Option<String>)>,
+        event: ToolCallHookEvent<'_>,
     ) {
+        let ToolCallHookEvent {
+            kind,
+            tool_name,
+            call_id,
+            tool_payload,
+            end_fields,
+        } = event;
         let thread_id = sess.conversation_id().to_string();
         let hook_cwd =
             resolve_root_git_project_for_trust(&turn.cwd).unwrap_or_else(|| turn.cwd.clone());
@@ -368,11 +380,11 @@ impl HookRunner {
                 );
             }
 
-            if let Some((success, error)) = &end_fields
+            if let Some(end_fields) = &end_fields
                 && let Some(obj) = payload.as_object_mut()
             {
-                obj.insert("success".to_string(), json!(success));
-                if let Some(error) = error {
+                obj.insert("success".to_string(), json!(end_fields.success));
+                if let Some(error) = &end_fields.error {
                     obj.insert("error".to_string(), json!(error));
                 }
             }
@@ -416,6 +428,19 @@ impl HookRunner {
             });
         }
     }
+}
+
+struct ToolCallEndFields {
+    success: Option<bool>,
+    error: Option<String>,
+}
+
+struct ToolCallHookEvent<'a> {
+    kind: &'static str,
+    tool_name: &'a str,
+    call_id: &'a str,
+    tool_payload: Option<&'a ToolPayload>,
+    end_fields: Option<ToolCallEndFields>,
 }
 
 fn tool_input_json(payload: &ToolPayload, max_len: usize) -> serde_json::Value {

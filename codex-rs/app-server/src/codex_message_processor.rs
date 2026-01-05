@@ -3668,17 +3668,16 @@ impl CodexMessageProcessor {
                             );
                         }
 
-                        apply_bespoke_event_handling(
-                            event.clone(),
+                        let bespoke_ctx = crate::bespoke_event_handling::BespokeEventContext {
                             conversation_id,
-                            conversation.clone(),
-                            outgoing_for_task.clone(),
-                            pending_interrupts.clone(),
-                            turn_summary_store.clone(),
-                            active_turns.clone(),
-                            api_version_for_task,
-                        )
-                        .await;
+                            conversation: conversation.clone(),
+                            outgoing: outgoing_for_task.clone(),
+                            pending_interrupts: pending_interrupts.clone(),
+                            turn_summary_store: turn_summary_store.clone(),
+                            active_turns: active_turns.clone(),
+                            api_version: api_version_for_task,
+                        };
+                        apply_bespoke_event_handling(event.clone(), &bespoke_ctx).await;
                     }
                 }
             }
