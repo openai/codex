@@ -449,7 +449,10 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.online_username,
             log,
         )?;
-        let users = vec![payload.offline_username.clone(), payload.online_username.clone()];
+        let users = vec![
+            payload.offline_username.clone(),
+            payload.online_username.clone(),
+        ];
         hide_newly_created_users(&users, sbx_dir);
     }
     let offline_sid = resolve_sid(&payload.offline_username)?;
