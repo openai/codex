@@ -39,8 +39,9 @@ pub fn hide_newly_created_users(usernames: &[String], log_base: &Path) {
 
 /// Best-effort: hides the current sandbox user's profile directory once it exists.
 ///
-/// This intentionally runs in the command-runner (as the sandbox user) so it can apply the
-/// attributes without requiring elevation, and so profiles are hidden only if the user is used.
+/// Windows only creates profile directories when that user first logs in.
+/// This intentionally runs in the command-runner (as the sandbox user) because
+/// command running is what causes us to log in as a particular sandbox user.
 pub fn hide_current_user_profile_dir(log_base: &Path) {
     let Some(profile) = std::env::var_os("USERPROFILE") else {
         return;
