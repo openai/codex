@@ -3,6 +3,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use http::Uri;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT;
+use opentelemetry_otlp::tonic_types::transport::Certificate as TonicCertificate;
+use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
+use opentelemetry_otlp::tonic_types::transport::Identity as TonicIdentity;
 use reqwest::Certificate as ReqwestCertificate;
 use reqwest::Identity as ReqwestIdentity;
 use reqwest::header::HeaderMap;
@@ -15,9 +18,6 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
-use tonic::transport::Certificate as TonicCertificate;
-use tonic::transport::ClientTlsConfig;
-use tonic::transport::Identity as TonicIdentity;
 
 pub(crate) fn build_header_map(headers: &std::collections::HashMap<String, String>) -> HeaderMap {
     let mut header_map = HeaderMap::new();

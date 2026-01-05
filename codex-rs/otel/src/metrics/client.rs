@@ -18,6 +18,8 @@ use opentelemetry_otlp::Protocol;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
+use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
+use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::PeriodicReader;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
@@ -253,7 +255,7 @@ fn build_otlp_metric_exporter(
 
             let header_map = crate::otlp::build_header_map(&headers);
 
-            let base_tls_config = tonic::transport::ClientTlsConfig::new()
+            let base_tls_config = ClientTlsConfig::new()
                 .with_enabled_roots()
                 .assume_http2(true);
 
@@ -269,7 +271,7 @@ fn build_otlp_metric_exporter(
                 .with_tonic()
                 .with_endpoint(endpoint)
                 .with_temporality(temporality)
-                .with_metadata(tonic::metadata::MetadataMap::from_headers(header_map))
+                .with_metadata(MetadataMap::from_headers(header_map))
                 .with_tls_config(tls_config)
                 .build()
                 .map_err(|source| MetricsError::ExporterBuild { source })
