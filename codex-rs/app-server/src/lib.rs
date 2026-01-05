@@ -1,7 +1,8 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use codex_common::CliConfigOverrides;
-use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
+use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -42,6 +43,7 @@ const CHANNEL_CAPACITY: usize = 128;
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
 ) -> IoResult<()> {
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
@@ -78,7 +80,11 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides.clone())
+    let loader_overrides_for_config_api = loader_overrides.clone();
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides.clone())
+        .loader_overrides(loader_overrides)
+        .build()
         .await
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
@@ -120,11 +126,13 @@ pub async fn run_main(
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
+        let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),
             cli_overrides,
+            loader_overrides,
             feedback.clone(),
         );
         async move {
