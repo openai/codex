@@ -47,7 +47,7 @@ use super::session::OutputBuffer;
 use super::session::OutputHandles;
 use super::session::UnifiedExecSession;
 
-const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
+const UNIFIED_EXEC_ENV: [(&str, &str); 9] = [
     ("NO_COLOR", "1"),
     ("TERM", "dumb"),
     ("LANG", "C.UTF-8"),
@@ -56,6 +56,7 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
     ("COLORTERM", ""),
     ("PAGER", "cat"),
     ("GIT_PAGER", "cat"),
+    ("GH_PAGER", "cat"),
 ];
 
 fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
@@ -679,6 +680,7 @@ mod tests {
             ("COLORTERM".to_string(), String::new()),
             ("PAGER".to_string(), "cat".to_string()),
             ("GIT_PAGER".to_string(), "cat".to_string()),
+            ("GH_PAGER".to_string(), "cat".to_string()),
         ]);
 
         assert_eq!(env, expected);

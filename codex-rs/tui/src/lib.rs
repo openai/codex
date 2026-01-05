@@ -29,7 +29,6 @@ use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
 mod additional_dirs;
@@ -282,13 +281,8 @@ pub async fn run_main(
         .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
-    let targets = Targets::new().with_default(tracing::Level::TRACE);
-
-    let feedback_layer = tracing_subscriber::fmt::layer()
-        .with_writer(feedback.make_writer())
-        .with_ansi(false)
-        .with_target(false)
-        .with_filter(targets);
+    let feedback_layer = feedback.logger_layer();
+    let feedback_metadata_layer = feedback.metadata_layer();
 
     if cli.oss && model_provider_override.is_some() {
         // We're in the oss section, so provider_id should be Some
@@ -323,6 +317,7 @@ pub async fn run_main(
     let _ = tracing_subscriber::registry()
         .with(file_layer)
         .with(feedback_layer)
+        .with(feedback_metadata_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();

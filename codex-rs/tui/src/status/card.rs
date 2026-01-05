@@ -7,10 +7,10 @@ use chrono::DateTime;
 use chrono::Local;
 use codex_common::create_config_summary_entries;
 use codex_core::config::Config;
-use codex_core::models_manager::model_family::ModelFamily;
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use ratatui::prelude::*;
@@ -72,9 +72,8 @@ struct StatusHistoryCell {
 pub(crate) fn new_status_output(
     config: &Config,
     auth_manager: &AuthManager,
-    model_family: &ModelFamily,
+    token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
-    context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
@@ -85,9 +84,8 @@ pub(crate) fn new_status_output(
     let card = StatusHistoryCell::new(
         config,
         auth_manager,
-        model_family,
+        token_info,
         total_usage,
-        context_usage,
         session_id,
         rate_limits,
         plan_type,
@@ -103,9 +101,8 @@ impl StatusHistoryCell {
     fn new(
         config: &Config,
         auth_manager: &AuthManager,
-        model_family: &ModelFamily,
+        token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
-        context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
         plan_type: Option<PlanType>,
@@ -134,12 +131,15 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
-        let context_window = model_family.context_window.and_then(|window| {
-            context_usage.map(|usage| StatusContextWindowData {
-                percent_remaining: usage.percent_of_context_window_remaining(window),
-                tokens_in_context: usage.tokens_in_context_window(),
-                window,
-            })
+        let default_usage = TokenUsage::default();
+        let (context_usage, context_window) = match token_info {
+            Some(info) => (&info.last_token_usage, info.model_context_window),
+            None => (&default_usage, config.model_context_window),
+        };
+        let context_window = context_window.map(|window| StatusContextWindowData {
+            percent_remaining: context_usage.percent_of_context_window_remaining(window),
+            tokens_in_context: context_usage.tokens_in_context_window(),
+            window,
         });
 
         let token_usage = StatusTokenUsageData {
@@ -348,6 +348,7 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
+
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));

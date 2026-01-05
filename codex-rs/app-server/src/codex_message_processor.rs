@@ -2579,6 +2579,7 @@ impl CodexMessageProcessor {
         let _ = conversation
             .submit(Op::UserInput {
                 items: mapped_items,
+                final_output_json_schema: None,
             })
             .await;
 
@@ -2598,6 +2599,7 @@ impl CodexMessageProcessor {
             model,
             effort,
             summary,
+            output_schema,
         } = params;
 
         let Ok(conversation) = self
@@ -2632,7 +2634,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
-                final_output_json_schema: None,
+                final_output_json_schema: output_schema,
             })
             .await;
 
@@ -2650,19 +2652,17 @@ impl CodexMessageProcessor {
         };
 
         let skills_manager = self.conversation_manager.skills_manager();
-        let data = cwds
-            .into_iter()
-            .map(|cwd| {
-                let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
-                let errors = errors_to_info(&outcome.errors);
-                let skills = skills_to_info(&outcome.skills);
-                codex_app_server_protocol::SkillsListEntry {
-                    cwd,
-                    skills,
-                    errors,
-                }
-            })
-            .collect();
+        let mut data = Vec::new();
+        for cwd in cwds {
+            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let errors = errors_to_info(&outcome.errors);
+            let skills = skills_to_info(&outcome.skills);
+            data.push(codex_app_server_protocol::SkillsListEntry {
+                cwd,
+                skills,
+                errors,
+            });
+        }
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
@@ -2741,6 +2741,7 @@ impl CodexMessageProcessor {
         let turn_id = conversation
             .submit(Op::UserInput {
                 items: mapped_items,
+                final_output_json_schema: params.output_schema,
             })
             .await;
 
