@@ -2652,19 +2652,17 @@ impl CodexMessageProcessor {
         };
 
         let skills_manager = self.conversation_manager.skills_manager();
-        let data = cwds
-            .into_iter()
-            .map(|cwd| {
-                let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
-                let errors = errors_to_info(&outcome.errors);
-                let skills = skills_to_info(&outcome.skills);
-                codex_app_server_protocol::SkillsListEntry {
-                    cwd,
-                    skills,
-                    errors,
-                }
-            })
-            .collect();
+        let mut data = Vec::new();
+        for cwd in cwds {
+            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let errors = errors_to_info(&outcome.errors);
+            let skills = skills_to_info(&outcome.skills);
+            data.push(codex_app_server_protocol::SkillsListEntry {
+                cwd,
+                skills,
+                errors,
+            });
+        }
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
