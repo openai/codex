@@ -1,0 +1,24 @@
+common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
+common --repo_contents_cache=~/bazel_repo_contents_cache
+common --disk_cache=~/bazel_cache
+
+common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
+common --@toolchains_llvm_bootstrapped//config:experimental_stub_libgcc_s
+
+# TODO(zbarsky): rules_rust doesn't implement this flag properly with remote exec...
+# common --@rules_rust//rust/settings:pipelined_compilation
+
+common --bes_results_url=https://app.buildbuddy.io/invocation/
+common --bes_backend=grpcs://remote.buildbuddy.io
+common --remote_cache=grpcs://remote.buildbuddy.io
+common --remote_download_toplevel
+common --nobuild_runfile_links
+common --remote_timeout=3600
+common --noexperimental_throttle_remote_action_building
+common --experimental_remote_execution_keepalive
+common --grpc_keepalive_time=30s
+
+common:remote --extra_execution_platforms=//:rbe
+common:remote --remote_executor=grpcs://remote.buildbuddy.io
+common:remote --jobs=800

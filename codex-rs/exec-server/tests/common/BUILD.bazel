@@ -3,16 +3,16 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
 
 rust_library(
-    name = "ansi-escape",
-    crate_name = "codex_ansi_escape",
+    name = "common",
+    crate_name = "exec_server_test_support",
     deps = all_crate_deps(normal = True),
     proc_macro_deps = all_crate_deps(proc_macro = True),
-    srcs = glob(["src/**/*.rs"]),
+    srcs = glob(["*.rs"]),
 )
 
 rust_test(
-    name = "ansi-escape-tests",
-    crate = ":ansi-escape",
+    name = "common-tests",
+    crate = ":common",
     deps = all_crate_deps(normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
 )

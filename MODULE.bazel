@@ -2,10 +2,26 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.3.1")
 archive_override(
     module_name = "toolchains_llvm_bootstrapped",
-    integrity = "sha256-dBvq3EBkK0YWeYLZz+lPGT1EP5jKdpvZ7VJ6iy//ADM=",
-    strip_prefix = "toolchains_llvm_bootstrapped-ae1f72282fbe8695c5641eda171d6b7b73e475b6",
-    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/ae1f72282fbe8695c5641eda171d6b7b73e475b6/master.tar.gz"],
+    integrity = "sha256-OGiYzQVklfGW59nDZTyI3ZTC0tJ/WsM/gMahfTJSvgM=",
+    strip_prefix = "toolchains_llvm_bootstrapped-85c1fbdeade8b4a41f7a60167b1cd87618a90901",
+    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/85c1fbdeade8b4a41f7a60167b1cd87618a90901/master.tar.gz"],
 )
+osx = use_extension("@toolchains_llvm_bootstrapped//toolchain/extension:osx.bzl", "osx")
+
+osx.framework(name = "ApplicationServices")
+osx.framework(name = "AppKit")
+osx.framework(name = "ColorSync")
+osx.framework(name = "CoreFoundation")
+osx.framework(name = "CoreGraphics")
+osx.framework(name = "CoreServices")
+osx.framework(name = "CoreText")
+osx.framework(name = "CFNetwork")
+osx.framework(name = "Foundation")
+osx.framework(name = "ImageIO")
+osx.framework(name = "Kernel")
+osx.framework(name = "OSLog")
+osx.framework(name = "Security")
+osx.framework(name = "SystemConfiguration")
 
 register_toolchains(
     "@toolchains_llvm_bootstrapped//toolchain:all",
@@ -54,5 +70,22 @@ crate.from_cargo(
     cargo_toml = "//codex-rs:Cargo.toml",
     platform_triples = RUST_TRIPLES,
 )
+
+bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
+
+crate.annotation(
+    build_script_data = [
+        "@openssl//:gen_dir",
+    ],
+    build_script_env = {
+        "OPENSSL_DIR": "$(execpath @openssl//:gen_dir)",
+        "OPENSSL_NO_VENDOR": "1",
+        "OPENSSL_STATIC": "1",
+    },
+    crate = "openssl-sys",
+    data = ["@openssl//:gen_dir"],
+)
+
+inject_repo(crate, "openssl")
 
 use_repo(crate, "crates")

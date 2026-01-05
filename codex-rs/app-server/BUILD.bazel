@@ -1,0 +1,29 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+
+_DEPS = all_crate_deps(normal = True)
+_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+
+rust_library(
+    name = "app-server",
+    crate_name = "codex_app_server",
+    deps = _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_binary(
+    name = "codex-app-server",
+    crate_name = "codex_app_server",
+    deps = [":app-server"] + _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_test(
+    name = "app-server-tests",
+    crate = ":app-server",
+    deps = all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)
