@@ -680,6 +680,7 @@ mod tests {
             ("COLORTERM".to_string(), String::new()),
             ("PAGER".to_string(), "cat".to_string()),
             ("GIT_PAGER".to_string(), "cat".to_string()),
+            ("GH_PAGER".to_string(), "cat".to_string()),
         ]);
 
         assert_eq!(env, expected);
