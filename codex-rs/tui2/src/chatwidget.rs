@@ -749,24 +749,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn show_model_migration_notice(
-        &mut self,
-        notice: model_migration::PendingModelMigrationNotice,
-    ) {
-        self.add_to_history(history_cell::new_info_event(
-            format!(
-                "Model upgrade available: {} -> {}. Use /model to switch.",
-                notice.from_model, notice.to_model
-            ),
-            None,
-        ));
-        self.app_event_tx
-            .send(AppEvent::PersistModelMigrationPromptAcknowledged {
-                from_model: notice.from_model,
-                to_model: notice.to_model,
-            });
-    }
-
     fn refresh_pending_model_migration_notice(&self) {
         let available_models = match self.models_manager.try_list_models(&self.config) {
             Ok(models) => models,

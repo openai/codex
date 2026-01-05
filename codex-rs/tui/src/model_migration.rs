@@ -3,6 +3,7 @@ use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
+use color_eyre::eyre::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io;
@@ -19,6 +20,11 @@ pub(crate) struct PendingModelMigrationNotice {
     #[serde(default)]
     pub(crate) scheduled_at_unix_seconds: Option<u64>,
 }
+
+pub(crate) use prompt_ui::ModelMigrationCopy;
+pub(crate) use prompt_ui::ModelMigrationOutcome;
+pub(crate) use prompt_ui::ModelMigrationScreen;
+pub(crate) use prompt_ui::migration_copy_for_models;
 
 /// Read and clear the one-shot migration notice file, returning the notice if it should be shown.
 ///
@@ -175,6 +181,83 @@ pub(crate) fn refresh_pending_model_migration_notice(
     }
 }
 
+pub(crate) async fn run_startup_model_migration_prompt(
+    tui: &mut crate::tui::Tui,
+    config: &Config,
+    models_manager: &codex_core::models_manager::manager::ModelsManager,
+    notice: &PendingModelMigrationNotice,
+) -> Result<ModelMigrationOutcome> {
+    use tokio_stream::StreamExt as _;
+
+    let available_models = models_manager.try_list_models(config).ok();
+    let copy = migration_copy_for_notice(notice, available_models.as_deref());
+
+    let mut screen = ModelMigrationScreen::new(tui.frame_requester(), copy);
+    tui.frame_requester().schedule_frame();
+
+    let tui_events = tui.event_stream();
+    tokio::pin!(tui_events);
+
+    while let Some(event) = tui_events.next().await {
+        match event {
+            crate::tui::TuiEvent::Key(key_event) => {
+                screen.handle_key(key_event);
+                if screen.is_done() {
+                    return Ok(screen.outcome());
+                }
+            }
+            crate::tui::TuiEvent::Draw => {
+                let height = tui.terminal.size()?.height;
+                tui.draw(height, |frame| {
+                    frame.render_widget_ref(&screen, frame.area());
+                })?;
+            }
+            crate::tui::TuiEvent::Paste(_) => {}
+        }
+    }
+
+    Ok(ModelMigrationOutcome::Accepted)
+}
+
+pub(crate) fn migration_copy_for_notice(
+    notice: &PendingModelMigrationNotice,
+    available_models: Option<&[ModelPreset]>,
+) -> ModelMigrationCopy {
+    let from_model = notice.from_model.as_str();
+    let to_model = notice.to_model.as_str();
+
+    let from_preset = available_models
+        .unwrap_or_default()
+        .iter()
+        .find(|preset| preset.model == from_model);
+    let to_preset = available_models
+        .unwrap_or_default()
+        .iter()
+        .find(|preset| preset.model == to_model);
+
+    let upgrade = from_preset
+        .and_then(|preset| preset.upgrade.as_ref())
+        .filter(|upgrade| upgrade.id == to_model);
+
+    let can_opt_out = from_preset
+        .map(|preset| preset.show_in_picker)
+        .unwrap_or(true);
+
+    migration_copy_for_models(
+        from_model,
+        to_model,
+        upgrade.and_then(|u| u.model_link.clone()),
+        upgrade.and_then(|u| u.upgrade_copy.clone()),
+        to_preset
+            .map(|preset| preset.display_name.clone())
+            .unwrap_or_else(|| to_model.to_string()),
+        to_preset
+            .map(|preset| Some(preset.description.clone()))
+            .unwrap_or(None),
+        can_opt_out,
+    )
+}
+
 const PENDING_MODEL_MIGRATION_NOTICE_FILENAME: &str = "pending_model_migration_notice.json";
 
 fn pending_model_migration_notice_path(config: &Config) -> PathBuf {
@@ -247,7 +330,6 @@ fn should_show_model_migration_notice(
         .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
 }
 
-#[cfg(test)]
 mod prompt_ui {
     use crate::key_hint;
     use crate::render::Insets;
@@ -373,7 +455,7 @@ mod prompt_ui {
     }
 
     impl ModelMigrationScreen {
-        pub(super) fn new(request_frame: FrameRequester, copy: ModelMigrationCopy) -> Self {
+        pub(crate) fn new(request_frame: FrameRequester, copy: ModelMigrationCopy) -> Self {
             Self {
                 request_frame,
                 copy,
@@ -419,7 +501,7 @@ mod prompt_ui {
             }
         }
 
-        pub(super) fn handle_key(&mut self, key_event: KeyEvent) {
+        pub(crate) fn handle_key(&mut self, key_event: KeyEvent) {
             if key_event.kind == KeyEventKind::Release {
                 return;
             }
@@ -436,11 +518,11 @@ mod prompt_ui {
             }
         }
 
-        pub(super) fn is_done(&self) -> bool {
+        pub(crate) fn is_done(&self) -> bool {
             self.done
         }
 
-        pub(super) fn outcome(&self) -> ModelMigrationOutcome {
+        pub(crate) fn outcome(&self) -> ModelMigrationOutcome {
             self.outcome
         }
     }

@@ -190,6 +190,41 @@ impl App {
             SessionSource::Cli,
         ));
 
+        if let Some(notice) = &pending_model_migration_notice {
+            let outcome = crate::model_migration::run_startup_model_migration_prompt(
+                tui,
+                &config,
+                conversation_manager.get_models_manager().as_ref(),
+                notice,
+            )
+            .await?;
+
+            let mut edits = ConfigEditsBuilder::new(&config.codex_home)
+                .record_model_migration_seen(notice.from_model.as_str(), notice.to_model.as_str());
+            if matches!(
+                outcome,
+                crate::model_migration::ModelMigrationOutcome::Accepted
+            ) {
+                config.model = Some(notice.to_model.clone());
+                edits = edits.set_model(config.model.as_deref(), config.model_reasoning_effort);
+            }
+
+            if let Err(err) = edits.apply().await {
+                tracing::error!(
+                    error = %err,
+                    "failed to persist model migration prompt outcome"
+                );
+            }
+
+            if matches!(outcome, crate::model_migration::ModelMigrationOutcome::Exit) {
+                return Ok(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    conversation_id: None,
+                    update_action: None,
+                });
+            }
+        }
+
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
@@ -241,10 +276,6 @@ impl App {
                 )
             }
         };
-
-        if let Some(notice) = pending_model_migration_notice {
-            chat_widget.show_model_migration_notice(notice);
-        }
 
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
@@ -872,24 +903,6 @@ impl App {
                     );
                     self.chat_widget.add_error_message(format!(
                         "Failed to save rate limit reminder preference: {err}"
-                    ));
-                }
-            }
-            AppEvent::PersistModelMigrationPromptAcknowledged {
-                from_model,
-                to_model,
-            } => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .record_model_migration_seen(from_model.as_str(), to_model.as_str())
-                    .apply()
-                    .await
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to persist model migration prompt acknowledgement"
-                    );
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to save model migration prompt preference: {err}"
                     ));
                 }
             }
