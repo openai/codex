@@ -396,10 +396,8 @@ impl ChatComposer {
 
     /// Attempt to start a burst by retro-capturing recent chars before the cursor.
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, _format_label: &str) {
-        let file_label = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "image".to_string());
+        // Include the full path in the placeholder so the model can refer back to the local file.
+        let file_label = path.display().to_string();
         let base_placeholder = format!("{file_label} {width}x{height}");
         let placeholder = self.next_image_placeholder(&base_placeholder);
         // Insert as an element to match large paste placeholder behavior:
@@ -3244,7 +3242,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[image1.png 32x16] hi"),
+            InputResult::Submitted(text) => assert_eq!(text, "[/tmp/image1.png 32x16] hi"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -3267,7 +3265,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[image2.png 10x5]"),
+            InputResult::Submitted(text) => assert_eq!(text, "[/tmp/image2.png 10x5]"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -3293,15 +3291,15 @@ mod tests {
         composer.attach_image(path, 10, 5, "PNG");
 
         let text = composer.textarea.text().to_string();
-        assert!(text.contains("[image_dup.png 10x5]"));
-        assert!(text.contains("[image_dup.png 10x5 #2]"));
+        assert!(text.contains("[/tmp/image_dup.png 10x5]"));
+        assert!(text.contains("[/tmp/image_dup.png 10x5 #2]"));
         assert_eq!(
             composer.attached_images[0].placeholder,
-            "[image_dup.png 10x5]"
+            "[/tmp/image_dup.png 10x5]"
         );
         assert_eq!(
             composer.attached_images[1].placeholder,
-            "[image_dup.png 10x5 #2]"
+            "[/tmp/image_dup.png 10x5 #2]"
         );
     }
 
@@ -3369,11 +3367,15 @@ mod tests {
         composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
         assert_eq!(composer.attached_images.len(), 1);
+        let expected_placeholder_prefix = format!(
+            "[{} 10x5]",
+            PathBuf::from("/tmp/image_multibyte.png").display()
+        );
         assert!(
             composer
                 .textarea
                 .text()
-                .starts_with("[image_multibyte.png 10x5]")
+                .starts_with(&expected_placeholder_prefix)
         );
     }
 
@@ -3421,7 +3423,7 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: "[image_dup2.png 10x5]".to_string()
+                placeholder: "[/tmp/image_dup2.png 10x5]".to_string()
             }],
             composer.attached_images,
             "one image mapping remains"
@@ -3448,12 +3450,8 @@ mod tests {
 
         let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
         assert!(needs_redraw);
-        assert!(
-            composer
-                .textarea
-                .text()
-                .starts_with("[codex_tui_test_paste_image.png 3x2] ")
-        );
+        let expected_prefix = format!("[{} 3x2] ", tmp_path.display());
+        assert!(composer.textarea.text().starts_with(&expected_prefix));
 
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs, vec![tmp_path]);
