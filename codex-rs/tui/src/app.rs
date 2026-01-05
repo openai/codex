@@ -10,6 +10,8 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::model_migration::StartupModelMigrationAction;
+use crate::model_migration::maybe_run_startup_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -189,13 +191,13 @@ impl App {
         ));
 
         if matches!(
-            crate::model_migration::maybe_run_startup_model_migration_prompt(
+            maybe_run_startup_model_migration_prompt(
                 tui,
                 &mut config,
                 conversation_manager.get_models_manager().as_ref(),
             )
             .await?,
-            crate::model_migration::StartupModelMigrationAction::Exit
+            StartupModelMigrationAction::Exit
         ) {
             return Ok(AppExitInfo {
                 token_usage: TokenUsage::default(),
