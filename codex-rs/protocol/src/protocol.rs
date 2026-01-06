@@ -672,6 +672,26 @@ pub enum EventMsg {
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 }
 
+/// Agent lifecycle status, derived from emitted events.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum AgentStatus {
+    /// Agent is waiting for initialization.
+    #[default]
+    PendingInit,
+    /// Agent is currently running.
+    Running,
+    /// Agent is done. Contains the final assistant message.
+    Completed(Option<String>),
+    /// Agent encountered an error.
+    Errored(String),
+    /// Agent has been shutdowned.
+    Shutdown,
+    /// Agent is not found.
+    NotFound,
+}
+
 /// Codex errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]

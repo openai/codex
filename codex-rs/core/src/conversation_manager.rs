@@ -3,7 +3,6 @@ use crate::AuthManager;
 use crate::CodexAuth;
 #[cfg(any(test, feature = "test-support"))]
 use crate::ModelProviderInfo;
-use crate::agent::AgentBus;
 use crate::agent::AgentControl;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
@@ -58,7 +57,6 @@ pub(crate) struct ConversationManagerState {
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
     session_source: SessionSource,
-    agent_bus: AgentBus,
 }
 
 impl ConversationManager {
@@ -72,7 +70,6 @@ impl ConversationManager {
                 )),
                 auth_manager,
                 session_source,
-                agent_bus: AgentBus::default(),
             }),
             #[cfg(any(test, feature = "test-support"))]
             _test_codex_home_guard: None,
@@ -111,7 +108,6 @@ impl ConversationManager {
                 )),
                 auth_manager,
                 session_source: SessionSource::Exec,
-                agent_bus: AgentBus::default(),
             }),
             _test_codex_home_guard: None,
         }
@@ -210,7 +206,7 @@ impl ConversationManager {
     }
 
     fn agent_control(&self) -> AgentControl {
-        AgentControl::new(Arc::downgrade(&self.state), self.state.agent_bus.clone())
+        AgentControl::new(Arc::downgrade(&self.state))
     }
 }
 
