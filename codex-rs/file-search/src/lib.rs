@@ -32,6 +32,7 @@ mod cli;
 pub use cli::Cli;
 
 const GIT_FILE_LIST_TTL: Duration = Duration::from_secs(1);
+const GIT_REPO_INFO_NEGATIVE_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 struct GitRepoInfo {
@@ -52,8 +53,13 @@ struct GitFileListEntry {
     files: Arc<Vec<String>>,
 }
 
-static GIT_REPO_INFO_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<GitRepoInfo>>>> =
-    OnceLock::new();
+#[derive(Clone)]
+struct GitRepoInfoEntry {
+    created_at: Instant,
+    repo_info: Option<GitRepoInfo>,
+}
+
+static GIT_REPO_INFO_CACHE: OnceLock<Mutex<HashMap<PathBuf, GitRepoInfoEntry>>> = OnceLock::new();
 static GIT_FILE_LIST_CACHE: OnceLock<Mutex<HashMap<GitFileListKey, GitFileListEntry>>> =
     OnceLock::new();
 
@@ -67,8 +73,14 @@ fn git_repo_info(search_directory: &Path) -> Option<GitRepoInfo> {
 
     {
         let guard = cache.lock().unwrap_or_else(|err| err.into_inner());
-        if let Some(cached) = guard.get(&key) {
-            return cached.clone();
+        if let Some(entry) = guard.get(&key) {
+            if let Some(repo_info) = &entry.repo_info {
+                return Some(repo_info.clone());
+            }
+
+            if entry.created_at.elapsed() < GIT_REPO_INFO_NEGATIVE_TTL {
+                return None;
+            }
         }
     }
 
@@ -77,26 +89,32 @@ fn git_repo_info(search_directory: &Path) -> Option<GitRepoInfo> {
         .current_dir(&key)
         .output()
         .ok()?;
-    if !output.status.success() {
-        let mut guard = cache.lock().unwrap_or_else(|err| err.into_inner());
-        guard.insert(key, None);
-        return None;
-    }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines();
-    let repo_root_raw = lines.next()?.trim();
-    let prefix = lines.next().unwrap_or("").trim().to_string();
+    let repo_info = if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut lines = stdout.lines();
+        let repo_root_raw = lines.next()?.trim();
+        let prefix = lines.next().unwrap_or("").trim().to_string();
 
-    let repo_info = GitRepoInfo {
-        repo_root: canonicalize_for_cache(Path::new(repo_root_raw)),
-        prefix,
+        Some(GitRepoInfo {
+            repo_root: canonicalize_for_cache(Path::new(repo_root_raw)),
+            prefix,
+        })
+    } else {
+        None
     };
 
+    let entry = GitRepoInfoEntry {
+        created_at: Instant::now(),
+        repo_info: repo_info.clone(),
+    };
     let mut guard = cache.lock().unwrap_or_else(|err| err.into_inner());
-    guard.insert(key, Some(repo_info.clone()));
+    guard.retain(|_, entry| {
+        entry.repo_info.is_some() || entry.created_at.elapsed() < GIT_REPO_INFO_NEGATIVE_TTL
+    });
+    guard.insert(key, entry);
 
-    Some(repo_info)
+    repo_info
 }
 
 fn normalize_git_path(path: &str) -> String {
@@ -109,6 +127,26 @@ fn normalize_git_path(path: &str) -> String {
     {
         path.to_string()
     }
+}
+
+fn excluded_by_matcher(exclude_matcher: Option<&Override>, path: &str) -> bool {
+    let Some(exclude_matcher) = exclude_matcher else {
+        return false;
+    };
+
+    if exclude_matcher.matched(path, false).is_ignore() {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        if path.contains('\\') {
+            let path = path.replace('\\', "/");
+            return exclude_matcher.matched(&path, false).is_ignore();
+        }
+    }
+
+    false
 }
 
 fn git_ls_files(repo_root: &Path, prefix: &str, extra_args: &[&str]) -> Option<Vec<String>> {
@@ -184,6 +222,7 @@ fn git_files_for_search_directory(search_directory: &Path) -> Option<Arc<Vec<Str
     };
 
     let mut guard = cache.lock().unwrap_or_else(|err| err.into_inner());
+    guard.retain(|_, entry| entry.created_at.elapsed() < GIT_FILE_LIST_TTL);
     guard.insert(key, entry);
 
     Some(files)
@@ -355,8 +394,11 @@ pub fn run(
     };
 
     if git_best_lists.is_none() {
-        // Fall back to a raw filesystem walk with *no* ignore filtering so completion still works
-        // when git isn't available or we aren't in a repository.
+        // Fall back to a raw filesystem walk when git isn't available or we aren't in a repository.
+        //
+        // If `respect_gitignore` is set, we keep ignore filtering enabled so `.gitignore`/`.ignore`
+        // files are still honored in non-git directories. If it isn't set, we disable ignore
+        // filtering and walk everything.
         //
         // We use the same tree-walker library that ripgrep uses so that we can leverage the
         // parallelism it provides.
@@ -366,13 +408,20 @@ pub fn run(
             // Allow hidden entries.
             .hidden(false)
             // Follow symlinks to search their contents.
-            .follow_links(true)
+            .follow_links(true);
+
+        if respect_gitignore {
+            // Don't require git to be present to apply git-related ignore rules.
+            walk_builder.require_git(false);
+        } else {
             // Do not apply ignore rules when git isn't being used.
-            .git_ignore(false)
-            .git_global(false)
-            .git_exclude(false)
-            .ignore(false)
-            .parents(false);
+            walk_builder
+                .git_ignore(false)
+                .git_global(false)
+                .git_exclude(false)
+                .ignore(false)
+                .parents(false);
+        }
 
         if let Some(matcher) = &exclude_matcher {
             walk_builder.overrides(matcher.clone());
@@ -535,10 +584,7 @@ fn build_best_lists_for_paths(
         let mut processed = 0usize;
 
         for path in &*files {
-            if exclude_matcher
-                .as_ref()
-                .is_some_and(|m| m.matched(path.as_str(), false).is_ignore())
-            {
+            if excluded_by_matcher(exclude_matcher.as_ref(), path.as_str()) {
                 continue;
             }
             best_list.insert(path.as_str());
@@ -578,10 +624,7 @@ fn build_best_lists_for_paths(
             let mut processed = 0usize;
 
             for path in &files[start..end] {
-                if exclude_matcher
-                    .as_ref()
-                    .is_some_and(|m| m.matched(path.as_str(), false).is_ignore())
-                {
+                if excluded_by_matcher(exclude_matcher.as_ref(), path.as_str()) {
                     continue;
                 }
                 best_list.insert(path.as_str());
@@ -812,6 +855,40 @@ mod tests {
     }
 
     #[test]
+    fn gitignore_filters_untracked_ignored_files_and_dirs_outside_git_repo() -> anyhow::Result<()> {
+        let dir = TempDir::new().expect("tempdir should create");
+        std::fs::write(
+            dir.path().join(".gitignore"),
+            "ignored_dir/\nignored_file.txt\n",
+        )?;
+        std::fs::write(dir.path().join("ignored_file.txt"), "ignored")?;
+        std::fs::create_dir_all(dir.path().join("ignored_dir"))?;
+        std::fs::write(dir.path().join("ignored_dir").join("a.txt"), "ignored")?;
+        std::fs::write(dir.path().join("kept.txt"), "kept")?;
+
+        let results = run(
+            "txt",
+            NonZero::new(50).unwrap(),
+            dir.path(),
+            Vec::new(),
+            NonZero::new(2).unwrap(),
+            Arc::new(AtomicBool::new(false)),
+            false,
+            true,
+        )?;
+
+        let paths: Vec<&str> = results.matches.iter().map(|m| m.path.as_str()).collect();
+        let ignored_path = Path::new("ignored_dir")
+            .join("a.txt")
+            .to_string_lossy()
+            .to_string();
+        assert!(paths.contains(&"kept.txt"));
+        assert!(!paths.contains(&"ignored_file.txt"));
+        assert!(!paths.contains(&ignored_path.as_str()));
+        Ok(())
+    }
+
+    #[test]
     fn gitignore_does_not_filter_tracked_files() -> anyhow::Result<()> {
         let repo = mk_repo();
         std::fs::write(repo.path().join("tracked.log"), "tracked")?;
@@ -835,6 +912,26 @@ mod tests {
         let paths: Vec<&str> = results.matches.iter().map(|m| m.path.as_str()).collect();
         assert!(paths.contains(&"tracked.log"));
         assert!(!paths.contains(&"ignored.log"));
+        Ok(())
+    }
+
+    #[test]
+    fn git_repo_info_revalidates_negative_cache_entries() -> anyhow::Result<()> {
+        let dir = TempDir::new().expect("tempdir should create");
+
+        assert!(git_repo_info(dir.path()).is_none());
+        run_git(dir.path(), &["init"]);
+
+        let key = canonicalize_for_cache(dir.path());
+        let cache = GIT_REPO_INFO_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = cache.lock().unwrap_or_else(|err| err.into_inner());
+        let entry = guard
+            .get_mut(&key)
+            .expect("git_repo_info should cache negative results");
+        entry.created_at = Instant::now() - GIT_REPO_INFO_NEGATIVE_TTL - Duration::from_secs(1);
+        drop(guard);
+
+        assert!(git_repo_info(dir.path()).is_some());
         Ok(())
     }
 }
