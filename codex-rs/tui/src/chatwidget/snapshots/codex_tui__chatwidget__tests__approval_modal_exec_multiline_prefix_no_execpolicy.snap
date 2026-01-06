@@ -2,9 +2,13 @@
 source: tui/src/chatwidget/tests.rs
 expression: contents
 ---
+
+
   Would you like to run the following command?
 
-  $ echo hello world
+  $ python - <<'PY'
+  print('hello')
+  PY
 
 › 1. Yes, proceed (y)
   2. No, and tell Codex what to do differently (esc)

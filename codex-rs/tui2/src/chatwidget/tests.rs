@@ -2130,18 +2130,15 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
 
-    let long = format!("python - <<'PY'\n{}\nPY\n", "x".repeat(500));
+    let script = "python - <<'PY'\nprint('hello')\nPY".to_string();
+    let command = vec!["bash".into(), "-lc".into(), script];
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-multiline-trunc".into(),
         turn_id: "turn-approve-cmd-multiline-trunc".into(),
-        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        command: command.clone(),
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
-        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-            "bash".into(),
-            "-lc".into(),
-            long,
-        ])),
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
