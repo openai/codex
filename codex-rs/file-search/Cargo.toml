@@ -23,3 +23,4 @@ tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
