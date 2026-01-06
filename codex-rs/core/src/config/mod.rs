@@ -363,11 +363,19 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
+    thread_agnostic: bool,
 }
 
 impl ConfigBuilder {
     pub fn codex_home(mut self, codex_home: PathBuf) -> Self {
         self.codex_home = Some(codex_home);
+        self
+    }
+
+    /// Load a "thread-agnostic" config stack, which intentionally ignores any
+    /// in-repo `.codex/` config layers (because there is no cwd/project context).
+    pub fn thread_agnostic(mut self) -> Self {
+        self.thread_agnostic = true;
         self
     }
 
@@ -392,18 +400,22 @@ impl ConfigBuilder {
             cli_overrides,
             harness_overrides,
             loader_overrides,
+            thread_agnostic,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
         let cli_overrides = cli_overrides.unwrap_or_default();
         let harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
-        let cwd = match harness_overrides.cwd.as_deref() {
-            Some(path) => AbsolutePathBuf::try_from(path)?,
-            None => AbsolutePathBuf::current_dir()?,
+        let cwd = if thread_agnostic {
+            None
+        } else {
+            Some(match harness_overrides.cwd.as_deref() {
+                Some(path) => AbsolutePathBuf::try_from(path)?,
+                None => AbsolutePathBuf::current_dir()?,
+            })
         };
         let config_layer_stack =
-            load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
-                .await?;
+            load_config_layers_state(&codex_home, cwd, &cli_overrides, loader_overrides).await?;
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
@@ -2078,6 +2090,43 @@ trust_level = "trusted"
             final_config.mcp_oauth_credentials_store_mode,
             OAuthCredentialsStoreMode::Keyring,
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_builder_thread_agnostic_ignores_project_layers() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
+        let codex_home = tmp.path().join("codex_home");
+        std::fs::create_dir_all(&codex_home)?;
+        std::fs::write(codex_home.join(CONFIG_TOML_FILE), "model = \"from-user\"\n")?;
+
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(project.join(".codex"))?;
+        std::fs::write(
+            project.join(".codex").join(CONFIG_TOML_FILE),
+            "model = \"from-project\"\n",
+        )?;
+
+        let harness_overrides = ConfigOverrides {
+            cwd: Some(project),
+            ..Default::default()
+        };
+
+        let with_project_layers = ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .harness_overrides(harness_overrides.clone())
+            .build()
+            .await?;
+        assert_eq!(with_project_layers.model.as_deref(), Some("from-project"));
+
+        let thread_agnostic = ConfigBuilder::default()
+            .codex_home(codex_home)
+            .harness_overrides(harness_overrides)
+            .thread_agnostic()
+            .build()
+            .await?;
+        assert_eq!(thread_agnostic.model.as_deref(), Some("from-user"));
 
         Ok(())
     }

@@ -1,4 +1,5 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::config_api::ConfigApi;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
@@ -215,6 +216,7 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
+    config_api: ConfigApi,
     cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
@@ -265,12 +267,14 @@ impl CodexMessageProcessor {
         cli_overrides: Vec<(String, TomlValue)>,
         feedback: CodexFeedback,
     ) -> Self {
+        let config_api = ConfigApi::new(config.codex_home.clone(), cli_overrides.clone());
         Self {
             auth_manager,
             conversation_manager,
             outgoing,
             codex_linux_sandbox_exe,
             config,
+            config_api,
             cli_overrides,
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
@@ -282,13 +286,7 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        Config::load_with_cli_overrides(self.cli_overrides.clone())
-            .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+        self.config_api.load_latest_thread_agnostic_config().await
     }
 
     fn review_request_from_target(

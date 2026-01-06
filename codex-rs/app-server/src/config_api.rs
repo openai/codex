@@ -7,6 +7,8 @@ use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
 use serde_json::json;
@@ -15,13 +17,17 @@ use toml::Value as TomlValue;
 
 #[derive(Clone)]
 pub(crate) struct ConfigApi {
+    codex_home: PathBuf,
+    cli_overrides: Vec<(String, TomlValue)>,
     service: ConfigService,
 }
 
 impl ConfigApi {
     pub(crate) fn new(codex_home: PathBuf, cli_overrides: Vec<(String, TomlValue)>) -> Self {
         Self {
-            service: ConfigService::new(codex_home, cli_overrides),
+            service: ConfigService::new(codex_home.clone(), cli_overrides.clone()),
+            codex_home,
+            cli_overrides,
         }
     }
 
@@ -44,6 +50,22 @@ impl ConfigApi {
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         self.service.batch_write(params).await.map_err(map_error)
+    }
+
+    pub(crate) async fn load_latest_thread_agnostic_config(
+        &self,
+    ) -> Result<Config, JSONRPCErrorError> {
+        ConfigBuilder::default()
+            .codex_home(self.codex_home.clone())
+            .cli_overrides(self.cli_overrides.clone())
+            .thread_agnostic()
+            .build()
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to reload config: {err}"),
+                data: None,
+            })
     }
 }
 
