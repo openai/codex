@@ -44,12 +44,6 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
     }
 }
 
-fn is_multiline_command(command: &[String]) -> bool {
-    command
-        .iter()
-        .any(|arg| arg.contains('\n') || arg.contains('\r'))
-}
-
 #[derive(Debug, Error)]
 pub enum ExecPolicyError {
     #[error("failed to read execpolicy files from {dir}: {source}")]
@@ -123,8 +117,6 @@ impl ExecPolicyManager {
         let exec_policy = self.current();
         let commands =
             parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
-        let allow_execpolicy_proposals =
-            features.enabled(Feature::ExecPolicy) && !is_multiline_command(command);
         let heuristics_fallback = |cmd: &[String]| {
             if requires_initial_appoval(approval_policy, sandbox_policy, cmd, sandbox_permissions) {
                 Decision::Prompt
@@ -146,7 +138,7 @@ impl ExecPolicyManager {
                 } else {
                     ExecApprovalRequirement::NeedsApproval {
                         reason: derive_prompt_reason(&evaluation),
-                        proposed_execpolicy_amendment: if allow_execpolicy_proposals {
+                        proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
                             try_derive_execpolicy_amendment_for_prompt_rules(
                                 &evaluation.matched_rules,
                             )
@@ -161,7 +153,7 @@ impl ExecPolicyManager {
                 bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
                     is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
                 }),
-                proposed_execpolicy_amendment: if allow_execpolicy_proposals {
+                proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
                     try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
                 } else {
                     None
@@ -864,33 +856,6 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                     "cargo".to_string(),
                     "build".to_string()
                 ])),
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn proposed_execpolicy_amendment_is_omitted_for_multiline_scripts() {
-        let command = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "cargo build\necho ok".to_string(),
-        ];
-        let manager = ExecPolicyManager::default();
-        let requirement = manager
-            .create_exec_approval_requirement_for_command(
-                &Features::with_defaults(),
-                &command,
-                AskForApproval::UnlessTrusted,
-                &SandboxPolicy::ReadOnly,
-                SandboxPermissions::UseDefault,
-            )
-            .await;
-
-        assert_eq!(
-            requirement,
-            ExecApprovalRequirement::NeedsApproval {
-                reason: None,
-                proposed_execpolicy_amendment: None,
             }
         );
     }
