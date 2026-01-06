@@ -453,6 +453,32 @@ pub struct ConfigReadResponse {
     pub layers: Option<Vec<ConfigLayer>>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum SandboxModeRequirement {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+    ExternalSandbox,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct Requirements {
+    pub allowed_approval_policies: Option<Vec<AskForApproval>>,
+    pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RequirementListResponse {
+    /// Null if no requirements are configured (e.g. no requirements.toml/MDM entries).
+    pub requirements: Option<Requirements>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

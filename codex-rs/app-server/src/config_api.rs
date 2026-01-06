@@ -7,9 +7,14 @@ use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequirementListResponse;
+use codex_app_server_protocol::Requirements;
+use codex_app_server_protocol::SandboxModeRequirement;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
+use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
 use serde_json::json;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
@@ -37,6 +42,19 @@ impl ConfigApi {
         self.service.read(params).await.map_err(map_error)
     }
 
+    pub(crate) async fn requirement_list(
+        &self,
+    ) -> Result<RequirementListResponse, JSONRPCErrorError> {
+        let requirements = self
+            .service
+            .read_requirements()
+            .await
+            .map_err(map_error)?
+            .map(map_requirements_toml_to_api);
+
+        Ok(RequirementListResponse { requirements })
+    }
+
     pub(crate) async fn write_value(
         &self,
         params: ConfigValueWriteParams,
@@ -49,6 +67,70 @@ impl ConfigApi {
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         self.service.batch_write(params).await.map_err(map_error)
+    }
+}
+
+fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> Requirements {
+    Requirements {
+        allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
+            policies
+                .into_iter()
+                .map(codex_app_server_protocol::AskForApproval::from)
+                .collect()
+        }),
+        allowed_sandbox_modes: requirements.allowed_sandbox_modes.map(|modes| {
+            modes
+                .into_iter()
+                .map(map_sandbox_mode_requirement_to_api)
+                .collect()
+        }),
+    }
+}
+
+fn map_sandbox_mode_requirement_to_api(mode: CoreSandboxModeRequirement) -> SandboxModeRequirement {
+    match mode {
+        CoreSandboxModeRequirement::ReadOnly => SandboxModeRequirement::ReadOnly,
+        CoreSandboxModeRequirement::WorkspaceWrite => SandboxModeRequirement::WorkspaceWrite,
+        CoreSandboxModeRequirement::DangerFullAccess => SandboxModeRequirement::DangerFullAccess,
+        CoreSandboxModeRequirement::ExternalSandbox => SandboxModeRequirement::ExternalSandbox,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn map_requirements_toml_to_api_converts_core_enums() {
+        let requirements = ConfigRequirementsToml {
+            allowed_approval_policies: Some(vec![
+                CoreAskForApproval::Never,
+                CoreAskForApproval::OnRequest,
+            ]),
+            allowed_sandbox_modes: Some(vec![
+                CoreSandboxModeRequirement::ReadOnly,
+                CoreSandboxModeRequirement::ExternalSandbox,
+            ]),
+        };
+
+        let mapped = map_requirements_toml_to_api(requirements);
+
+        assert_eq!(
+            mapped.allowed_approval_policies,
+            Some(vec![
+                codex_app_server_protocol::AskForApproval::Never,
+                codex_app_server_protocol::AskForApproval::OnRequest,
+            ])
+        );
+        assert_eq!(
+            mapped.allowed_sandbox_modes,
+            Some(vec![
+                SandboxModeRequirement::ReadOnly,
+                SandboxModeRequirement::ExternalSandbox,
+            ])
+        );
     }
 }
 

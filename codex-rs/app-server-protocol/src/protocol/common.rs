@@ -197,6 +197,11 @@ client_request_definitions! {
         response: v2::ConfigWriteResponse,
     },
 
+    RequirementList => "requirements/list" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::RequirementListResponse,
+    },
+
     GetAccount => "account/read" {
         params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
