@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
 use codex_app_server_protocol::AddConversationListenerParams;
@@ -66,6 +67,19 @@ struct Cli {
     /// Path to the `codex` CLI binary.
     #[arg(long, env = "CODEX_BIN", default_value = "codex")]
     codex_bin: String,
+
+    /// Forwarded to the `codex` CLI as `--config key=value`. Repeatable.
+    ///
+    /// Example:
+    ///   `--config 'model_providers.mock.base_url="http://localhost:4010/v2"'`
+    #[arg(
+        short = 'c',
+        long = "config",
+        value_name = "key=value",
+        action = ArgAction::Append,
+        global = true
+    )]
+    config_overrides: Vec<String>,
 
     #[command(subcommand)]
     command: CliCommand,
@@ -121,30 +135,43 @@ enum CliCommand {
 }
 
 fn main() -> Result<()> {
-    let Cli { codex_bin, command } = Cli::parse();
+    let Cli {
+        codex_bin,
+        config_overrides,
+        command,
+    } = Cli::parse();
 
     match command {
-        CliCommand::SendMessage { user_message } => send_message(codex_bin, user_message),
-        CliCommand::SendMessageV2 { user_message } => send_message_v2(codex_bin, user_message),
+        CliCommand::SendMessage { user_message } => {
+            send_message(&codex_bin, &config_overrides, user_message)
+        }
+        CliCommand::SendMessageV2 { user_message } => {
+            send_message_v2(&codex_bin, &config_overrides, user_message)
+        }
         CliCommand::TriggerCmdApproval { user_message } => {
-            trigger_cmd_approval(codex_bin, user_message)
+            trigger_cmd_approval(&codex_bin, &config_overrides, user_message)
         }
         CliCommand::TriggerPatchApproval { user_message } => {
-            trigger_patch_approval(codex_bin, user_message)
+            trigger_patch_approval(&codex_bin, &config_overrides, user_message)
         }
-        CliCommand::NoTriggerCmdApproval => no_trigger_cmd_approval(codex_bin),
+        CliCommand::NoTriggerCmdApproval => no_trigger_cmd_approval(&codex_bin, &config_overrides),
         CliCommand::SendFollowUpV2 {
             first_message,
             follow_up_message,
-        } => send_follow_up_v2(codex_bin, first_message, follow_up_message),
-        CliCommand::TestLogin => test_login(codex_bin),
-        CliCommand::GetAccountRateLimits => get_account_rate_limits(codex_bin),
-        CliCommand::ModelList => model_list(codex_bin),
+        } => send_follow_up_v2(
+            &codex_bin,
+            &config_overrides,
+            first_message,
+            follow_up_message,
+        ),
+        CliCommand::TestLogin => test_login(&codex_bin, &config_overrides),
+        CliCommand::GetAccountRateLimits => get_account_rate_limits(&codex_bin, &config_overrides),
+        CliCommand::ModelList => model_list(&codex_bin, &config_overrides),
     }
 }
 
-fn send_message(codex_bin: String, user_message: String) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+fn send_message(codex_bin: &str, config_overrides: &[String], user_message: String) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -165,46 +192,61 @@ fn send_message(codex_bin: String, user_message: String) -> Result<()> {
     Ok(())
 }
 
-fn send_message_v2(codex_bin: String, user_message: String) -> Result<()> {
-    send_message_v2_with_policies(codex_bin, user_message, None, None)
+fn send_message_v2(
+    codex_bin: &str,
+    config_overrides: &[String],
+    user_message: String,
+) -> Result<()> {
+    send_message_v2_with_policies(codex_bin, config_overrides, user_message, None, None)
 }
 
-fn trigger_cmd_approval(codex_bin: String, user_message: Option<String>) -> Result<()> {
+fn trigger_cmd_approval(
+    codex_bin: &str,
+    config_overrides: &[String],
+    user_message: Option<String>,
+) -> Result<()> {
     let default_prompt =
         "Run `touch /tmp/should-trigger-approval` so I can confirm the file exists.";
     let message = user_message.unwrap_or_else(|| default_prompt.to_string());
     send_message_v2_with_policies(
         codex_bin,
+        config_overrides,
         message,
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly),
     )
 }
 
-fn trigger_patch_approval(codex_bin: String, user_message: Option<String>) -> Result<()> {
+fn trigger_patch_approval(
+    codex_bin: &str,
+    config_overrides: &[String],
+    user_message: Option<String>,
+) -> Result<()> {
     let default_prompt =
         "Create a file named APPROVAL_DEMO.txt containing a short hello message using apply_patch.";
     let message = user_message.unwrap_or_else(|| default_prompt.to_string());
     send_message_v2_with_policies(
         codex_bin,
+        config_overrides,
         message,
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly),
     )
 }
 
-fn no_trigger_cmd_approval(codex_bin: String) -> Result<()> {
+fn no_trigger_cmd_approval(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
     let prompt = "Run `touch should_not_trigger_approval.txt`";
-    send_message_v2_with_policies(codex_bin, prompt.to_string(), None, None)
+    send_message_v2_with_policies(codex_bin, config_overrides, prompt.to_string(), None, None)
 }
 
 fn send_message_v2_with_policies(
-    codex_bin: String,
+    codex_bin: &str,
+    config_overrides: &[String],
     user_message: String,
     approval_policy: Option<AskForApproval>,
     sandbox_policy: Option<SandboxPolicy>,
 ) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -228,11 +270,12 @@ fn send_message_v2_with_policies(
 }
 
 fn send_follow_up_v2(
-    codex_bin: String,
+    codex_bin: &str,
+    config_overrides: &[String],
     first_message: String,
     follow_up_message: String,
 ) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -265,8 +308,8 @@ fn send_follow_up_v2(
     Ok(())
 }
 
-fn test_login(codex_bin: String) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+fn test_login(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -295,8 +338,8 @@ fn test_login(codex_bin: String) -> Result<()> {
     }
 }
 
-fn get_account_rate_limits(codex_bin: String) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+fn get_account_rate_limits(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -307,8 +350,8 @@ fn get_account_rate_limits(codex_bin: String) -> Result<()> {
     Ok(())
 }
 
-fn model_list(codex_bin: String) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+fn model_list(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -327,8 +370,12 @@ struct CodexClient {
 }
 
 impl CodexClient {
-    fn spawn(codex_bin: String) -> Result<Self> {
-        let mut codex_app_server = Command::new(&codex_bin)
+    fn spawn(codex_bin: &str, config_overrides: &[String]) -> Result<Self> {
+        let mut cmd = Command::new(codex_bin);
+        for override_kv in config_overrides {
+            cmd.arg("--config").arg(override_kv);
+        }
+        let mut codex_app_server = cmd
             .arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

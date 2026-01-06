@@ -1255,14 +1255,14 @@ impl CodexMessageProcessor {
             cwd,
             approval_policy,
             sandbox: sandbox_mode,
-            config: cli_overrides,
+            config: request_overrides,
             base_instructions,
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool,
         } = params;
 
-        let overrides = ConfigOverrides {
+        let typesafe_overrides = ConfigOverrides {
             model,
             config_profile: profile,
             cwd: cwd.clone().map(PathBuf::from),
@@ -1279,15 +1279,21 @@ impl CodexMessageProcessor {
 
         // Persist windows sandbox feature.
         // TODO: persist default config in general.
-        let mut cli_overrides = cli_overrides.unwrap_or_default();
+        let mut request_overrides = request_overrides.unwrap_or_default();
         if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-            cli_overrides.insert(
+            request_overrides.insert(
                 "features.experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
             );
         }
 
-        let config = match derive_config_from_params(overrides, Some(cli_overrides)).await {
+        let config = match derive_config_from_params(
+            &self.cli_overrides,
+            Some(request_overrides),
+            typesafe_overrides,
+        )
+        .await
+        {
             Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1327,7 +1333,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
-        let overrides = self.build_thread_config_overrides(
+        let typesafe_overrides = self.build_thread_config_overrides(
             params.model,
             params.model_provider,
             params.cwd,
@@ -1337,18 +1343,21 @@ impl CodexMessageProcessor {
             params.developer_instructions,
         );
 
-        let config = match derive_config_from_params(overrides, params.config).await {
-            Ok(config) => config,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config =
+            match derive_config_from_params(&self.cli_overrides, params.config, typesafe_overrides)
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("error deriving config: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
@@ -1598,7 +1607,7 @@ impl CodexMessageProcessor {
             cwd,
             approval_policy,
             sandbox,
-            config: cli_overrides,
+            config: request_overrides,
             base_instructions,
             developer_instructions,
         } = params;
@@ -1608,12 +1617,12 @@ impl CodexMessageProcessor {
             || cwd.is_some()
             || approval_policy.is_some()
             || sandbox.is_some()
-            || cli_overrides.is_some()
+            || request_overrides.is_some()
             || base_instructions.is_some()
             || developer_instructions.is_some();
 
         let config = if overrides_requested {
-            let overrides = self.build_thread_config_overrides(
+            let typesafe_overrides = self.build_thread_config_overrides(
                 model,
                 model_provider,
                 cwd,
@@ -1622,7 +1631,13 @@ impl CodexMessageProcessor {
                 base_instructions,
                 developer_instructions,
             );
-            match derive_config_from_params(overrides, cli_overrides).await {
+            match derive_config_from_params(
+                &self.cli_overrides,
+                request_overrides,
+                typesafe_overrides,
+            )
+            .await
+            {
                 Ok(config) => config,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -2252,7 +2267,7 @@ impl CodexMessageProcessor {
                     cwd,
                     approval_policy,
                     sandbox: sandbox_mode,
-                    config: cli_overrides,
+                    config: request_overrides,
                     base_instructions,
                     developer_instructions,
                     compact_prompt,
@@ -2260,15 +2275,15 @@ impl CodexMessageProcessor {
                 } = overrides;
 
                 // Persist windows sandbox feature.
-                let mut cli_overrides = cli_overrides.unwrap_or_default();
+                let mut request_overrides = request_overrides.unwrap_or_default();
                 if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-                    cli_overrides.insert(
+                    request_overrides.insert(
                         "features.experimental_windows_sandbox".to_string(),
                         serde_json::json!(true),
                     );
                 }
 
-                let overrides = ConfigOverrides {
+                let typesafe_overrides = ConfigOverrides {
                     model,
                     config_profile: profile,
                     cwd: cwd.map(PathBuf::from),
@@ -2283,7 +2298,12 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 };
 
-                derive_config_from_params(overrides, Some(cli_overrides)).await
+                derive_config_from_params(
+                    &self.cli_overrides,
+                    Some(request_overrides),
+                    typesafe_overrides,
+                )
+                .await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -3400,17 +3420,34 @@ fn errors_to_info(
         .collect()
 }
 
+/// Derive the effective [`Config`] by layering three override sources.
+///
+/// Precedence (lowest to highest):
+/// - `cli_overrides`: process-wide startup `--config` flags.
+/// - `request_overrides`: per-request dotted-path overrides (`params.config`), converted JSON->TOML.
+/// - `typesafe_overrides`: Request objects such as `NewConversationParams` and
+///   `ThreadStartParams` support a limited set of _explicit_ config overrides, so
+///   `typesafe_overrides` is a `ConfigOverrides` derived from the respective request object.
+///   Because the overrides are defined explicitly in the `*Params`, this takes priority over
+///   the more general "bag of config options" provided by `cli_overrides` and `request_overrides`.
 async fn derive_config_from_params(
-    overrides: ConfigOverrides,
-    cli_overrides: Option<HashMap<String, serde_json::Value>>,
+    cli_overrides: &[(String, TomlValue)],
+    request_overrides: Option<HashMap<String, serde_json::Value>>,
+    typesafe_overrides: ConfigOverrides,
 ) -> std::io::Result<Config> {
-    let cli_overrides = cli_overrides
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(k, v)| (k, json_to_toml(v)))
-        .collect();
+    let merged_cli_overrides = cli_overrides
+        .iter()
+        .cloned()
+        .chain(
+            request_overrides
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k, json_to_toml(v))),
+        )
+        .collect::<Vec<_>>();
 
-    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
+    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, typesafe_overrides)
+        .await
 }
 
 pub(crate) async fn read_summary_from_rollout(
