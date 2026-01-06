@@ -1028,6 +1028,25 @@ impl Session {
         }
     }
 
+    /// Persist the event to the rollout file, flush it, and only then deliver it to clients.
+    ///
+    /// Most events can be delivered immediately after queueing the rollout write, but some
+    /// clients (e.g. app-server thread/rollback) re-read the rollout file synchronously on
+    /// receipt of the event and depend on the marker already being visible on disk.
+    pub(crate) async fn send_event_raw_flushed(&self, event: Event) {
+        // Record the last known agent status.
+        if let Some(status) = agent_status_from_event(&event.msg) {
+            let mut guard = self.agent_status.write().await;
+            *guard = status;
+        }
+        self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
+            .await;
+        self.flush_rollout().await;
+        if let Err(e) = self.tx_event.send(event).await {
+            error!("failed to send tool call event: {e}");
+        }
+    }
+
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
             turn_context,
@@ -1244,6 +1263,9 @@ impl Session {
                         );
                         history.replace(rebuilt);
                     }
+                }
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    history.drop_last_n_user_turns(rollback.num_turns);
                 }
                 _ => {}
             }
@@ -1687,6 +1709,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::SetSessionTitle { title } => {
                 handlers::set_session_title(&sess, sub.id.clone(), title).await;
             }
+            Op::ThreadRollback { num_turns } => {
+                handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -1744,6 +1769,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
 
@@ -2076,33 +2102,46 @@ mod handlers {
             sess.send_event_raw(event).await;
             return;
         }
+    }
 
-        let recorder = {
-            let guard = sess.services.rollout.lock().await;
-            guard.clone()
-        };
-        let Some(recorder) = recorder else {
-            let event = Event {
+    pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
+        if num_turns == 0 {
+            sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Session persistence is disabled; cannot rename session.".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::Other),
+                    message: "num_turns must be >= 1".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 }),
-            };
-            sess.send_event_raw(event).await;
+            })
+            .await;
             return;
-        };
+        }
 
-        if let Err(e) = recorder.set_session_title(title).await {
-            let event = Event {
+        let has_active_turn = { sess.active_turn.lock().await.is_some() };
+        if has_active_turn {
+            sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: format!("Failed to set session title: {e}"),
-                    codex_error_info: Some(CodexErrorInfo::Other),
+                    message: "Cannot rollback while a turn is in progress.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 }),
-            };
-            sess.send_event_raw(event).await;
+            })
+            .await;
+            return;
         }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+
+        let mut history = sess.clone_history().await;
+        history.drop_last_n_user_turns(num_turns);
+        sess.replace_history(history.get_history()).await;
+        sess.recompute_token_usage(turn_context.as_ref()).await;
+
+        sess.send_event_raw_flushed(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
+        })
+        .await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -3019,6 +3058,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_rollback_drops_last_turn_from_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref());
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let turn_1 = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "turn 1 user".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn 1 assistant".to_string(),
+                }],
+            },
+        ];
+        sess.record_into_history(&turn_1, tc.as_ref()).await;
+
+        let turn_2 = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "turn 2 user".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn 2 assistant".to_string(),
+                }],
+            },
+        ];
+        sess.record_into_history(&turn_2, tc.as_ref()).await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+
+        let mut expected = Vec::new();
+        expected.extend(initial_context);
+        expected.extend(turn_1);
+
+        let actual = sess.clone_history().await.get_history();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref());
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let turn_1 = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "turn 1 user".to_string(),
+            }],
+        }];
+        sess.record_into_history(&turn_1, tc.as_ref()).await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 99).await;
+
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 99);
+
+        let actual = sess.clone_history().await.get_history();
+        assert_eq!(initial_context, actual);
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_fails_when_turn_in_progress() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref());
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        *sess.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+
+        let error_event = wait_for_thread_rollback_failed(&rx).await;
+        assert_eq!(
+            error_event.codex_error_info,
+            Some(CodexErrorInfo::ThreadRollbackFailed)
+        );
+
+        let actual = sess.clone_history().await.get_history();
+        assert_eq!(initial_context, actual);
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_fails_when_num_turns_is_zero() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref());
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 0).await;
+
+        let error_event = wait_for_thread_rollback_failed(&rx).await;
+        assert_eq!(error_event.message, "num_turns must be >= 1");
+        assert_eq!(
+            error_event.codex_error_info,
+            Some(CodexErrorInfo::ThreadRollbackFailed)
+        );
+
+        let actual = sess.clone_history().await.get_history();
+        assert_eq!(initial_context, actual);
+    }
+
+    #[tokio::test]
     async fn set_rate_limits_retains_previous_credits() {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
@@ -3249,6 +3413,44 @@ mod tests {
         };
 
         assert_eq!(expected, got);
+    }
+
+    async fn wait_for_thread_rolled_back(
+        rx: &async_channel::Receiver<Event>,
+    ) -> crate::protocol::ThreadRolledBackEvent {
+        let deadline = StdDuration::from_secs(2);
+        let start = std::time::Instant::now();
+        loop {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::ThreadRolledBack(payload) => return payload,
+                _ => continue,
+            }
+        }
+    }
+
+    async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) -> ErrorEvent {
+        let deadline = StdDuration::from_secs(2);
+        let start = std::time::Instant::now();
+        loop {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::Error(payload)
+                    if payload.codex_error_info == Some(CodexErrorInfo::ThreadRollbackFailed) =>
+                {
+                    return payload;
+                }
+                _ => continue,
+            }
+        }
     }
 
     fn text_block(s: &str) -> ContentBlock {
