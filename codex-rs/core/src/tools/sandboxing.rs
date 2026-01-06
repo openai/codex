@@ -55,7 +55,7 @@ impl ApprovalStore {
 /// - If all keys are already approved for session, we skip prompting.
 /// - If the user approves for session, we store the decision for each key individually
 ///   so future requests touching any subset can also skip prompting.
-pub(crate) async fn with_cached_approval_set<K, F, Fut>(
+pub(crate) async fn with_cached_approval<K, F, Fut>(
     services: &SessionServices,
     keys: Vec<K>,
     fetch: F,

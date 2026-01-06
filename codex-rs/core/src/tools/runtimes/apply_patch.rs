@@ -18,7 +18,7 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::with_cached_approval_set;
+use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -117,7 +117,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                     .await;
             }
 
-            with_cached_approval_set(&session.services, approval_keys, || async move {
+            with_cached_approval(&session.services, approval_keys, || async move {
                 let rx_approve = session
                     .request_patch_approval(turn, call_id, changes, None, None)
                     .await;
