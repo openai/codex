@@ -188,7 +188,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
             std::process::exit(0);
         }
         Err(e) => {
-            if e.to_string().contains("device code login is not enabled") {
+            if e.kind() == std::io::ErrorKind::NotFound {
                 eprintln!("Device code login is not enabled; falling back to browser login.");
                 match run_login_server(opts) {
                     Ok(server) => {

@@ -682,7 +682,7 @@ impl AuthModeWidget {
                 let device_code = match request_device_code(&opts).await {
                     Ok(device_code) => device_code,
                     Err(err) => {
-                        if err.to_string().contains("device code login is not enabled") {
+                        if err.kind() == std::io::ErrorKind::NotFound {
                             let should_fallback = {
                                 let guard = sign_in_state.read().unwrap();
                                 matches!(
