@@ -10,6 +10,8 @@ import type { ThreadStartParams } from "../generated/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "../generated/v2/ThreadStartResponse";
 import type { ThreadResumeParams } from "../generated/v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "../generated/v2/ThreadResumeResponse";
+import type { ThreadCompactParams } from "../generated/v2/ThreadCompactParams";
+import type { ThreadCompactResponse } from "../generated/v2/ThreadCompactResponse";
 import type { TurnStartParams } from "../generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "../generated/v2/TurnStartResponse";
 import type { TurnInterruptParams } from "../generated/v2/TurnInterruptParams";
@@ -20,8 +22,6 @@ import type { ModelListParams } from "../generated/v2/ModelListParams";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse";
-import type { ThreadUndoParams } from "../generated/v2/ThreadUndoParams";
-import type { ThreadUndoResponse } from "../generated/v2/ThreadUndoResponse";
 import type { ThreadRewindParams } from "../generated/v2/ThreadRewindParams";
 import type { ThreadRewindResponse } from "../generated/v2/ThreadRewindResponse";
 import type { ThreadListParams } from "../generated/v2/ThreadListParams";
@@ -178,9 +178,11 @@ export class BackendProcess implements vscode.Disposable {
     });
   }
 
-  public async threadUndo(params: ThreadUndoParams): Promise<ThreadUndoResponse> {
-    return this.rpc.request<ThreadUndoResponse>({
-      method: "thread/undo",
+  public async threadCompact(
+    params: ThreadCompactParams,
+  ): Promise<ThreadCompactResponse> {
+    return this.rpc.request<ThreadCompactResponse>({
+      method: "thread/compact",
       params,
     });
   }

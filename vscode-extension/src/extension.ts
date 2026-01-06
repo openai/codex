@@ -33,6 +33,9 @@ import { DiffDocumentProvider, makeDiffUri } from "./ui/diff_provider";
 import { SessionPanelManager } from "./ui/session_panel_manager";
 import { SessionTreeDataProvider } from "./ui/session_tree";
 
+const REWIND_STEP_TIMEOUT_MS = 120_000;
+const LAST_ACTIVE_SESSION_KEY = "codexMine.lastActiveSessionId.v1";
+
 let backendManager: BackendManager | null = null;
 let sessions: SessionStore | null = null;
 let sessionTree: SessionTreeDataProvider | null = null;
@@ -40,9 +43,14 @@ let diffProvider: DiffDocumentProvider | null = null;
 let chatView: ChatViewProvider | null = null;
 let sessionPanels: SessionPanelManager | null = null;
 let activeSessionId: string | null = null;
-let selectSessionRequestSeq = 0;
 let extensionContext: vscode.ExtensionContext | null = null;
 let outputChannel: vscode.OutputChannel | null = null;
+
+type StressUiJob = {
+  sessionId: string;
+  cancel: () => void;
+};
+let stressUiJob: StressUiJob | null = null;
 
 type CachedImageMeta = {
   mimeType: string;
@@ -54,6 +62,26 @@ const IMAGE_CACHE_DIRNAME = "images.v2";
 const IMAGE_CACHE_MAX_ITEMS = 500;
 const IMAGE_CACHE_MAX_TOTAL_BYTES = 250_000_000;
 const SESSION_IMAGE_AUTOLOAD_RECENT = 24;
+const USER_INPUT_IMAGE_DIRNAME = "user-input-images.v1";
+
+async function withTimeout<T>(
+  label: string,
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
 
 function requireExtensionContext(): vscode.ExtensionContext {
   if (!extensionContext) throw new Error("extensionContext is not initialized");
@@ -64,6 +92,20 @@ function imageCacheDirFsPath(context: vscode.ExtensionContext): string {
   const base = context.globalStorageUri?.fsPath;
   if (!base) throw new Error("globalStorageUri is not available");
   return path.join(base, IMAGE_CACHE_DIRNAME);
+}
+
+function userInputImageDirFsPath(context: vscode.ExtensionContext): string {
+  const base = context.globalStorageUri?.fsPath;
+  if (!base) throw new Error("globalStorageUri is not available");
+  return path.join(base, USER_INPUT_IMAGE_DIRNAME);
+}
+
+async function ensureUserInputImageDir(
+  context: vscode.ExtensionContext,
+): Promise<string> {
+  const dir = userInputImageDirFsPath(context);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
 }
 
 function imageCachePaths(
@@ -193,6 +235,42 @@ function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
   return { mimeType, base64 };
 }
 
+function imageExtFromMimeType(mimeType: string): string | null {
+  switch (mimeType) {
+    case "image/png":
+      return "png";
+    case "image/jpeg":
+      return "jpg";
+    case "image/gif":
+      return "gif";
+    case "image/webp":
+      return "webp";
+    case "image/bmp":
+      return "bmp";
+    case "image/svg+xml":
+      return "svg";
+    case "image/tiff":
+      return "tiff";
+    default:
+      return null;
+  }
+}
+
+async function persistUserInputImageFile(args: {
+  sessionId: string;
+  mimeType: string;
+  bytes: Buffer;
+}): Promise<{ path: string }> {
+  const context = requireExtensionContext();
+  const dir = await ensureUserInputImageDir(context);
+  const ext = imageExtFromMimeType(args.mimeType);
+  if (!ext) throw new Error(`Unsupported image MIME type: ${args.mimeType}`);
+  const fileName = `${sanitizeImageKey(`user-${args.sessionId}-${crypto.randomUUID()}`)}.${ext}`;
+  const filePath = path.join(dir, fileName);
+  await fs.writeFile(filePath, args.bytes);
+  return { path: filePath };
+}
+
 async function cacheImageDataUrl(args: {
   prefix: string;
   dataUrl: string;
@@ -228,6 +306,9 @@ const cliVariantByBackendKey = new Map<
 >();
 const defaultTitleRe = /^(.*)\s+\([0-9a-f]{8}\)$/i;
 type UiImageInput = { name: string; url: string };
+type BackendImageInput =
+  | { kind: "imageUrl"; url: string }
+  | { kind: "localImage"; path: string };
 
 type CustomPromptSummary = {
   name: string;
@@ -243,6 +324,8 @@ type SessionRuntime = {
   statusText: string | null;
   tokenUsage: ThreadTokenUsage | null;
   sending: boolean;
+  compactInFlight: boolean;
+  pendingCompactBlockId: string | null;
   streamingAssistantItemIds: Set<string>;
   activeTurnId: string | null;
   pendingInterrupt: boolean;
@@ -400,19 +483,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
       if (rewind) {
         const turnIndexRaw = (rewind as any).turnIndex;
-        const scopeRaw = (rewind as any).scope;
         const turnIndex =
           typeof turnIndexRaw === "number" && Number.isFinite(turnIndexRaw)
             ? Math.trunc(turnIndexRaw)
             : 0;
-        const scope =
-          scopeRaw === "code" ||
-          scopeRaw === "conversation" ||
-          scopeRaw === "both"
-            ? scopeRaw
-            : null;
 
-        if (!turnIndex || turnIndex < 1 || !scope) {
+        if (!turnIndex || turnIndex < 1) {
           void vscode.window.showErrorMessage("Invalid rewind request.");
           return;
         }
@@ -425,25 +501,67 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
+        const rewindBlockId = newLocalId("info");
         upsertBlock(session.id, {
-          id: newLocalId("info"),
+          id: rewindBlockId,
           type: "info",
           title: "Rewind requested",
-          text: `Rewinding to turn #${turnIndex} (${scope})…`,
+          text: `Rewinding to turn #${turnIndex}…`,
         });
         chatView?.refresh();
 
-        await backendManager.threadRewind(session, { turnIndex, scope });
+        try {
+          await withTimeout(
+            "thread/rewind",
+            backendManager.threadRewind(session, { turnIndex }),
+            REWIND_STEP_TIMEOUT_MS,
+          );
 
-        const reloaded = await backendManager.reloadSession(
-          session,
-          getSessionModelState(),
-        );
-        hydrateRuntimeFromThread(session.id, reloaded.thread, { force: true });
-        chatView?.refresh();
+          upsertBlock(session.id, {
+            id: rewindBlockId,
+            type: "info",
+            title: "Reloading session",
+            text: "Rewind completed. Reloading thread state…",
+          });
+          chatView?.refresh();
+
+          const reloaded = await withTimeout(
+            "thread/reload",
+            backendManager.reloadSession(session, getSessionModelState()),
+            REWIND_STEP_TIMEOUT_MS,
+          );
+          hydrateRuntimeFromThread(session.id, reloaded.thread, {
+            force: true,
+          });
+
+          upsertBlock(session.id, {
+            id: rewindBlockId,
+            type: "info",
+            title: "Rewind completed",
+            text: `Rewound to turn #${turnIndex}.`,
+          });
+          chatView?.refresh();
+        } catch (err) {
+          outputChannel?.appendLine(
+            `[rewind] Failed: threadId=${session.threadId} turnIndex=${turnIndex} err=${String(err)}`,
+          );
+          upsertBlock(session.id, {
+            id: rewindBlockId,
+            type: "error",
+            title: "Rewind failed",
+            text: `${String(err)}\n\nCheck 'Codex UI' output channel for backend logs.`,
+          });
+          chatView?.refresh();
+          return;
+        }
       }
 
-      await sendUserInput(session, expanded.text, images);
+      await sendUserInput(
+        session,
+        expanded.text,
+        images,
+        getSessionModelState(),
+      );
     },
     async (sessionId, query, cancellationToken) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
@@ -529,6 +647,35 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(output);
+
+  // Best-effort: restore the last active session after extension reloads so users
+  // don't need to re-select it from Sessions every time. This performs at most one
+  // `thread/resume` and avoids any background rehydration while switching tabs.
+  void (async () => {
+    if (!backendManager) return;
+    if (!sessions) return;
+    if (activeSessionId) return;
+    const lastSessionId = context.workspaceState.get<string>(
+      LAST_ACTIVE_SESSION_KEY,
+    );
+    if (typeof lastSessionId !== "string" || !lastSessionId) return;
+    const session = sessions.getById(lastSessionId);
+    if (!session) return;
+    try {
+      // Ensure the view is visible so the user sees the restored conversation.
+      await showCodexMineViewContainer();
+      setActiveSession(session.id, { markRead: false });
+      const res = await backendManager.resumeSession(session);
+      void ensureModelsFetched(session);
+      hydrateRuntimeFromThread(session.id, res.thread);
+      setActiveSession(session.id);
+      refreshCustomPromptsFromDisk();
+    } catch (err) {
+      output.appendLine(
+        `[startup] Failed to restore last sessionId=${lastSessionId}: ${String(err)}`,
+      );
+    }
+  })();
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexMine.startBackend", async () => {
@@ -750,27 +897,6 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       if (!turnId) {
-        output.appendLine(
-          `[turn] Interrupt requested but turnId is unknown; refreshing thread state: threadId=${session.threadId}`,
-        );
-        try {
-          const resumed = await backendManager.resumeSession(session);
-          const inProgress = resumed.thread.turns.find(
-            (t) => t.status === "inProgress",
-          );
-          if (inProgress) {
-            turnId = inProgress.id;
-            rt.activeTurnId = turnId;
-            rt.sending = true;
-          }
-        } catch (err) {
-          output.appendLine(
-            `[turn] Failed to refresh thread state for interrupt: ${String(err)}`,
-          );
-        }
-      }
-
-      if (!turnId) {
         upsertBlock(session.id, {
           id: newLocalId("info"),
           type: "info",
@@ -814,7 +940,9 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      output.appendLine(`[session] Reload requested: threadId=${session.threadId}`);
+      output.appendLine(
+        `[session] Reload requested: threadId=${session.threadId}`,
+      );
       try {
         const res = await backendManager.reloadSession(
           session,
@@ -834,6 +962,165 @@ export function activate(context: vscode.ExtensionContext): void {
         chatView?.refresh();
       }
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.debug.stressUi", async () => {
+      if (!sessions) throw new Error("sessions is not initialized");
+      if (!outputChannel) throw new Error("outputChannel is not initialized");
+      if (!chatView) throw new Error("chatView is not initialized");
+      const output = outputChannel;
+      const view = chatView;
+
+      const session = activeSessionId
+        ? sessions.getById(activeSessionId)
+        : null;
+      if (!session) {
+        void vscode.window.showErrorMessage("No session selected.");
+        return;
+      }
+
+      const totalRaw = await vscode.window.showInputBox({
+        title: "Stress UI streaming",
+        prompt: "Total characters to append",
+        value: "2000000",
+        validateInput: (v) => {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n <= 0) return "Enter a positive number";
+          return undefined;
+        },
+      });
+      if (!totalRaw) return;
+      const totalChars = Math.floor(Number(totalRaw));
+
+      const chunkRaw = await vscode.window.showInputBox({
+        title: "Stress UI streaming",
+        prompt: "Chunk size (characters per tick)",
+        value: "2000",
+        validateInput: (v) => {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n <= 0) return "Enter a positive number";
+          if (n > 200_000) return "Too large; keep it <= 200000";
+          return undefined;
+        },
+      });
+      if (!chunkRaw) return;
+      const chunkChars = Math.floor(Number(chunkRaw));
+
+      const intervalRaw = await vscode.window.showInputBox({
+        title: "Stress UI streaming",
+        prompt: "Interval between ticks (ms)",
+        value: "0",
+        validateInput: (v) => {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n < 0)
+            return "Enter 0 or a positive number";
+          if (n > 10_000) return "Too large; keep it <= 10000";
+          return undefined;
+        },
+      });
+      if (intervalRaw === undefined) return;
+      const intervalMs = Math.floor(Number(intervalRaw));
+
+      // Cancel any existing job.
+      if (stressUiJob) {
+        stressUiJob.cancel();
+        stressUiJob = null;
+      }
+
+      const rt = ensureRuntime(session.id);
+      const blockId = `debug:stressUi:${session.id}`;
+      const block = getOrCreateBlock(rt, blockId, () => ({
+        id: blockId,
+        type: "assistant",
+        text: "",
+        streaming: true,
+      }));
+      if (block.type === "assistant") {
+        block.text = "";
+        (block as any).streaming = true;
+      }
+      view.postBlockUpsert(session.id, block);
+
+      const baseChunk =
+        chunkChars <= 1 ? "A" : `${"A".repeat(chunkChars - 1)}\n`;
+      let remaining = totalChars;
+      let cancelled = false;
+
+      output.appendLine(
+        `[debug] stressUi started: sessionId=${session.id} totalChars=${totalChars} chunkChars=${chunkChars} intervalMs=${intervalMs}`,
+      );
+
+      const tick = (): void => {
+        if (cancelled) return;
+        const nextLen = Math.min(remaining, baseChunk.length);
+        const delta =
+          nextLen === baseChunk.length
+            ? baseChunk
+            : baseChunk.slice(0, nextLen);
+        remaining -= delta.length;
+
+        const b = getOrCreateBlock(rt, blockId, () => ({
+          id: blockId,
+          type: "assistant",
+          text: "",
+          streaming: true,
+        }));
+        if (b.type === "assistant") {
+          b.text += delta;
+          (b as any).streaming = remaining > 0;
+        }
+        view.postBlockAppend(session.id, blockId, "assistantText", delta, {
+          streaming: remaining > 0,
+        });
+
+        if (remaining <= 0) {
+          output.appendLine(
+            `[debug] stressUi completed: sessionId=${session.id}`,
+          );
+          stressUiJob = null;
+          return;
+        }
+        setTimeout(tick, intervalMs);
+      };
+
+      tick();
+
+      stressUiJob = {
+        sessionId: session.id,
+        cancel: () => {
+          cancelled = true;
+          const b = getOrCreateBlock(rt, blockId, () => ({
+            id: blockId,
+            type: "assistant",
+            text: "",
+            streaming: false,
+          }));
+          if (b.type === "assistant") (b as any).streaming = false;
+          view.postBlockUpsert(session.id, b);
+          output.appendLine(
+            `[debug] stressUi cancelled: sessionId=${session.id}`,
+          );
+        },
+      };
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "codexMine.debug.stopStressUi",
+      async () => {
+        if (!outputChannel) throw new Error("outputChannel is not initialized");
+        if (!stressUiJob) {
+          void vscode.window.showInformationMessage(
+            "No UI stress job is running.",
+          );
+          return;
+        }
+        stressUiJob.cancel();
+        stressUiJob = null;
+      },
+    ),
   );
 
   context.subscriptions.push(
@@ -935,7 +1222,7 @@ export function activate(context: vscode.ExtensionContext): void {
         )
         .join("\n");
 
-      upsertBlock(rt, {
+      upsertBlock(session.id, {
         id: newLocalId("status"),
         type: "info",
         title: "Status",
@@ -1153,12 +1440,24 @@ export function activate(context: vscode.ExtensionContext): void {
       const restart = await vscode.window.showInformationMessage(
         "CLI setting updated. Restart running backends now to apply?",
         "Restart all",
+        "Force restart all",
         "Later",
       );
       if (restart === "Restart all") {
         const folders = vscode.workspace.workspaceFolders ?? [];
         for (const f of folders) {
           await ensureBackendMatchesConfiguredCli(f, "newSession");
+        }
+      } else if (restart === "Force restart all") {
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        for (const f of folders) {
+          await backendManager.restartForWorkspaceFolder(f);
+          if (picked.it.variant !== "auto") {
+            cliVariantByBackendKey.set(
+              f.uri.toString(),
+              picked.it.variant === "codex-mine" ? "codex-mine" : "codex",
+            );
+          }
         }
       } else {
         void vscode.window.showInformationMessage(
@@ -1181,14 +1480,21 @@ export function activate(context: vscode.ExtensionContext): void {
 
         const picked = await vscode.window.showQuickPick(
           [
+            { label: "Copy Session ID", action: "copySessionId" as const },
             { label: "Rename", action: "rename" as const },
             { label: "Open in Editor Tab", action: "openPanel" as const },
-            { label: "Revert (Undo last snapshot)", action: "revert" as const },
             { label: "Close Tab (Hide)", action: "hide" as const },
           ],
           { title: session.title },
         );
         if (!picked) return;
+
+        if (picked.action === "copySessionId") {
+          await vscode.commands.executeCommand("codexMine.copySessionId", {
+            sessionId: session.id,
+          });
+          return;
+        }
 
         if (picked.action === "rename") {
           await vscode.commands.executeCommand("codexMine.renameSession", {
@@ -1199,13 +1505,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
         if (picked.action === "openPanel") {
           await vscode.commands.executeCommand("codexMine.openSessionPanel", {
-            sessionId: session.id,
-          });
-          return;
-        }
-
-        if (picked.action === "revert") {
-          await vscode.commands.executeCommand("codexMine.revert", {
             sessionId: session.id,
           });
           return;
@@ -1282,6 +1581,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
         sessionTree?.refresh();
         chatView?.refresh();
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "codexMine.copySessionId",
+      async (args?: unknown) => {
+        if (!sessions) throw new Error("sessions is not initialized");
+        const session = parseSessionArg(args, sessions);
+        if (!session) {
+          void vscode.window.showErrorMessage("Session not found.");
+          return;
+        }
+
+        await vscode.env.clipboard.writeText(session.id);
+        void vscode.window.showInformationMessage("Copied session ID.");
       },
     ),
   );
@@ -1395,52 +1711,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.revert", async (args?: unknown) => {
-      if (!backendManager) throw new Error("backendManager is not initialized");
-      if (!sessions) throw new Error("sessions is not initialized");
-
-      const session =
-        parseSessionArg(args, sessions) ??
-        (activeSessionId ? sessions.getById(activeSessionId) : null);
-      if (!session) {
-        void vscode.window.showErrorMessage("Session not found.");
-        return;
-      }
-
-      const rt = ensureRuntime(session.id);
-      if (rt.sending) {
-        void vscode.window.showErrorMessage(
-          "Cannot revert while a turn is in progress.",
-        );
-        return;
-      }
-
-      // Optimistic UI feedback; completion and errors should arrive via server notifications.
-      upsertBlock(session.id, {
-        id: newLocalId("info"),
-        type: "info",
-        title: "Revert requested",
-        text: "Undo requested. Waiting for backend…",
-      });
-      chatView?.refresh();
-      schedulePersistRuntime(session.id);
-
-      try {
-        await backendManager.threadUndo(session);
-      } catch (err) {
-        outputChannel?.appendLine(`[undo] Failed to request undo: ${String(err)}`);
-        upsertBlock(session.id, {
-          id: newLocalId("error"),
-          type: "error",
-          title: "Revert failed",
-          text: String(err),
-        });
-        chatView?.refresh();
-      }
-    }),
-  );
-
-  context.subscriptions.push(
     vscode.commands.registerCommand(
       "codexMine.selectSession",
       async (args?: unknown) => {
@@ -1454,42 +1724,57 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        const requestSeq = ++selectSessionRequestSeq;
-        const prevActiveSessionId = activeSessionId;
-
-        // Make tab switching feel immediate: update the active session in the UI
-        // before waiting on any backend I/O. Avoid marking as read until we confirm
-        // the session is actually opened.
+        // Session switching should be a pure UI operation. However, after a reload the UI may not
+        // have hydrated blocks for a session yet. In that case, treat the click as an explicit
+        // "open" and resume once (only if nothing is currently running).
         setActiveSession(session.id, { markRead: false });
-        void showCodexMineViewContainer();
+        await showCodexMineViewContainer();
+
+        const rt = ensureRuntime(session.id);
+        if (hasConversationBlocks(rt)) {
+          setActiveSession(session.id);
+          return;
+        }
+
+        const anyRunning = [...runtimeBySessionId.values()].some(
+          (r) =>
+            r.sending ||
+            r.activeTurnId !== null ||
+            r.streamingAssistantItemIds.size > 0 ||
+            r.pendingApprovals.size > 0,
+        );
+        if (anyRunning) {
+          upsertBlock(session.id, {
+            id: newLocalId("info"),
+            type: "info",
+            title: "Session not loaded yet",
+            text:
+              "This session has not been loaded in the UI yet. Wait for the running session to finish, then use Reload/Resume to load history.",
+          });
+          chatView?.refresh();
+          setActiveSession(session.id);
+          return;
+        }
 
         try {
           const res = await backendManager.resumeSession(session);
-          if (requestSeq !== selectSessionRequestSeq) return;
-
           void ensureModelsFetched(session);
           hydrateRuntimeFromThread(session.id, res.thread);
           setActiveSession(session.id);
-          await showCodexMineViewContainer();
         } catch (err) {
-          if (requestSeq !== selectSessionRequestSeq) return;
-
           outputChannel?.appendLine(
-            `[selectSession] Failed sessionId=${session.id}: ${
+            `[selectSession] Failed to hydrate sessionId=${session.id}: ${
               err instanceof Error ? (err.stack ?? err.message) : String(err)
             }`,
           );
-
-          if (prevActiveSessionId) {
-            setActiveSession(prevActiveSessionId);
-          } else {
-            activeSessionId = null;
-            chatView?.refresh();
-          }
-
-          void vscode.window.showErrorMessage(
-            "Failed to open session. See 'Codex UI' output for details.",
-          );
+          upsertBlock(session.id, {
+            id: newLocalId("error"),
+            type: "error",
+            title: "Failed to load session",
+            text: String(err),
+          });
+          chatView?.refresh();
+          setActiveSession(session.id);
         }
       },
     ),
@@ -1868,18 +2153,20 @@ function expandCustomPromptIfAny(
 }
 
 async function sendUserText(session: Session, text: string): Promise<void> {
-  await sendUserInput(session, text, []);
+  await sendUserInput(session, text, [], getSessionModelState());
 }
 
 async function sendUserInput(
   session: Session,
   text: string,
   images: UiImageInput[],
+  modelState: ModelState | null,
 ): Promise<void> {
   if (!backendManager) throw new Error("backendManager is not initialized");
   const rt = ensureRuntime(session.id);
   rt.sending = true;
   rt.pendingInterrupt = false;
+  const backendImages: BackendImageInput[] = [];
   const trimmed = text.trim();
   if (trimmed) {
     upsertBlock(session.id, { id: newLocalId("user"), type: "user", text });
@@ -1903,9 +2190,17 @@ async function sendUserInput(
       const rawName = String(img.name || "").trim();
       const name = rawName || `image-${i + 1}`;
       try {
-        const saved = await cacheImageDataUrl({
+        const { mimeType, base64 } = parseDataUrl(img.url);
+        const bytes = Buffer.from(base64, "base64");
+        const saved = await cacheImageBytes({
           prefix: `user-${session.id}`,
-          dataUrl: img.url,
+          mimeType,
+          bytes,
+        });
+        const persisted = await persistUserInputImageFile({
+          sessionId: session.id,
+          mimeType,
+          bytes,
         });
         galleryImages.push({
           title: name,
@@ -1917,8 +2212,10 @@ async function sendUserInput(
           alt: name,
           caption: name,
         });
+        backendImages.push({ kind: "localImage", path: persisted.path });
       } catch (err) {
         errors.push(`${name}: ${String(err)}`);
+        backendImages.push({ kind: "imageUrl", url: img.url });
       }
     }
 
@@ -1957,10 +2254,13 @@ async function sendUserInput(
     await backendManager.sendMessageWithModelAndImages(
       session,
       text,
-      images.map((img) => img.url),
-      getSessionModelState(),
+      backendImages,
+      modelState,
     );
   } catch (err) {
+    outputChannel?.appendLine(
+      `[send] Failed: sessionId=${session.id} threadId=${session.threadId} err=${String(err)}`,
+    );
     rt.sending = false;
     rt.pendingInterrupt = false;
     upsertBlock(session.id, {
@@ -1989,12 +2289,17 @@ async function handleSlashCommand(
 
   const expandedPrompt = expandCustomPromptIfAny(trimmed, customPrompts);
   if (expandedPrompt.kind === "expanded") {
-    await sendUserText(session, expandedPrompt.text);
+    await sendUserInput(
+      session,
+      expandedPrompt.text,
+      [],
+      getSessionModelState(),
+    );
     return true;
   }
   if (expandedPrompt.kind === "error") {
     const rt = ensureRuntime(session.id);
-    upsertBlock(rt, {
+    upsertBlock(session.id, {
       id: newLocalId("promptError"),
       type: "error",
       title: "Custom prompt error",
@@ -2009,6 +2314,81 @@ async function handleSlashCommand(
     await vscode.commands.executeCommand("codexMine.newSession", {
       workspaceFolderUri: session.workspaceFolderUri,
     });
+    return true;
+  }
+  if (cmd === "compact") {
+    if (arg) {
+      upsertBlock(session.id, {
+        id: newLocalId("compactError"),
+        type: "error",
+        title: "Slash command error",
+        text: "/compact does not take arguments.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (!backendManager) throw new Error("backendManager is not initialized");
+    const rt = ensureRuntime(session.id);
+    if (rt.compactInFlight) {
+      upsertBlock(session.id, {
+        id: newLocalId("compactAlreadyRunning"),
+        type: "error",
+        title: "Compact already running",
+        text: "A previous /compact is still in progress.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+    rt.sending = true;
+    rt.compactInFlight = true;
+    rt.pendingInterrupt = false;
+    const pendingId = newLocalId("compacting");
+    rt.pendingCompactBlockId = pendingId;
+    upsertBlock(session.id, {
+      id: pendingId,
+      type: "divider",
+      status: "inProgress",
+      text: `${makeDividerLine("Context")}\n• Compacting…`,
+    });
+    chatView?.refresh();
+    schedulePersistRuntime(session.id);
+
+    try {
+      await backendManager.threadCompact(session);
+    } catch (err) {
+      const errText =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : JSON.stringify(err);
+      outputChannel?.appendLine(
+        `[compact] Failed: sessionId=${session.id} threadId=${session.threadId} err=${errText}`,
+      );
+      rt.sending = false;
+      rt.compactInFlight = false;
+      if (rt.pendingCompactBlockId) {
+        upsertBlock(session.id, {
+          id: rt.pendingCompactBlockId,
+          type: "divider",
+          status: "failed",
+          text: `${makeDividerLine("Context")}\n• Compact failed`,
+        });
+      }
+      rt.pendingCompactBlockId = null;
+      rt.pendingInterrupt = false;
+      upsertBlock(session.id, {
+        id: newLocalId("error"),
+        type: "error",
+        title: "Compact failed",
+        text: errText,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+    }
     return true;
   }
   if (cmd === "resume") {
@@ -2055,12 +2435,13 @@ async function handleSlashCommand(
         return "- /prompts:" + p.name + hint;
       })
       .join("\n");
-    upsertBlock(rt, {
+    upsertBlock(session.id, {
       id: newLocalId("help"),
       type: "system",
       title: "Help",
       text: [
         "Slash commands:",
+        "- /compact: Compact context (if supported by backend)",
         "- /new: New session",
         "- /resume: Resume from history",
         "- /diff: Open Latest Diff",
@@ -2255,6 +2636,25 @@ async function showCodexMineViewContainer(): Promise<void> {
   await vscode.commands.executeCommand("workbench.view.extension.codexMine");
 }
 
+function hasConversationBlocks(rt: SessionRuntime): boolean {
+  return rt.blocks.some((b) => {
+    switch (b.type) {
+      case "user":
+      case "assistant":
+      case "command":
+      case "fileChange":
+      case "mcp":
+      case "webSearch":
+      case "reasoning":
+      case "plan":
+      case "divider":
+        return true;
+      default:
+        return false;
+    }
+  });
+}
+
 function setActiveSession(
   sessionId: string,
   opts?: { markRead?: boolean },
@@ -2263,6 +2663,9 @@ function setActiveSession(
   activeSessionId = sessionId;
   ensureRuntime(sessionId);
   if (markRead) unreadSessionIds.delete(sessionId);
+  if (extensionContext) {
+    void extensionContext.workspaceState.update(LAST_ACTIVE_SESSION_KEY, sessionId);
+  }
   // If a hidden tab session is selected (e.g. via Sessions tree), show it again.
   if (hiddenTabSessionIds.delete(sessionId)) {
     if (extensionContext) saveHiddenTabSessions(extensionContext);
@@ -2270,6 +2673,7 @@ function setActiveSession(
   const s = sessions ? sessions.getById(sessionId) : null;
   if (s) void ensureModelsFetched(s);
   chatView?.refresh();
+  chatView?.syncBlocksForActiveSession();
 }
 
 function markUnreadSession(sessionId: string): void {
@@ -2666,6 +3070,8 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     statusText: null,
     tokenUsage: null,
     sending: false,
+    compactInFlight: false,
+    pendingCompactBlockId: null,
     streamingAssistantItemIds: new Set(),
     activeTurnId: null,
     pendingInterrupt: false,
@@ -2878,38 +3284,18 @@ function applyServerNotification(
       const headline =
         workedSeconds !== null ? `Worked for ${workedSeconds}s` : "Context";
       const line = makeDividerLine(headline);
-      upsertBlock(rt, {
-        id: `compacted:${turnId || Date.now()}`,
+      const blockId = rt.pendingCompactBlockId
+        ? rt.pendingCompactBlockId
+        : `compacted:${turnId || Date.now()}`;
+      upsertBlock(sessionId, {
+        id: blockId,
         type: "divider",
+        status: "completed",
         text: `${line}\n• Context compacted`,
       });
-      chatView?.refresh();
-      return;
-    }
-    case "thread/undo/started": {
-      const p = (n as any).params as any;
-      const turnId = String(p?.turnId ?? p?.turn_id ?? "") || "";
-      const message = typeof p?.message === "string" ? p.message : null;
-      upsertBlock(rt, {
-        id: `undoStarted:${turnId || Date.now()}`,
-        type: "info",
-        title: "Revert started",
-        text: message || "Undo in progress…",
-      });
-      chatView?.refresh();
-      return;
-    }
-    case "thread/undo/completed": {
-      const p = (n as any).params as any;
-      const turnId = String(p?.turnId ?? p?.turn_id ?? "") || "";
-      const message = typeof p?.message === "string" ? p.message : null;
-      const success = Boolean(p?.success);
-      upsertBlock(rt, {
-        id: `undoCompleted:${turnId || Date.now()}`,
-        type: success ? "info" : "error",
-        title: success ? "Revert completed" : "Revert failed",
-        text: message || (success ? "Undo completed." : "Undo failed."),
-      });
+      rt.sending = false;
+      rt.compactInFlight = false;
+      rt.pendingCompactBlockId = null;
       chatView?.refresh();
       return;
     }
@@ -2960,7 +3346,10 @@ function applyServerNotification(
         const idx = rt.blockIndexById.get(id);
         if (idx === undefined) continue;
         const b = rt.blocks[idx];
-        if (b && b.type === "assistant") (b as any).streaming = false;
+        if (b && b.type === "assistant") {
+          (b as any).streaming = false;
+          chatView?.postBlockUpsert(sessionId, b);
+        }
       }
       rt.streamingAssistantItemIds.clear();
       markUnreadSession(sessionId);
@@ -2988,7 +3377,9 @@ function applyServerNotification(
       rt.streamingAssistantItemIds.add(id);
       markUnreadSession(sessionId);
       sessionPanels?.appendAssistantDelta(sessionId, delta);
-      chatView?.refresh();
+      chatView?.postBlockAppend(sessionId, id, "assistantText", delta, {
+        streaming: true,
+      });
       return;
     }
     case "item/reasoning/summaryTextDelta": {
@@ -3005,7 +3396,7 @@ function applyServerNotification(
         ensureParts(block.summaryParts, p.summaryIndex);
         block.summaryParts[p.summaryIndex] += p.delta;
       }
-      chatView?.refresh();
+      chatView?.postBlockUpsert(sessionId, block);
       return;
     }
     case "item/reasoning/summaryPartAdded": {
@@ -3023,7 +3414,7 @@ function applyServerNotification(
           (n as any).params.summaryIndex as number,
         );
       }
-      chatView?.refresh();
+      chatView?.postBlockUpsert(sessionId, block);
       return;
     }
     case "item/reasoning/textDelta": {
@@ -3040,7 +3431,7 @@ function applyServerNotification(
         ensureParts(block.rawParts, p.contentIndex);
         block.rawParts[p.contentIndex] += p.delta;
       }
-      chatView?.refresh();
+      chatView?.postBlockUpsert(sessionId, block);
       return;
     }
     case "item/commandExecution/outputDelta": {
@@ -3058,9 +3449,9 @@ function applyServerNotification(
         terminalStdin: [],
         output: "",
       }));
-      if (block.type === "command")
-        block.output += (n as any).params.delta as string;
-      chatView?.refresh();
+      const delta = (n as any).params.delta as string;
+      if (block.type === "command") block.output += delta;
+      chatView?.postBlockAppend(sessionId, id, "commandOutput", delta);
       return;
     }
     case "item/commandExecution/terminalInteraction": {
@@ -3080,7 +3471,7 @@ function applyServerNotification(
       }));
       if (block.type === "command")
         block.terminalStdin.push((n as any).params.stdin as string);
-      chatView?.refresh();
+      chatView?.postBlockUpsert(sessionId, block);
       return;
     }
     case "item/fileChange/outputDelta": {
@@ -3095,11 +3486,11 @@ function applyServerNotification(
         hasDiff: rt.latestDiff != null,
         diffs: [],
       }));
-      if (block.type === "fileChange")
-        block.detail += (n as any).params.delta as string;
+      const delta = (n as any).params.delta as string;
+      if (block.type === "fileChange") block.detail += delta;
       if (block.type === "fileChange")
         block.diffs = diffsForFiles(block.files, rt.latestDiff);
-      chatView?.refresh();
+      chatView?.postBlockAppend(sessionId, id, "fileChangeDetail", delta);
       return;
     }
     case "item/mcpToolCall/progress": {
@@ -3115,7 +3506,7 @@ function applyServerNotification(
       }));
       if (block.type === "mcp")
         block.detail += `${String((n as any).params.message ?? "")}\n`;
-      chatView?.refresh();
+      chatView?.postBlockUpsert(sessionId, block);
       return;
     }
     case "turn/plan/updated": {
@@ -3140,6 +3531,7 @@ function applyServerNotification(
         if (b.type === "fileChange") {
           b.hasDiff = true;
           b.diffs = diffsForFiles(b.files, rt.latestDiff);
+          chatView?.postBlockUpsert(sessionId, b);
         }
       }
       sessionPanels?.setLatestDiff(sessionId, rt.latestDiff);
@@ -3209,6 +3601,7 @@ function applyItemLifecycle(
           block.rawParts = [...item.content];
         }
       }
+      chatView?.postBlockUpsert(sessionId, block);
       break;
     }
     case "commandExecution": {
@@ -3243,6 +3636,7 @@ function applyItemLifecycle(
         if (completed && item.aggregatedOutput)
           block.output = item.aggregatedOutput;
       }
+      chatView?.postBlockUpsert(sessionId, block);
       break;
     }
     case "fileChange": {
@@ -3274,6 +3668,7 @@ function applyItemLifecycle(
         block.hasDiff = true;
         block.diffs = diffsForFiles(files, rt.latestDiff);
       }
+      chatView?.postBlockUpsert(sessionId, block);
       break;
     }
     case "mcpToolCall": {
@@ -3295,6 +3690,7 @@ function applyItemLifecycle(
         if (completed && item.error)
           block.detail += `\nerror: ${JSON.stringify(item.error)}\n`;
       }
+      chatView?.postBlockUpsert(sessionId, block);
       if (completed && item.result?.content) {
         void appendMcpImageBlocks(
           rt,
@@ -3333,7 +3729,7 @@ function applyItemLifecycle(
         }
       }
 
-      upsertBlock(rt, {
+      upsertBlock(sessionId, {
         id: item.id,
         type: "webSearch",
         query: item.query,
@@ -3346,7 +3742,7 @@ function applyItemLifecycle(
       break;
     }
     case "enteredReviewMode": {
-      upsertBlock(rt, {
+      upsertBlock(sessionId, {
         id: item.id,
         type: "system",
         title: `Entered review mode (${statusText})`,
@@ -3355,7 +3751,7 @@ function applyItemLifecycle(
       break;
     }
     case "exitedReviewMode": {
-      upsertBlock(rt, {
+      upsertBlock(sessionId, {
         id: item.id,
         type: "system",
         title: `Exited review mode (${statusText})`,
@@ -3379,6 +3775,7 @@ function applyItemLifecycle(
       }
       if (completed) rt.streamingAssistantItemIds.delete(id);
       else rt.streamingAssistantItemIds.add(id);
+      chatView?.postBlockUpsert(sessionId, block);
       break;
     }
     default:
@@ -3399,9 +3796,15 @@ function upsertBlock(
   if (idx === undefined) {
     rt.blockIndexById.set(block.id, rt.blocks.length);
     rt.blocks.push(block);
+    if (typeof sessionIdOrRt === "string") {
+      chatView?.postBlockUpsert(sessionIdOrRt, block);
+    }
     return;
   }
   rt.blocks[idx] = block;
+  if (typeof sessionIdOrRt === "string") {
+    chatView?.postBlockUpsert(sessionIdOrRt, block);
+  }
 }
 
 function getOrCreateBlock(
@@ -3598,7 +4001,7 @@ async function appendMcpImageBlocks(
       bytes,
     });
     cached.push(saved);
-    upsertBlock(rt, {
+    upsertBlock(sessionId, {
       id: `mcp-image:${itemId}:${index}`,
       type: "image",
       title: `MCP image (${server}.${tool})`,
@@ -3626,13 +4029,12 @@ async function upsertImageViewBlock(
 ): Promise<void> {
   const mimeType = imageMimeFromPath(imagePath);
   if (!mimeType) {
-    upsertBlock(rt, {
+    upsertBlock(sessionId, {
       id: `imageView:${itemId}`,
       type: "error",
       title: `Image view (${statusText})`,
       text: `Unsupported image extension: ${imagePath}`,
     });
-    chatView?.refresh();
     schedulePersistRuntime(sessionId);
     return;
   }
@@ -3645,7 +4047,7 @@ async function upsertImageViewBlock(
       mimeType,
       bytes: Buffer.from(data),
     });
-    upsertBlock(rt, {
+    upsertBlock(sessionId, {
       id: `imageView:${itemId}`,
       type: "image",
       title: `Image view (${statusText})`,
@@ -3660,14 +4062,13 @@ async function upsertImageViewBlock(
     } as any);
     enforceSessionImageAutoloadLimit(rt);
   } catch (err) {
-    upsertBlock(rt, {
+    upsertBlock(sessionId, {
       id: `imageView:${itemId}`,
       type: "error",
       title: `Image view (${statusText})`,
       text: `Failed to read image ${imagePath}: ${String(err)}`,
     });
   }
-  chatView?.refresh();
   schedulePersistRuntime(sessionId);
 }
 
@@ -4195,7 +4596,7 @@ function applyCodexEvent(
     const failed = Array.isArray(msg.failed) ? msg.failed : [];
     const cancelled = Array.isArray(msg.cancelled) ? msg.cancelled : [];
     if (failed.length === 0 && cancelled.length === 0) return;
-    upsertBlock(rt, {
+    upsertBlock(sessionId, {
       id: newLocalId("mcpStartup"),
       type: "system",
       title: "MCP startup issues",
@@ -4383,11 +4784,11 @@ function hydrateRuntimeFromThread(
           .filter((c) => c.type === "text")
           .map((c) => c.text)
           .join("\n");
-        if (text) upsertBlock(rt, { id: item.id, type: "user", text });
+        if (text) upsertBlock(sessionId, { id: item.id, type: "user", text });
       }
       if (item.type === "agentMessage") {
         if (item.text)
-          upsertBlock(rt, {
+          upsertBlock(sessionId, {
             id: item.id,
             type: "assistant",
             text: item.text,
@@ -4397,7 +4798,11 @@ function hydrateRuntimeFromThread(
     }
   }
 
-  for (const b of preserved) upsertBlock(rt, b);
+  for (const b of preserved) upsertBlock(sessionId, b);
+
+  if (activeSessionId === sessionId) {
+    chatView?.syncBlocksForActiveSession();
+  }
 }
 
 function formatApprovalDetail(

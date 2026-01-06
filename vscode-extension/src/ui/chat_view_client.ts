@@ -26,7 +26,12 @@ type ModelState = {
 type ChatBlock =
   | { id: string; type: "user"; text: string }
   | { id: string; type: "assistant"; text: string; streaming?: boolean }
-  | { id: string; type: "divider"; text: string }
+  | {
+      id: string;
+      type: "divider";
+      text: string;
+      status?: "inProgress" | "completed" | "failed";
+    }
   | { id: string; type: "note"; text: string }
   | {
       id: string;
@@ -666,7 +671,14 @@ function main(): void {
 
   let receivedState = false;
   let pendingState: ChatViewState | null = null;
+  let pendingStateSeq: number | null = null;
   let renderScheduled = false;
+  let controlRenderScheduled = false;
+  let pendingControlState: ChatViewState | null = null;
+  let pendingControlSeq: number | null = null;
+  let blocksRenderScheduled = false;
+  let pendingBlocksState: ChatViewState | null = null;
+  let forceScrollToBottomNextRender = false;
   function showWebviewError(err: unknown): void {
     const anyErr = err as { message?: unknown; stack?: unknown } | null;
     const msg = String(anyErr && anyErr.message ? anyErr.message : err);
@@ -817,10 +829,7 @@ function main(): void {
       const w = bitmap.width;
       const h = bitmap.height;
       if (!w || !h) return { blob, byteLength: blob.size };
-      const scale = Math.min(
-        1,
-        IMAGE_RENDER_MAX_EDGE_PX / Math.max(w, h),
-      );
+      const scale = Math.min(1, IMAGE_RENDER_MAX_EDGE_PX / Math.max(w, h));
       const tw = Math.max(1, Math.round(w * scale));
       const th = Math.max(1, Math.round(h * scale));
 
@@ -889,7 +898,8 @@ function main(): void {
       imgEl.removeAttribute("src");
       imgEl.style.cursor = "pointer";
       const caption = (imageRef.caption || "").trim();
-      captionEl.textContent = caption || "画像はオフロードされています（クリックで読み込み）";
+      captionEl.textContent =
+        caption || "画像はオフロードされています（クリックで読み込み）";
       captionEl.style.display = "";
       imgEl.addEventListener(
         "click",
@@ -948,7 +958,14 @@ function main(): void {
     updatePersistedWebviewState({ detailsState });
   }
 
-  const baseSlashSuggestions: SuggestItem[] = [];
+  const baseSlashSuggestions: SuggestItem[] = [
+    {
+      insert: "/compact ",
+      label: "/compact",
+      detail: "Compact context",
+      kind: "slash",
+    },
+  ];
   const uiSlashSuggestions: SuggestItem[] = [
     {
       insert: "/new ",
@@ -1038,14 +1055,12 @@ function main(): void {
   let agentIndex: string[] | null = null;
   let agentIndexForSessionId: string | null = null;
   let agentIndexRequestedForSessionId: string | null = null;
-  let skillIndex:
-    | Array<{
-        name: string;
-        description: string | null;
-        scope: string;
-        path: string;
-      }>
-    | null = null;
+  let skillIndex: Array<{
+    name: string;
+    description: string | null;
+    scope: string;
+    path: string;
+  }> | null = null;
   let skillIndexForSessionId: string | null = null;
   let skillIndexRequestedForSessionId: string | null = null;
   let activeReplace: null | {
@@ -1053,6 +1068,8 @@ function main(): void {
     to: number;
     inserted: string;
   } = null;
+  const pendingBlocksBySessionId = new Map<string, ChatBlock[]>();
+  const blocksBySessionId = new Map<string, ChatBlock[]>();
 
   function isOpen(key: string, defaultOpen: boolean): boolean {
     const v = detailsState[key];
@@ -1582,7 +1599,7 @@ function main(): void {
             ? label.slice(1)
             : label.startsWith("$")
               ? label.slice(1)
-            : label;
+              : label;
         const useAlt = !q.includes("prompts:");
         const hay = useAlt ? altLabel : label;
         const idx = hay.indexOf(q);
@@ -1871,16 +1888,75 @@ function main(): void {
     requestAnimationFrame(() => {
       renderScheduled = false;
       if (!pendingState) return;
-      render(pendingState);
+      const renderedSeq = pendingStateSeq;
+      try {
+        renderFull(pendingState);
+      } catch (err) {
+        vscode.postMessage({
+          type: "uiError",
+          message: `Webview render failed: ${String((err as Error)?.message ?? err)}`,
+        });
+      }
       pendingState = null;
+      pendingStateSeq = null;
       autosizeInput();
+      if (typeof renderedSeq === "number") {
+        vscode.postMessage({ type: "stateAck", seq: renderedSeq });
+      }
     });
   }
 
-  function render(s: ChatViewState): void {
+  function scheduleControlRender(): void {
+    if (controlRenderScheduled) return;
+    controlRenderScheduled = true;
+    requestAnimationFrame(() => {
+      controlRenderScheduled = false;
+      if (!pendingControlState) return;
+      const renderedSeq = pendingControlSeq;
+      try {
+        renderControl(pendingControlState);
+      } catch (err) {
+        vscode.postMessage({
+          type: "uiError",
+          message: `Webview render(control) failed: ${String((err as Error)?.message ?? err)}`,
+        });
+      }
+      pendingControlState = null;
+      pendingControlSeq = null;
+      autosizeInput();
+      if (typeof renderedSeq === "number") {
+        vscode.postMessage({ type: "stateAck", seq: renderedSeq });
+      }
+    });
+  }
+
+  function scheduleBlocksRender(): void {
+    if (blocksRenderScheduled) return;
+    blocksRenderScheduled = true;
+    requestAnimationFrame(() => {
+      blocksRenderScheduled = false;
+      if (!pendingBlocksState) return;
+      try {
+        renderBlocks(pendingBlocksState);
+      } catch (err) {
+        vscode.postMessage({
+          type: "uiError",
+          message: `Webview render(blocks) failed: ${String((err as Error)?.message ?? err)}`,
+        });
+      }
+      pendingBlocksState = null;
+      updateReturnToBottomVisibility();
+    });
+  }
+
+  function renderFull(s: ChatViewState): void {
     state = s;
-    const shouldAutoScroll = stickLogToBottom && isLogNearBottom();
-    let forceScrollToBottom = false;
+    renderControl(s);
+    renderBlocks(s);
+  }
+
+  function renderControl(s: ChatViewState): void {
+    state = s;
     titleEl.textContent = s.activeSession
       ? getSessionDisplayTitle(
           s.activeSession,
@@ -1981,7 +2057,8 @@ function main(): void {
     resumeBtn.disabled = s.sending;
     attachBtn.disabled = !s.activeSession;
     const variant = s.capabilities?.cliVariant ?? "unknown";
-    reloadBtn.disabled = !s.activeSession || s.sending || variant !== "codex-mine";
+    reloadBtn.disabled =
+      !s.activeSession || s.sending || variant !== "codex-mine";
     reloadBtn.title =
       variant === "codex-mine"
         ? "Reload session (re-read config.toml, agents, etc.)"
@@ -2073,7 +2150,24 @@ function main(): void {
       logEl.replaceChildren();
       // New session / fresh log should start pinned.
       stickLogToBottom = true;
-      forceScrollToBottom = true;
+      forceScrollToBottomNextRender = true;
+
+      // If blocks for the next session are already known, immediately re-render them.
+      // This avoids a race where a blocks render runs before this control render,
+      // and then gets wiped by the DOM reset above.
+      if (domSessionId) {
+        const cached =
+          pendingBlocksBySessionId.get(domSessionId) ??
+          blocksBySessionId.get(domSessionId) ??
+          null;
+        if (cached) {
+          pendingBlocksBySessionId.delete(domSessionId);
+          blocksBySessionId.set(domSessionId, cached);
+          state = { ...(state as any), blocks: cached } as ChatViewState;
+          pendingBlocksState = state;
+          scheduleBlocksRender();
+        }
+      }
     }
 
     approvalsEl.innerHTML = "";
@@ -2203,11 +2297,47 @@ function main(): void {
       return;
     }
 
+    updateSuggestions();
+  }
+
+  function renderBlocks(s: ChatViewState): void {
+    if (!s.activeSession) return;
+
+    const shouldAutoScroll = stickLogToBottom && isLogNearBottom();
+    const forceScrollToBottom = forceScrollToBottomNextRender;
+    forceScrollToBottomNextRender = false;
+
     let userTurnIndex = 0;
     for (const block of s.blocks || []) {
       if (block.type === "divider") {
         const key = "b:" + block.id;
         const div = ensureDiv(key, "msg system divider");
+        const status = block.status;
+        const existingIcon = div.querySelector(
+          'span[data-k="statusIcon"]',
+        ) as HTMLSpanElement | null;
+        if (status) {
+          const icon =
+            existingIcon ??
+            (() => {
+              const el = document.createElement("span");
+              el.dataset.k = "statusIcon";
+              div.appendChild(el);
+              return el;
+            })();
+          const className = `statusIcon status-${status}`;
+          if (icon.className !== className) icon.className = className;
+          const label =
+            status === "inProgress"
+              ? "Compacting"
+              : status === "completed"
+                ? "Completed"
+                : "Failed";
+          if (icon.getAttribute("aria-label") !== label)
+            icon.setAttribute("aria-label", label);
+        } else if (existingIcon) {
+          existingIcon.remove();
+        }
         const pre = ensurePre(div, "body");
         if (pre.textContent !== block.text) pre.textContent = block.text;
         continue;
@@ -2290,9 +2420,7 @@ function main(): void {
           titleEl.textContent = block.title;
 
         const gridEl =
-          (div.querySelector(
-            'div[data-k="grid"]',
-          ) as HTMLDivElement | null) ??
+          (div.querySelector('div[data-k="grid"]') as HTMLDivElement | null) ??
           (() => {
             const g = document.createElement("div");
             g.dataset.k = "grid";
@@ -2756,7 +2884,6 @@ function main(): void {
     }
 
     pruneStaleSessionBlockEls(new Set((s.blocks || []).map((b) => b.id)));
-    updateSuggestions();
     updateReturnToBottomVisibility();
 
     if (forceScrollToBottom || shouldAutoScroll) {
@@ -2805,7 +2932,7 @@ function main(): void {
         type: "sendWithImages",
         text,
         images: pendingImages.map((img) => ({ name: img.name, url: img.url })),
-        rewind: rewindTurnIndex ? { turnIndex: rewindTurnIndex, scope: "both" } : null,
+        rewind: rewindTurnIndex ? { turnIndex: rewindTurnIndex } : null,
       });
       pendingImages.splice(0, pendingImages.length);
       renderAttachments();
@@ -2813,7 +2940,7 @@ function main(): void {
       vscode.postMessage({
         type: "send",
         text,
-        rewind: rewindTurnIndex ? { turnIndex: rewindTurnIndex, scope: "both" } : null,
+        rewind: rewindTurnIndex ? { turnIndex: rewindTurnIndex } : null,
       });
     }
 
@@ -3125,12 +3252,29 @@ function main(): void {
     }
   });
 
+  function appendDeltaToPre(pre: HTMLPreElement, delta: string): void {
+    // Avoid creating one Text node per delta (can eventually freeze the webview).
+    const last = pre.lastChild;
+    if (last && last.nodeType === Node.TEXT_NODE) {
+      (last as Text).appendData(delta);
+      return;
+    }
+    pre.append(document.createTextNode(delta));
+  }
+
   window.addEventListener("message", (event: MessageEvent) => {
     const msg = event.data;
     if (!msg || typeof msg !== "object") return;
     const anyMsg = msg as {
       type?: unknown;
+      seq?: unknown;
       state?: unknown;
+      blocks?: unknown;
+      block?: unknown;
+      blockId?: unknown;
+      field?: unknown;
+      delta?: unknown;
+      streaming?: unknown;
       paths?: unknown;
       sessionId?: unknown;
       query?: unknown;
@@ -3161,16 +3305,168 @@ function main(): void {
         pending.resolve({
           ok: false,
           imageKey: pending.imageKey,
-          error: typeof anyMsg.error === "string" ? anyMsg.error : "Unknown error",
+          error:
+            typeof anyMsg.error === "string" ? anyMsg.error : "Unknown error",
         });
       }
       return;
     }
     if (anyMsg.type === "state") {
       receivedState = true;
+      const seq = typeof anyMsg.seq === "number" ? anyMsg.seq : null;
       state = anyMsg.state as ChatViewState;
       pendingState = state;
+      pendingStateSeq = seq;
       scheduleRender();
+      return;
+    }
+    if (anyMsg.type === "controlState") {
+      receivedState = true;
+      const seq = typeof anyMsg.seq === "number" ? anyMsg.seq : null;
+      const next = (anyMsg.state as Partial<ChatViewState>) ?? {};
+      const prevBlocks = state.blocks;
+      state = {
+        ...(state as any),
+        ...(next as any),
+        blocks: prevBlocks,
+      } as ChatViewState;
+
+      const activeId = state.activeSession?.id ?? null;
+      if (activeId) {
+        const pendingBlocks = pendingBlocksBySessionId.get(activeId);
+        if (pendingBlocks) {
+          pendingBlocksBySessionId.delete(activeId);
+          blocksBySessionId.set(activeId, pendingBlocks);
+          state = { ...(state as any), blocks: pendingBlocks } as ChatViewState;
+          pendingBlocksState = state;
+          scheduleBlocksRender();
+        } else {
+          const cachedBlocks = blocksBySessionId.get(activeId);
+          if (cachedBlocks) {
+            state = { ...(state as any), blocks: cachedBlocks } as ChatViewState;
+            pendingBlocksState = state;
+            scheduleBlocksRender();
+          }
+        }
+      }
+      pendingControlState = state;
+      pendingControlSeq = seq;
+      scheduleControlRender();
+      return;
+    }
+    if (anyMsg.type === "blocksReset") {
+      const sessionId =
+        typeof anyMsg.sessionId === "string" ? anyMsg.sessionId : null;
+      if (!sessionId) return;
+      const blocks = Array.isArray(anyMsg.blocks)
+        ? (anyMsg.blocks as ChatBlock[])
+        : [];
+      blocksBySessionId.set(sessionId, blocks);
+      if (!state.activeSession || state.activeSession.id !== sessionId) {
+        pendingBlocksBySessionId.set(sessionId, blocks);
+        return;
+      }
+      state = { ...(state as any), blocks } as ChatViewState;
+      pendingBlocksState = state;
+      scheduleBlocksRender();
+      return;
+    }
+    if (anyMsg.type === "blockUpsert") {
+      const sessionId =
+        typeof anyMsg.sessionId === "string" ? anyMsg.sessionId : null;
+      if (!sessionId) return;
+      if (!state.activeSession || state.activeSession.id !== sessionId) return;
+      const block = anyMsg.block as ChatBlock;
+      if (!block || typeof (block as any).id !== "string") return;
+      const blocks = state.blocks || [];
+      const idx = blocks.findIndex((b) => b && b.id === (block as any).id);
+      if (idx >= 0) blocks[idx] = block;
+      else blocks.push(block);
+      blocksBySessionId.set(sessionId, blocks);
+      state = { ...(state as any), blocks } as ChatViewState;
+      pendingBlocksState = state;
+      scheduleBlocksRender();
+      return;
+    }
+    if (anyMsg.type === "blockAppend") {
+      const sessionId =
+        typeof anyMsg.sessionId === "string" ? anyMsg.sessionId : null;
+      const blockId =
+        typeof anyMsg.blockId === "string" ? anyMsg.blockId : null;
+      const field = typeof anyMsg.field === "string" ? anyMsg.field : null;
+      const delta = typeof anyMsg.delta === "string" ? anyMsg.delta : null;
+      const streaming =
+        typeof anyMsg.streaming === "boolean" ? anyMsg.streaming : null;
+      if (!sessionId || !blockId || !field || delta === null) return;
+      if (!state.activeSession || state.activeSession.id !== sessionId) return;
+
+      const b = (state.blocks || []).find((x) => x && x.id === blockId) as
+        | ChatBlock
+        | undefined;
+      if (!b) return;
+
+      if (field === "assistantText" && b.type === "assistant") {
+        b.text += delta;
+        if (streaming !== null) (b as any).streaming = streaming;
+        blocksBySessionId.set(sessionId, state.blocks || []);
+
+        // Fast path: update the visible <pre> without a full render.
+        const key = "b:" + blockId;
+        const div = blockElByKey.get(key);
+        if (div) {
+          const pre = div.querySelector(
+            `pre[data-k="body"]`,
+          ) as HTMLPreElement | null;
+          if (pre) {
+            appendDeltaToPre(pre, delta);
+            return;
+          }
+        }
+
+        pendingBlocksState = state;
+        scheduleBlocksRender();
+        return;
+      }
+      if (field === "commandOutput" && b.type === "command") {
+        b.output += delta;
+        blocksBySessionId.set(sessionId, state.blocks || []);
+
+        const id = "command:" + blockId;
+        const det = blockElByKey.get(id);
+        if (det && det.tagName.toLowerCase() === "details") {
+          const pre = (det as HTMLElement).querySelector(
+            `pre[data-k="body"]`,
+          ) as HTMLPreElement | null;
+          if (pre) {
+            appendDeltaToPre(pre, delta);
+            return;
+          }
+        }
+
+        pendingBlocksState = state;
+        scheduleBlocksRender();
+        return;
+      }
+      if (field === "fileChangeDetail" && b.type === "fileChange") {
+        b.detail += delta;
+        blocksBySessionId.set(sessionId, state.blocks || []);
+
+        const id = "fileChange:" + blockId;
+        const det = blockElByKey.get(id);
+        if (det && det.tagName.toLowerCase() === "details") {
+          const pre = (det as HTMLElement).querySelector(
+            `pre[data-k="detail"]`,
+          ) as HTMLPreElement | null;
+          if (pre) {
+            appendDeltaToPre(pre, delta);
+            return;
+          }
+        }
+
+        pendingBlocksState = state;
+        scheduleBlocksRender();
+        return;
+      }
       return;
     }
     if (anyMsg.type === "fileSearchResult") {
@@ -3222,22 +3518,26 @@ function main(): void {
       if (state.activeSession.id !== sessionId) return;
 
       const skills = rawSkills
-        .map((s): null | {
-          name: string;
-          description: string | null;
-          scope: string;
-          path: string;
-        } => {
-          if (!s || typeof s !== "object") return null;
-          const o = s as Record<string, unknown>;
-          const name = typeof o.name === "string" ? o.name : "";
-          const scope = typeof o.scope === "string" ? o.scope : "";
-          const path = typeof o.path === "string" ? o.path : "";
-          const description =
-            typeof o.description === "string" ? o.description : null;
-          if (!name || !scope || !path) return null;
-          return { name, description, scope, path };
-        })
+        .map(
+          (
+            s,
+          ): null | {
+            name: string;
+            description: string | null;
+            scope: string;
+            path: string;
+          } => {
+            if (!s || typeof s !== "object") return null;
+            const o = s as Record<string, unknown>;
+            const name = typeof o.name === "string" ? o.name : "";
+            const scope = typeof o.scope === "string" ? o.scope : "";
+            const path = typeof o.path === "string" ? o.path : "";
+            const description =
+              typeof o.description === "string" ? o.description : null;
+            if (!name || !scope || !path) return null;
+            return { name, description, scope, path };
+          },
+        )
         .filter((v): v is NonNullable<typeof v> => v !== null);
 
       skillIndex = skills;

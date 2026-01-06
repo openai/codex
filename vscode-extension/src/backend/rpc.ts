@@ -15,6 +15,36 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+const RPC_LOG_MAX_CHARS = 12_000;
+
+function redactLargeDataUrls(line: string): string {
+  if (!line.includes("data:image/")) return line;
+  // Avoid dumping huge base64 blobs (e.g. data:image/png;base64,...) into the
+  // Output channel, which can freeze the UI.
+  return line.replace(
+    /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g,
+    (m) => {
+      const idx = m.indexOf("base64,");
+      if (idx < 0) return "data:image/*;base64,<redacted>";
+      const prefix = m.slice(0, idx + "base64,".length);
+      const payloadLen = Math.max(0, m.length - prefix.length);
+      return `${prefix}<redacted ${payloadLen} chars>`;
+    },
+  );
+}
+
+function formatRpcLogLine(line: string): string {
+  if (!line.includes("data:image/")) {
+    if (line.length <= RPC_LOG_MAX_CHARS) return line;
+    const omitted = line.length - RPC_LOG_MAX_CHARS;
+    return `${line.slice(0, RPC_LOG_MAX_CHARS)}…(truncated ${omitted} chars)`;
+  }
+  const redacted = redactLargeDataUrls(line);
+  if (redacted.length <= RPC_LOG_MAX_CHARS) return redacted;
+  const omitted = redacted.length - RPC_LOG_MAX_CHARS;
+  return `${redacted.slice(0, RPC_LOG_MAX_CHARS)}…(truncated ${omitted} chars)`;
+}
+
 export class RpcClient extends EventEmitter implements vscode.Disposable {
   private nextId = 0;
   private readonly pending = new Map<
@@ -23,6 +53,7 @@ export class RpcClient extends EventEmitter implements vscode.Disposable {
   >();
   private readonly stdoutRl: readline.Interface;
   private readonly stderrRl: readline.Interface;
+  private stdinError: Error | null = null;
 
   public constructor(
     private readonly child: ChildProcessWithoutNullStreams,
@@ -38,6 +69,22 @@ export class RpcClient extends EventEmitter implements vscode.Disposable {
     this.stderrRl.on("line", (line) =>
       this.output.appendLine(`[backend stderr] ${line}`),
     );
+
+    this.child.stdin.on("error", (err) => {
+      const e = err instanceof Error ? err : new Error(String(err));
+      this.stdinError = e;
+      this.output.appendLine(`Backend stdin error: ${e.message}`);
+      for (const { reject } of this.pending.values()) reject(e);
+      this.pending.clear();
+    });
+    this.child.stdin.on("close", () => {
+      if (this.stdinError) return;
+      const e = new Error("Backend stdin closed");
+      this.stdinError = e;
+      this.output.appendLine(e.message);
+      for (const { reject } of this.pending.values()) reject(e);
+      this.pending.clear();
+    });
 
     this.child.on("exit", (code, signal) => {
       this.output.appendLine(
@@ -90,20 +137,23 @@ export class RpcClient extends EventEmitter implements vscode.Disposable {
 
   private writeJson(obj: unknown): void {
     const line = JSON.stringify(obj);
-    if (this.logRpcPayloads) this.output.appendLine(`[rpc ->] ${line}`);
+    if (this.logRpcPayloads)
+      this.output.appendLine(`[rpc ->] ${formatRpcLogLine(line)}`);
+    if (this.stdinError) throw this.stdinError;
     this.child.stdin.write(`${line}\n`);
   }
 
   private onStdoutLine(line: string): void {
     if (!line.trim()) return;
-    if (this.logRpcPayloads) this.output.appendLine(`[rpc <-] ${line}`);
+    if (this.logRpcPayloads)
+      this.output.appendLine(`[rpc <-] ${formatRpcLogLine(line)}`);
 
     let msg: unknown;
     try {
       msg = JSON.parse(line) as unknown;
     } catch (err) {
       this.output.appendLine(
-        `Failed to parse backend JSONL message: ${String(err)}; line=${line}`,
+        `Failed to parse backend JSONL message: ${String(err)}; line=${formatRpcLogLine(line)}`,
       );
       return;
     }

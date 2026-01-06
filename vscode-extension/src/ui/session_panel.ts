@@ -13,6 +13,8 @@ export class SessionPanel implements vscode.Disposable {
   private latestDiff: string | null = null;
   private baseTitle: string;
   private unread = false;
+  private pendingAssistantDelta = "";
+  private assistantDeltaFlushTimer: NodeJS.Timeout | null = null;
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
@@ -96,12 +98,20 @@ export class SessionPanel implements vscode.Disposable {
   public appendAssistantDelta(delta: string): void {
     const last = this.transcript.at(-1);
     if (!last || last.kind !== "assistant") {
+      // The webview is not guaranteed to have an "active" assistant bubble yet.
+      // Keep the slow full-state render for this structural change.
       this.transcript.push({ kind: "assistant", text: delta });
+      this.postState();
     } else {
       last.text += delta;
+      this.pendingAssistantDelta += delta;
+      if (this.pendingAssistantDelta.length >= 64 * 1024) {
+        this.flushAssistantDelta();
+      } else {
+        this.scheduleAssistantDeltaFlush();
+      }
     }
     this.markUnreadIfInactive();
-    this.postState();
   }
 
   public addSystemMessage(text: string): void {
@@ -183,8 +193,27 @@ export class SessionPanel implements vscode.Disposable {
 
       window.addEventListener("message", (event) => {
         const msg = event.data;
-        if (!msg || msg.type !== "state") return;
-        render(msg.state);
+        if (!msg) return;
+        if (msg.type === "state") {
+          render(msg.state);
+          return;
+        }
+        if (msg.type === "assistantDelta") {
+          const delta = typeof msg.delta === "string" ? msg.delta : "";
+          if (!delta) return;
+          const pres = logEl.querySelectorAll(".msg.assistant pre");
+          const pre = pres.length > 0 ? pres[pres.length - 1] : null;
+          if (!pre) return;
+
+          const last = pre.lastChild;
+          if (last && last.nodeType === Node.TEXT_NODE) {
+            last.appendData(delta);
+          } else {
+            pre.appendChild(document.createTextNode(delta));
+          }
+          window.scrollTo(0, document.body.scrollHeight);
+          return;
+        }
       });
 
       sendBtn.addEventListener("click", () => {
@@ -208,6 +237,25 @@ export class SessionPanel implements vscode.Disposable {
         latestDiff: this.latestDiff,
       },
     });
+  }
+
+  private postAssistantDelta(delta: string): void {
+    this.panel.webview.postMessage({ type: "assistantDelta", delta });
+  }
+
+  private scheduleAssistantDeltaFlush(): void {
+    if (this.assistantDeltaFlushTimer) return;
+    this.assistantDeltaFlushTimer = setTimeout(() => {
+      this.assistantDeltaFlushTimer = null;
+      this.flushAssistantDelta();
+    }, 16);
+  }
+
+  private flushAssistantDelta(): void {
+    const delta = this.pendingAssistantDelta;
+    if (!delta) return;
+    this.pendingAssistantDelta = "";
+    this.postAssistantDelta(delta);
   }
 
   private onMessage(msg: unknown): void {

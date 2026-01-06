@@ -4,7 +4,18 @@
 
 ## Unreleased
 
-- （未リリースの変更はありません）
+- （なし）
+
+## 0.1.14
+
+- ストリーミング: 大量の `delta` 受信時に Webview/Session Panel の更新が詰まって止まるケースを軽減（DOM更新のcoalesce、差分追記の効率化）
+- Resume: `thread/resume` で `cwd`/model 等の上書きをやめ、進行中turnのストリームを壊さない（loaded conversation は fast-path で復元）
+- セッション切替: `selectSession` で裏の `thread/resume` を廃止（進行中turnのストリーム競合を回避）
+- セッション: reload/rewind/undo をサポート
+- Mentions: `@` のファイル検索候補が更新されずに詰まることがある不具合を修正
+- Interrupt: turnId不明時に `thread/resume` で探索しない（`turn/started` 到達まで pending に寄せる）
+- タブ切替: Webview側でセッション別のblocksをメモリ保持し、切替時の描画レースでログが空になる/2回クリックが必要になる問題を修正
+- Compact: `/compact` 実行時に Context カードを即時表示し、右上にスピナー→チェックで進行状況を表示（失敗時は×＋エラー表示）
 
 ## 0.1.13
 

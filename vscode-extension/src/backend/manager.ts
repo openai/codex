@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { BackendProcess, type BackendExitInfo } from "./process";
 import type { ThreadResumeParams } from "../generated/v2/ThreadResumeParams";
 import type { ThreadStartParams } from "../generated/v2/ThreadStartParams";
+import type { ThreadCompactParams } from "../generated/v2/ThreadCompactParams";
 import type { TurnStartParams } from "../generated/v2/TurnStartParams";
 import type { UserInput } from "../generated/v2/UserInput";
 import type { ThreadItem } from "../generated/v2/ThreadItem";
@@ -34,6 +35,7 @@ export type BackendTermination = {
 
 export class BackendManager implements vscode.Disposable {
   private readonly processes = new Map<string, BackendProcess>();
+  private readonly startInFlight = new Map<string, Promise<void>>();
   private readonly streamState = new Map<
     string,
     { activeTurnId: string | null }
@@ -109,9 +111,12 @@ export class BackendManager implements vscode.Disposable {
     const key = folder.uri.toString();
     const existing = this.processes.get(key);
     if (existing) {
-      this.output.appendLine(
-        `Backend already running for ${folder.uri.fsPath}`,
-      );
+      return;
+    }
+
+    const inflight = this.startInFlight.get(key);
+    if (inflight) {
+      await inflight;
       return;
     }
 
@@ -154,26 +159,53 @@ export class BackendManager implements vscode.Disposable {
     }
     if (!args) throw new Error("Missing configuration: codexMine.backend.args");
 
-    this.output.appendLine(
-      `Starting backend: ${command} ${args.join(" ")} (cwd=${folder.uri.fsPath})`,
+    const startPromise = (async () => {
+      this.output.appendLine(
+        `Starting backend: ${command} ${args.join(" ")} (cwd=${folder.uri.fsPath})`,
+      );
+      const proc = await BackendProcess.spawn({
+        command,
+        args,
+        cwd: folder.uri.fsPath,
+        logRpcPayloads,
+        output: this.output,
+      });
+
+      this.processes.set(key, proc);
+      proc.onDidExitWithInfo((info: BackendExitInfo) => {
+        // Backend died unexpectedly (e.g. killed from outside VS Code).
+        this.processes.delete(key);
+        this.cleanupBackendCaches(key);
+        this.onBackendTerminated?.(key, { reason: "exit", ...info });
+      });
+      proc.onNotification = (n) => this.onServerNotification(key, n);
+      proc.onApprovalRequest = async (req) => this.handleApprovalRequest(req);
+    })();
+
+    this.startInFlight.set(
+      key,
+      startPromise.finally(() => this.startInFlight.delete(key)),
     );
-    const proc = await BackendProcess.spawn({
-      command,
-      args,
-      cwd: folder.uri.fsPath,
-      logRpcPayloads,
-      output: this.output,
+    await startPromise;
+  }
+
+  private async withTimeout<T>(
+    label: string,
+    promise: Promise<T>,
+    timeoutMs: number,
+  ): Promise<T> {
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
     });
 
-    this.processes.set(key, proc);
-    proc.onDidExitWithInfo((info: BackendExitInfo) => {
-      // Backend died unexpectedly (e.g. killed from outside VS Code).
-      this.processes.delete(key);
-      this.cleanupBackendCaches(key);
-      this.onBackendTerminated?.(key, { reason: "exit", ...info });
-    });
-    proc.onNotification = (n) => this.onServerNotification(key, n);
-    proc.onApprovalRequest = async (req) => this.handleApprovalRequest(req);
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   }
 
   public async newSession(
@@ -332,7 +364,6 @@ export class BackendManager implements vscode.Disposable {
 
   public async resumeSession(
     session: Session,
-    modelSettings?: ModelSettings,
   ): Promise<ThreadResumeResponse> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
@@ -350,14 +381,15 @@ export class BackendManager implements vscode.Disposable {
       threadId: session.threadId,
       history: null,
       path: null,
-      model: modelSettings?.model ?? null,
-      modelProvider: modelSettings?.provider ?? null,
-      cwd: folder.uri.fsPath,
+      // Resume should not override session settings. Overriding here would prevent the backend from
+      // using a "fast path" for loaded conversations and can break streaming if the UI calls
+      // thread/resume while a turn is in progress.
+      model: null,
+      modelProvider: null,
+      cwd: null,
       approvalPolicy: null,
       sandbox: null,
-      config: modelSettings?.reasoning
-        ? { reasoning_effort: modelSettings.reasoning }
-        : null,
+      config: null,
       baseInstructions: null,
       developerInstructions: null,
     };
@@ -472,7 +504,10 @@ export class BackendManager implements vscode.Disposable {
   public async sendMessageWithModelAndImages(
     session: Session,
     text: string,
-    images: string[],
+    images: Array<
+      | { kind: "imageUrl"; url: string }
+      | { kind: "localImage"; path: string }
+    >,
     modelSettings: ModelSettings | null | undefined,
   ): Promise<void> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
@@ -482,15 +517,31 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
+    // Backend can terminate unexpectedly; ensure it is started before sending.
+    await this.startForWorkspaceFolder(folder);
+
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
 
     const input: UserInput[] = [];
     if (text.trim()) input.push({ type: "text", text });
-    for (const url of images) {
-      if (typeof url !== "string" || url.trim() === "") continue;
-      input.push({ type: "image", url });
+    for (const img of images) {
+      if (!img) continue;
+      if (img.kind === "imageUrl") {
+        const url = img.url;
+        if (typeof url !== "string" || url.trim() === "") continue;
+        input.push({ type: "image", url });
+        continue;
+      }
+      if (img.kind === "localImage") {
+        const p = img.path;
+        if (typeof p !== "string" || p.trim() === "") continue;
+        input.push({ type: "localImage", path: p });
+        continue;
+      }
+      const neverImg: never = img;
+      throw new Error(`Unexpected image input: ${String(neverImg)}`);
     }
     if (input.length === 0) {
       throw new Error("Message must include text or images");
@@ -510,7 +561,11 @@ export class BackendManager implements vscode.Disposable {
     const imageSuffix = images.length > 0 ? ` [images=${images.length}]` : "";
     this.output.appendLine(`\n>> (${session.title}) ${text}${imageSuffix}`);
     this.output.append(`<< (${session.title}) `);
-    const turn = await proc.turnStart(params);
+    const turn = await this.withTimeout(
+      "turn/start",
+      proc.turnStart(params),
+      10_000,
+    );
     this.streamState.set(session.threadId, { activeTurnId: turn.turn.id });
   }
 
@@ -530,25 +585,9 @@ export class BackendManager implements vscode.Disposable {
     await proc.turnInterrupt({ threadId: session.threadId, turnId });
   }
 
-  public async threadUndo(session: Session): Promise<void> {
-    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
-    if (!folder) {
-      throw new Error(
-        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
-      );
-    }
-
-    await this.startForWorkspaceFolder(folder);
-    const proc = this.processes.get(session.backendKey);
-    if (!proc)
-      throw new Error("Backend is not running for this workspace folder");
-
-    await proc.threadUndo({ threadId: session.threadId });
-  }
-
   public async threadRewind(
     session: Session,
-    args: { turnIndex: number; scope: "code" | "conversation" | "both" },
+    args: { turnIndex: number },
   ): Promise<void> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
@@ -565,8 +604,27 @@ export class BackendManager implements vscode.Disposable {
     await proc.threadRewind({
       threadId: session.threadId,
       turnIndex: args.turnIndex,
-      scope: args.scope,
+      scope: "both",
     });
+  }
+
+  public async threadCompact(session: Session): Promise<void> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    const params: ThreadCompactParams = { threadId: session.threadId };
+    this.output.appendLine(`\n>> (${session.title}) /compact`);
+    this.output.append(`<< (${session.title}) `);
+    await this.withTimeout("thread/compact", proc.threadCompact(params), 10_000);
   }
 
   private toReasoningEffort(effort: string | null): ReasoningEffort | null {
@@ -630,8 +688,6 @@ export class BackendManager implements vscode.Disposable {
     if (n.method === "item/agentMessage/delta") {
       const state = this.streamState.get(p.threadId);
       if (!state || state.activeTurnId !== p.turnId) return;
-      this.output.append(p.delta);
-
       if (session) this.onAssistantDelta?.(session, p.delta, p.turnId);
       return;
     }

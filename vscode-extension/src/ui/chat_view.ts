@@ -7,7 +7,12 @@ import type { Session } from "../sessions";
 export type ChatBlock =
   | { id: string; type: "user"; text: string }
   | { id: string; type: "assistant"; text: string; streaming?: boolean }
-  | { id: string; type: "divider"; text: string }
+  | {
+      id: string;
+      type: "divider";
+      text: string;
+      status?: "inProgress" | "completed" | "failed";
+    }
   | { id: string; type: "note"; text: string }
   | {
       id: string;
@@ -134,7 +139,6 @@ export type ChatViewState = {
 
 type RewindRequest = {
   turnIndex: number;
-  scope: "code" | "conversation" | "both";
 };
 
 let sessionModelState: {
@@ -168,6 +172,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private view: vscode.WebviewView | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
+  private blockAppendFlushTimer: NodeJS.Timeout | null = null;
+  private readonly pendingBlockAppends = new Map<
+    string,
+    {
+      sessionId: string;
+      blockId: string;
+      field: "assistantText" | "commandOutput" | "fileChangeDetail";
+      delta: string;
+      streaming: boolean | null;
+    }
+  >();
+  private statePostInFlight = false;
+  private statePostDirty = false;
+  private lastStatePostSeq = 0;
+  private lastStateAckSeq = 0;
+  private stateAckTimeout: NodeJS.Timeout | null = null;
+  private blocksSessionIdSynced: string | null = null;
   private readonly fileSearchCancellationTokenBySessionId = new Map<
     string,
     string
@@ -212,11 +233,72 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public refresh(): void {
     // Avoid flooding the Webview with full-state updates (especially during streaming).
+    this.statePostDirty = true;
+    if (this.statePostInFlight) return;
     if (this.refreshTimer) return;
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
-      this.postState();
+      this.postControlState();
     }, 16);
+  }
+
+  public syncBlocksForActiveSession(): void {
+    if (!this.view) return;
+    const st = this.getState();
+    const active = st.activeSession;
+    if (!active) return;
+    this.blocksSessionIdSynced = active.id;
+    void this.view.webview
+      .postMessage({
+        type: "blocksReset",
+        sessionId: active.id,
+        blocks: st.blocks,
+      })
+      .then(undefined, (err) => {
+        this.onUiError(`Failed to post blocks to webview: ${String(err)}`);
+      });
+  }
+
+  public postBlockUpsert(sessionId: string, block: ChatBlock): void {
+    if (!this.view) return;
+    const st = this.getState();
+    const active = st.activeSession;
+    if (!active || active.id !== sessionId) return;
+    void this.view.webview
+      .postMessage({ type: "blockUpsert", sessionId, block })
+      .then(undefined, (err) => {
+        this.onUiError(
+          `Failed to post block update to webview: ${String(err)}`,
+        );
+      });
+  }
+
+  public postBlockAppend(
+    sessionId: string,
+    blockId: string,
+    field: "assistantText" | "commandOutput" | "fileChangeDetail",
+    delta: string,
+    opts?: { streaming?: boolean },
+  ): void {
+    if (!this.view) return;
+    const st = this.getState();
+    const active = st.activeSession;
+    if (!active || active.id !== sessionId) return;
+    const key = `${sessionId}:${blockId}:${field}`;
+    const prev = this.pendingBlockAppends.get(key);
+    if (prev) {
+      prev.delta += delta;
+      if (typeof opts?.streaming === "boolean") prev.streaming = opts.streaming;
+    } else {
+      this.pendingBlockAppends.set(key, {
+        sessionId,
+        blockId,
+        field,
+        delta,
+        streaming: opts?.streaming ?? null,
+      });
+    }
+    this.scheduleBlockAppendFlush();
   }
 
   public resolveWebviewView(view: vscode.WebviewView): void {
@@ -229,10 +311,64 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ],
     };
     view.webview.html = this.renderHtml(view.webview);
-    view.webview.onDidReceiveMessage(
-      (msg: unknown) => void this.onMessage(msg),
-    );
-    this.postState();
+    view.webview.onDidReceiveMessage((msg: unknown) => {
+      void this.onMessage(msg).catch((err) => {
+        this.onUiError(`Failed to handle webview message: ${String(err)}`);
+      });
+    });
+    view.onDidDispose(() => {
+      this.view = null;
+      this.statePostInFlight = false;
+      this.statePostDirty = false;
+      if (this.stateAckTimeout) clearTimeout(this.stateAckTimeout);
+      this.stateAckTimeout = null;
+      this.blocksSessionIdSynced = null;
+      if (this.blockAppendFlushTimer) clearTimeout(this.blockAppendFlushTimer);
+      this.blockAppendFlushTimer = null;
+      this.pendingBlockAppends.clear();
+    });
+    this.statePostDirty = true;
+    this.postControlState();
+  }
+
+  private scheduleBlockAppendFlush(): void {
+    if (this.blockAppendFlushTimer) return;
+    this.blockAppendFlushTimer = setTimeout(() => {
+      this.blockAppendFlushTimer = null;
+      this.flushBlockAppends();
+    }, 16);
+  }
+
+  private flushBlockAppends(): void {
+    if (!this.view) return;
+    if (this.pendingBlockAppends.size === 0) return;
+    const st = this.getState();
+    const activeId = st.activeSession?.id ?? null;
+    if (!activeId) {
+      this.pendingBlockAppends.clear();
+      return;
+    }
+
+    const pending = [...this.pendingBlockAppends.values()];
+    this.pendingBlockAppends.clear();
+
+    for (const p of pending) {
+      if (p.sessionId !== activeId) continue;
+      void this.view.webview
+        .postMessage({
+          type: "blockAppend",
+          sessionId: p.sessionId,
+          blockId: p.blockId,
+          field: p.field,
+          delta: p.delta,
+          streaming: p.streaming,
+        })
+        .then(undefined, (err) => {
+          this.onUiError(
+            `Failed to post block delta to webview: ${String(err)}`,
+          );
+        });
+    }
   }
 
   private async onMessage(msg: unknown): Promise<void> {
@@ -241,7 +377,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const type = anyMsg["type"];
 
     if (type === "ready") {
-      this.postState();
+      this.statePostDirty = true;
+      this.postControlState();
+      this.syncBlocksForActiveSession();
+      return;
+    }
+
+    if (type === "stateAck") {
+      const seq = anyMsg["seq"];
+      if (typeof seq !== "number") return;
+      if (seq > this.lastStateAckSeq) this.lastStateAckSeq = seq;
+      // Only unblock when the latest in-flight state is acknowledged.
+      if (seq === this.lastStatePostSeq) {
+        this.statePostInFlight = false;
+        if (this.stateAckTimeout) clearTimeout(this.stateAckTimeout);
+        this.stateAckTimeout = null;
+        if (this.statePostDirty) this.postControlState();
+      }
       return;
     }
 
@@ -501,7 +653,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const st = this.getState();
       const active = st.activeSession;
       if (!active || active.id !== sessionId) {
-        this.postState();
+        this.refresh();
+        this.syncBlocksForActiveSession();
         return;
       }
 
@@ -559,7 +712,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const st = this.getState();
       const active = st.activeSession;
       if (!active || active.id !== sessionId) {
-        this.postState();
+        this.refresh();
+        this.syncBlocksForActiveSession();
         return;
       }
 
@@ -590,7 +744,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const st = this.getState();
       const active = st.activeSession;
       if (!active || active.id !== sessionId) {
-        this.postState();
+        this.refresh();
+        this.syncBlocksForActiveSession();
         return;
       }
 
@@ -626,13 +781,66 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
   }
-  private postState(): void {
+  private postControlState(): void {
     if (!this.view) return;
+    if (this.statePostInFlight) return;
+    if (!this.statePostDirty) return;
+    this.statePostDirty = false;
+    this.statePostInFlight = true;
+    const seq = (this.lastStatePostSeq += 1);
+    if (this.stateAckTimeout) clearTimeout(this.stateAckTimeout);
+    // If the webview stops acknowledging state updates (e.g. render stuck),
+    // do not deadlock future refreshes; surface the issue and keep going.
+    this.stateAckTimeout = setTimeout(() => {
+      this.stateAckTimeout = null;
+      if (!this.view) return;
+      if (!this.statePostInFlight) return;
+      this.statePostInFlight = false;
+      this.onUiError(
+        `Webview did not acknowledge state update (seq=${String(seq)}) within 2000ms; continuing.`,
+      );
+      if (this.statePostDirty) this.postControlState();
+    }, 2000);
+    const full = this.getState();
+    const controlState = {
+      globalBlocks: full.globalBlocks,
+      capabilities: full.capabilities,
+      sessions: full.sessions,
+      activeSession: full.activeSession,
+      unreadSessionIds: full.unreadSessionIds,
+      runningSessionIds: full.runningSessionIds,
+      latestDiff: full.latestDiff,
+      sending: full.sending,
+      statusText: full.statusText,
+      statusTooltip: full.statusTooltip,
+      modelState: full.modelState,
+      models: full.models,
+      approvals: full.approvals,
+      customPrompts: full.customPrompts,
+    };
     void this.view.webview
-      .postMessage({ type: "state", state: this.getState() })
+      .postMessage({ type: "controlState", seq, state: controlState })
       .then(undefined, (err) => {
+        // Unblock if postMessage itself failed (e.g., disposed webview).
+        this.statePostInFlight = false;
+        if (this.stateAckTimeout) clearTimeout(this.stateAckTimeout);
+        this.stateAckTimeout = null;
         this.onUiError(`Failed to post state to webview: ${String(err)}`);
       });
+
+    const activeId = full.activeSession?.id ?? null;
+    if (activeId && activeId !== this.blocksSessionIdSynced) {
+      this.blocksSessionIdSynced = activeId;
+      void this.view.webview
+        .postMessage({
+          type: "blocksReset",
+          sessionId: activeId,
+          blocks: full.blocks,
+        })
+        .then(undefined, (err) => {
+          this.onUiError(`Failed to post blocks to webview: ${String(err)}`);
+        });
+    }
   }
 
   private renderHtml(webview: vscode.Webview): string {
@@ -729,7 +937,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .tool.mcp { background: rgba(0, 200, 170, 0.08); }
       .tool.webSearch { background: rgba(0, 180, 255, 0.10); border-color: rgba(0, 180, 255, 0.22); }
       .reasoning { background: rgba(0, 169, 110, 0.12); }
-      .divider { background: rgba(255, 185, 0, 0.06); border-style: dashed; }
+      .divider { background: rgba(255, 185, 0, 0.06); border-style: dashed; position: relative; padding-right: 28px; }
       .imageBlock { display: flex; flex-direction: column; gap: 8px; }
       .imageBlock-user { background: rgba(255,255,255,0.035); border-color: rgba(0, 120, 212, 0.35); }
       .imageBlock-assistant { background: rgba(0,0,0,0.06); }
@@ -757,6 +965,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       details > summary > span.statusIcon { position: static; top: auto; right: auto; transform: none; margin-left: auto; }
       .webSearchCard { position: relative; padding-right: 28px; }
       .webSearchCard .statusIcon { top: 12px; transform: none; }
+      .divider .statusIcon { top: 12px; transform: none; }
       .webSearchRow { position: relative; }
       .statusIcon { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; opacity: 0.9; }
       .statusIcon::before, .statusIcon::after { content: ""; display: block; box-sizing: border-box; }
