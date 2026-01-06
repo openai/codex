@@ -193,10 +193,8 @@ pub(crate) mod tools {
         Function(ResponsesApiTool),
         #[serde(rename = "local_shell")]
         LocalShell {},
-        // TODO: Understand why we get an error on web_search although the API docs say it's supported.
-        // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
         #[serde(rename = "web_search")]
-        WebSearch {},
+        WebSearch(WebSearchTool),
         #[serde(rename = "custom")]
         Freeform(FreeformTool),
     }
@@ -206,7 +204,7 @@ pub(crate) mod tools {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
                 ToolSpec::LocalShell {} => "local_shell",
-                ToolSpec::WebSearch {} => "web_search",
+                ToolSpec::WebSearch(_) => "web_search",
                 ToolSpec::Freeform(tool) => tool.name.as_str(),
             }
         }
@@ -235,6 +233,11 @@ pub(crate) mod tools {
         /// `properties` must be present in `required`.
         pub(crate) strict: bool,
         pub(crate) parameters: JsonSchema,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub struct WebSearchTool {
+        pub(crate) external_web_access: bool,
     }
 }
 

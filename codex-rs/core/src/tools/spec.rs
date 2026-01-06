@@ -1,5 +1,6 @@
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::client_common::tools::WebSearchTool;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::models_manager::model_family::ModelFamily;
@@ -1094,7 +1095,9 @@ pub(crate) fn build_specs(
     }
 
     if config.web_search_request {
-        builder.push_spec(ToolSpec::WebSearch {});
+        builder.push_spec(ToolSpec::WebSearch(WebSearchTool {
+            external_web_access: false,
+        }));
     }
 
     if config.include_view_image_tool {
