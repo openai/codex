@@ -56,4 +56,6 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 - [**Installing & building**](./docs/install.md)
 - [**Open source fund**](./docs/open-source-fund.md)
 
+Joke: Why do programmers prefer dark mode? Because light attracts bugs.
+
 This repository is licensed under the [Apache-2.0 License](LICENSE).
