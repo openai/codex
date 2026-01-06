@@ -276,7 +276,12 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    pub(crate) fn set_composer_input_enabled(&mut self, enabled: bool, placeholder: Option<String>) {
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn set_composer_input_enabled(
+        &mut self,
+        enabled: bool,
+        placeholder: Option<String>,
+    ) {
         self.composer.set_input_enabled(enabled, placeholder);
         self.request_redraw();
     }

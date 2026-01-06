@@ -1,6 +1,8 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+#[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
+#[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
@@ -1709,7 +1711,7 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, mode);
                 }
             }
             AppEvent::PersistModelSelection { model, effort } => {

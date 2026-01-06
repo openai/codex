@@ -1913,6 +1913,7 @@ impl ChatComposer {
         self.has_focus = has_focus;
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_input_enabled(&mut self, enabled: bool, placeholder: Option<String>) {
         self.input_enabled = enabled;
         self.input_disabled_placeholder = if enabled { None } else { placeholder };

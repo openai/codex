@@ -84,6 +84,7 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+#[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
@@ -1607,7 +1608,7 @@ impl ChatWidget {
                 #[cfg(not(target_os = "windows"))]
                 {
                     // Not supported; on non-Windows this command should never be reachable.
-                    return;
+                    ()
                 }
             }
             SlashCommand::Quit | SlashCommand::Exit => {
@@ -3151,6 +3152,7 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
     pub(crate) fn show_windows_sandbox_setup_status(&mut self) {}
 
     #[cfg(target_os = "windows")]
