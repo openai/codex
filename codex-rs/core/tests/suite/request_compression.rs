@@ -21,13 +21,19 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    mount_sse_once(&server, sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")])).await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let base_url = format!("{}/backend-api/codex/v1", server.uri());
-    let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::EnableRequestCompression);
-        config.model_provider.base_url = Some(base_url.clone());
-    });
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.features.enable(Feature::EnableRequestCompression);
+            config.model_provider.base_url = Some(base_url.clone());
+        });
     let codex = builder.build(&server).await?.codex;
 
     codex
@@ -39,8 +45,8 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
         })
         .await?;
 
-    // Wait until the turn completes so the request definitely hit the server.
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    // Wait until the task completes so the request definitely hit the server.
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = get_responses_requests(&server).await;
     assert_eq!(requests.len(), 1);
@@ -63,19 +69,21 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_body_is_not_compressed_for_chatgpt_auth_even_when_enabled() -> anyhow::Result<()> {
+async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    mount_sse_once(&server, sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")])).await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let base_url = format!("{}/backend-api/codex/v1", server.uri());
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config.features.enable(Feature::EnableRequestCompression);
-            config.model_provider.base_url = Some(base_url.clone());
-        });
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::EnableRequestCompression);
+        config.model_provider.base_url = Some(base_url.clone());
+    });
     let codex = builder.build(&server).await?.codex;
 
     codex
@@ -87,7 +95,7 @@ async fn request_body_is_not_compressed_for_chatgpt_auth_even_when_enabled() -> 
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = get_responses_requests(&server).await;
     assert_eq!(requests.len(), 1);
@@ -95,7 +103,7 @@ async fn request_body_is_not_compressed_for_chatgpt_auth_even_when_enabled() -> 
     let request = &requests[0];
     assert!(
         request.headers.get("content-encoding").is_none(),
-        "did not expect request compression for ChatGPT auth"
+        "did not expect request compression for API-key auth"
     );
 
     let json: serde_json::Value = serde_json::from_slice(&request.body)?;
@@ -106,4 +114,3 @@ async fn request_body_is_not_compressed_for_chatgpt_auth_even_when_enabled() -> 
 
     Ok(())
 }
-
