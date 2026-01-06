@@ -1253,7 +1253,7 @@ impl CodexMessageProcessor {
             include_apply_patch_tool,
         } = params;
 
-        let forced_overrides = ConfigOverrides {
+        let typesafe_overrides = ConfigOverrides {
             model,
             config_profile: profile,
             cwd: cwd.clone().map(PathBuf::from),
@@ -1281,7 +1281,7 @@ impl CodexMessageProcessor {
         let config = match derive_config_from_params(
             &self.cli_overrides,
             Some(request_overrides),
-            forced_overrides,
+            typesafe_overrides,
         )
         .await
         {
@@ -1324,7 +1324,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
-        let forced_overrides = self.build_thread_config_overrides(
+        let typesafe_overrides = self.build_thread_config_overrides(
             params.model,
             params.model_provider,
             params.cwd,
@@ -1335,7 +1335,7 @@ impl CodexMessageProcessor {
         );
 
         let config =
-            match derive_config_from_params(&self.cli_overrides, params.config, forced_overrides)
+            match derive_config_from_params(&self.cli_overrides, params.config, typesafe_overrides)
                 .await
             {
                 Ok(config) => config,
@@ -1567,7 +1567,7 @@ impl CodexMessageProcessor {
             || developer_instructions.is_some();
 
         let config = if overrides_requested {
-            let forced_overrides = self.build_thread_config_overrides(
+            let typesafe_overrides = self.build_thread_config_overrides(
                 model,
                 model_provider,
                 cwd,
@@ -1579,7 +1579,7 @@ impl CodexMessageProcessor {
             match derive_config_from_params(
                 &self.cli_overrides,
                 request_overrides,
-                forced_overrides,
+                typesafe_overrides,
             )
             .await
             {
@@ -2228,7 +2228,7 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let forced_overrides = ConfigOverrides {
+                let typesafe_overrides = ConfigOverrides {
                     model,
                     config_profile: profile,
                     cwd: cwd.map(PathBuf::from),
@@ -2246,7 +2246,7 @@ impl CodexMessageProcessor {
                 derive_config_from_params(
                     &self.cli_overrides,
                     Some(request_overrides),
-                    forced_overrides,
+                    typesafe_overrides,
                 )
                 .await
             }
@@ -3366,13 +3366,15 @@ fn errors_to_info(
 /// Precedence (lowest to highest):
 /// - `cli_overrides`: process-wide startup `--config` flags.
 /// - `request_overrides`: per-request dotted-path overrides (`params.config`), converted JSON->TOML.
-/// - `forced_overrides`: strongly-typed overrides derived from the conversation/thread parameters
-///   (e.g. `cwd`, sandbox/approval policy, model/provider, instructions), plus a few app-server
-///   supplied values (e.g. `codex_linux_sandbox_exe`).
+/// - `typesafe_overrides`: Request objects such as `NewConversationParams` and
+///   `ThreadStartParams` support a limited set of _explicit_ config overrides, so
+///   `typesafe_overrides` is a `ConfigOverrides` derived from the respective request object.
+///   Because the overrides are defined explicitly in the `*Params`, this takes priority over
+///   the more general "bag of config options" provided by `cli_overrides` and `request_overrides`.
 async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
     request_overrides: Option<HashMap<String, serde_json::Value>>,
-    forced_overrides: ConfigOverrides,
+    typesafe_overrides: ConfigOverrides,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
         .iter()
@@ -3385,7 +3387,7 @@ async fn derive_config_from_params(
         )
         .collect::<Vec<_>>();
 
-    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, forced_overrides)
+    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, typesafe_overrides)
         .await
 }
 
