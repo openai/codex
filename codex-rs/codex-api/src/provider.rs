@@ -1,4 +1,5 @@
 use codex_client::Request;
+use codex_client::RequestCompression;
 use codex_client::RetryOn;
 use codex_client::RetryPolicy;
 use http::Method;
@@ -87,6 +88,7 @@ impl Provider {
             url: self.url_for_path(path),
             headers: self.headers.clone(),
             body: None,
+            compression: RequestCompression::None,
             timeout: None,
         }
     }

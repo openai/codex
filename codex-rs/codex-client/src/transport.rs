@@ -2,6 +2,7 @@ use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
 use crate::error::TransportError;
 use crate::request::Request;
+use crate::request::RequestCompression;
 use crate::request::Response;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -31,41 +32,13 @@ pub trait HttpTransport: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct ReqwestTransport {
     client: CodexHttpClient,
-    enable_request_compression: bool,
 }
 
 impl ReqwestTransport {
     pub fn new(client: reqwest::Client) -> Self {
         Self {
             client: CodexHttpClient::new(client),
-            enable_request_compression: false,
         }
-    }
-
-    pub fn with_request_compression(mut self, enabled: bool) -> Self {
-        self.enable_request_compression = enabled;
-        self
-    }
-
-    fn should_compress_request(&self, method: &Method, url: &str, headers: &HeaderMap) -> bool {
-        if !self.enable_request_compression {
-            return false;
-        }
-
-        if *method != Method::POST {
-            return false;
-        }
-
-        if headers.contains_key(http::header::CONTENT_ENCODING) {
-            return false;
-        }
-
-        let Ok(parsed) = reqwest::Url::parse(url) else {
-            return false;
-        };
-
-        let path = parsed.path().to_ascii_lowercase();
-        path.contains("/backend-api/codex") || path.contains("/api/codex")
     }
 
     fn build(&self, req: Request) -> Result<CodexRequestBuilder, TransportError> {
@@ -74,6 +47,7 @@ impl ReqwestTransport {
             url,
             mut headers,
             body,
+            compression,
             timeout,
         } = req;
 
@@ -87,21 +61,31 @@ impl ReqwestTransport {
         }
 
         if let Some(body) = body {
-            if self.should_compress_request(&method, &url, &headers) {
+            if compression != RequestCompression::None {
+                if headers.contains_key(http::header::CONTENT_ENCODING) {
+                    return Err(TransportError::Build(
+                        "request compression was requested but content-encoding is already set"
+                            .to_string(),
+                    ));
+                }
+
                 let json = serde_json::to_vec(&body)
                     .map_err(|err| TransportError::Build(err.to_string()))?;
                 let pre_compression_bytes = json.len();
                 let compression_start = std::time::Instant::now();
-                let compressed = zstd::stream::encode_all(std::io::Cursor::new(json), 3)
-                    .map_err(|err| TransportError::Build(err.to_string()))?;
+                let (compressed, content_encoding) = match compression {
+                    RequestCompression::None => unreachable!("guarded by compression != None"),
+                    RequestCompression::Zstd => (
+                        zstd::stream::encode_all(std::io::Cursor::new(json), 3)
+                            .map_err(|err| TransportError::Build(err.to_string()))?,
+                        http::HeaderValue::from_static("zstd"),
+                    ),
+                };
                 let post_compression_bytes = compressed.len();
                 let compression_duration = compression_start.elapsed();
 
                 // Ensure the server knows to unpack the request body.
-                headers.insert(
-                    http::header::CONTENT_ENCODING,
-                    http::HeaderValue::from_static("zstd"),
-                );
+                headers.insert(http::header::CONTENT_ENCODING, content_encoding);
                 if !headers.contains_key(http::header::CONTENT_TYPE) {
                     headers.insert(
                         http::header::CONTENT_TYPE,

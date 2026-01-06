@@ -17,6 +17,7 @@ use codex_api::TransportError;
 use codex_api::common::Reasoning;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
+use codex_api::requests::responses::Compression;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
@@ -161,16 +162,7 @@ impl ModelClient {
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-            let enable_request_compression = self
-                .config
-                .features
-                .enabled(Feature::EnableRequestCompression)
-                && auth
-                    .as_ref()
-                    .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
-                && !api_provider.is_azure_responses_endpoint();
-            let transport = ReqwestTransport::new(build_reqwest_client())
-                .with_request_compression(enable_request_compression);
+            let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let client = ApiChatClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
@@ -259,17 +251,22 @@ impl ModelClient {
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-            let enable_request_compression = self
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
+            let compression = if self
                 .config
                 .features
                 .enabled(Feature::EnableRequestCompression)
                 && auth
                     .as_ref()
                     .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
-                && !api_provider.is_azure_responses_endpoint();
-            let transport = ReqwestTransport::new(build_reqwest_client())
-                .with_request_compression(enable_request_compression);
-            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
+                && self.provider.is_openai()
+            {
+                Compression::Zstd
+            } else {
+                Compression::None
+            };
+
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
@@ -282,6 +279,7 @@ impl ModelClient {
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),
                 extra_headers: beta_feature_headers(&self.config),
+                compression,
             };
 
             let stream_result = client
@@ -353,15 +351,7 @@ impl ModelClient {
             .provider
             .to_api_provider(auth.as_ref().map(|a| a.mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-        let enable_request_compression = self
-            .config
-            .features
-            .enabled(Feature::EnableRequestCompression)
-            && auth
-                .as_ref()
-                .is_some_and(|auth| auth.mode != AuthMode::ChatGPT);
-        let transport = ReqwestTransport::new(build_reqwest_client())
-            .with_request_compression(enable_request_compression);
+        let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = self.build_request_telemetry();
         let client = ApiCompactClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));
