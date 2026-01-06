@@ -1,20 +1,11 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 2618
-expression: terminal.backend()
+assertion_line: 2612
+expression: active_blob(&chat)
 ---
-"                                                            "
-"╭───────────────────────────────────────╮                   "
-"│ >_ OpenAI Codex (v0.0.0)              │                   "
-"│                                       │                   "
-"│ model:     loading   /model to change │                   "
-"│ directory: ~/code/codex/codex-rs/tui  │                   "
-"╰───────────────────────────────────────╯                   "
-"                                                            "
-"                                                            "
-"› Ask Codex to do anything                                  "
-"                                                            "
-"  100% context left · ? for shortcuts                       "
-"                                                            "
-"                                                            "
-"                                                            "
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: /home/user/project         │
+╰───────────────────────────────────────╯

@@ -153,7 +153,8 @@ async fn resumed_initial_messages_render_history() {
 #[tokio::test]
 async fn startup_header_renders_in_active_cell_before_session_configured_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    let startup_dir = chat.config.cwd.clone();
+    // Use a path that's not under $HOME so the rendered directory is stable across CI/dev.
+    let startup_dir = PathBuf::from("/home/user/project");
     chat.active_cell = Some(Box::new(
         crate::history_cell::StartupSessionHeaderHistoryCell::new(startup_dir),
     ));

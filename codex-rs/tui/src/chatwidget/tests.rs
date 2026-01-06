@@ -2602,20 +2602,14 @@ async fn ui_snapshots_small_heights_idle() {
 
 #[tokio::test]
 async fn startup_header_renders_in_active_cell_before_session_configured_snapshot() {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.active_cell = Some(Box::new(
-        crate::history_cell::StartupSessionHeaderHistoryCell::new(chat.config.cwd.clone()),
+        // Use a path that's not under $HOME so the rendered directory is stable across CI/dev.
+        crate::history_cell::StartupSessionHeaderHistoryCell::new(PathBuf::from(
+            "/home/user/project",
+        )),
     ));
-
-    let mut terminal = Terminal::new(TestBackend::new(60, 15)).expect("create terminal");
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw startup header");
-
-    assert_snapshot!("startup_header_active_cell", terminal.backend());
+    assert_snapshot!("startup_header_active_cell", active_blob(&chat));
 }
 
 #[tokio::test]

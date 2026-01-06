@@ -1,11 +1,11 @@
 ---
 source: tui2/src/chatwidget/tests.rs
-assertion_line: 160
+assertion_line: 161
 expression: active_blob(&chat)
 ---
 ╭───────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.0.0)              │
 │                                       │
 │ model:     loading   /model to change │
-│ directory: ~/code/codex/codex-rs/tui2 │
+│ directory: /home/user/project         │
 ╰───────────────────────────────────────╯
