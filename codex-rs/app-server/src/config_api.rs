@@ -11,6 +11,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
+use codex_utils_json_to_toml::json_to_toml;
 use serde_json::json;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
@@ -38,6 +39,30 @@ impl ConfigApi {
         self.service.read(params).await.map_err(map_error)
     }
 
+    pub(crate) async fn load_thread_agnostic_config(
+        &self,
+        overrides: codex_core::config::ConfigOverrides,
+        request_cli_overrides: Option<std::collections::HashMap<String, serde_json::Value>>,
+    ) -> std::io::Result<Config> {
+        // Apply the app server's startup `--config` overrides, then apply request-scoped overrides
+        // with higher precedence.
+        let mut merged_cli_overrides = self.cli_overrides.clone();
+        merged_cli_overrides.extend(
+            request_cli_overrides
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k, json_to_toml(v))),
+        );
+
+        ConfigBuilder::default()
+            .codex_home(self.codex_home.clone())
+            .cli_overrides(merged_cli_overrides)
+            .harness_overrides(overrides)
+            .thread_agnostic()
+            .build()
+            .await
+    }
+
     pub(crate) async fn write_value(
         &self,
         params: ConfigValueWriteParams,
@@ -55,11 +80,7 @@ impl ConfigApi {
     pub(crate) async fn load_latest_thread_agnostic_config(
         &self,
     ) -> Result<Config, JSONRPCErrorError> {
-        ConfigBuilder::default()
-            .codex_home(self.codex_home.clone())
-            .cli_overrides(self.cli_overrides.clone())
-            .thread_agnostic()
-            .build()
+        self.load_thread_agnostic_config(codex_core::config::ConfigOverrides::default(), None)
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,

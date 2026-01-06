@@ -156,7 +156,6 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
-use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -217,7 +216,6 @@ pub(crate) struct CodexMessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
     config_api: ConfigApi,
-    cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
@@ -275,7 +273,6 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe,
             config,
             config_api,
-            cli_overrides,
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
@@ -1277,8 +1274,7 @@ impl CodexMessageProcessor {
         }
 
         let config =
-            match derive_config_from_params(&self.cli_overrides, overrides, Some(cli_overrides))
-                .await
+            match derive_config_from_params(&self.config_api, overrides, Some(cli_overrides)).await
             {
                 Ok(config) => config,
                 Err(err) => {
@@ -1330,7 +1326,7 @@ impl CodexMessageProcessor {
         );
 
         let config =
-            match derive_config_from_params(&self.cli_overrides, overrides, params.config).await {
+            match derive_config_from_params(&self.config_api, overrides, params.config).await {
                 Ok(config) => config,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -1569,7 +1565,7 @@ impl CodexMessageProcessor {
                 base_instructions,
                 developer_instructions,
             );
-            match derive_config_from_params(&self.cli_overrides, overrides, cli_overrides).await {
+            match derive_config_from_params(&self.config_api, overrides, cli_overrides).await {
                 Ok(config) => config,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -2230,7 +2226,7 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 };
 
-                derive_config_from_params(&self.cli_overrides, overrides, Some(cli_overrides)).await
+                derive_config_from_params(&self.config_api, overrides, Some(cli_overrides)).await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -3346,21 +3342,13 @@ fn errors_to_info(
 }
 
 async fn derive_config_from_params(
-    base_cli_overrides: &[(String, TomlValue)],
+    config_api: &ConfigApi,
     overrides: ConfigOverrides,
     cli_overrides: Option<HashMap<String, serde_json::Value>>,
 ) -> std::io::Result<Config> {
-    // Apply the app server's startup `--config` overrides, then apply request-scoped
-    // overrides with higher precedence.
-    let mut merged_cli_overrides: Vec<(String, TomlValue)> = base_cli_overrides.to_vec();
-    merged_cli_overrides.extend(
-        cli_overrides
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(k, v)| (k, json_to_toml(v))),
-    );
-
-    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, overrides).await
+    config_api
+        .load_thread_agnostic_config(overrides, cli_overrides)
+        .await
 }
 
 async fn read_summary_from_rollout(
