@@ -498,7 +498,7 @@ fn patch_options() -> Vec<ApprovalOption> {
             label: "Yes, and don't ask again for these files".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
             display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('s'))],
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
