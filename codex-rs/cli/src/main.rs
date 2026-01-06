@@ -18,6 +18,7 @@ use codex_cli::login::run_login_with_device_code_fallback_to_browser;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
+use codex_core::env::is_headless_environment;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
@@ -786,29 +787,6 @@ fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
     let name = "codex";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
-}
-
-fn env_var_set(key: &str) -> bool {
-    std::env::var(key).is_ok_and(|v| !v.trim().is_empty())
-}
-
-fn is_headless_environment() -> bool {
-    if env_var_set("CI")
-        || env_var_set("SSH_CONNECTION")
-        || env_var_set("SSH_CLIENT")
-        || env_var_set("SSH_TTY")
-    {
-        return true;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if !env_var_set("DISPLAY") && !env_var_set("WAYLAND_DISPLAY") {
-            return true;
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]

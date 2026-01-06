@@ -5,6 +5,7 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
+use codex_core::env::is_headless_environment;
 use codex_login::DeviceCode;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
@@ -899,29 +900,6 @@ impl WidgetRef for AuthModeWidget {
             }
         }
     }
-}
-
-fn env_var_set(key: &str) -> bool {
-    std::env::var(key).is_ok_and(|v| !v.trim().is_empty())
-}
-
-fn is_headless_environment() -> bool {
-    if env_var_set("CI")
-        || env_var_set("SSH_CONNECTION")
-        || env_var_set("SSH_CLIENT")
-        || env_var_set("SSH_TTY")
-    {
-        return true;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if !env_var_set("DISPLAY") && !env_var_set("WAYLAND_DISPLAY") {
-            return true;
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]
