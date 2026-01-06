@@ -5,6 +5,7 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::CODEX_APPLY_PATCH_ARG1;
+use crate::apply_patch_approval_key::ApplyPatchFileApprovalKey;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
@@ -30,7 +31,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub action: ApplyPatchAction,
-    pub approval_keys: Vec<crate::apply_patch_approval_key::ApplyPatchFileApprovalKey>,
+    pub approval_keys: Vec<ApplyPatchFileApprovalKey>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub timeout_ms: Option<u64>,
@@ -85,7 +86,7 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = crate::apply_patch_approval_key::ApplyPatchFileApprovalKey;
+    type ApprovalKey = ApplyPatchFileApprovalKey;
 
     fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
         req.approval_keys.clone()
