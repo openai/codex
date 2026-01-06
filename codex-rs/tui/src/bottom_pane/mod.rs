@@ -549,6 +549,14 @@ impl BottomPane {
         self.composer.take_recent_submission_images()
     }
 
+    pub(crate) fn expand_attached_image_placeholders_for_model(
+        &self,
+        display_text: &str,
+    ) -> String {
+        self.composer
+            .expand_attached_image_placeholders_for_model(display_text)
+    }
+
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
             RenderableItem::Borrowed(view)

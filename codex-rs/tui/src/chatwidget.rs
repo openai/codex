@@ -371,14 +371,16 @@ pub(crate) struct ChatWidget {
 }
 
 struct UserMessage {
-    text: String,
+    display_text: String,
+    model_text: String,
     image_paths: Vec<PathBuf>,
 }
 
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
-            text,
+            display_text: text.clone(),
+            model_text: text,
             image_paths: Vec::new(),
         }
     }
@@ -387,7 +389,8 @@ impl From<String> for UserMessage {
 impl From<&str> for UserMessage {
     fn from(text: &str) -> Self {
         Self {
-            text: text.to_string(),
+            display_text: text.to_string(),
+            model_text: text.to_string(),
             image_paths: Vec::new(),
         }
     }
@@ -397,7 +400,11 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
     if text.is_empty() && image_paths.is_empty() {
         None
     } else {
-        Some(UserMessage { text, image_paths })
+        Some(UserMessage {
+            display_text: text.clone(),
+            model_text: text,
+            image_paths,
+        })
     }
 }
 
@@ -813,7 +820,7 @@ impl ChatWidget {
             let queued_text = self
                 .queued_user_messages
                 .iter()
-                .map(|m| m.text.clone())
+                .map(|m| m.display_text.clone())
                 .collect::<Vec<_>>()
                 .join("\n");
             let existing_text = self.bottom_pane.composer_text();
@@ -1621,7 +1628,8 @@ impl ChatWidget {
             } if !self.queued_user_messages.is_empty() => {
                 // Prefer the most recently queued item.
                 if let Some(user_message) = self.queued_user_messages.pop_back() {
-                    self.bottom_pane.set_composer_text(user_message.text);
+                    self.bottom_pane
+                        .set_composer_text(user_message.display_text);
                     self.refresh_queued_user_messages();
                     self.request_redraw();
                 }
@@ -1630,8 +1638,12 @@ impl ChatWidget {
                 match self.bottom_pane.handle_key_event(key_event) {
                     InputResult::Submitted(text) => {
                         // If a task is running, queue the user input to be sent after the turn completes.
+                        let model_text = self
+                            .bottom_pane
+                            .expand_attached_image_placeholders_for_model(&text);
                         let user_message = UserMessage {
-                            text,
+                            display_text: text,
+                            model_text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
                         self.queue_user_message(user_message);
@@ -1909,15 +1921,19 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
-        if text.is_empty() && image_paths.is_empty() {
+        let UserMessage {
+            display_text,
+            model_text,
+            image_paths,
+        } = user_message;
+        if display_text.is_empty() && image_paths.is_empty() {
             return;
         }
 
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
-        if let Some(stripped) = text.strip_prefix('!') {
+        if let Some(stripped) = display_text.strip_prefix('!') {
             let cmd = stripped.trim();
             if cmd.is_empty() {
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -1934,8 +1950,8 @@ impl ChatWidget {
             return;
         }
 
-        if !text.is_empty() {
-            items.push(UserInput::Text { text: text.clone() });
+        if !model_text.is_empty() {
+            items.push(UserInput::Text { text: model_text });
         }
 
         for path in image_paths {
@@ -1943,7 +1959,7 @@ impl ChatWidget {
         }
 
         if let Some(skills) = self.bottom_pane.skills() {
-            let skill_mentions = find_skill_mentions(&text, skills);
+            let skill_mentions = find_skill_mentions(&display_text, skills);
             for skill in skill_mentions {
                 items.push(UserInput::Skill {
                     name: skill.name.clone(),
@@ -1959,17 +1975,19 @@ impl ChatWidget {
             });
 
         // Persist the text to cross-session message history.
-        if !text.is_empty() {
+        if !display_text.is_empty() {
             self.codex_op_tx
-                .send(Op::AddToHistory { text: text.clone() })
+                .send(Op::AddToHistory {
+                    text: display_text.clone(),
+                })
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
         }
 
         // Only show the text portion in conversation history.
-        if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text));
+        if !display_text.is_empty() {
+            self.add_to_history(history_cell::new_user_prompt(display_text));
         }
         self.needs_final_message_separator = false;
     }
@@ -2226,7 +2244,7 @@ impl ChatWidget {
         let messages: Vec<String> = self
             .queued_user_messages
             .iter()
-            .map(|m| m.text.clone())
+            .map(|m| m.display_text.clone())
             .collect();
         self.bottom_pane.set_queued_user_messages(messages);
     }

@@ -1010,7 +1010,7 @@ async fn alt_up_edits_most_recent_queued_message() {
     // And the queue should now contain only the remaining (older) item.
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.queued_user_messages.front().unwrap().display_text,
         "first queued"
     );
 }
@@ -1040,7 +1040,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 
     assert_eq!(chat.queued_user_messages.len(), 3);
     for message in chat.queued_user_messages.iter() {
-        assert_eq!(message.text, "repeat me");
+        assert_eq!(message.display_text, "repeat me");
     }
 }
 
@@ -1061,7 +1061,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.queued_user_messages.front().unwrap().display_text,
         "queued submission"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -1117,6 +1117,67 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     assert!(
         images.is_empty(),
         "attachments are not preserved in history recall"
+    );
+}
+
+#[tokio::test]
+async fn submitting_image_shows_short_path_but_sends_full_path_to_model() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    // Use a long absolute path so the display placeholder is shortened.
+    let image_path = PathBuf::from("/var/tmp/some/dir/image.png");
+
+    chat.bottom_pane.insert_str("see ");
+    chat.bottom_pane
+        .attach_image(image_path.clone(), 24, 42, "png");
+
+    let display_text = chat.bottom_pane.composer_text();
+    assert!(
+        display_text.contains("[/var/.../image.png 24x42]"),
+        "expected shortened display placeholder, got {display_text:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // The user-visible transcript should keep the short placeholder.
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected a user history cell to be inserted"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("/var/.../image.png"),
+        "expected transcript to contain shortened placeholder, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("/var/tmp/some/dir/image.png"),
+        "expected transcript not to contain full path, got {rendered:?}"
+    );
+
+    // The model-facing text should expand the placeholder to the full path.
+    let mut model_text: Option<String> = None;
+    while let Ok(op) = op_rx.try_recv() {
+        if let Op::UserInput { items } = op {
+            for item in items {
+                if let codex_protocol::user_input::UserInput::Text { text } = item {
+                    model_text = Some(text);
+                    break;
+                }
+            }
+        }
+        if model_text.is_some() {
+            break;
+        }
+    }
+    let model_text = model_text.expect("expected Op::UserInput with a Text item");
+    assert!(
+        model_text.contains("/var/tmp/some/dir/image.png"),
+        "expected model text to contain full path, got {model_text:?}"
+    );
+    assert!(
+        !model_text.contains("/var/.../image.png"),
+        "expected model text not to contain shortened placeholder, got {model_text:?}"
     );
 }
 

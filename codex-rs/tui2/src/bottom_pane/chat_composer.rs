@@ -81,7 +81,8 @@ pub enum InputResult {
 
 #[derive(Clone, Debug, PartialEq)]
 struct AttachedImage {
-    placeholder: String,
+    display_placeholder: String,
+    model_placeholder: String,
     path: PathBuf,
 }
 
@@ -189,6 +190,36 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    fn display_label_for_image_placeholder(path: &Path) -> String {
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return "image".to_string();
+        };
+
+        // Avoid dumping very long absolute paths into the composer UI (common when attaching screenshots).
+        if !path.is_absolute() {
+            return path.display().to_string();
+        }
+
+        // Count normal path segments (including the file name).
+        let mut segments: Vec<String> = Vec::new();
+        for c in path.components() {
+            if let std::path::Component::Normal(seg) = c {
+                segments.push(seg.to_string_lossy().into_owned());
+            }
+        }
+
+        // Keep short absolute paths readable.
+        if segments.len() <= 2 {
+            return path.display().to_string();
+        }
+
+        let top = segments
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "...".to_string());
+        format!("/{top}/.../{file_name}")
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -330,19 +361,33 @@ impl ChatComposer {
 
     /// Attempt to start a burst by retro-capturing recent chars before the cursor.
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, _format_label: &str) {
-        // Include the full path in the placeholder so the model can refer back to the local file.
-        let file_label = path.display().to_string();
-        let placeholder = format!("[{file_label} {width}x{height}]");
+        let display_label = Self::display_label_for_image_placeholder(&path);
+        let full_label = path.display().to_string();
+        let display_placeholder = format!("[{display_label} {width}x{height}]");
+        let model_placeholder = format!("[{full_label} {width}x{height}]");
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
-        self.textarea.insert_element(&placeholder);
-        self.attached_images
-            .push(AttachedImage { placeholder, path });
+        self.textarea.insert_element(&display_placeholder);
+        self.attached_images.push(AttachedImage {
+            display_placeholder,
+            model_placeholder,
+            path,
+        });
     }
 
     pub fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         let images = std::mem::take(&mut self.attached_images);
         images.into_iter().map(|img| img.path).collect()
+    }
+
+    pub fn expand_attached_image_placeholders_for_model(&self, display_text: &str) -> String {
+        let mut text = display_text.to_string();
+        for img in &self.attached_images {
+            if text.contains(&img.display_placeholder) {
+                text = text.replace(&img.display_placeholder, &img.model_placeholder);
+            }
+        }
+        text
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
@@ -1353,15 +1398,15 @@ impl ChatComposer {
             let mut needed: HashMap<String, usize> = HashMap::new();
             for img in &self.attached_images {
                 needed
-                    .entry(img.placeholder.clone())
-                    .or_insert_with(|| text_after.matches(&img.placeholder).count());
+                    .entry(img.display_placeholder.clone())
+                    .or_insert_with(|| text_after.matches(&img.display_placeholder).count());
             }
 
             let mut used: HashMap<String, usize> = HashMap::new();
             let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
             for img in self.attached_images.drain(..) {
-                let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
-                let used_count = used.entry(img.placeholder.clone()).or_insert(0);
+                let total_needed = *needed.get(&img.display_placeholder).unwrap_or(&0);
+                let used_count = used.entry(img.display_placeholder.clone()).or_insert(0);
                 if *used_count < total_needed {
                     kept.push(img);
                     *used_count += 1;
@@ -1385,7 +1430,7 @@ impl ChatComposer {
         // Detect if the cursor is at the end of any image placeholder.
         // If duplicates exist, remove the specific occurrence's mapping.
         for (i, img) in self.attached_images.iter().enumerate() {
-            let ph = &img.placeholder;
+            let ph = &img.display_placeholder;
             if p < ph.len() {
                 continue;
             }
@@ -1415,7 +1460,7 @@ impl ChatComposer {
                 .attached_images
                 .iter()
                 .enumerate()
-                .filter(|(_, img2)| img2.placeholder == *ph)
+                .filter(|(_, img2)| img2.display_placeholder == *ph)
                 .nth(occ_before)
             {
                 Some((remove_idx, ph.clone()))
@@ -1434,7 +1479,7 @@ impl ChatComposer {
         // let result = 'out: {
         let out: Option<(usize, String)> = 'out: {
             for (i, img) in self.attached_images.iter().enumerate() {
-                let ph = &img.placeholder;
+                let ph = &img.display_placeholder;
                 if p + ph.len() > text.len() {
                     continue;
                 }
@@ -1462,7 +1507,7 @@ impl ChatComposer {
                     .attached_images
                     .iter()
                     .enumerate()
-                    .filter(|(_, img2)| img2.placeholder == *ph)
+                    .filter(|(_, img2)| img2.display_placeholder == *ph)
                     .nth(occ_before)
                 {
                     break 'out Some((remove_idx, ph.clone()));
@@ -3210,7 +3255,7 @@ mod tests {
         );
         let path = PathBuf::from("/tmp/image3.png");
         composer.attach_image(path.clone(), 20, 10, "PNG");
-        let placeholder = composer.attached_images[0].placeholder.clone();
+        let placeholder = composer.attached_images[0].display_placeholder.clone();
 
         // Case 1: backspace at end
         composer.textarea.move_cursor_to_end_of_line(false);
@@ -3221,7 +3266,7 @@ mod tests {
         // Re-add and test backspace in middle: should break the placeholder string
         // and drop the image mapping (same as text placeholder behavior).
         composer.attach_image(path, 20, 10, "PNG");
-        let placeholder2 = composer.attached_images[0].placeholder.clone();
+        let placeholder2 = composer.attached_images[0].display_placeholder.clone();
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
             let mid_pos = start_pos + (placeholder2.len() / 2);
@@ -3293,8 +3338,8 @@ mod tests {
         composer.handle_paste(" ".into());
         composer.attach_image(path2.clone(), 10, 5, "PNG");
 
-        let placeholder1 = composer.attached_images[0].placeholder.clone();
-        let placeholder2 = composer.attached_images[1].placeholder.clone();
+        let placeholder1 = composer.attached_images[0].display_placeholder.clone();
+        let placeholder2 = composer.attached_images[1].display_placeholder.clone();
         let text = composer.textarea.text().to_string();
         let start1 = text.find(&placeholder1).expect("first placeholder present");
         let end1 = start1 + placeholder1.len();
@@ -3317,7 +3362,8 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: "[/tmp/image_dup2.png 10x5]".to_string()
+                display_placeholder: "[/tmp/image_dup2.png 10x5]".to_string(),
+                model_placeholder: "[/tmp/image_dup2.png 10x5]".to_string()
             }],
             composer.attached_images,
             "one image mapping remains"
@@ -3344,7 +3390,8 @@ mod tests {
 
         let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
         assert!(needs_redraw);
-        let expected_prefix = format!("[{} 3x2] ", tmp_path.display());
+        let display_label = ChatComposer::display_label_for_image_placeholder(&tmp_path);
+        let expected_prefix = format!("[{display_label} 3x2] ");
         assert!(composer.textarea.text().starts_with(&expected_prefix));
 
         let imgs = composer.take_recent_submission_images();
