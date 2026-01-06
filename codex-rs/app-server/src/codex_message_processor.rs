@@ -88,6 +88,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadCompactParams;
+use codex_app_server_protocol::ThreadCompactResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -391,6 +393,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadUndo { request_id, params } => {
                 self.thread_undo(request_id, params).await;
+            }
+            ClientRequest::ThreadCompact { request_id, params } => {
+                self.thread_compact(request_id, params).await;
             }
             ClientRequest::ThreadRewind { request_id, params } => {
                 self.thread_rewind(request_id, params).await;
@@ -1576,6 +1581,51 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn thread_compact(&mut self, request_id: RequestId, params: ThreadCompactParams) {
+        let (conversation_id, conversation) =
+            match self.conversation_from_thread_id(&params.thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let active_turn_id = {
+            self.active_turns
+                .lock()
+                .await
+                .get(&conversation_id)
+                .cloned()
+        };
+        if let Some(turn_id) = active_turn_id {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread/compact is not allowed while a turn is in progress: {turn_id}"),
+            )
+            .await;
+            return;
+        }
+
+        if let Err(err) = conversation.submit(Op::Compact).await {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to submit compact: {err}"),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadCompactResponse {})
+            .await;
+    }
+
     async fn thread_rewind(&mut self, request_id: RequestId, params: ThreadRewindParams) {
         let ThreadRewindParams {
             thread_id,
@@ -1763,6 +1813,11 @@ impl CodexMessageProcessor {
             developer_instructions,
         } = params;
 
+        // Note: `thread_id` may be invalid when `path` is provided (tests and some clients treat
+        // `path` as the source of truth). Only require a valid thread id when we must resolve a
+        // conversation by id.
+        let conversation_id_opt = ConversationId::from_string(&thread_id).ok();
+
         let overrides_requested = model.is_some()
             || model_provider.is_some()
             || cwd.is_some()
@@ -1797,6 +1852,173 @@ impl CodexMessageProcessor {
         } else {
             self.config.as_ref().clone()
         };
+
+        let active_turn_id = match conversation_id_opt {
+            Some(conversation_id) => self
+                .active_turns
+                .lock()
+                .await
+                .get(&conversation_id)
+                .cloned(),
+            None => None,
+        };
+
+        // If the conversation is already loaded, avoid respawning it. Respawning would reset turn
+        // ids and (worse) can clobber an in-progress turn's event stream if the client calls
+        // thread/resume while streaming.
+        //
+        // This is especially important because the VS Code extension may call thread/resume when
+        // switching sessions.
+        let existing_conversation_loaded = match conversation_id_opt {
+            Some(conversation_id) => self
+                .conversation_manager
+                .get_conversation(conversation_id)
+                .await
+                .is_ok(),
+            None => false,
+        };
+
+        if existing_conversation_loaded
+            && history.is_none()
+            && path.is_none()
+            && !overrides_requested
+        {
+            let Some(conversation_id) = conversation_id_opt else {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "thread/resume requires a valid threadId when resuming by id: {thread_id}"
+                    ),
+                )
+                .await;
+                return;
+            };
+            // Ensure we have a listener so streaming continues for the active turn.
+            let key: AutoListenerKey = (conversation_id, ApiVersion::V2);
+            if !self.auto_listeners.contains_key(&key) {
+                self.attach_auto_listener(conversation_id, false, ApiVersion::V2)
+                    .await;
+            }
+
+            let rollout_path = match find_conversation_path_by_id_str(
+                &self.config.codex_home,
+                &conversation_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for conversation id {conversation_id}"),
+                    )
+                    .await;
+                    return;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate conversation id {conversation_id}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let fallback_model_provider = config.model_provider_id.clone();
+            let mut thread = match read_summary_from_rollout(
+                rollout_path.as_path(),
+                fallback_model_provider.as_str(),
+            )
+            .await
+            {
+                Ok(summary) => summary_to_thread(summary),
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!(
+                            "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                            rollout_path.display()
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let history = match RolloutRecorder::get_rollout_history(&rollout_path).await {
+                Ok(v) => v,
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!(
+                            "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                            rollout_path.display()
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let turn_context = history
+                .get_rollout_items()
+                .into_iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::TurnContext(tc) => Some(tc),
+                    _ => None,
+                });
+
+            let events = history.get_event_msgs().unwrap_or_default();
+            thread.turns = build_turns_from_event_msgs(&events);
+
+            if let Some(turn_context) = turn_context {
+                let response = ThreadResumeResponse {
+                    thread,
+                    model: turn_context.model,
+                    model_provider: config.model_provider_id.clone(),
+                    cwd: turn_context.cwd,
+                    approval_policy: turn_context.approval_policy.into(),
+                    sandbox: turn_context.sandbox_policy.into(),
+                    reasoning_effort: turn_context.effort,
+                };
+
+                self.outgoing.send_response(request_id, response).await;
+                return;
+            }
+
+            // Older rollouts (or test fixtures) may not include TurnContext items.
+            //
+            // If a turn is in progress, we cannot safely respawn the conversation (doing so can
+            // clobber the active turn's event stream). In that case, surface the error.
+            if active_turn_id.is_some() {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to resume thread {conversation_id}: rollout `{}` is missing a turn context",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return;
+            }
+
+            // Otherwise, fall through to the slow path below (respawn from rollout).
+        }
+
+        if active_turn_id.is_some() && (history.is_some() || path.is_some() || overrides_requested)
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "thread/resume with overrides/history is not allowed while a turn is in progress: {}",
+                    active_turn_id.unwrap_or_default()
+                ),
+            )
+            .await;
+            return;
+        }
 
         let conversation_history = if let Some(history) = history {
             if history.is_empty() {

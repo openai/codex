@@ -121,6 +121,10 @@ client_request_definitions! {
         params: v2::ThreadUndoParams,
         response: v2::ThreadUndoResponse,
     },
+    ThreadCompact => "thread/compact" {
+        params: v2::ThreadCompactParams,
+        response: v2::ThreadCompactResponse,
+    },
     ThreadRewind => "thread/rewind" {
         params: v2::ThreadRewindParams,
         response: v2::ThreadRewindResponse,
