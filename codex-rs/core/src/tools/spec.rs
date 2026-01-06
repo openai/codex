@@ -163,6 +163,15 @@ fn create_exec_command_tool() -> ToolSpec {
         },
     );
     properties.insert(
+        "tty".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to allocate a TTY for the command. Defaults to true (PTY); set to false for plain stdio pipes."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
         "yield_time_ms".to_string(),
         JsonSchema::Number {
             description: Some(

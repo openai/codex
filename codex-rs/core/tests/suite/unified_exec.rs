@@ -38,6 +38,7 @@ use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use tokio::time::Duration;
+use which::which;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -1283,6 +1284,168 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
         "original token count should exceed max_output_tokens"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_defaults_to_tty() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let python = match which("python").or_else(|_| which("python3")) {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python not found in PATH, skipping tty default test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-tty-default";
+    let args = serde_json::json!({
+        "cmd": format!("{} -c \"import sys; print(sys.stdin.isatty())\"", python.display()),
+        "yield_time_ms": 1500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check tty default".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let bodies = get_responses_request_bodies(&server).await;
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing tty default unified exec output");
+    let normalized = output.output.replace("\r\n", "\n");
+
+    assert!(
+        normalized.contains("True"),
+        "stdin should be a tty by default: {normalized:?}"
+    );
+    assert_eq!(output.exit_code, Some(0));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_can_disable_tty() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let python = match which("python").or_else(|_| which("python3")) {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python not found in PATH, skipping non-tty test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-no-tty";
+    let args = serde_json::json!({
+        "cmd": format!("{} -c \"import sys; print(sys.stdin.isatty())\"", python.display()),
+        "yield_time_ms": 1500,
+        "tty": false,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check tty disabled".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let bodies = get_responses_request_bodies(&server).await;
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing non-tty unified exec output");
+    let normalized = output.output.replace("\r\n", "\n");
+
+    assert!(
+        normalized.contains("False"),
+        "stdin should not be a tty when tty=false: {normalized:?}"
+    );
+    assert_eq!(output.exit_code, Some(0));
+    assert!(output.process_id.is_none(), "process should have exited");
     Ok(())
 }
 

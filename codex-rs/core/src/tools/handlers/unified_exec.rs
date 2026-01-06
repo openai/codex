@@ -32,6 +32,8 @@ struct ExecCommandArgs {
     shell: Option<String>,
     #[serde(default = "default_login")]
     login: bool,
+    #[serde(default = "default_tty")]
+    tty: bool,
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -64,6 +66,10 @@ fn default_write_stdin_yield_time_ms() -> u64 {
 
 fn default_login() -> bool {
     true
+}
+
+fn default_tty() -> bool {
+    false
 }
 
 #[async_trait]
@@ -127,6 +133,7 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let ExecCommandArgs {
                     workdir,
+                    tty,
                     yield_time_ms,
                     max_output_tokens,
                     sandbox_permissions,
@@ -176,6 +183,7 @@ impl ToolHandler for UnifiedExecHandler {
                             yield_time_ms,
                             max_output_tokens,
                             workdir,
+                            tty,
                             sandbox_permissions,
                             justification,
                         },

@@ -131,6 +131,7 @@ impl UnifiedExecSessionManager {
                 cwd.clone(),
                 request.sandbox_permissions,
                 request.justification,
+                request.tty,
                 context,
             )
             .await;
@@ -471,21 +472,34 @@ impl UnifiedExecSessionManager {
     pub(crate) async fn open_session_with_exec_env(
         &self,
         env: &ExecEnv,
+        tty: bool,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let (program, args) = env
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
 
-        let spawned = codex_utils_pty::spawn_pty_process(
-            program,
-            args,
-            env.cwd.as_path(),
-            &env.env,
-            &env.arg0,
-        )
-        .await
-        .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
+        let spawn_result = if tty {
+            codex_utils_pty::pty::spawn_process(
+                program,
+                args,
+                env.cwd.as_path(),
+                &env.env,
+                &env.arg0,
+            )
+            .await
+        } else {
+            codex_utils_pty::pipe::spawn_process(
+                program,
+                args,
+                env.cwd.as_path(),
+                &env.env,
+                &env.arg0,
+            )
+            .await
+        };
+        let spawned =
+            spawn_result.map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
         UnifiedExecSession::from_spawned(spawned, env.sandbox).await
     }
 
@@ -495,6 +509,7 @@ impl UnifiedExecSessionManager {
         cwd: PathBuf,
         sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
+        tty: bool,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
@@ -517,6 +532,7 @@ impl UnifiedExecSessionManager {
             command.to_vec(),
             cwd,
             env,
+            tty,
             sandbox_permissions,
             justification,
             exec_approval_requirement,
