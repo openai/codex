@@ -9,6 +9,7 @@ pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
+use codex_common::oss::ollama_chat_deprecation_notice;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
@@ -428,6 +429,8 @@ async fn run_ratatui_app(
         initial_config
     };
 
+    let ollama_chat_support_notice = ollama_chat_deprecation_notice(&config).await?;
+
     // Determine resume behavior: explicit id, then resume last, then picker.
     let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
         match find_conversation_path_by_id_str(&config.codex_home, id_str).await? {
@@ -505,6 +508,7 @@ async fn run_ratatui_app(
         resume_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        ollama_chat_support_notice,
     )
     .await;
 
