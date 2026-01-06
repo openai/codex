@@ -12,11 +12,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+/// LoaderOverrides overrides managed configuration inputs (primarily for tests).
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
+    //TODO(gt): Add a macos_ prefix to this field and remove the target_os check.
     #[cfg(target_os = "macos")]
     pub managed_preferences_base64: Option<String>,
+    pub macos_managed_config_requirements_base64: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

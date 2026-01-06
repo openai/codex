@@ -218,10 +218,11 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = config
-            .features
-            .enabled(Feature::Skills)
-            .then(|| skills_manager.skills_for_cwd(&config.cwd));
+        let loaded_skills = if config.features.enabled(Feature::Skills) {
+            Some(skills_manager.skills_for_config(&config))
+        } else {
+            None
+        };
 
         if let Some(outcome) = &loaded_skills {
             for err in &outcome.errors {
@@ -1776,7 +1777,16 @@ mod handlers {
                     final_output_json_schema: Some(final_output_json_schema),
                 },
             ),
-            Op::UserInput { items } => (items, SessionSettingsUpdate::default()),
+            Op::UserInput {
+                items,
+                final_output_json_schema,
+            } => (
+                items,
+                SessionSettingsUpdate {
+                    final_output_json_schema: Some(final_output_json_schema),
+                    ..Default::default()
+                },
+            ),
             _ => unreachable!(),
         };
 
@@ -1978,18 +1988,18 @@ mod handlers {
         };
         let skills = if sess.enabled(Feature::Skills) {
             let skills_manager = &sess.services.skills_manager;
-            cwds.into_iter()
-                .map(|cwd| {
-                    let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
-                    let errors = super::errors_to_info(&outcome.errors);
-                    let skills = super::skills_to_info(&outcome.skills);
-                    SkillsListEntry {
-                        cwd,
-                        skills,
-                        errors,
-                    }
-                })
-                .collect()
+            let mut entries = Vec::new();
+            for cwd in cwds {
+                let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+                let errors = super::errors_to_info(&outcome.errors);
+                let skills = super::skills_to_info(&outcome.skills);
+                entries.push(SkillsListEntry {
+                    cwd,
+                    skills,
+                    errors,
+                });
+            }
+            entries
         } else {
             cwds.into_iter()
                 .map(|cwd| SkillsListEntry {
@@ -2068,7 +2078,7 @@ mod handlers {
         review_request: ReviewRequest,
     ) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
-        match resolve_review_request(review_request, config.cwd.as_path()) {
+        match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
                     Arc::clone(sess),
@@ -2243,11 +2253,16 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
-    let skills_outcome = sess.enabled(Feature::Skills).then(|| {
-        sess.services
-            .skills_manager
-            .skills_for_cwd(&turn_context.cwd)
-    });
+    let skills_outcome = if sess.enabled(Feature::Skills) {
+        Some(
+            sess.services
+                .skills_manager
+                .skills_for_cwd(&turn_context.cwd, false)
+                .await,
+        )
+    } else {
+        None
+    };
 
     let SkillInjections {
         items: skill_items,

@@ -74,6 +74,9 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
+        /// Optional JSON Schema used to constrain the final assistant message for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_output_json_schema: Option<Value>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -1926,6 +1929,62 @@ mod tests {
         };
 
         assert!(event.as_legacy_events(false).is_empty());
+    }
+
+    #[test]
+    fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: None,
+        };
+
+        let json_op = serde_json::to_value(op)?;
+        assert_eq!(json_op, json!({ "type": "user_input", "items": [] }));
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_deserializes_without_final_output_json_schema_field() -> Result<()> {
+        let op: Op = serde_json::from_value(json!({ "type": "user_input", "items": [] }))?;
+
+        assert_eq!(
+            op,
+            Op::UserInput {
+                items: Vec::new(),
+                final_output_json_schema: None,
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_serialization_includes_final_output_json_schema_when_some() -> Result<()> {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "answer": { "type": "string" }
+            },
+            "required": ["answer"],
+            "additionalProperties": false
+        });
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: Some(schema.clone()),
+        };
+
+        let json_op = serde_json::to_value(op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "final_output_json_schema": schema,
+            })
+        );
+
+        Ok(())
     }
 
     /// Serialize Event to verify that its JSON representation has the expected

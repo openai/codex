@@ -20,6 +20,11 @@ use crate::transcript_copy_action::TranscriptCopyAction;
 use crate::transcript_copy_action::TranscriptCopyFeedback;
 use crate::transcript_copy_ui::TranscriptCopyUi;
 use crate::transcript_multi_click::TranscriptMultiClick;
+use crate::transcript_scrollbar::render_transcript_scrollbar_if_active;
+use crate::transcript_scrollbar::split_transcript_area;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarMouseEvent;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarMouseHandling;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarUi;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
@@ -337,11 +342,24 @@ pub(crate) struct App {
     transcript_total_lines: usize,
     transcript_copy_ui: TranscriptCopyUi,
     transcript_copy_action: TranscriptCopyAction,
+    transcript_scrollbar_ui: TranscriptScrollbarUi,
 
-    // Pager overlay state (Transcript or Static like Diff)
+    // Pager overlay state (Transcript or Static like Diff).
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
-    has_emitted_history_lines: bool,
+    /// History cells received while an overlay is active.
+    ///
+    /// While in an alt-screen overlay, the normal terminal buffer is not visible.
+    /// Instead we queue the incoming cells here and, on overlay close, render them at the *current*
+    /// width and queue them in one batch via `Tui::insert_history_lines`.
+    ///
+    /// This matters for correctness if/when scrollback printing is enabled: if we deferred
+    /// already-rendered `Vec<Line>`, we'd bake viewport-width wrapping based on the width at the
+    /// time the cell arrived (which may differ from the width when the overlay closes).
+    pub(crate) deferred_history_cells: Vec<Arc<dyn HistoryCell>>,
+    /// True once at least one history cell has been inserted into terminal scrollback.
+    ///
+    /// Used to decide whether to insert an extra blank separator line when flushing deferred cells.
+    pub(crate) has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -503,8 +521,9 @@ impl App {
             transcript_total_lines: 0,
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
             transcript_copy_action: TranscriptCopyAction::default(),
+            transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
+            deferred_history_cells: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             scroll_config,
@@ -708,18 +727,19 @@ impl App {
             return area.y;
         }
 
-        let transcript_area = Rect {
+        let transcript_full_area = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
             height: max_transcript_height,
         };
+        let (transcript_area, _) = split_transcript_area(transcript_full_area);
 
         self.transcript_view_cache
             .ensure_wrapped(cells, transcript_area.width);
         let total_lines = self.transcript_view_cache.lines().len();
         if total_lines == 0 {
-            Clear.render_ref(transcript_area, frame.buffer);
+            Clear.render_ref(transcript_full_area, frame.buffer);
             self.transcript_scroll = TranscriptScroll::default();
             self.transcript_view_top = 0;
             self.transcript_total_lines = 0;
@@ -760,12 +780,14 @@ impl App {
             );
         }
 
-        let transcript_area = Rect {
+        let transcript_full_area = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
             height: transcript_visible_height,
         };
+        let (transcript_area, transcript_scrollbar_area) =
+            split_transcript_area(transcript_full_area);
 
         // Cache a few viewports worth of rasterized rows so redraws during streaming can cheaply
         // copy already-rendered `Cell`s instead of re-running grapheme segmentation.
@@ -806,6 +828,13 @@ impl App {
         } else {
             self.transcript_copy_ui.clear_affordance();
         }
+        render_transcript_scrollbar_if_active(
+            frame.buffer,
+            transcript_scrollbar_area,
+            total_lines,
+            max_visible,
+            top_offset,
+        );
         chat_top
     }
 
@@ -854,21 +883,45 @@ impl App {
             return;
         }
 
-        let transcript_area = Rect {
+        let transcript_full_area = Rect {
             x: 0,
             y: 0,
             width,
             height: transcript_height,
         };
+        let (transcript_area, transcript_scrollbar_area) =
+            split_transcript_area(transcript_full_area);
         let base_x = transcript_area.x.saturating_add(TRANSCRIPT_GUTTER_COLS);
         let max_x = transcript_area.right().saturating_sub(1);
+
+        if matches!(
+            self.transcript_scrollbar_ui
+                .handle_mouse_event(TranscriptScrollbarMouseEvent {
+                    tui,
+                    mouse_event,
+                    transcript_area,
+                    scrollbar_area: transcript_scrollbar_area,
+                    transcript_cells: &self.transcript_cells,
+                    transcript_view_cache: &mut self.transcript_view_cache,
+                    transcript_scroll: &mut self.transcript_scroll,
+                    transcript_view_top: &mut self.transcript_view_top,
+                    transcript_total_lines: &mut self.transcript_total_lines,
+                    mouse_scroll_state: &mut self.scroll_state,
+                }),
+            TranscriptScrollbarMouseHandling::Handled
+        ) {
+            return;
+        }
 
         // Treat the transcript as the only interactive region for transcript selection.
         //
         // This prevents clicks in the composer/footer from starting or extending a transcript
         // selection, while still allowing a left-click outside the transcript to clear an
         // existing highlight.
-        if mouse_event.row < transcript_area.y || mouse_event.row >= transcript_area.bottom() {
+        if !self.transcript_scrollbar_ui.pointer_capture_active()
+            && (mouse_event.row < transcript_full_area.y
+                || mouse_event.row >= transcript_full_area.bottom())
+        {
             if matches!(
                 mouse_event.kind,
                 MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
@@ -1082,7 +1135,15 @@ impl App {
             return None;
         }
 
-        Some((transcript_height as usize, width))
+        let transcript_full_area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: transcript_height,
+        };
+        let (transcript_area, _) = split_transcript_area(transcript_full_area);
+
+        Some((transcript_height as usize, transcript_area.width))
     }
 
     /// Scroll the transcript by a number of visual lines.
@@ -1400,21 +1461,8 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    }
+                if self.overlay.is_some() {
+                    self.deferred_history_cells.push(cell);
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -2084,8 +2132,9 @@ mod tests {
                 CopySelectionShortcut::CtrlShiftC,
             ),
             transcript_copy_action: TranscriptCopyAction::default(),
+            transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
+            deferred_history_cells: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
@@ -2136,8 +2185,9 @@ mod tests {
                     CopySelectionShortcut::CtrlShiftC,
                 ),
                 transcript_copy_action: TranscriptCopyAction::default(),
+                transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
                 overlay: None,
-                deferred_history_lines: Vec::new(),
+                deferred_history_cells: Vec::new(),
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
