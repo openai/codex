@@ -1019,6 +1019,15 @@ impl ChatComposer {
         if !self.skills_enabled() {
             return None;
         }
+        // Avoid popping the skill picker when the cursor is *at* the `$` prefix
+        // (common when recalling history, or when navigating across text).
+        // Users can still open the picker by moving/typing past `$`.
+        let text = self.textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, self.textarea.cursor());
+        if text.as_bytes().get(safe_cursor) == Some(&b'$') {
+            return None;
+        }
+
         Self::current_prefixed_token(&self.textarea, '$', true)
     }
 
@@ -4107,6 +4116,45 @@ mod tests {
         let (result, _redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(result, InputResult::None);
+    }
+
+    #[test]
+    fn skill_popup_not_activated_when_cursor_is_at_dollar_prefix() {
+        use codex_protocol::protocol::SkillScope;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "example-skill".to_string(),
+            description: "example".to_string(),
+            short_description: None,
+            path: PathBuf::from("skills/example-skill/skill.md"),
+            scope: SkillScope::Repo,
+        }]));
+
+        // set_text_content resets cursor to 0, which is a common state when recalling history.
+        // We should not pop the skills picker just because the content begins with `$...`.
+        composer.set_text_content("$example-skill do something".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "expected no skills popup when cursor is at '$'"
+        );
+
+        // Moving the cursor past `$` should re-enable the picker.
+        composer.textarea.set_cursor(1);
+        composer.sync_popups();
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Skill(_)),
+            "expected skills popup once cursor moves past '$'"
+        );
     }
 
     #[test]
