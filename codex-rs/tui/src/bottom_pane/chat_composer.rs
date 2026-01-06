@@ -1650,6 +1650,16 @@ impl ChatComposer {
 
     fn sync_popups(&mut self) {
         let file_token = Self::current_at_token(&self.textarea);
+        let browsing_history = self
+            .history
+            .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
+        // When browsing input history (shell-style Up/Down recall), skip all popup
+        // synchronization so nothing steals focus from continued history navigation.
+        if browsing_history {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
+
         let skill_token = self.current_skill_token();
 
         let allow_command_popup = file_token.is_none() && skill_token.is_none();
@@ -4107,6 +4117,59 @@ mod tests {
         let (result, _redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(result, InputResult::None);
+    }
+
+    #[test]
+    fn history_navigation_takes_priority_over_popups() {
+        use codex_protocol::protocol::SkillScope;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "codex-cli-release-notes".to_string(),
+            description: "example".to_string(),
+            short_description: None,
+            path: PathBuf::from("skills/codex-cli-release-notes/SKILL.md"),
+            scope: SkillScope::Repo,
+        }]));
+
+        // Seed local history; the newest entry triggers the skills popup.
+        composer.history.record_local_submission("older");
+        composer
+            .history
+            .record_local_submission("$codex-cli-release-notes");
+
+        // First Up recalls "$...", but we should not open the skills popup while browsing history.
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.textarea.text(), "$codex-cli-release-notes");
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "expected no skills popup while browsing history"
+        );
+
+        // Second Up should navigate history again (no popup should interfere).
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.textarea.text(), "older");
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "expected popup to be dismissed after history navigation"
+        );
     }
 
     #[test]
