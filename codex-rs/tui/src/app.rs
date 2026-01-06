@@ -1145,7 +1145,7 @@ impl App {
                                 );
                             } else {
                                 self.app_event_tx.send(AppEvent::CodexOp(
-                                    Op::OverrideTurnContext {
+                                    codex_core::protocol::Op::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
