@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
 use crate::SandboxState;
+use crate::agent::AgentControl;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -207,13 +208,14 @@ fn maybe_push_chat_wire_api_deprecation(
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(
+    pub(crate) async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
+        agent_control: AgentControl,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -284,6 +286,7 @@ impl Codex {
             conversation_history,
             session_source_clone,
             skills_manager,
+            agent_control,
         )
         .await
         .map_err(|e| {
@@ -549,6 +552,7 @@ impl Session {
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
+        agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -670,6 +674,7 @@ impl Session {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let sess = Arc::new(Session {
@@ -995,6 +1000,11 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        self.services
+            .agent_control
+            .bus
+            .on_event(self.conversation_id, &event.msg)
+            .await;
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
@@ -3270,6 +3280,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
@@ -3316,6 +3327,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let turn_context = Session::make_turn_context(
@@ -3357,6 +3369,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
@@ -3403,6 +3416,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

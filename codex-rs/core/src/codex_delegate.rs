@@ -52,6 +52,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         Arc::clone(&parent_session.services.skills_manager),
         initial_history.unwrap_or(InitialHistory::New),
         SessionSource::SubAgent(SubAgentSource::Review),
+        parent_session.services.agent_control.clone(),
     )
     .await?;
     let codex = Arc::new(codex);
