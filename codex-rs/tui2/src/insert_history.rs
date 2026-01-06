@@ -1,8 +1,12 @@
-//! Render `ratatui` transcript lines into terminal scrollback.
+//! Render `ratatui` transcript lines into terminal output (scrollback) and/or deterministic ANSI.
 //!
 //! `insert_history_lines` is responsible for inserting rendered transcript lines
 //! *above* the TUI viewport by emitting ANSI control sequences through the
 //! terminal backend writer.
+//!
+//! Note: the current `tui2` main draw loop does not call `insert_history_lines` (see
+//! `codex-rs/tui2/src/tui.rs`). This module is still used for deterministic ANSI emission via
+//! `write_spans` (e.g., "print after exit" flows) and for tests.
 //!
 //! ## Why we use crossterm style commands
 //!

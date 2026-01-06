@@ -1023,9 +1023,9 @@ impl ChatWidget {
                 self.needs_final_message_separator = false;
                 needs_redraw = true;
             }
-            self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
-            ));
+            // Streaming must not capture the current viewport width: width-derived wraps are
+            // applied later, at render time, so the transcript can reflow on resize.
+            self.stream_controller = Some(StreamController::new());
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)
