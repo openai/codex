@@ -4,6 +4,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 
 use crate::config::Config;
@@ -36,7 +37,7 @@ fn default_model_info(slug: &str) -> ModelInfo {
         priority: 0,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
-        supports_reasoning_summaries: false,
+        supports_reasoning_summaries: true,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
@@ -94,14 +95,17 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     } else if slug.starts_with("gpt-4.1") {
         model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.context_window = 1_047_576;
+        model.supports_reasoning_summaries = false;
     } else if slug.starts_with("gpt-oss") || slug.starts_with("openai/gpt-oss") {
         model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
         model.context_window = 96_000;
     } else if slug.starts_with("gpt-4o") {
+        model.supports_reasoning_summaries = false;
         model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
         model.context_window = 128_000;
     } else if slug.starts_with("gpt-3.5") {
         model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
+        model.supports_reasoning_summaries = false;
         model.context_window = 16_385;
     } else if slug.starts_with("test-gpt-5") {
         model.supports_reasoning_summaries = true;
@@ -144,6 +148,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model.support_verbosity = false;
         model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
         model.context_window = CONTEXT_WINDOW_272K;
+        model.supported_reasoning_levels = supported_reasoning_level_low_medium_high_xhigh();
     } else if slug.starts_with("gpt-5.1-codex-max") {
         model.supports_reasoning_summaries = true;
         model.base_instructions = GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string();
@@ -153,6 +158,21 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model.support_verbosity = false;
         model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
         model.context_window = CONTEXT_WINDOW_272K;
+        model.supported_reasoning_levels = supported_reasoning_level_low_medium_high_xhigh();
+    } else if (slug.starts_with("gpt-5-codex")
+        || slug.starts_with("gpt-5.1-codex")
+        || slug.starts_with("codex-"))
+        && !slug.contains("-mini")
+    {
+        model.supports_reasoning_summaries = true;
+        model.base_instructions = GPT_5_CODEX_INSTRUCTIONS.to_string();
+        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        model.shell_type = ConfigShellToolType::ShellCommand;
+        model.supports_parallel_tool_calls = false;
+        model.support_verbosity = false;
+        model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
+        model.context_window = CONTEXT_WINDOW_272K;
+        model.supported_reasoning_levels = supported_reasoning_level_low_medium_high();
     } else if slug.starts_with("gpt-5-codex")
         || slug.starts_with("gpt-5.1-codex")
         || slug.starts_with("codex-")
@@ -165,7 +185,9 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model.support_verbosity = false;
         model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
         model.context_window = CONTEXT_WINDOW_272K;
-    } else if slug.starts_with("gpt-5.2") || slug.starts_with("boomslang") {
+    } else if (slug.starts_with("gpt-5.2") || slug.starts_with("boomslang"))
+        && !slug.contains("codex")
+    {
         model.supports_reasoning_summaries = true;
         model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
         model.support_verbosity = true;
@@ -175,7 +197,9 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model.shell_type = ConfigShellToolType::ShellCommand;
         model.supports_parallel_tool_calls = true;
         model.context_window = CONTEXT_WINDOW_272K;
-    } else if slug.starts_with("gpt-5.1") {
+        model.supported_reasoning_levels =
+            supported_reasoning_level_low_medium_high_xhigh_non_codex();
+    } else if slug.starts_with("gpt-5.1") && !slug.contains("codex") {
         model.supports_reasoning_summaries = true;
         model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
         model.support_verbosity = true;
@@ -185,6 +209,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model.shell_type = ConfigShellToolType::ShellCommand;
         model.supports_parallel_tool_calls = true;
         model.context_window = CONTEXT_WINDOW_272K;
+        model.supported_reasoning_levels = supported_reasoning_level_low_medium_high_non_codex();
     } else if slug.starts_with("gpt-5") {
         model.supports_reasoning_summaries = true;
         model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
@@ -195,4 +220,80 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     }
 
     model
+}
+
+fn supported_reasoning_level_low_medium_high() -> Vec<ReasoningEffortPreset> {
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Fast responses with lighter reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Balances speed and reasoning depth for everyday tasks".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Greater reasoning depth for complex problems".to_string(),
+        },
+    ]
+}
+
+fn supported_reasoning_level_low_medium_high_non_codex() -> Vec<ReasoningEffortPreset> {
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Balances speed with some reasoning; useful for straightforward queries and short explanations".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
+        },
+    ]
+}
+
+fn supported_reasoning_level_low_medium_high_xhigh() -> Vec<ReasoningEffortPreset> {
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Fast responses with lighter reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Balances speed and reasoning depth for everyday tasks".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Greater reasoning depth for complex problems".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::XHigh,
+            description: "Extra high reasoning depth for complex problems".to_string(),
+        },
+    ]
+}
+
+fn supported_reasoning_level_low_medium_high_xhigh_non_codex() -> Vec<ReasoningEffortPreset> {
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Balances speed with some reasoning; useful for straightforward queries and short explanations".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::XHigh,
+            description: "Extra high reasoning for complex problems".to_string(),
+        },
+    ]
 }

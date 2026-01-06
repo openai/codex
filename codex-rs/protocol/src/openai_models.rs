@@ -176,10 +176,6 @@ pub struct ModelInfo {
     pub supported_in_api: bool,
     pub priority: i32,
     pub upgrade: Option<String>,
-    /// Server-provided base system instructions for the model.
-    ///
-    /// This field is required; if it is missing from `/models` or cached JSON,
-    /// we prefer to fail loudly rather than silently degrade behavior.
     pub base_instructions: String,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
@@ -187,10 +183,6 @@ pub struct ModelInfo {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
-    /// Maximum supported context window.
-    ///
-    /// This field is required; if it is missing from `/models` or cached JSON,
-    /// we prefer to fail loudly rather than silently degrade behavior.
     pub context_window: i64,
     /// Token threshold for automatic compaction. When omitted, core derives it
     /// from `context_window` (90%).

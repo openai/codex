@@ -362,14 +362,14 @@ mod tests {
             "supported_in_api": true,
             "priority": priority,
             "upgrade": null,
-            "base_instructions": null,
+            "base_instructions": "base instructions",
             "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
             "truncation_policy": {"mode": "bytes", "limit": 10_000},
             "supports_parallel_tool_calls": false,
-            "context_window": null,
+            "context_window": 272_000,
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
