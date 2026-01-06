@@ -2580,6 +2580,26 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     let _ = drain_insert_history(&mut rx);
 }
 
+#[tokio::test]
+async fn interrupt_clears_unified_exec_sessions() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    assert_eq!(chat.unified_exec_sessions.len(), 2);
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(chat.unified_exec_sessions.is_empty());
+
+    let _ = drain_insert_history(&mut rx);
+}
+
 // Snapshot test: ChatWidget at very small heights (idle)
 // Ensures overall layout behaves when terminal height is extremely constrained.
 #[tokio::test]
