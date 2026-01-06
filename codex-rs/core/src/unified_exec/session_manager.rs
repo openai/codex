@@ -29,54 +29,26 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
-
-use super::CommandTranscript;
-use super::ExecCommandRequest;
-use super::MAX_UNIFIED_EXEC_SESSIONS;
-use super::SessionEntry;
-use super::SessionStore;
-use super::UnifiedExecContext;
-use super::UnifiedExecError;
-use super::UnifiedExecResponse;
-use super::UnifiedExecSessionManager;
-use super::WARNING_UNIFIED_EXEC_SESSIONS;
-use super::WriteStdinRequest;
-use super::async_watcher::emit_exec_end_for_unified_exec;
-use super::async_watcher::spawn_exit_watcher;
-use super::async_watcher::start_streaming_output;
-use super::clamp_yield_time;
-use super::generate_chunk_id;
-use super::resolve_max_tokens;
-use super::session::OutputBuffer;
-use super::session::OutputHandles;
-use super::session::UnifiedExecSession;
-use crate::bash::extract_bash_command;
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::exec_env::create_env;
-use crate::protocol::BackgroundEventEvent;
-use crate::protocol::EventMsg;
-use crate::sandboxing::ExecEnv;
-use crate::sandboxing::SandboxPermissions;
-use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
-use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
-use crate::tools::sandboxing::ToolCtx;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::approx_token_count;
-use crate::truncate::formatted_truncate_text;
+use crate::unified_exec::ExecCommandRequest;
+use crate::unified_exec::MAX_UNIFIED_EXEC_SESSIONS;
+use crate::unified_exec::SessionEntry;
+use crate::unified_exec::SessionStore;
+use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::UnifiedExecError;
+use crate::unified_exec::UnifiedExecResponse;
+use crate::unified_exec::UnifiedExecSessionManager;
+use crate::unified_exec::WARNING_UNIFIED_EXEC_SESSIONS;
+use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
+use crate::unified_exec::async_watcher::spawn_exit_watcher;
+use crate::unified_exec::async_watcher::start_streaming_output;
+use crate::unified_exec::clamp_yield_time;
+use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
-use rand::Rng;
-use std::cmp::Reverse;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Notify;
-use tokio::sync::mpsc;
-use tokio::time::Duration;
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
+use crate::unified_exec::resolve_max_tokens;
+use crate::unified_exec::session::OutputBuffer;
+use crate::unified_exec::session::OutputHandles;
+use crate::unified_exec::session::UnifiedExecSession;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 9] = [
     ("NO_COLOR", "1"),
@@ -185,7 +157,7 @@ impl UnifiedExecSessionManager {
             Some(request.process_id.clone()),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
-      
+
         start_streaming_output(&session, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
