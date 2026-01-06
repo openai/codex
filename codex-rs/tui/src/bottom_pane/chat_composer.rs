@@ -414,6 +414,13 @@ impl ChatComposer {
         images.into_iter().map(|img| img.path).collect()
     }
 
+    pub(crate) fn attached_image_paths(&self) -> Vec<PathBuf> {
+        self.attached_images
+            .iter()
+            .map(|img| img.path.clone())
+            .collect()
+    }
+
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
         self.handle_paste_burst_flush(Instant::now())
     }

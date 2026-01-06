@@ -507,7 +507,7 @@ impl App {
     }
 
     fn open_new_conversation_prompt(&mut self) {
-        let (initial_prompt, initial_images) = self.chat_widget.take_composer_draft();
+        let (initial_prompt, initial_images) = self.chat_widget.composer_draft();
 
         let tx = self.app_event_tx.clone();
         let initial_prompt = Arc::new(initial_prompt);
@@ -998,6 +998,7 @@ impl App {
                         return Ok(true);
                     }
                 };
+                self.chat_widget.set_composer_text(String::new());
                 let conversation_id = created.conversation_id;
 
                 if !self.conversation_order.contains(&conversation_id) {

@@ -549,6 +549,10 @@ impl BottomPane {
         self.composer.take_recent_submission_images()
     }
 
+    pub(crate) fn composer_attached_image_paths(&self) -> Vec<PathBuf> {
+        self.composer.attached_image_paths()
+    }
+
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
             RenderableItem::Borrowed(view)

@@ -3559,11 +3559,11 @@ impl ChatWidget {
             .unwrap_or_default()
     }
 
-    pub(crate) fn take_composer_draft(&mut self) -> (String, Vec<PathBuf>) {
-        let text = self.bottom_pane.composer_text();
-        let images = self.bottom_pane.take_recent_submission_images();
-        self.bottom_pane.set_composer_text(String::new());
-        (text, images)
+    pub(crate) fn composer_draft(&self) -> (String, Vec<PathBuf>) {
+        (
+            self.bottom_pane.composer_text(),
+            self.bottom_pane.composer_attached_image_paths(),
+        )
     }
 
     pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
