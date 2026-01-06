@@ -1598,12 +1598,7 @@ async fn load_stored_refresh_token_if_identity_matches(
         return Ok(None);
     };
 
-    if !tokens
-        .id_token
-        .chatgpt_account_id
-        .as_deref()
-        .is_some_and(|account_id| account_id == expected_account_id)
-    {
+    if tokens.id_token.chatgpt_account_id.as_deref() != Some(expected_account_id) {
         return Ok(None);
     }
 
