@@ -66,7 +66,11 @@ pub(crate) mod announcement {
 
     /// Fetch the announcement tip, return None if the prewarm is not done yet.
     pub(crate) fn fetch_announcement_tip() -> Option<String> {
-        ANNOUNCEMENT_TIP.get().cloned().flatten()
+        ANNOUNCEMENT_TIP
+            .get()
+            .cloned()
+            .flatten()
+            .and_then(|raw| parse_announcement_tip_toml(&raw))
     }
 
     #[derive(Debug, Deserialize)]
@@ -105,17 +109,7 @@ pub(crate) mod announcement {
             .timeout(Duration::from_millis(2000))
             .send()
             .ok()?;
-        let text = response.error_for_status().ok()?.text().ok()?;
-
-        // Normalize the tip.
-        parse_announcement_tip_toml(&text).or_else(|| {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
+        response.error_for_status().ok()?.text().ok()
     }
 
     pub(crate) fn parse_announcement_tip_toml(text: &str) -> Option<String> {
@@ -287,5 +281,31 @@ from_date = "2000-01-01"
         "#;
 
         assert_eq!(None, parse_announcement_tip_toml(toml));
+    }
+
+    #[test]
+    fn announcement_tip_toml_parse_comments() {
+        let toml = r#"
+# Example announcement tips for Codex TUI.
+# Each [[announcements]] entry is evaluated in order; the last matching one is shown.
+# Dates are UTC, formatted as YYYY-MM-DD. The from_date is inclusive and the to_date is exclusive.
+# version_regex matches against the CLI version (env!("CARGO_PKG_VERSION")); omit to apply to all versions.
+# target_app specify which app should display the announcement (cli, vsce, ...).
+
+[[announcements]]
+content = "Welcome to Codex! Check out the new onboarding flow."
+from_date = "2024-10-01"
+to_date = "2024-10-15"
+target_app = "cli"
+version_regex = "^0\\.0\\.0$"
+
+[[announcements]]
+content = "This is a test announcement"
+        "#;
+
+        assert_eq!(
+            Some("This is a test announcement".to_string()),
+            parse_announcement_tip_toml(toml)
+        );
     }
 }
