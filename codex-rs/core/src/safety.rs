@@ -67,24 +67,10 @@ pub fn assess_patch_safety(
     policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
-    session_patch_approved: bool,
 ) -> SafetyCheck {
     if action.is_empty() {
         return SafetyCheck::Reject {
             reason: "empty patch".to_string(),
-        };
-    }
-
-    if session_patch_approved {
-        let sandbox_type = match sandbox_policy {
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                SandboxType::None
-            }
-            _ => get_platform_sandbox().unwrap_or(SandboxType::None),
-        };
-        return SafetyCheck::AutoApprove {
-            sandbox_type,
-            user_explicitly_approved: true,
         };
     }
 
@@ -291,7 +277,7 @@ mod tests {
         };
 
         assert_eq!(
-            assess_patch_safety(&add_inside, AskForApproval::OnRequest, &policy, &cwd, false),
+            assess_patch_safety(&add_inside, AskForApproval::OnRequest, &policy, &cwd),
             SafetyCheck::AutoApprove {
                 sandbox_type: SandboxType::None,
                 user_explicitly_approved: false,

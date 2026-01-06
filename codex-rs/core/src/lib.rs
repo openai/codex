@@ -7,6 +7,7 @@
 
 pub mod api_bridge;
 mod apply_patch;
+mod apply_patch_approval_key;
 pub mod auth;
 pub mod bash;
 mod client;
@@ -16,7 +17,6 @@ mod codex_conversation;
 mod compact_remote;
 pub use codex_conversation::CodexConversation;
 mod agent;
-mod apply_patch_approval_store;
 mod codex_delegate;
 mod command_safety;
 pub mod config;

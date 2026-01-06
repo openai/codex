@@ -11,24 +11,29 @@ use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::with_cached_approval_set;
+use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ApplyPatchRequest {
-    pub patch: String,
-    pub cwd: PathBuf,
+    pub action: ApplyPatchAction,
+    pub approval_keys: Vec<crate::apply_patch_approval_key::ApplyPatchFileApprovalKey>,
+    pub changes: std::collections::HashMap<PathBuf, FileChange>,
+    pub exec_approval_requirement: ExecApprovalRequirement,
     pub timeout_ms: Option<u64>,
-    pub user_explicitly_approved: bool,
     pub codex_exe: Option<PathBuf>,
 }
 
@@ -51,8 +56,8 @@ impl ApplyPatchRuntime {
         let program = exe.to_string_lossy().to_string();
         Ok(CommandSpec {
             program,
-            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.patch.clone()],
-            cwd: req.cwd.clone(),
+            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.action.patch.clone()],
+            cwd: req.action.cwd.clone(),
             expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
@@ -80,9 +85,11 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = ();
+    type ApprovalKey = crate::apply_patch_approval_key::ApplyPatchFileApprovalKey;
 
-    fn approval_key(&self, _req: &ApplyPatchRequest) -> Self::ApprovalKey {}
+    fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
+        req.approval_keys.clone()
+    }
 
     fn start_approval_async<'a>(
         &'a mut self,
@@ -92,12 +99,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
-        let cwd = req.cwd.clone();
+        let cwd = req.action.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
-        let user_explicitly_approved = req.user_explicitly_approved;
+        let approval_keys = self.approval_keys(req);
+        let changes = req.changes.clone();
         Box::pin(async move {
             if let Some(reason) = retry_reason {
-                session
+                return session
                     .request_command_approval(
                         turn,
                         call_id,
@@ -106,17 +114,28 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         Some(reason),
                         None,
                     )
-                    .await
-            } else if user_explicitly_approved {
-                ReviewDecision::ApprovedForSession
-            } else {
-                ReviewDecision::Approved
+                    .await;
             }
+
+            with_cached_approval_set(&session.services, approval_keys, || async move {
+                let rx_approve = session
+                    .request_patch_approval(turn, call_id, changes, None, None)
+                    .await;
+                rx_approve.await.unwrap_or_default()
+            })
+            .await
         })
     }
 
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         !matches!(policy, AskForApproval::Never)
+    }
+
+    fn exec_approval_requirement(
+        &self,
+        req: &ApplyPatchRequest,
+    ) -> Option<ExecApprovalRequirement> {
+        Some(req.exec_approval_requirement.clone())
     }
 }
 

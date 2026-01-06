@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
+use crate::apply_patch_approval_key::approval_keys_for_action;
 use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
@@ -81,9 +82,7 @@ impl ToolHandler for ApplyPatchHandler {
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                match apply_patch::apply_patch(session.as_ref(), turn.as_ref(), &call_id, changes)
-                    .await
-                {
+                match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
                         Ok(ToolOutput::Function {
@@ -93,10 +92,10 @@ impl ToolHandler for ApplyPatchHandler {
                         })
                     }
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
-                        let emitter = ToolEmitter::apply_patch(
-                            convert_apply_patch_to_protocol(&apply.action),
-                            !apply.user_explicitly_approved_this_action,
-                        );
+                        let changes = convert_apply_patch_to_protocol(&apply.action);
+                        let approval_keys = approval_keys_for_action(&apply.action);
+                        let emitter =
+                            ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
@@ -106,10 +105,11 @@ impl ToolHandler for ApplyPatchHandler {
                         emitter.begin(event_ctx).await;
 
                         let req = ApplyPatchRequest {
-                            patch: apply.action.patch.clone(),
-                            cwd: apply.action.cwd.clone(),
+                            action: apply.action,
+                            approval_keys,
+                            changes,
+                            exec_approval_requirement: apply.exec_approval_requirement,
                             timeout_ms: None,
-                            user_explicitly_approved: apply.user_explicitly_approved_this_action,
                             codex_exe: turn.codex_linux_sandbox_exe.clone(),
                         };
 
@@ -178,7 +178,7 @@ pub(crate) async fn intercept_apply_patch(
                     turn,
                 )
                 .await;
-            match apply_patch::apply_patch(session, turn, call_id, changes).await {
+            match apply_patch::apply_patch(turn, changes).await {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;
                     Ok(Some(ToolOutput::Function {
@@ -188,19 +188,19 @@ pub(crate) async fn intercept_apply_patch(
                     }))
                 }
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
-                    let emitter = ToolEmitter::apply_patch(
-                        convert_apply_patch_to_protocol(&apply.action),
-                        !apply.user_explicitly_approved_this_action,
-                    );
+                    let changes = convert_apply_patch_to_protocol(&apply.action);
+                    let approval_keys = approval_keys_for_action(&apply.action);
+                    let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx =
                         ToolEventCtx::new(session, turn, call_id, tracker.as_ref().copied());
                     emitter.begin(event_ctx).await;
 
                     let req = ApplyPatchRequest {
-                        patch: apply.action.patch.clone(),
-                        cwd: apply.action.cwd.clone(),
+                        action: apply.action,
+                        approval_keys,
+                        changes,
+                        exec_approval_requirement: apply.exec_approval_requirement,
                         timeout_ms,
-                        user_explicitly_approved: apply.user_explicitly_approved_this_action,
                         codex_exe: turn.codex_linux_sandbox_exe.clone(),
                     };
 
