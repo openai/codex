@@ -13,6 +13,7 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::environment_context::is_user_ide_context;
 use crate::user_instructions::SkillInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_shell_command::is_user_shell_command_text;
@@ -38,6 +39,10 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 if is_session_prefix(text) || is_user_shell_command_text(text) {
                     return None;
                 }
+                // user_ide_context is bundled with the user's prompt in its own content item
+                if is_user_ide_context(text) {
+                    continue;
+                }
                 content.push(UserInput::Text { text: text.clone() });
             }
             ContentItem::InputImage { image_url } => {
@@ -49,12 +54,16 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 if is_session_prefix(text) {
                     return None;
                 }
-                warn!("Output text in user message: {}", text);
+                warn!("Output text in user message: {text}");
             }
         }
     }
 
-    Some(UserMessageItem::new(&content))
+    if content.is_empty() {
+        None
+    } else {
+        Some(UserMessageItem::new(&content))
+    }
 }
 
 fn parse_agent_message(id: Option<&String>, message: &[ContentItem]) -> AgentMessageItem {
@@ -131,13 +140,25 @@ mod tests {
     use super::parse_turn_item;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemContent;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::models::WebSearchAction;
+    use codex_protocol::protocol::USER_IDE_CONTEXT_CLOSE_TAG;
+    use codex_protocol::protocol::USER_IDE_CONTEXT_OPEN_TAG;
     use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
+
+    fn assert_eq_user_message_content(actual: TurnItem, expected_content: &[UserInput]) {
+        match actual {
+            TurnItem::UserMessage(user) => {
+                assert_eq!(user.content, expected_content);
+            }
+            other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+        }
+    }
 
     #[test]
     fn parses_user_message_with_text_and_two_images() {
@@ -162,19 +183,14 @@ mod tests {
 
         let turn_item = parse_turn_item(&item).expect("expected user message turn item");
 
-        match turn_item {
-            TurnItem::UserMessage(user) => {
-                let expected_content = vec![
-                    UserInput::Text {
-                        text: "Hello world".to_string(),
-                    },
-                    UserInput::Image { image_url: img1 },
-                    UserInput::Image { image_url: img2 },
-                ];
-                assert_eq!(user.content, expected_content);
-            }
-            other => panic!("expected TurnItem::UserMessage, got {other:?}"),
-        }
+        let expected_content = vec![
+            UserInput::Text {
+                text: "Hello world".to_string(),
+            },
+            UserInput::Image { image_url: img1 },
+            UserInput::Image { image_url: img2 },
+        ];
+        assert_eq_user_message_content(turn_item, &expected_content);
     }
 
     #[test]
@@ -216,12 +232,46 @@ mod tests {
                     text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
                 }],
             },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<user_ide_context>echo 42</user_ide_context>".to_string(),
+                }],
+            },
         ];
 
         for item in items {
             let turn_item = parse_turn_item(&item);
             assert!(turn_item.is_none(), "expected none, got {turn_item:?}");
         }
+    }
+
+    #[test]
+    fn trims_user_ide_context_item_from_user_message() {
+        let message = ResponseItem::Message {
+            id: Some("user-1".to_string()),
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: format!(
+                        "{USER_IDE_CONTEXT_OPEN_TAG}some context{USER_IDE_CONTEXT_CLOSE_TAG}"
+                    ),
+                },
+                ContentItem::InputText {
+                    text: "Hello world".to_string(),
+                },
+            ],
+        };
+
+        let turn_item = parse_turn_item(&message).expect("expected user message turn item");
+
+        assert_eq_user_message_content(
+            turn_item,
+            &[UserInput::Text {
+                text: "Hello world".to_string(),
+            }],
+        );
     }
 
     #[test]

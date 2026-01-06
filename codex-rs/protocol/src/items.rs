@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 #[serde(tag = "type")]
 #[ts(tag = "type")]
 pub enum TurnItem {
@@ -20,26 +20,26 @@ pub enum TurnItem {
     WebSearch(WebSearchItem),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct UserMessageItem {
     pub id: String,
     pub content: Vec<UserInput>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 #[serde(tag = "type")]
 #[ts(tag = "type")]
 pub enum AgentMessageContent {
     Text { text: String },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct AgentMessageItem {
     pub id: String,
     pub content: Vec<AgentMessageContent>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ReasoningItem {
     pub id: String,
     pub summary_text: Vec<String>,
@@ -47,7 +47,7 @@ pub struct ReasoningItem {
     pub raw_content: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct WebSearchItem {
     pub id: String,
     pub query: String,

@@ -8,10 +8,16 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_protocol::protocol::USER_IDE_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::USER_IDE_CONTEXT_OPEN_TAG;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
+
+pub(crate) fn is_user_ide_context(text: &str) -> bool {
+    text.starts_with(USER_IDE_CONTEXT_OPEN_TAG) && text.ends_with(USER_IDE_CONTEXT_CLOSE_TAG)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "environment_context", rename_all = "snake_case")]
