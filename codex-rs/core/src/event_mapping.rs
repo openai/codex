@@ -140,7 +140,7 @@ mod tests {
     use super::parse_turn_item;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::TurnItem;
-    use codex_protocol::items::UserMessageItem;
+    
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemContent;
     use codex_protocol::models::ReasoningItemReasoningSummary;
