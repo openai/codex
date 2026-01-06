@@ -72,8 +72,11 @@ pub enum Feature {
     UnifiedExec,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
-    /// Allow the model to request web searches.
+    /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
+    /// Allow the model to request web searches that fetch cached content.
+    /// Takes precedence over `WebSearchRequest`.
+    WebSearchCached,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -328,6 +331,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebSearchCached,
+        key: "web_search_cached",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
     // Beta program. Rendered in the `/experimental` menu for users.
