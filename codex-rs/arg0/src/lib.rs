@@ -203,7 +203,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     let path_element = path.display();
     let updated_path_env_var = match std::env::var("PATH") {
         Ok(existing_path) => {
-            format!("{existing_path}{PATH_SEPARATOR}{path_element}")
+            format!("{path_element}{PATH_SEPARATOR}{existing_path}")
         }
         Err(_) => {
             format!("{path_element}")
