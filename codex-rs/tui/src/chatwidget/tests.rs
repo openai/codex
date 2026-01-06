@@ -7,6 +7,7 @@ use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
+use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
@@ -311,12 +312,17 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
-    let cfg = test_config().await;
+    let mut cfg = test_config().await;
     let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    cfg.model = Some(resolved_model.clone());
     let conversation_manager = Arc::new(ConversationManager::with_models_provider(
         CodexAuth::from_api_key("test"),
         cfg.model_provider.clone(),
     ));
+    let created = conversation_manager
+        .new_conversation(cfg.clone())
+        .await
+        .unwrap();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
@@ -331,7 +337,11 @@ async fn helpers_are_available_and_do_not_panic() {
         is_first_run: true,
         model: resolved_model,
     };
-    let mut w = ChatWidget::new(init, conversation_manager);
+    let mut w = ChatWidget::new_from_new_conversation(
+        init,
+        created.conversation,
+        created.session_configured,
+    );
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -434,6 +444,12 @@ fn drain_insert_history(
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = ev {
+            let mut lines = cell.display_lines(80);
+            if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
+                lines.insert(0, "".into());
+            }
+            out.push(lines)
+        } else if let AppEvent::InsertHistoryCellForConversation { cell, .. } = ev {
             let mut lines = cell.display_lines(80);
             if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
                 lines.insert(0, "".into());
@@ -3619,12 +3635,15 @@ printf 'fenced within fenced\n'
             chat.on_commit_tick();
             let mut inserted_any = false;
             while let Ok(app_ev) = rx.try_recv() {
-                if let AppEvent::InsertHistoryCell(cell) = app_ev {
-                    let lines = cell.display_lines(width);
-                    crate::insert_history::insert_history_lines(&mut term, lines)
-                        .expect("Failed to insert history lines in test");
-                    inserted_any = true;
-                }
+                let cell = match app_ev {
+                    AppEvent::InsertHistoryCell(cell) => cell,
+                    AppEvent::InsertHistoryCellForConversation { cell, .. } => cell,
+                    _ => continue,
+                };
+                let lines = cell.display_lines(width);
+                crate::insert_history::insert_history_lines(&mut term, lines)
+                    .expect("Failed to insert history lines in test");
+                inserted_any = true;
             }
             if !inserted_any {
                 break;

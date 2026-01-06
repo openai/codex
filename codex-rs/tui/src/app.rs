@@ -2,6 +2,9 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::diff_render::DiffSummary;
@@ -34,7 +37,6 @@ use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONF
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
@@ -52,6 +54,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -125,6 +128,14 @@ fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorI
 struct SessionSummary {
     usage_line: String,
     resume_command: Option<String>,
+}
+
+struct ConversationTab {
+    name: String,
+    chat_widget: ChatWidget,
+    transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    unread_cells: usize,
+    backtrack: BacktrackState,
 }
 
 fn should_show_model_migration_prompt(
@@ -289,6 +300,11 @@ pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
+    active_conversation_id: ConversationId,
+    active_conversation_name: String,
+    active_unread_cells: usize,
+    inactive_conversations: HashMap<ConversationId, ConversationTab>,
+    conversation_order: Vec<ConversationId>,
     pub(crate) auth_manager: Arc<AuthManager>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
@@ -324,12 +340,200 @@ pub(crate) struct App {
 }
 
 impl App {
+    #[cfg(test)]
     async fn shutdown_current_conversation(&mut self) {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
             self.suppress_shutdown_complete = true;
-            self.chat_widget.submit_op(Op::Shutdown);
+            self.chat_widget
+                .submit_op(codex_core::protocol::Op::Shutdown);
             self.server.remove_conversation(&conversation_id).await;
         }
+    }
+
+    fn insert_history_cell_for_active(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+
+        self.transcript_cells.push(cell.clone());
+
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if display.is_empty() {
+            return;
+        }
+
+        // Only insert a separating blank line for new cells that are not
+        // part of an ongoing stream. Streaming continuations should not
+        // accrue extra blank lines between chunks.
+        if !cell.is_stream_continuation() {
+            if self.has_emitted_history_lines {
+                display.insert(0, Line::from(""));
+            } else {
+                self.has_emitted_history_lines = true;
+            }
+        }
+
+        if self.overlay.is_some() {
+            self.deferred_history_lines.extend(display);
+        } else {
+            tui.insert_history_lines(display);
+        }
+    }
+
+    fn emit_pending_active_history(&mut self, tui: &mut tui::Tui) {
+        if self.overlay.is_some() {
+            return;
+        }
+
+        for cell in self.transcript_cells.iter().cloned() {
+            let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+            if display.is_empty() {
+                continue;
+            }
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            tui.insert_history_lines(display);
+        }
+    }
+
+    fn switch_to_existing_conversation(&mut self, tui: &mut tui::Tui, id: ConversationId) {
+        if id == self.active_conversation_id {
+            return;
+        }
+
+        if self.overlay.is_some() {
+            self.close_transcript_overlay(tui);
+        }
+
+        let Some(mut tab) = self.inactive_conversations.remove(&id) else {
+            return;
+        };
+
+        let old_id = self.active_conversation_id;
+
+        std::mem::swap(&mut self.chat_widget, &mut tab.chat_widget);
+        std::mem::swap(&mut self.transcript_cells, &mut tab.transcript_cells);
+        std::mem::swap(&mut self.active_conversation_name, &mut tab.name);
+        std::mem::swap(&mut self.active_unread_cells, &mut tab.unread_cells);
+        std::mem::swap(&mut self.backtrack, &mut tab.backtrack);
+
+        self.active_conversation_id = id;
+        self.active_unread_cells = 0;
+
+        self.inactive_conversations.insert(old_id, tab);
+        self.emit_pending_active_history(tui);
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn switch_to_new_conversation(
+        &mut self,
+        tui: &mut tui::Tui,
+        id: ConversationId,
+        mut tab: ConversationTab,
+    ) {
+        if self.overlay.is_some() {
+            self.close_transcript_overlay(tui);
+        }
+
+        let old_id = self.active_conversation_id;
+
+        std::mem::swap(&mut self.chat_widget, &mut tab.chat_widget);
+        std::mem::swap(&mut self.transcript_cells, &mut tab.transcript_cells);
+        std::mem::swap(&mut self.active_conversation_name, &mut tab.name);
+        std::mem::swap(&mut self.active_unread_cells, &mut tab.unread_cells);
+        std::mem::swap(&mut self.backtrack, &mut tab.backtrack);
+
+        self.active_conversation_id = id;
+        self.active_unread_cells = 0;
+
+        self.inactive_conversations.insert(old_id, tab);
+        self.emit_pending_active_history(tui);
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn open_conversation_picker(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        for conversation_id in self.conversation_order.clone() {
+            let (name, unread) = if conversation_id == self.active_conversation_id {
+                (
+                    self.active_conversation_name.clone(),
+                    self.active_unread_cells,
+                )
+            } else if let Some(tab) = self.inactive_conversations.get(&conversation_id) {
+                (tab.name.clone(), tab.unread_cells)
+            } else {
+                continue;
+            };
+
+            let description = if unread > 0 {
+                Some(format!("{unread} unread update(s)"))
+            } else {
+                None
+            };
+
+            let display_name = if conversation_id == self.active_conversation_id {
+                format!("{name} (active)")
+            } else {
+                name.clone()
+            };
+
+            items.push(SelectionItem {
+                name: display_name.clone(),
+                description,
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::SwitchConversation(conversation_id));
+                })],
+                dismiss_on_select: true,
+                search_value: Some(display_name),
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            title: Some("Conversations".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search conversations".to_string()),
+            ..Default::default()
+        });
+    }
+
+    fn open_new_conversation_prompt(&mut self) {
+        let (initial_prompt, initial_images) = self.chat_widget.take_composer_draft();
+
+        let tx = self.app_event_tx.clone();
+        let initial_prompt = Arc::new(initial_prompt);
+        let initial_images = Arc::new(initial_images);
+        let default_name = format!("Conversation {}", self.conversation_order.len() + 1);
+        let title = String::from("New conversation");
+        let hint = String::from("Name the conversation and press Enter");
+
+        self.chat_widget.show_custom_prompt_view(
+            title,
+            hint,
+            Some(default_name.clone()),
+            Box::new(move |name| {
+                let name = name.trim().to_string();
+                let name = if name.is_empty() {
+                    default_name.clone()
+                } else {
+                    name
+                };
+                tx.send(AppEvent::CreateConversation {
+                    name,
+                    initial_prompt: (*initial_prompt).clone(),
+                    initial_images: (*initial_images).clone(),
+                });
+            }),
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -372,8 +576,15 @@ impl App {
         }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-        let mut chat_widget = match resume_selection {
+        let (active_conversation_id, mut chat_widget) = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
+                let mut conversation_config = config.clone();
+                conversation_config.model = Some(model.clone());
+                let created = conversation_manager
+                    .new_conversation(conversation_config)
+                    .await
+                    .wrap_err("Failed to start new session")?;
+                let conversation_id = created.conversation_id;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -387,7 +598,14 @@ impl App {
                     is_first_run,
                     model: model.clone(),
                 };
-                ChatWidget::new(init, conversation_manager.clone())
+                (
+                    conversation_id,
+                    ChatWidget::new_from_new_conversation(
+                        init,
+                        created.conversation,
+                        created.session_configured,
+                    ),
+                )
             }
             ResumeSelection::Resume(path) => {
                 let resumed = conversation_manager
@@ -400,6 +618,7 @@ impl App {
                     .wrap_err_with(|| {
                         format!("Failed to resume session from {}", path.display())
                     })?;
+                let conversation_id = resumed.conversation_id;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -413,10 +632,13 @@ impl App {
                     is_first_run,
                     model: model.clone(),
                 };
-                ChatWidget::new_from_existing(
-                    init,
-                    resumed.conversation,
-                    resumed.session_configured,
+                (
+                    conversation_id,
+                    ChatWidget::new_from_existing(
+                        init,
+                        resumed.conversation,
+                        resumed.session_configured,
+                    ),
                 )
             }
         };
@@ -431,6 +653,11 @@ impl App {
             server: conversation_manager.clone(),
             app_event_tx,
             chat_widget,
+            active_conversation_id,
+            active_conversation_name: String::from("Conversation 1"),
+            active_unread_cells: 0,
+            inactive_conversations: HashMap::new(),
+            conversation_order: vec![active_conversation_id],
             auth_manager: auth_manager.clone(),
             config,
             current_model: model.clone(),
@@ -562,27 +789,10 @@ impl App {
             .await;
         match event {
             AppEvent::NewSession => {
-                let summary = session_summary(
+                if let Some(summary) = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
-                );
-                self.shutdown_current_conversation().await;
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: self.config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: self.app_event_tx.clone(),
-                    initial_prompt: None,
-                    initial_images: Vec::new(),
-                    enhanced_keys_supported: self.enhanced_keys_supported,
-                    auth_manager: self.auth_manager.clone(),
-                    models_manager: self.server.get_models_manager(),
-                    feedback: self.feedback.clone(),
-                    is_first_run: false,
-                    model: self.current_model.clone(),
-                };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.current_model = model_family.get_model_slug().to_string();
-                if let Some(summary) = summary {
+                ) {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
@@ -590,7 +800,13 @@ impl App {
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
-                tui.frame_requester().schedule_frame();
+
+                let name = format!("Conversation {}", self.conversation_order.len() + 1);
+                self.app_event_tx.send(AppEvent::CreateConversation {
+                    name,
+                    initial_prompt: String::new(),
+                    initial_images: Vec::new(),
+                });
             }
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(
@@ -616,7 +832,22 @@ impl App {
                             .await
                         {
                             Ok(resumed) => {
-                                self.shutdown_current_conversation().await;
+                                if let Some(summary) = summary {
+                                    let mut lines: Vec<Line<'static>> =
+                                        vec![summary.usage_line.clone().into()];
+                                    if let Some(command) = summary.resume_command {
+                                        let spans = vec![
+                                            "To continue this session, run ".into(),
+                                            command.cyan(),
+                                        ];
+                                        lines.push(spans.into());
+                                    }
+                                    self.chat_widget.add_plain_history_lines(lines);
+                                }
+
+                                let conversation_id = resumed.conversation_id;
+                                let name =
+                                    format!("Conversation {}", self.conversation_order.len() + 1);
                                 let init = crate::chatwidget::ChatWidgetInit {
                                     config: self.config.clone(),
                                     frame_requester: tui.frame_requester(),
@@ -630,24 +861,25 @@ impl App {
                                     is_first_run: false,
                                     model: self.current_model.clone(),
                                 };
-                                self.chat_widget = ChatWidget::new_from_existing(
+                                let chat_widget = ChatWidget::new_from_existing(
                                     init,
                                     resumed.conversation,
                                     resumed.session_configured,
                                 );
                                 self.current_model = model_family.get_model_slug().to_string();
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
+
+                                if !self.conversation_order.contains(&conversation_id) {
+                                    self.conversation_order.push(conversation_id);
                                 }
+
+                                let tab = ConversationTab {
+                                    name,
+                                    chat_widget,
+                                    transcript_cells: Vec::new(),
+                                    unread_cells: 0,
+                                    backtrack: BacktrackState::default(),
+                                };
+                                self.switch_to_new_conversation(tui, conversation_id, tab);
                             }
                             Err(err) => {
                                 self.chat_widget.add_error_message(format!(
@@ -665,28 +897,18 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
+                self.insert_history_cell_for_active(tui, cell);
+            }
+            AppEvent::InsertHistoryCellForConversation {
+                conversation_id,
+                cell,
+            } => {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                if conversation_id == self.active_conversation_id {
+                    self.insert_history_cell_for_active(tui, cell);
+                } else if let Some(tab) = self.inactive_conversations.get_mut(&conversation_id) {
+                    tab.transcript_cells.push(cell);
+                    tab.unread_cells = tab.unread_cells.saturating_add(1);
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -711,6 +933,36 @@ impl App {
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
             }
+            AppEvent::CodexEventForConversation {
+                conversation_id,
+                event,
+            } => {
+                if conversation_id == self.active_conversation_id
+                    && self.suppress_shutdown_complete
+                    && matches!(event.msg, EventMsg::ShutdownComplete)
+                {
+                    self.suppress_shutdown_complete = false;
+                    return Ok(true);
+                }
+
+                if let EventMsg::ListSkillsResponse(response) = &event.msg {
+                    let cwd = if conversation_id == self.active_conversation_id {
+                        self.chat_widget.config_ref().cwd.clone()
+                    } else if let Some(tab) = self.inactive_conversations.get(&conversation_id) {
+                        tab.chat_widget.config_ref().cwd.clone()
+                    } else {
+                        self.chat_widget.config_ref().cwd.clone()
+                    };
+                    let errors = errors_for_cwd(&cwd, response);
+                    emit_skill_load_warnings(&self.app_event_tx, &errors);
+                }
+
+                if conversation_id == self.active_conversation_id {
+                    self.chat_widget.handle_codex_event(event);
+                } else if let Some(tab) = self.inactive_conversations.get_mut(&conversation_id) {
+                    tab.chat_widget.handle_codex_event(event);
+                }
+            }
             AppEvent::CodexEvent(event) => {
                 if self.suppress_shutdown_complete
                     && matches!(event.msg, EventMsg::ShutdownComplete)
@@ -724,6 +976,66 @@ impl App {
                     emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
                 self.chat_widget.handle_codex_event(event);
+            }
+            AppEvent::CreateConversation {
+                name,
+                initial_prompt,
+                initial_images,
+            } => {
+                let name = if name.trim().is_empty() {
+                    format!("Conversation {}", self.conversation_order.len() + 1)
+                } else {
+                    name
+                };
+
+                let mut config = self.config.clone();
+                config.model = Some(self.current_model.clone());
+                let created = match self.server.new_conversation(config).await {
+                    Ok(v) => v,
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to start new session: {err}",));
+                        return Ok(true);
+                    }
+                };
+                let conversation_id = created.conversation_id;
+
+                if !self.conversation_order.contains(&conversation_id) {
+                    self.conversation_order.push(conversation_id);
+                }
+
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: self.config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: self.app_event_tx.clone(),
+                    initial_prompt: (!initial_prompt.is_empty()).then_some(initial_prompt),
+                    initial_images,
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
+                    models_manager: self.server.get_models_manager(),
+                    feedback: self.feedback.clone(),
+                    is_first_run: false,
+                    model: self.current_model.clone(),
+                };
+
+                let chat_widget = ChatWidget::new_from_new_conversation(
+                    init,
+                    created.conversation,
+                    created.session_configured,
+                );
+
+                let tab = ConversationTab {
+                    name,
+                    chat_widget,
+                    transcript_cells: Vec::new(),
+                    unread_cells: 0,
+                    backtrack: BacktrackState::default(),
+                };
+
+                self.switch_to_new_conversation(tui, conversation_id, tab);
+            }
+            AppEvent::SwitchConversation(conversation_id) => {
+                self.switch_to_existing_conversation(tui, conversation_id);
             }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
@@ -1219,6 +1531,26 @@ impl App {
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if self.overlay.is_none() {
+                    self.open_conversation_picker();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if self.overlay.is_none() {
+                    self.open_new_conversation_prompt();
+                }
+            }
+            KeyEvent {
                 code: KeyCode::Char('t'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
@@ -1337,6 +1669,7 @@ mod tests {
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
+    use codex_core::protocol::Op;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
@@ -1349,6 +1682,7 @@ mod tests {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = "gpt-5.2-codex".to_string();
+        let active_conversation_id = ConversationId::new();
         let server = Arc::new(ConversationManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
@@ -1361,6 +1695,11 @@ mod tests {
             server,
             app_event_tx,
             chat_widget,
+            active_conversation_id,
+            active_conversation_name: String::from("Conversation 1"),
+            active_unread_cells: 0,
+            inactive_conversations: HashMap::new(),
+            conversation_order: vec![active_conversation_id],
             auth_manager,
             config,
             current_model,
@@ -1388,6 +1727,7 @@ mod tests {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = "gpt-5.2-codex".to_string();
+        let active_conversation_id = ConversationId::new();
         let server = Arc::new(ConversationManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
@@ -1401,6 +1741,11 @@ mod tests {
                 server,
                 app_event_tx,
                 chat_widget,
+                active_conversation_id,
+                active_conversation_name: String::from("Conversation 1"),
+                active_unread_cells: 0,
+                inactive_conversations: HashMap::new(),
+                conversation_order: vec![active_conversation_id],
                 auth_manager,
                 config,
                 current_model,

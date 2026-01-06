@@ -5,6 +5,7 @@ use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
+use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -19,6 +20,10 @@ use codex_protocol::openai_models::ReasoningEffort;
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+    CodexEventForConversation {
+        conversation_id: ConversationId,
+        event: Event,
+    },
 
     /// Start a new session.
     NewSession,
@@ -32,6 +37,12 @@ pub(crate) enum AppEvent {
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),
+
+    CreateConversation {
+        name: String,
+        initial_prompt: String,
+        initial_images: Vec<PathBuf>,
+    },
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -53,6 +64,11 @@ pub(crate) enum AppEvent {
     DiffResult(String),
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    InsertHistoryCellForConversation {
+        conversation_id: ConversationId,
+        cell: Box<dyn HistoryCell>,
+    },
 
     StartCommitAnimation,
     StopCommitAnimation,
@@ -158,6 +174,9 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
+
+    /// Switch active conversation tab.
+    SwitchConversation(ConversationId),
 
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),

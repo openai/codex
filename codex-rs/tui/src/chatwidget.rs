@@ -124,7 +124,6 @@ use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
-use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
@@ -136,7 +135,6 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
-use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
@@ -402,6 +400,18 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    fn emit_history_cell(&self, cell: Box<dyn HistoryCell>) {
+        if let Some(conversation_id) = self.conversation_id {
+            self.app_event_tx
+                .send(AppEvent::InsertHistoryCellForConversation {
+                    conversation_id,
+                    cell,
+                });
+        } else {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        }
+    }
+
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -1401,96 +1411,13 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn new(
-        common: ChatWidgetInit,
-        conversation_manager: Arc<ConversationManager>,
-    ) -> Self {
-        let ChatWidgetInit {
-            config,
-            frame_requester,
-            app_event_tx,
-            initial_prompt,
-            initial_images,
-            enhanced_keys_supported,
-            auth_manager,
-            models_manager,
-            feedback,
-            is_first_run,
-            model,
-        } = common;
-        let mut config = config;
-        config.model = Some(model.clone());
-        let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
-
-        let mut widget = Self {
-            app_event_tx: app_event_tx.clone(),
-            frame_requester: frame_requester.clone(),
-            codex_op_tx,
-            bottom_pane: BottomPane::new(BottomPaneParams {
-                frame_requester,
-                app_event_tx,
-                has_input_focus: true,
-                enhanced_keys_supported,
-                placeholder_text: placeholder,
-                disable_paste_burst: config.disable_paste_burst,
-                animations_enabled: config.animations,
-                skills: None,
-            }),
-            active_cell: None,
-            config,
-            model: model.clone(),
-            auth_manager,
-            models_manager,
-            session_header: SessionHeader::new(model),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-            ),
-            token_info: None,
-            rate_limit_snapshot: None,
-            plan_type: None,
-            rate_limit_warnings: RateLimitWarningState::default(),
-            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-            rate_limit_poller: None,
-            stream_controller: None,
-            running_commands: HashMap::new(),
-            suppressed_exec_calls: HashSet::new(),
-            last_unified_wait: None,
-            task_complete_pending: false,
-            unified_exec_sessions: Vec::new(),
-            mcp_startup_status: None,
-            interrupts: InterruptManager::new(),
-            reasoning_buffer: String::new(),
-            full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            retry_status_header: None,
-            conversation_id: None,
-            queued_user_messages: VecDeque::new(),
-            show_welcome_banner: is_first_run,
-            suppress_session_configured_redraw: false,
-            pending_notification: None,
-            is_review_mode: false,
-            pre_review_token_info: None,
-            needs_final_message_separator: false,
-            last_rendered_width: std::cell::Cell::new(None),
-            feedback,
-            current_rollout_path: None,
-            external_editor_state: ExternalEditorState::Closed,
-        };
-
-        widget.prefetch_rate_limits();
-
-        widget
-    }
-
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexConversation>,
         session_configured: codex_core::protocol::SessionConfiguredEvent,
     ) -> Self {
+        let conversation_id = session_configured.session_id;
         let ChatWidgetInit {
             config,
             frame_requester,
@@ -1504,6 +1431,8 @@ impl ChatWidget {
             model,
             ..
         } = common;
+        let mut config = config;
+        config.model = Some(model.clone());
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
@@ -1552,10 +1481,105 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
-            conversation_id: None,
+            conversation_id: Some(conversation_id),
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
+            pending_notification: None,
+            is_review_mode: false,
+            pre_review_token_info: None,
+            needs_final_message_separator: false,
+            last_rendered_width: std::cell::Cell::new(None),
+            feedback,
+            current_rollout_path: None,
+            external_editor_state: ExternalEditorState::Closed,
+        };
+
+        widget.prefetch_rate_limits();
+
+        widget
+    }
+
+    /// Create a ChatWidget attached to a freshly-created conversation.
+    ///
+    /// This is like [`Self::new_from_existing`] but preserves the "new session"
+    /// experience (welcome banner + immediate redraw) while still allowing the
+    /// caller to create and track the conversation id.
+    pub(crate) fn new_from_new_conversation(
+        common: ChatWidgetInit,
+        conversation: std::sync::Arc<codex_core::CodexConversation>,
+        session_configured: codex_core::protocol::SessionConfiguredEvent,
+    ) -> Self {
+        let conversation_id = session_configured.session_id;
+        let ChatWidgetInit {
+            config,
+            frame_requester,
+            app_event_tx,
+            initial_prompt,
+            initial_images,
+            enhanced_keys_supported,
+            auth_manager,
+            models_manager,
+            feedback,
+            is_first_run,
+            model,
+        } = common;
+
+        let mut config = config;
+        config.model = Some(model.clone());
+
+        let mut rng = rand::rng();
+        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+
+        let codex_op_tx =
+            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+
+        let mut widget = Self {
+            app_event_tx: app_event_tx.clone(),
+            frame_requester: frame_requester.clone(),
+            codex_op_tx,
+            bottom_pane: BottomPane::new(BottomPaneParams {
+                frame_requester,
+                app_event_tx,
+                has_input_focus: true,
+                enhanced_keys_supported,
+                placeholder_text: placeholder,
+                disable_paste_burst: config.disable_paste_burst,
+                animations_enabled: config.animations,
+                skills: None,
+            }),
+            active_cell: None,
+            config,
+            model: model.clone(),
+            auth_manager,
+            models_manager,
+            session_header: SessionHeader::new(model),
+            initial_user_message: create_initial_user_message(
+                initial_prompt.unwrap_or_default(),
+                initial_images,
+            ),
+            token_info: None,
+            rate_limit_snapshot: None,
+            plan_type: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            rate_limit_poller: None,
+            stream_controller: None,
+            running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
+            task_complete_pending: false,
+            unified_exec_sessions: Vec::new(),
+            mcp_startup_status: None,
+            interrupts: InterruptManager::new(),
+            reasoning_buffer: String::new(),
+            full_reasoning_buffer: String::new(),
+            current_status_header: String::from("Working"),
+            retry_status_header: None,
+            conversation_id: Some(conversation_id),
+            queued_user_messages: VecDeque::new(),
+            show_welcome_banner: is_first_run,
+            suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
             pre_review_token_info: None,
@@ -1803,7 +1827,7 @@ impl ChatWidget {
                 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
                 use codex_core::protocol::FileChange;
 
-                self.app_event_tx.send(AppEvent::CodexEvent(Event {
+                let event = Event {
                     id: "1".to_string(),
                     // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                     //     call_id: "1".to_string(),
@@ -1832,7 +1856,16 @@ impl ChatWidget {
                         reason: None,
                         grant_root: Some(PathBuf::from("/tmp")),
                     }),
-                }));
+                };
+
+                if let Some(conversation_id) = self.conversation_id {
+                    self.app_event_tx.send(AppEvent::CodexEventForConversation {
+                        conversation_id,
+                        event,
+                    });
+                } else {
+                    self.app_event_tx.send(AppEvent::CodexEvent(event));
+                }
             }
         }
     }
@@ -1863,7 +1896,7 @@ impl ChatWidget {
         self.flush_wait_cell();
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+            self.emit_history_cell(active);
         }
     }
 
@@ -1884,8 +1917,7 @@ impl ChatWidget {
         self.needs_final_message_separator = true;
         let cell =
             history_cell::new_unified_exec_interaction(wait_cell.command_display(), String::new());
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.emit_history_cell(Box::new(cell));
     }
 
     pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
@@ -1898,7 +1930,7 @@ impl ChatWidget {
             self.flush_active_cell();
             self.needs_final_message_separator = true;
         }
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.emit_history_cell(cell);
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
@@ -3344,6 +3376,23 @@ impl ChatWidget {
         self.set_skills_from_response(&ev);
     }
 
+    pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_custom_prompt_view(
+        &mut self,
+        title: String,
+        hint: String,
+        initial_text: Option<String>,
+        on_submit: Box<dyn Fn(String) + Send + Sync>,
+    ) {
+        let view = CustomPromptView::new(title, hint, initial_text, on_submit);
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
     pub(crate) fn open_review_popup(&mut self) {
         let mut items: Vec<SelectionItem> = Vec::new();
 
@@ -3508,6 +3557,13 @@ impl ChatWidget {
             .as_ref()
             .map(|ti| ti.total_token_usage.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn take_composer_draft(&mut self) -> (String, Vec<PathBuf>) {
+        let text = self.bottom_pane.composer_text();
+        let images = self.bottom_pane.take_recent_submission_images();
+        self.bottom_pane.set_composer_text(String::new());
+        (text, images)
     }
 
     pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
