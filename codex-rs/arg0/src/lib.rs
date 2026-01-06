@@ -145,6 +145,7 @@ where
 /// that `apply_patch` can be on the PATH without requiring the user to
 /// install a separate `apply_patch` executable, simplifying the deployment of
 /// Codex CLI.
+/// Note: In debug builds the temp-dir guard is disabled to ease local testing.
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
