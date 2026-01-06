@@ -273,6 +273,15 @@ pub enum HistoryPersistence {
     None,
 }
 
+// ===== Analytics configuration =====
+
+/// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct AnalyticsConfigToml {
+    /// When `false`, disables analytics across Codex product surfaces in this profile.
+    pub enabled: Option<bool>,
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
