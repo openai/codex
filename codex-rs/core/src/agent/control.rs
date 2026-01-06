@@ -1,5 +1,4 @@
 use crate::CodexConversation;
-use crate::agent::AgentBus;
 use crate::agent::AgentStatus;
 use crate::conversation_manager::ConversationManagerState;
 use crate::error::CodexErr;
@@ -20,14 +19,12 @@ pub(crate) struct AgentControl {
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ConversationManagerState -> CodexConversation -> Session -> SessionServices -> ConversationManagerState`.
     manager: Weak<ConversationManagerState>,
-    /// Shared agent status store updated from emitted events.
-    pub(crate) bus: AgentBus,
 }
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
-    pub(crate) fn new(manager: Weak<ConversationManagerState>, bus: AgentBus) -> Self {
-        Self { manager, bus }
+    pub(crate) fn new(manager: Weak<ConversationManagerState>) -> Self {
+        Self { manager }
     }
 
     #[allow(dead_code)] // Used by upcoming multi-agent tooling.
@@ -44,24 +41,12 @@ impl AgentControl {
         let state = self.upgrade()?;
         let new_conversation = state.spawn_new_conversation(config, self.clone()).await?;
 
-        self.bus
-            .record_status(&new_conversation.conversation_id, AgentStatus::PendingInit)
-            .await;
-
         if headless {
-            spawn_headless_drain(
-                Arc::clone(&new_conversation.conversation),
-                new_conversation.conversation_id,
-                self.clone(),
-            );
+            spawn_headless_drain(Arc::clone(&new_conversation.conversation));
         }
 
         self.send_prompt(new_conversation.conversation_id, prompt)
             .await?;
-
-        self.bus
-            .record_status(&new_conversation.conversation_id, AgentStatus::Running)
-            .await;
 
         Ok(new_conversation.conversation_id)
     }
@@ -85,6 +70,19 @@ impl AgentControl {
             .await
     }
 
+    #[allow(dead_code)] // Used by upcoming multi-agent tooling.
+    /// Fetch the last known status for `agent_id`, returning `NotFound` when unavailable.
+    pub(crate) async fn get_status(&self, agent_id: ConversationId) -> AgentStatus {
+        let Ok(state) = self.upgrade() else {
+            // No agent available if upgrade fails.
+            return AgentStatus::NotFound;
+        };
+        let Ok(conversation) = state.get_conversation(agent_id).await else {
+            return AgentStatus::NotFound;
+        };
+        conversation.agent_status().await
+    }
+
     fn upgrade(&self) -> CodexResult<Arc<ConversationManagerState>> {
         self.manager.upgrade().ok_or_else(|| {
             CodexErr::UnsupportedOperation("conversation manager dropped".to_string())
@@ -96,11 +94,7 @@ impl AgentControl {
 /// `CodexConversation::next_event()`. The underlying event channel is unbounded, so the producer can
 /// accumulate events indefinitely. This drain task prevents that memory growth by polling and
 /// discarding events until shutdown.
-fn spawn_headless_drain(
-    conversation: Arc<CodexConversation>,
-    conversation_id: ConversationId,
-    agent_control: AgentControl,
-) {
+fn spawn_headless_drain(conversation: Arc<CodexConversation>) {
     tokio::spawn(async move {
         loop {
             match conversation.next_event().await {
@@ -110,10 +104,7 @@ fn spawn_headless_drain(
                     }
                 }
                 Err(err) => {
-                    agent_control
-                        .bus
-                        .record_status(&conversation_id, AgentStatus::Errored(err.to_string()))
-                        .await;
+                    tracing::warn!("failed to receive event from agent: {err:?}");
                     break;
                 }
             }
@@ -124,6 +115,7 @@ fn spawn_headless_drain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::agent_status_from_event;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::TaskCompleteEvent;
     use codex_protocol::protocol::TaskStartedEvent;
@@ -145,110 +137,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_status_persists_to_bus() {
+    async fn get_status_returns_not_found_without_manager() {
         let control = AgentControl::default();
-        let conversation_id = ConversationId::new();
-
-        control
-            .bus
-            .record_status(&conversation_id, AgentStatus::PendingInit)
-            .await;
-
-        let got = control.bus.status(conversation_id).await;
-        assert_eq!(got, AgentStatus::PendingInit);
+        let got = control.get_status(ConversationId::new()).await;
+        assert_eq!(got, AgentStatus::NotFound);
     }
 
     #[tokio::test]
     async fn on_event_updates_status_from_task_started() {
-        let control = AgentControl::default();
-        let conversation_id = ConversationId::new();
-
-        control
-            .bus
-            .on_event(
-                conversation_id,
-                &EventMsg::TaskStarted(TaskStartedEvent {
-                    model_context_window: None,
-                }),
-            )
-            .await;
-
-        let got = control.bus.status(conversation_id).await;
-        assert_eq!(got, AgentStatus::Running);
+        let status = agent_status_from_event(&EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }));
+        assert_eq!(status, Some(AgentStatus::Running));
     }
 
     #[tokio::test]
     async fn on_event_updates_status_from_task_complete() {
-        let control = AgentControl::default();
-        let conversation_id = ConversationId::new();
-
-        control
-            .bus
-            .on_event(
-                conversation_id,
-                &EventMsg::TaskComplete(TaskCompleteEvent {
-                    last_agent_message: Some("done".to_string()),
-                }),
-            )
-            .await;
-
+        let status = agent_status_from_event(&EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: Some("done".to_string()),
+        }));
         let expected = AgentStatus::Completed(Some("done".to_string()));
-        let got = control.bus.status(conversation_id).await;
-        assert_eq!(got, expected);
+        assert_eq!(status, Some(expected));
     }
 
     #[tokio::test]
     async fn on_event_updates_status_from_error() {
-        let control = AgentControl::default();
-        let conversation_id = ConversationId::new();
-
-        control
-            .bus
-            .on_event(
-                conversation_id,
-                &EventMsg::Error(ErrorEvent {
-                    message: "boom".to_string(),
-                    codex_error_info: None,
-                }),
-            )
-            .await;
+        let status = agent_status_from_event(&EventMsg::Error(ErrorEvent {
+            message: "boom".to_string(),
+            codex_error_info: None,
+        }));
 
         let expected = AgentStatus::Errored("boom".to_string());
-        let got = control.bus.status(conversation_id).await;
-        assert_eq!(got, expected);
+        assert_eq!(status, Some(expected));
     }
 
     #[tokio::test]
     async fn on_event_updates_status_from_turn_aborted() {
-        let control = AgentControl::default();
-        let conversation_id = ConversationId::new();
-
-        control
-            .bus
-            .on_event(
-                conversation_id,
-                &EventMsg::TurnAborted(TurnAbortedEvent {
-                    reason: TurnAbortReason::Interrupted,
-                }),
-            )
-            .await;
+        let status = agent_status_from_event(&EventMsg::TurnAborted(TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }));
 
         let expected = AgentStatus::Errored("Interrupted".to_string());
-        let got = control.bus.status(conversation_id).await;
-        assert_eq!(got, expected);
+        assert_eq!(status, Some(expected));
     }
 
     #[tokio::test]
     async fn on_event_updates_status_from_shutdown_complete() {
-        let control = AgentControl::default();
-        let conversation_id = ConversationId::new();
-
-        control
-            .bus
-            .on_event(conversation_id, &EventMsg::ShutdownComplete)
-            .await;
-
-        let got = control.bus.status(conversation_id).await;
-        assert_eq!(got, AgentStatus::Shutdown);
+        let status = agent_status_from_event(&EventMsg::ShutdownComplete);
+        assert_eq!(status, Some(AgentStatus::Shutdown));
     }
 }

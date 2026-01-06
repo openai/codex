@@ -1,6 +1,6 @@
-pub(crate) mod bus;
 pub(crate) mod control;
+pub(crate) mod status;
 
-pub(crate) use bus::AgentBus;
-pub(crate) use bus::AgentStatus;
+pub(crate) use codex_protocol::protocol::AgentStatus;
 pub(crate) use control::AgentControl;
+pub(crate) use status::agent_status_from_event;

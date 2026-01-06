@@ -87,6 +87,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         next_id: AtomicU64::new(0),
         tx_sub: tx_ops,
         rx_event: rx_sub,
+        agent_status: Arc::clone(&codex.agent_status),
     })
 }
 
@@ -128,6 +129,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
+    let agent_status = Arc::clone(&io.agent_status);
     let io_for_bridge = io;
     tokio::spawn(async move {
         while let Ok(event) = io_for_bridge.next_event().await {
@@ -159,6 +161,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
         next_id: AtomicU64::new(0),
         rx_event: rx_bridge,
         tx_sub: tx_closed,
+        agent_status,
     })
 }
 
@@ -373,6 +376,7 @@ mod tests {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event: rx_events,
+            agent_status: Default::default(),
         });
 
         let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
