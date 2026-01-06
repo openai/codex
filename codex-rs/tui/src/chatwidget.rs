@@ -447,12 +447,24 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.set_model(&model_for_header);
-        self.add_to_history(history_cell::new_session_info(
+
+        let session_info = history_cell::new_session_info(
             &self.config,
             &model_for_header,
             event,
             self.show_welcome_banner,
-        ));
+        );
+        if self.active_cell.as_ref().is_some_and(|cell| {
+            cell.as_any()
+                .is::<history_cell::StartupSessionHeaderHistoryCell>()
+        }) {
+            // Replace the startup placeholder header ("model: loading") with the configured
+            // session header now that we know the selected model.
+            self.active_cell = Some(Box::new(session_info));
+            self.flush_active_cell();
+        } else {
+            self.add_to_history(session_info);
+        }
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -929,6 +941,9 @@ impl ChatWidget {
                         .as_any()
                         .downcast_ref::<history_cell::UnifiedExecWaitCell>()
                         .is_none()
+                        && !active
+                            .as_any()
+                            .is::<history_cell::StartupSessionHeaderHistoryCell>()
             );
             if has_non_wait_active {
                 // Do not preempt non-wait active cells with a wait entry.
@@ -1447,6 +1462,7 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
+        let startup_dir = config.cwd.clone();
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -1462,7 +1478,9 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            active_cell: None,
+            active_cell: Some(Box::new(
+                history_cell::StartupSessionHeaderHistoryCell::new(startup_dir),
+            )),
             config,
             model: model.clone(),
             auth_manager,
@@ -1886,6 +1904,15 @@ impl ChatWidget {
     fn flush_active_cell(&mut self) {
         self.flush_wait_cell();
         if let Some(active) = self.active_cell.take() {
+            if active
+                .as_any()
+                .is::<history_cell::StartupSessionHeaderHistoryCell>()
+            {
+                // Startup header is a transient placeholder and should not be flushed into
+                // history. It will be replaced once SessionConfigured arrives.
+                self.active_cell = Some(active);
+                return;
+            }
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }

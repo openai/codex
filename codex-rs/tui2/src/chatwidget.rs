@@ -412,12 +412,24 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.set_model(&model_for_header);
-        self.add_to_history(history_cell::new_session_info(
+        let session_info = history_cell::new_session_info(
             &self.config,
             &model_for_header,
             event,
             self.show_welcome_banner,
-        ));
+        );
+        let is_startup_header_active = self.active_cell.as_ref().is_some_and(|cell| {
+            cell.as_any()
+                .downcast_ref::<history_cell::StartupSessionHeaderHistoryCell>()
+                .is_some()
+        });
+        if is_startup_header_active {
+            // Replace the startup placeholder header instead of duplicating it.
+            self.active_cell = Some(Box::new(session_info));
+            self.flush_active_cell();
+        } else {
+            self.add_to_history(session_info);
+        }
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -1302,6 +1314,7 @@ impl ChatWidget {
             model,
         } = common;
         let mut config = config;
+        let startup_dir = config.cwd.clone();
         // `model` is an optional override provided by the app. Avoid clobbering the configured
         // model with an empty string during startup; that would propagate to core and render as a
         // blank model in the session header (/model current label, etc).
@@ -1326,7 +1339,9 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            active_cell: None,
+            active_cell: Some(Box::new(
+                history_cell::StartupSessionHeaderHistoryCell::new(startup_dir),
+            )),
             config,
             model: model.clone(),
             auth_manager,
@@ -1714,6 +1729,14 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
+            if active
+                .as_ref()
+                .as_any()
+                .downcast_ref::<history_cell::StartupSessionHeaderHistoryCell>()
+                .is_some()
+            {
+                return;
+            }
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }

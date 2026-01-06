@@ -2600,6 +2600,73 @@ async fn ui_snapshots_small_heights_idle() {
     }
 }
 
+#[tokio::test]
+async fn startup_header_renders_in_active_cell_before_session_configured_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.active_cell = Some(Box::new(
+        crate::history_cell::StartupSessionHeaderHistoryCell::new(chat.config.cwd.clone()),
+    ));
+
+    let mut terminal = Terminal::new(TestBackend::new(60, 15)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw startup header");
+
+    assert_snapshot!("startup_header_active_cell", terminal.backend());
+}
+
+#[tokio::test]
+async fn startup_header_is_replaced_on_session_configured() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.active_cell = Some(Box::new(
+        crate::history_cell::StartupSessionHeaderHistoryCell::new(chat.config.cwd.clone()),
+    ));
+
+    chat.handle_codex_event(Event {
+        id: "session-1".into(),
+        msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
+            session_id: ConversationId::new(),
+            model: "gpt-5.2-codex".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: codex_core::protocol::AskForApproval::OnRequest,
+            sandbox_policy: codex_core::protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            cwd: chat.config.cwd.clone(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: std::env::temp_dir(),
+        }),
+    });
+
+    assert!(
+        chat.active_cell.is_none(),
+        "startup header should be replaced and flushed into history"
+    );
+
+    let history = drain_insert_history(&mut rx);
+    let rendered = history
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        rendered.contains("model:") && rendered.contains("gpt-5.2-codex"),
+        "expected configured model in history: {rendered}"
+    );
+
+    // Drain rx to avoid unused warnings.
+    let _ = drain_insert_history(&mut rx);
+    let _ = op_rx.try_recv();
+}
+
 // Snapshot test: ChatWidget at very small heights (task running)
 // Validates how status + composer are presented within tight space.
 #[tokio::test]

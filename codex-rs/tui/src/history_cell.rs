@@ -874,6 +874,7 @@ pub(crate) fn new_session_info(
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
         model.clone(),
+        Style::default(),
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
@@ -942,6 +943,7 @@ pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
 struct SessionHeaderHistoryCell {
     version: &'static str,
     model: String,
+    model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
 }
@@ -949,6 +951,7 @@ struct SessionHeaderHistoryCell {
 impl SessionHeaderHistoryCell {
     fn new(
         model: String,
+        model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
@@ -956,6 +959,7 @@ impl SessionHeaderHistoryCell {
         Self {
             version,
             model,
+            model_style,
             reasoning_effort,
             directory,
         }
@@ -1028,7 +1032,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let reasoning_label = self.reasoning_label();
         let mut model_spans: Vec<Span<'static>> = vec![
             Span::from(format!("{model_label} ")).dim(),
-            Span::from(self.model.clone()),
+            Span::styled(self.model.clone(), self.model_style),
         ];
         if let Some(reasoning) = reasoning_label {
             model_spans.push(Span::from(" "));
@@ -1053,6 +1057,43 @@ impl HistoryCell for SessionHeaderHistoryCell {
         ];
 
         with_border(lines)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct StartupSessionHeaderHistoryCell(SessionHeaderHistoryCell);
+
+impl StartupSessionHeaderHistoryCell {
+    pub(crate) fn new(directory: PathBuf) -> Self {
+        // Render a session header before we know the configured session details.
+        // This is a transient placeholder until the SessionConfigured event arrives.
+        let inner = SessionHeaderHistoryCell::new(
+            "loading".to_string(),
+            Style::default().dim().italic(),
+            None,
+            directory,
+            CODEX_CLI_VERSION,
+        );
+        Self(inner)
+    }
+}
+
+impl HistoryCell for StartupSessionHeaderHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.0.display_lines(width)
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.0.desired_height(width)
+    }
+
+    fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        // Do not include this placeholder in transcript/log output.
+        Vec::new()
+    }
+
+    fn desired_transcript_height(&self, _width: u16) -> u16 {
+        0
     }
 }
 
@@ -2200,6 +2241,7 @@ mod tests {
     fn session_header_includes_reasoning_level_when_present() {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
+            Style::default(),
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",

@@ -150,6 +150,63 @@ async fn resumed_initial_messages_render_history() {
     );
 }
 
+#[tokio::test]
+async fn startup_header_renders_in_active_cell_before_session_configured_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let startup_dir = chat.config.cwd.clone();
+    chat.active_cell = Some(Box::new(
+        crate::history_cell::StartupSessionHeaderHistoryCell::new(startup_dir),
+    ));
+    assert_snapshot!("startup_header_active_cell", active_blob(&chat));
+}
+
+#[tokio::test]
+async fn startup_header_is_replaced_on_session_configured() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+    let startup_dir = chat.config.cwd.clone();
+    chat.active_cell = Some(Box::new(
+        crate::history_cell::StartupSessionHeaderHistoryCell::new(startup_dir),
+    ));
+
+    let conversation_id = ConversationId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: rollout_file.path().to_path_buf(),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    assert!(chat.active_cell.is_none());
+
+    let cells = drain_insert_history(&mut rx);
+    let merged_lines = cells
+        .iter()
+        .flat_map(|lines| {
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .map(|span| span.content.clone())
+        })
+        .collect::<String>();
+    assert!(
+        merged_lines.contains("test-model"),
+        "expected resolved model to be recorded in history cell, got:\n{merged_lines}",
+    );
+}
+
 /// Entering review mode uses the hint provided by the review request.
 #[tokio::test]
 async fn entered_review_mode_uses_request_hint() {
