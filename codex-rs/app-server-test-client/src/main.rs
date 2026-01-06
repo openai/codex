@@ -166,7 +166,7 @@ fn main() -> Result<()> {
         ),
         CliCommand::TestLogin => test_login(&codex_bin, &config_overrides),
         CliCommand::GetAccountRateLimits => get_account_rate_limits(&codex_bin, &config_overrides),
-        CliCommand::ModelList => model_list(codex_bin),
+        CliCommand::ModelList => model_list(&codex_bin, &config_overrides),
     }
 }
 
@@ -350,8 +350,8 @@ fn get_account_rate_limits(codex_bin: &str, config_overrides: &[String]) -> Resu
     Ok(())
 }
 
-fn model_list(codex_bin: String) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+fn model_list(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");

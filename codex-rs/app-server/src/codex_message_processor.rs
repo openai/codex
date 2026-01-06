@@ -215,7 +215,7 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
-    startup_cli_overrides: Vec<(String, TomlValue)>,
+    cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
@@ -262,7 +262,7 @@ impl CodexMessageProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
-        startup_cli_overrides: Vec<(String, TomlValue)>,
+        cli_overrides: Vec<(String, TomlValue)>,
         feedback: CodexFeedback,
     ) -> Self {
         Self {
@@ -271,7 +271,7 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             config,
-            startup_cli_overrides,
+            cli_overrides,
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
@@ -282,7 +282,7 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        Config::load_with_cli_overrides(self.startup_cli_overrides.clone())
+        Config::load_with_cli_overrides(self.cli_overrides.clone())
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -1246,14 +1246,14 @@ impl CodexMessageProcessor {
             cwd,
             approval_policy,
             sandbox: sandbox_mode,
-            config: request_config_overrides,
+            config: request_overrides,
             base_instructions,
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool,
         } = params;
 
-        let harness_overrides = ConfigOverrides {
+        let forced_overrides = ConfigOverrides {
             model,
             config_profile: profile,
             cwd: cwd.clone().map(PathBuf::from),
@@ -1270,18 +1270,18 @@ impl CodexMessageProcessor {
 
         // Persist windows sandbox feature.
         // TODO: persist default config in general.
-        let mut request_config_overrides = request_config_overrides.unwrap_or_default();
+        let mut request_overrides = request_overrides.unwrap_or_default();
         if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-            request_config_overrides.insert(
+            request_overrides.insert(
                 "features.experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
             );
         }
 
         let config = match derive_config_from_params(
-            &self.startup_cli_overrides,
-            harness_overrides,
-            Some(request_config_overrides),
+            &self.cli_overrides,
+            forced_overrides,
+            Some(request_overrides),
         )
         .await
         {
@@ -1324,7 +1324,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
-        let harness_overrides = self.build_thread_config_overrides(
+        let forced_overrides = self.build_thread_config_overrides(
             params.model,
             params.model_provider,
             params.cwd,
@@ -1334,24 +1334,21 @@ impl CodexMessageProcessor {
             params.developer_instructions,
         );
 
-        let config = match derive_config_from_params(
-            &self.startup_cli_overrides,
-            harness_overrides,
-            params.config,
-        )
-        .await
-        {
-            Ok(config) => config,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config =
+            match derive_config_from_params(&self.cli_overrides, forced_overrides, params.config)
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("error deriving config: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
@@ -1555,7 +1552,7 @@ impl CodexMessageProcessor {
             cwd,
             approval_policy,
             sandbox,
-            config: request_config_overrides,
+            config: request_overrides,
             base_instructions,
             developer_instructions,
         } = params;
@@ -1565,12 +1562,12 @@ impl CodexMessageProcessor {
             || cwd.is_some()
             || approval_policy.is_some()
             || sandbox.is_some()
-            || request_config_overrides.is_some()
+            || request_overrides.is_some()
             || base_instructions.is_some()
             || developer_instructions.is_some();
 
         let config = if overrides_requested {
-            let harness_overrides = self.build_thread_config_overrides(
+            let forced_overrides = self.build_thread_config_overrides(
                 model,
                 model_provider,
                 cwd,
@@ -1580,9 +1577,9 @@ impl CodexMessageProcessor {
                 developer_instructions,
             );
             match derive_config_from_params(
-                &self.startup_cli_overrides,
-                harness_overrides,
-                request_config_overrides,
+                &self.cli_overrides,
+                forced_overrides,
+                request_overrides,
             )
             .await
             {
@@ -2215,7 +2212,7 @@ impl CodexMessageProcessor {
                     cwd,
                     approval_policy,
                     sandbox: sandbox_mode,
-                    config: request_config_overrides,
+                    config: request_overrides,
                     base_instructions,
                     developer_instructions,
                     compact_prompt,
@@ -2223,15 +2220,15 @@ impl CodexMessageProcessor {
                 } = overrides;
 
                 // Persist windows sandbox feature.
-                let mut request_config_overrides = request_config_overrides.unwrap_or_default();
+                let mut request_overrides = request_overrides.unwrap_or_default();
                 if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-                    request_config_overrides.insert(
+                    request_overrides.insert(
                         "features.experimental_windows_sandbox".to_string(),
                         serde_json::json!(true),
                     );
                 }
 
-                let harness_overrides = ConfigOverrides {
+                let forced_overrides = ConfigOverrides {
                     model,
                     config_profile: profile,
                     cwd: cwd.map(PathBuf::from),
@@ -2247,9 +2244,9 @@ impl CodexMessageProcessor {
                 };
 
                 derive_config_from_params(
-                    &self.startup_cli_overrides,
-                    harness_overrides,
-                    Some(request_config_overrides),
+                    &self.cli_overrides,
+                    forced_overrides,
+                    Some(request_overrides),
                 )
                 .await
             }
@@ -3364,22 +3361,31 @@ fn errors_to_info(
         .collect()
 }
 
+/// Derive the effective [`Config`] by layering three override sources.
+///
+/// Precedence (highest to lowest):
+/// - `forced_overrides`: strongly-typed "forced" values from the harness/app-server (e.g. `cwd`,
+///   sandbox/approval policy, model/provider, instructions).
+/// - `request_overrides`: per-request dotted-path overrides (`params.config`), converted JSON->TOML;
+///   applied after `cli_overrides`.
+/// - `cli_overrides`: process-wide startup `--config` flags.
 async fn derive_config_from_params(
-    startup_cli_overrides: &[(String, TomlValue)],
-    harness_overrides: ConfigOverrides,
-    request_config_overrides: Option<HashMap<String, serde_json::Value>>,
+    cli_overrides: &[(String, TomlValue)],
+    forced_overrides: ConfigOverrides,
+    request_overrides: Option<HashMap<String, serde_json::Value>>,
 ) -> std::io::Result<Config> {
-    // Apply the app server's startup `--config` overrides, then apply request-scoped
-    // overrides with higher precedence.
-    let mut merged_cli_overrides: Vec<(String, TomlValue)> = startup_cli_overrides.to_vec();
-    merged_cli_overrides.extend(
-        request_config_overrides
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(k, v)| (k, json_to_toml(v))),
-    );
+    let merged_cli_overrides = cli_overrides
+        .iter()
+        .cloned()
+        .chain(
+            request_overrides
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k, json_to_toml(v))),
+        )
+        .collect::<Vec<_>>();
 
-    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, harness_overrides)
+    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, forced_overrides)
         .await
 }
 
