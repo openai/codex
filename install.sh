@@ -5,7 +5,7 @@ set -eu
 #
 # Usage examples:
 #   curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | sh
-#   CODEX_MINE_VERSION=mine-v0.76.0-alpha.8-mine.0 sh install.sh
+#   CODEX_MINE_VERSION=mine-vX.Y.Z-mine.N sh install.sh
 #
 # Environment variables:
 #   CODEX_MINE_GITHUB_REPO   (default: inoueryo/codex-mine)

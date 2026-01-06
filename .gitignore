@@ -64,6 +64,9 @@ apply_patch/
 # coverage
 coverage/
 
+# local scratch
+dev/
+
 # personal files
 personal/
 

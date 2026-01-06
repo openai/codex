@@ -37,7 +37,7 @@ macOS/Linux 向けに GitHub Releases に prebuilt バイナリ（`codex-<target
 
 ### バージョニング方針
 
-- CLI の表示バージョンは upstream の Rust リリースタグをベースにし、末尾に `-mine.x` を付ける（例: `0.76.0-alpha.8-mine.0`）。
+- CLI の表示バージョンは upstream の Rust リリースタグをベースにし、末尾に `-mine.x` を付ける（例: `0.77.0-mine.0`）。
 - 「どの upstream に基づくか」を一目で分かるようにするためで、機能差分を示す独自番号は `mine.*` で刻む。
 - crates.io には publish しない前提のローカル版想定。
 

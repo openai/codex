@@ -1,5 +1,26 @@
 # Rust/codex-rs
 
+## VSCode拡張のバージョン運用
+
+- `vscode-extension/package.json` の `version` はローカル開発（`pnpm -C vscode-extension vsix:install`）では変更しない。
+- バージョンを上げるのはユーザーが明示的に Publish を指示したタイミングのみ。
+- 運用は「Publish時に1つ上げる → そのバージョンで開発/修正を続ける → 次のPublish時にまた1つ上げる」を繰り返す。
+
+## Codex-Mine バージョニング（CLI表示）
+
+- Codex-Mine の CLI 表示バージョンは、`openai/codex` の **GitHub Releases の最新 stable（pre-release除外）** の `rust-vX.Y.Z` を基準にし、`X.Y.Z-mine.N` とする（例: `0.77.0-mine.0`）。
+  - 理由: `upstream/main` はリリースタグの系譜と一致しないことがあり、`git describe upstream/main` を基準にすると npm / ネイティブ配布の latest とズレうるため。
+- 最新 stable の確認:
+  - `git fetch upstream --tags`
+  - `python3 scripts/map_upstream_releases.py --repo openai/codex --fetch-tags --remote upstream --tag-prefix rust-v --semver-only --format tsv --limit 200 | awk -F'\t' 'NR==1||$4==0{print}' | head`
+    - 先頭の `rust-vX.Y.Z` が最新 stable。
+- 更新対象:
+  - `codex-rs/Cargo.toml` の `[workspace.package].version`
+  - TUIの表示を含む snapshots（`codex-rs/tui*/src/status/snapshots/*.snap` など）
+  - `codex-rs/Cargo.lock`
+  - `README_mine.md` の例
+- Rust 変更後は `cd codex-rs && just fmt` を実行する。
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
