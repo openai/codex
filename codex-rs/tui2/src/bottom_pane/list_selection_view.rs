@@ -13,7 +13,6 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
@@ -396,10 +395,8 @@ impl Renderable for ListSelectionView {
         if self.is_searchable {
             height = height.saturating_add(1);
         }
-        if let Some(note) = &self.footer_note {
-            let note_width = width.saturating_sub(2);
-            let note_lines = wrap_styled_line(note, note_width);
-            height = height.saturating_add(note_lines.len() as u16);
+        if self.footer_note.is_some() {
+            height = height.saturating_add(1);
         }
         if self.footer_hint.is_some() {
             height = height.saturating_add(1);
@@ -412,15 +409,13 @@ impl Renderable for ListSelectionView {
             return;
         }
 
-        let note_width = area.width.saturating_sub(2);
-        let note_lines = self
-            .footer_note
-            .as_ref()
-            .map(|note| wrap_styled_line(note, note_width));
-        let note_height = note_lines.as_ref().map_or(0, |lines| lines.len() as u16);
-        let footer_rows = note_height + u16::from(self.footer_hint.is_some());
-        let [content_area, footer_area] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
+        let footer_rows =
+            u16::from(self.footer_note.is_some()) + u16::from(self.footer_hint.is_some());
+        let [content_area, footer_area] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(footer_rows),
+        ])
+        .areas(area);
 
         Block::default()
             .style(user_message_style())
@@ -490,30 +485,19 @@ impl Renderable for ListSelectionView {
 
         if footer_area.height > 0 {
             let [note_area, hint_area] = Layout::vertical([
-                Constraint::Length(note_height),
+                Constraint::Length(if self.footer_note.is_some() { 1 } else { 0 }),
                 Constraint::Length(if self.footer_hint.is_some() { 1 } else { 0 }),
             ])
             .areas(footer_area);
 
-            if let Some(lines) = note_lines {
+            if let Some(note) = &self.footer_note {
                 let note_area = Rect {
                     x: note_area.x + 2,
                     y: note_area.y,
                     width: note_area.width.saturating_sub(2),
                     height: note_area.height,
                 };
-                for (idx, line) in lines.iter().enumerate() {
-                    if idx as u16 >= note_area.height {
-                        break;
-                    }
-                    let line_area = Rect {
-                        x: note_area.x,
-                        y: note_area.y + idx as u16,
-                        width: note_area.width,
-                        height: 1,
-                    };
-                    line.clone().render(line_area, buf);
-                }
+                note.clone().render(note_area, buf);
             }
 
             if let Some(hint) = &self.footer_hint {
@@ -609,38 +593,6 @@ mod tests {
     fn renders_blank_line_between_subtitle_and_items() {
         let view = make_selection_view(Some("Switch between Codex approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
-    }
-
-    #[test]
-    fn snapshot_footer_note_wraps() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let items = vec![SelectionItem {
-            name: "Read Only".to_string(),
-            description: Some("Codex can read files".to_string()),
-            is_current: true,
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
-        let footer_note = Line::from(vec![
-            "Note: ".dim(),
-            "Use /setup-elevated-sandbox".cyan(),
-            " to allow network access.".dim(),
-        ]);
-        let view = ListSelectionView::new(
-            SelectionViewParams {
-                title: Some("Select Approval Mode".to_string()),
-                footer_note: Some(footer_note),
-                footer_hint: Some(standard_popup_hint_line()),
-                items,
-                ..Default::default()
-            },
-            tx,
-        );
-        assert_snapshot!(
-            "list_selection_footer_note_wraps",
-            render_lines_with_width(&view, 40)
-        );
     }
 
     #[test]

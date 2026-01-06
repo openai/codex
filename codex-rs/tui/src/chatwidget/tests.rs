@@ -76,6 +76,11 @@ fn set_windows_sandbox_enabled(enabled: bool) {
     codex_core::set_windows_sandbox_enabled(enabled);
 }
 
+#[cfg(target_os = "windows")]
+fn set_windows_elevated_sandbox_enabled(enabled: bool) {
+    codex_core::set_windows_elevated_sandbox_enabled(enabled);
+}
+
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     let codex_home = std::env::temp_dir();
@@ -2027,6 +2032,31 @@ async fn approvals_selection_popup_snapshot() {
     assert_snapshot!("approvals_selection_popup", popup);
 }
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.config.notices.hide_full_access_warning = None;
+    chat.config.features.enable(Feature::WindowsSandbox);
+    chat.config
+        .features
+        .disable(Feature::WindowsSandboxElevated);
+    set_windows_sandbox_enabled(true);
+    set_windows_elevated_sandbox_enabled(false);
+
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    insta::with_settings!({ snapshot_suffix => "windows_degraded" }, {
+        assert_snapshot!("approvals_selection_popup", popup);
+    });
+
+    // Avoid leaking sandbox global state into other tests.
+    set_windows_sandbox_enabled(true);
+    set_windows_elevated_sandbox_enabled(false);
+}
+
 #[tokio::test]
 async fn preset_matching_ignores_extra_writable_roots() {
     let preset = builtin_approval_presets()
@@ -2077,8 +2107,8 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("Agent mode on Windows uses an experimental sandbox"),
-        "expected auto mode prompt to mention enabling the sandbox feature, popup: {popup}"
+        popup.contains("requires elevation"),
+        "expected auto mode prompt to mention elevation, popup: {popup}"
     );
 }
 
@@ -2094,12 +2124,12 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("Agent mode on Windows uses an experimental sandbox"),
-        "expected startup prompt to explain sandbox: {popup}"
+        popup.contains("requires elevation"),
+        "expected startup prompt to explain elevation: {popup}"
     );
     assert!(
-        popup.contains("Enable experimental sandbox"),
-        "expected startup prompt to offer enabling the sandbox: {popup}"
+        popup.contains("Yes, I accept"),
+        "expected startup prompt to offer accepting elevation: {popup}"
     );
 
     set_windows_sandbox_enabled(true);

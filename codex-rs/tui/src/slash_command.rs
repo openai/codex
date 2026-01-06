@@ -14,6 +14,7 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Approvals,
+    ElevateSandbox,
     Experimental,
     Skills,
     Review,
@@ -54,6 +55,7 @@ impl SlashCommand {
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
+            SlashCommand::ElevateSandbox => "upgrade to the elevated Windows sandbox",
             SlashCommand::Experimental => "toggle beta features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
@@ -78,6 +80,7 @@ impl SlashCommand {
             // | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Approvals
+            | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Logout => false,

@@ -10,6 +10,7 @@ use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
+use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
@@ -83,6 +84,8 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+use crate::app_event::WindowsSandboxEnableMode;
+use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
@@ -1570,6 +1573,43 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::ElevateSandbox => {
+                #[cfg(target_os = "windows")]
+                {
+                    let windows_degraded_sandbox_enabled =
+                        codex_core::get_platform_sandbox().is_some()
+                            && !codex_core::is_windows_elevated_sandbox_enabled();
+                    if !windows_degraded_sandbox_enabled {
+                        // This command should not be visible/recognized outside degraded mode,
+                        // but guard anyway in case something dispatches it directly.
+                        return;
+                    }
+
+                    let Some(preset) = builtin_approval_presets()
+                        .into_iter()
+                        .find(|preset| preset.id == "auto")
+                    else {
+                        // Avoid panicking in interactive UI; treat this as a recoverable
+                        // internal error.
+                        self.add_error_message(
+                            "Internal error: missing the 'auto' approval preset.".to_string(),
+                        );
+                        return;
+                    };
+
+                    if let Err(err) = self.config.approval_policy.can_set(&preset.approval) {
+                        self.add_error_message(err.to_string());
+                        return;
+                    }
+
+                    self.app_event_tx.send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    // Not supported; on non-Windows this command should never be reachable.
+                    return;
+                }
+            }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_exit();
             }
@@ -2593,10 +2633,24 @@ impl ChatWidget {
         let current_sandbox = self.config.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+
+        #[cfg(target_os = "windows")]
+        let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox().is_some()
+            && !codex_core::is_windows_elevated_sandbox_enabled();
+        #[cfg(not(target_os = "windows"))]
+        let windows_degraded_sandbox_enabled = false;
+
+        let show_elevate_sandbox_hint = windows_degraded_sandbox_enabled
+            && presets.iter().any(|preset| preset.id == "auto");
+
         for preset in presets.into_iter() {
             let is_current =
                 Self::preset_matches_current(current_approval, current_sandbox, &preset);
-            let name = preset.label.to_string();
+            let name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
+                "Agent (degraded)".to_string()
+            } else {
+                preset.label.to_string()
+            };
             let description_text = preset.description;
             let description = Some(description_text.to_string());
             let requires_confirmation = preset.id == "full-access"
@@ -2616,12 +2670,24 @@ impl ChatWidget {
                 #[cfg(target_os = "windows")]
                 {
                     if codex_core::get_platform_sandbox().is_none() {
-                        let preset_clone = preset.clone();
-                        vec![Box::new(move |tx| {
-                            tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
-                                preset: preset_clone.clone(),
-                            });
-                        })]
+                        if codex_core::windows_sandbox::sandbox_setup_is_complete(
+                            self.config.codex_home.as_path(),
+                        ) {
+                            let preset_clone = preset.clone();
+                            vec![Box::new(move |tx| {
+                                tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                                    preset: preset_clone.clone(),
+                                    mode: WindowsSandboxEnableMode::Elevated,
+                                });
+                            })]
+                        } else {
+                            let preset_clone = preset.clone();
+                            vec![Box::new(move |tx| {
+                                tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                                    preset: preset_clone.clone(),
+                                });
+                            })]
+                        }
                     } else if let Some((sample_paths, extra_count, failed_scan)) =
                         self.world_writable_warning_details()
                     {
@@ -2655,8 +2721,18 @@ impl ChatWidget {
             });
         }
 
+        let footer_note = show_elevate_sandbox_hint.then(|| {
+            vec![
+                "To upgrade to the elevated sandbox, run ".dim(),
+                "/elevate-sandbox".cyan(),
+                ".".dim(),
+            ]
+            .into()
+        });
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Approval Mode".to_string()),
+            footer_note,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(()),
@@ -2917,32 +2993,36 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
             Paragraph::new(vec![
-                line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
-                line![
-                    "Learn more: https://developers.openai.com/codex/windows"
-                ],
+                line!["Codex works best in Agent mode.".bold()],
+                line!["To use Agent mode on Windows, we need to configure the sandbox."],
+                line!["This setup requires elevation. Do you accept?"],
+                line!["Learn more: https://developers.openai.com/codex/windows"],
             ])
             .wrap(Wrap { trim: false }),
         ));
 
-        let preset_clone = preset;
+        let preset_accept = preset.clone();
+        let preset_decline = preset;
         let items = vec![
             SelectionItem {
-                name: "Enable experimental sandbox".to_string(),
+                name: "Yes, I accept".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                        preset: preset_clone.clone(),
+                    tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                        preset: preset_accept.clone(),
                     });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Go back".to_string(),
+                name: "No, I do not accept".to_string(),
                 description: None,
-                actions: vec![Box::new(|tx| {
-                    tx.send(AppEvent::OpenApprovalsPopup);
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt {
+                        preset: preset_decline.clone(),
+                        reason: WindowsSandboxFallbackReason::DeclinedElevation,
+                    });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -2962,6 +3042,83 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
+    pub(crate) fn open_windows_sandbox_fallback_prompt(
+        &mut self,
+        preset: ApprovalPreset,
+        reason: WindowsSandboxFallbackReason,
+    ) {
+        use ratatui_macros::line;
+
+        let mut lines = Vec::new();
+        if reason == WindowsSandboxFallbackReason::ElevationFailed {
+            lines.push(line!["The elevated setup did not complete.".bold()]);
+        }
+        lines.push(line![
+            "You can still use a degraded sandbox without elevation."
+        ]);
+        lines.push(line!["It is less watertight, but still secure."]);
+        lines.push(line![
+            "Learn more: https://developers.openai.com/codex/windows"
+        ]);
+
+        let mut header = ColumnRenderable::new();
+        header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
+
+        let preset_retry = preset.clone();
+        let preset_degraded = preset;
+        let items = vec![
+            SelectionItem {
+                name: "Try elevated setup again".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                        preset: preset_retry.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Use degraded sandbox".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                        preset: preset_degraded.clone(),
+                        mode: WindowsSandboxEnableMode::Legacy,
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Use no sandbox".to_string(),
+                description: None,
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenApprovalsPopup);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: None,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn open_windows_sandbox_fallback_prompt(
+        &mut self,
+        _preset: ApprovalPreset,
+        _reason: WindowsSandboxFallbackReason,
+    ) {
+    }
+
+    #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
         if self.config.forced_auto_mode_downgraded_on_windows
             && codex_core::get_platform_sandbox().is_none()
@@ -2975,6 +3132,36 @@ impl ChatWidget {
 
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn show_windows_sandbox_setup_status(&mut self) {
+        // While elevated sandbox setup runs, prevent typing so the user doesn't
+        // accidentally queue messages that will run under an unexpected mode.
+        self.bottom_pane.set_composer_input_enabled(
+            false,
+            Some("Input disabled until setup completes.".to_string()),
+        );
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane.set_interrupt_hint_visible(false);
+        self.set_status_header(
+            "Setting up the elevated Windows sandbox (this may take a minute or more). You'll stay in your current mode until it's done."
+                .to_string(),
+        );
+        self.request_redraw();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn show_windows_sandbox_setup_status(&mut self) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {
+        self.bottom_pane.set_composer_input_enabled(true, None);
+        self.bottom_pane.hide_status_indicator();
+        self.request_redraw();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {}
 
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
@@ -3006,6 +3193,14 @@ impl ChatWidget {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
+        if enabled {
+            self.config.features.enable(feature);
+        } else {
+            self.config.features.disable(feature);
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
