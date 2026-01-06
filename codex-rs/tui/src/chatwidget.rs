@@ -1774,8 +1774,7 @@ impl ChatWidget {
                 #[cfg(not(target_os = "windows"))]
                 {
                     // Not supported; on non-Windows this command should never be reachable.
-                    ()
-                }
+                };
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
