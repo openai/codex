@@ -1125,11 +1125,11 @@ async fn submitting_image_shows_short_path_but_sends_full_path_to_model() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     // Use a long absolute path so we can verify display vs model text differ.
-    let image_path = PathBuf::from("/var/tmp/some/dir/image.png");
+    let image_path = "/var/tmp/some/dir/image.png";
 
     chat.bottom_pane.insert_str("see ");
     chat.bottom_pane
-        .attach_image(image_path.clone(), 24, 42, "png");
+        .attach_image(PathBuf::from(image_path), 24, 42, "png");
 
     let display_text = chat.bottom_pane.composer_text();
     assert!(
@@ -1151,14 +1151,14 @@ async fn submitting_image_shows_short_path_but_sends_full_path_to_model() {
         "expected transcript to contain basename placeholder, got {rendered:?}"
     );
     assert!(
-        !rendered.contains("/var/tmp/some/dir/image.png"),
+        !rendered.contains(image_path),
         "expected transcript not to contain full path, got {rendered:?}"
     );
 
     // The model-facing text should expand the placeholder to the full path.
     let mut model_text: Option<String> = None;
     while let Ok(op) = op_rx.try_recv() {
-        if let Op::UserInput { items } = op {
+        if let Op::UserInput { items, .. } = op {
             for item in items {
                 if let codex_protocol::user_input::UserInput::Text { text } = item {
                     model_text = Some(text);
@@ -1172,7 +1172,7 @@ async fn submitting_image_shows_short_path_but_sends_full_path_to_model() {
     }
     let model_text = model_text.expect("expected Op::UserInput with a Text item");
     assert!(
-        model_text.contains("/var/tmp/some/dir/image.png"),
+        model_text.contains(image_path),
         "expected model text to contain full path, got {model_text:?}"
     );
     assert!(

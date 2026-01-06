@@ -1759,9 +1759,7 @@ impl ChatWidget {
         }
 
         if !model_text.is_empty() {
-            items.push(UserInput::Text {
-                text: model_text.clone(),
-            });
+            items.push(UserInput::Text { text: model_text });
         }
 
         for path in image_paths {
