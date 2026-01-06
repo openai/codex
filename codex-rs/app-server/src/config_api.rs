@@ -9,6 +9,7 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
+use codex_core::config_loader::LoaderOverrides;
 use serde_json::json;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
@@ -19,9 +20,13 @@ pub(crate) struct ConfigApi {
 }
 
 impl ConfigApi {
-    pub(crate) fn new(codex_home: PathBuf, cli_overrides: Vec<(String, TomlValue)>) -> Self {
+    pub(crate) fn new(
+        codex_home: PathBuf,
+        cli_overrides: Vec<(String, TomlValue)>,
+        loader_overrides: LoaderOverrides,
+    ) -> Self {
         Self {
-            service: ConfigService::new(codex_home, cli_overrides),
+            service: ConfigService::new(codex_home, cli_overrides, loader_overrides),
         }
     }
 

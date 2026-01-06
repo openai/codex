@@ -1,7 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandSource;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
@@ -9,9 +8,6 @@ use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::events::ToolEmitter;
-use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventStage;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -171,20 +167,6 @@ impl ToolHandler for UnifiedExecHandler {
                     manager.release_process_id(&process_id).await;
                     return Ok(output);
                 }
-
-                let event_ctx = ToolEventCtx::new(
-                    context.session.as_ref(),
-                    context.turn.as_ref(),
-                    &context.call_id,
-                    None,
-                );
-                let emitter = ToolEmitter::unified_exec(
-                    &command,
-                    cwd.clone(),
-                    ExecCommandSource::UnifiedExecStartup,
-                    Some(process_id.clone()),
-                );
-                emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager
                     .exec_command(

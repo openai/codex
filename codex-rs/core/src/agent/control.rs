@@ -1,4 +1,5 @@
 use crate::CodexConversation;
+use crate::agent::AgentBus;
 use crate::agent::AgentStatus;
 use crate::conversation_manager::ConversationManagerState;
 use crate::error::CodexErr;
@@ -19,6 +20,8 @@ pub(crate) struct AgentControl {
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ConversationManagerState -> CodexConversation -> Session -> SessionServices -> ConversationManagerState`.
     manager: Weak<ConversationManagerState>,
+    /// Shared agent status store updated from emitted events.
+    pub(crate) bus: AgentBus,
 }
 
 impl AgentControl {
@@ -41,12 +44,20 @@ impl AgentControl {
         let state = self.upgrade()?;
         let new_conversation = state.spawn_new_conversation(config, self.clone()).await?;
 
+        self.bus
+            .record_status(&new_conversation.conversation_id, AgentStatus::PendingInit)
+            .await;
+
         if headless {
             spawn_headless_drain(Arc::clone(&new_conversation.conversation));
         }
 
         self.send_prompt(new_conversation.conversation_id, prompt)
             .await?;
+
+        self.bus
+            .record_status(&new_conversation.conversation_id, AgentStatus::Running)
+            .await;
 
         Ok(new_conversation.conversation_id)
     }

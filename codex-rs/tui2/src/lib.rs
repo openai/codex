@@ -361,6 +361,8 @@ async fn run_ratatui_app(
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
 
+    tooltips::announcement::prewarm();
+
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
     // Chain to the previous hook so users still get a rich panic report

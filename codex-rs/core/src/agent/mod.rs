@@ -1,3 +1,4 @@
+pub(crate) mod bus;
 pub(crate) mod control;
 pub(crate) mod status;
 
