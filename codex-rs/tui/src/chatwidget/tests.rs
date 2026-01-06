@@ -1093,7 +1093,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     chat.bottom_pane.insert_str("draft message ");
     chat.bottom_pane
         .attach_image(PathBuf::from("/tmp/preview.png"), 24, 42, "png");
-    let placeholder = "[/tmp/preview.png 24x42]";
+    let placeholder = "[preview.png 24x42]";
     assert!(
         chat.bottom_pane.composer_text().ends_with(placeholder),
         "expected placeholder {placeholder:?} in composer text"
@@ -1124,7 +1124,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
 async fn submitting_image_shows_short_path_but_sends_full_path_to_model() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
-    // Use a long absolute path so the display placeholder is shortened.
+    // Use a long absolute path so we can verify display vs model text differ.
     let image_path = PathBuf::from("/var/tmp/some/dir/image.png");
 
     chat.bottom_pane.insert_str("see ");
@@ -1133,8 +1133,8 @@ async fn submitting_image_shows_short_path_but_sends_full_path_to_model() {
 
     let display_text = chat.bottom_pane.composer_text();
     assert!(
-        display_text.contains("[/var/.../image.png 24x42]"),
-        "expected shortened display placeholder, got {display_text:?}"
+        display_text.contains("[image.png 24x42]"),
+        "expected basename display placeholder, got {display_text:?}"
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -1147,8 +1147,8 @@ async fn submitting_image_shows_short_path_but_sends_full_path_to_model() {
     );
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("/var/.../image.png"),
-        "expected transcript to contain shortened placeholder, got {rendered:?}"
+        rendered.contains("image.png 24x42"),
+        "expected transcript to contain basename placeholder, got {rendered:?}"
     );
     assert!(
         !rendered.contains("/var/tmp/some/dir/image.png"),
@@ -1176,8 +1176,8 @@ async fn submitting_image_shows_short_path_but_sends_full_path_to_model() {
         "expected model text to contain full path, got {model_text:?}"
     );
     assert!(
-        !model_text.contains("/var/.../image.png"),
-        "expected model text not to contain shortened placeholder, got {model_text:?}"
+        !model_text.contains("[image.png 24x42]"),
+        "expected model text not to contain display placeholder, got {model_text:?}"
     );
 }
 

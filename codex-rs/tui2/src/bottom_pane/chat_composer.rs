@@ -193,33 +193,12 @@ impl ChatComposer {
     }
 
     fn display_label_for_image_placeholder(path: &Path) -> String {
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-            return "image".to_string();
-        };
-
-        // Avoid dumping very long absolute paths into the composer UI (common when attaching screenshots).
-        if !path.is_absolute() {
-            return path.display().to_string();
-        }
-
-        // Count normal path segments (including the file name).
-        let mut segments: Vec<String> = Vec::new();
-        for c in path.components() {
-            if let std::path::Component::Normal(seg) = c {
-                segments.push(seg.to_string_lossy().into_owned());
-            }
-        }
-
-        // Keep short absolute paths readable.
-        if segments.len() <= 2 {
-            return path.display().to_string();
-        }
-
-        let top = segments
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "...".to_string());
-        format!("/{top}/.../{file_name}")
+        // Keep the UI placeholder compact: show only the basename (pre-existing behavior).
+        // The model can still receive the full path via model_placeholder expansion.
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| "image".to_string())
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -3210,7 +3189,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[/tmp/image1.png 32x16] hi"),
+            InputResult::Submitted(text) => assert_eq!(text, "[image1.png 32x16] hi"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -3233,7 +3212,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[/tmp/image2.png 10x5]"),
+            InputResult::Submitted(text) => assert_eq!(text, "[image2.png 10x5]"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -3306,15 +3285,11 @@ mod tests {
         composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
         assert_eq!(composer.attached_images.len(), 1);
-        let expected_placeholder_prefix = format!(
-            "[{} 10x5]",
-            PathBuf::from("/tmp/image_multibyte.png").display()
-        );
         assert!(
             composer
                 .textarea
                 .text()
-                .starts_with(&expected_placeholder_prefix)
+                .starts_with("[image_multibyte.png 10x5]")
         );
     }
 
@@ -3362,7 +3337,7 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                display_placeholder: "[/tmp/image_dup2.png 10x5]".to_string(),
+                display_placeholder: "[image_dup2.png 10x5]".to_string(),
                 model_placeholder: "[/tmp/image_dup2.png 10x5]".to_string()
             }],
             composer.attached_images,
