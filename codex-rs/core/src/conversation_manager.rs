@@ -16,10 +16,9 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 use codex_protocol::ConversationId;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
@@ -307,30 +306,8 @@ impl ConversationManagerState {
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message
 /// (0-based) and all items that follow it.
 fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
-    // Work directly on rollout items, and cut the vector at the nth user message input.
     let items: Vec<RolloutItem> = history.get_rollout_items();
-
-    // Find indices of user message inputs in rollout order.
-    let mut user_positions: Vec<usize> = Vec::new();
-    for (idx, item) in items.iter().enumerate() {
-        if let RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) = item
-            && matches!(
-                crate::event_mapping::parse_turn_item(item),
-                Some(TurnItem::UserMessage(_))
-            )
-        {
-            user_positions.push(idx);
-        }
-    }
-
-    // If fewer than or equal to n user messages exist, treat as empty (out of range).
-    if user_positions.len() <= n {
-        return InitialHistory::New;
-    }
-
-    // Cut strictly before the nth user message (do not keep the nth itself).
-    let cut_idx = user_positions[n];
-    let rolled: Vec<RolloutItem> = items.into_iter().take(cut_idx).collect();
+    let rolled = truncation::truncate_rollout_before_nth_user_message_from_start(&items, n);
 
     if rolled.is_empty() {
         InitialHistory::New

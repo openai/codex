@@ -52,6 +52,8 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
     n_from_start: usize,
 ) -> Vec<RolloutItem> {
     let user_positions = user_message_positions_in_rollout(items);
+
+    // If fewer than or equal to n user messages exist, treat as empty (out of range).
     if user_positions.len() <= n_from_start {
         return Vec::new();
     }
