@@ -1280,8 +1280,8 @@ impl CodexMessageProcessor {
 
         let config = match derive_config_from_params(
             &self.cli_overrides,
-            forced_overrides,
             Some(request_overrides),
+            forced_overrides,
         )
         .await
         {
@@ -1335,7 +1335,7 @@ impl CodexMessageProcessor {
         );
 
         let config =
-            match derive_config_from_params(&self.cli_overrides, forced_overrides, params.config)
+            match derive_config_from_params(&self.cli_overrides, params.config, forced_overrides)
                 .await
             {
                 Ok(config) => config,
@@ -1578,8 +1578,8 @@ impl CodexMessageProcessor {
             );
             match derive_config_from_params(
                 &self.cli_overrides,
-                forced_overrides,
                 request_overrides,
+                forced_overrides,
             )
             .await
             {
@@ -2245,8 +2245,8 @@ impl CodexMessageProcessor {
 
                 derive_config_from_params(
                     &self.cli_overrides,
-                    forced_overrides,
                     Some(request_overrides),
+                    forced_overrides,
                 )
                 .await
             }
@@ -3363,16 +3363,16 @@ fn errors_to_info(
 
 /// Derive the effective [`Config`] by layering three override sources.
 ///
-/// Precedence (highest to lowest):
-/// - `forced_overrides`: strongly-typed "forced" values from the harness/app-server (e.g. `cwd`,
-///   sandbox/approval policy, model/provider, instructions).
-/// - `request_overrides`: per-request dotted-path overrides (`params.config`), converted JSON->TOML;
-///   applied after `cli_overrides`.
+/// Precedence (lowest to highest):
 /// - `cli_overrides`: process-wide startup `--config` flags.
+/// - `request_overrides`: per-request dotted-path overrides (`params.config`), converted JSON->TOML.
+/// - `forced_overrides`: strongly-typed overrides derived from the conversation/thread parameters
+///   (e.g. `cwd`, sandbox/approval policy, model/provider, instructions), plus a few app-server
+///   supplied values (e.g. `codex_linux_sandbox_exe`).
 async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
-    forced_overrides: ConfigOverrides,
     request_overrides: Option<HashMap<String, serde_json::Value>>,
+    forced_overrides: ConfigOverrides,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
         .iter()
