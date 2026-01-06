@@ -34,7 +34,7 @@ pub fn create_shell_command_sse_response(
     });
 
     let sse = format!(
-        "data: {}\n\ndata: DONE\n\n",
+        "data: {}\n\ndata: [DONE]\n\n",
         serde_json::to_string(&tool_call)?
     );
     Ok(sse)
@@ -53,7 +53,7 @@ pub fn create_final_assistant_message_sse_response(message: &str) -> anyhow::Res
     });
 
     let sse = format!(
-        "data: {}\n\ndata: DONE\n\n",
+        "data: {}\n\ndata: [DONE]\n\n",
         serde_json::to_string(&assistant_message)?
     );
     Ok(sse)
@@ -89,7 +89,7 @@ pub fn create_apply_patch_sse_response(
     });
 
     let sse = format!(
-        "data: {}\n\ndata: DONE\n\n",
+        "data: {}\n\ndata: [DONE]\n\n",
         serde_json::to_string(&tool_call)?
     );
     Ok(sse)
