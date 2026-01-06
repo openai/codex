@@ -2037,6 +2037,9 @@ async fn approvals_selection_popup_snapshot() {
 async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
+    let was_sandbox_enabled = codex_core::get_platform_sandbox().is_some();
+    let was_elevated_enabled = codex_core::is_windows_elevated_sandbox_enabled();
+
     chat.config.notices.hide_full_access_warning = None;
     chat.config.features.enable(Feature::WindowsSandbox);
     chat.config
@@ -2053,8 +2056,8 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     });
 
     // Avoid leaking sandbox global state into other tests.
-    set_windows_sandbox_enabled(true);
-    set_windows_elevated_sandbox_enabled(false);
+    set_windows_sandbox_enabled(was_sandbox_enabled);
+    set_windows_elevated_sandbox_enabled(was_elevated_enabled);
 }
 
 #[tokio::test]
