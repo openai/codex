@@ -94,8 +94,8 @@ impl AgentControl {
 
 /// When an agent is spawned "headless" (no UI/view attached), there may be no consumer polling
 /// `CodexConversation::next_event()`. The underlying event channel is unbounded, so the producer can
-/// accumulate events indefinitely. This drain task prevents that memory growth while still allowing
-/// `AgentBus` to be updated from the received events.
+/// accumulate events indefinitely. This drain task prevents that memory growth by polling and
+/// discarding events until shutdown.
 fn spawn_headless_drain(
     conversation: Arc<CodexConversation>,
     conversation_id: ConversationId,

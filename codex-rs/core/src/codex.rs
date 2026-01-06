@@ -982,11 +982,6 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
-        self.services
-            .agent_control
-            .bus
-            .on_event(self.conversation_id, &msg)
-            .await;
         let legacy_source = msg.clone();
         let event = Event {
             id: turn_context.sub_id.clone(),
@@ -1005,6 +1000,11 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        self.services
+            .agent_control
+            .bus
+            .on_event(self.conversation_id, &event.msg)
+            .await;
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;

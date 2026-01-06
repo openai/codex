@@ -140,11 +140,6 @@ impl ConversationManager {
         self.state.get_conversation(conversation_id).await
     }
 
-    /// Submit an `Op` to an existing conversation.
-    pub async fn send_op(&self, conversation_id: ConversationId, op: Op) -> CodexResult<String> {
-        self.state.send_op(conversation_id, op).await
-    }
-
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
         self.state
             .spawn_conversation(
@@ -351,10 +346,12 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::make_session_and_context;
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
+    use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -397,11 +394,62 @@ mod tests {
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
             },
+            assistant_msg("a4"),
         ];
 
-        let history =
-            InitialHistory::Forked(items.into_iter().map(RolloutItem::ResponseItem).collect());
-        let forked = truncate_before_nth_user_message(history, 1);
-        assert_matches!(forked, InitialHistory::Forked(rolled) if rolled.len() == 3);
+        let initial: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        let truncated = truncate_before_nth_user_message(InitialHistory::Forked(initial), 1);
+        let got_items = truncated.get_rollout_items();
+        let expected_items = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+        ];
+        assert_eq!(
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected_items).unwrap()
+        );
+
+        let initial2: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
+        assert_matches!(truncated2, InitialHistory::New);
+    }
+
+    #[tokio::test]
+    async fn ignores_session_prefix_messages_when_truncating() {
+        let (session, turn_context) = make_session_and_context().await;
+        let mut items = session.build_initial_context(&turn_context);
+        items.push(user_msg("feature request"));
+        items.push(assistant_msg("ack"));
+        items.push(user_msg("second question"));
+        items.push(assistant_msg("answer"));
+
+        let rollout_items: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+
+        let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
+        let got_items = truncated.get_rollout_items();
+
+        let expected: Vec<RolloutItem> = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+        ];
+
+        assert_eq!(
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
     }
 }
