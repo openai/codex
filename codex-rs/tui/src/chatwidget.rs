@@ -3465,6 +3465,7 @@ impl ChatWidget {
         Ok(())
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
         if enabled {
             self.config.features.enable(feature);
