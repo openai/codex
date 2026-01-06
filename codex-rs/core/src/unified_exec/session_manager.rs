@@ -16,8 +16,12 @@ use crate::codex::TurnContext;
 use crate::exec_env::create_env;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
@@ -141,6 +145,19 @@ impl UnifiedExecSessionManager {
         };
 
         let transcript = Arc::new(tokio::sync::Mutex::new(CommandTranscript::default()));
+        let event_ctx = ToolEventCtx::new(
+            context.session.as_ref(),
+            context.turn.as_ref(),
+            &context.call_id,
+            None,
+        );
+        let emitter = ToolEmitter::unified_exec(
+            &request.command,
+            cwd.clone(),
+            ExecCommandSource::UnifiedExecStartup,
+            Some(request.process_id.clone()),
+        );
+        emitter.emit(event_ctx, ToolEventStage::Begin).await;
         start_streaming_output(&session, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
