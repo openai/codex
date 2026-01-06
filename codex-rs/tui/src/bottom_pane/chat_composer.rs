@@ -683,7 +683,6 @@ impl ChatComposer {
             if self.paste_burst.try_append_char_if_active(ch, now) {
                 return (InputResult::None, true);
             }
-            let mut flushed_pending = false;
             // Non-ASCII input often comes from IMEs and can arrive in quick bursts.
             // We do not want to hold the first char (flicker suppression) on this path, but we
             // still want to detect paste-like bursts. Before applying any non-ASCII input, flush
@@ -691,7 +690,6 @@ impl ChatComposer {
             // we don't carry that transient state forward.
             if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
                 self.handle_paste(pasted);
-                flushed_pending = true;
             }
             if let Some(decision) = self.paste_burst.on_plain_char_no_hold(now) {
                 match decision {
@@ -716,11 +714,6 @@ impl ChatComposer {
                     }
                     _ => unreachable!("on_plain_char_no_hold returned unexpected variant"),
                 }
-            }
-            // Keep the Enter suppression window alive while a burst is in-flight. If we flushed a
-            // buffered burst above, handle_paste() clears the window and we should not re-extend it.
-            if !flushed_pending {
-                self.paste_burst.extend_window(now);
             }
         }
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
@@ -2330,14 +2323,18 @@ mod tests {
             false,
         );
 
+        // Force an active paste burst so this test doesn't depend on tight timing.
+        composer
+            .paste_burst
+            .begin_with_retro_grabbed(String::new(), Instant::now());
+
         for ch in ['h', 'i', '?', 't', 'h', 'e', 'r', 'e'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         assert!(composer.is_in_paste_burst());
         assert_eq!(composer.textarea.text(), "");
 
-        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
-        let _ = composer.flush_paste_burst_if_due();
+        let _ = flush_after_paste_burst(&mut composer);
 
         assert_eq!(composer.textarea.text(), "hi?there");
         assert_ne!(composer.footer_mode, FooterMode::ShortcutOverlay);
@@ -2547,7 +2544,7 @@ mod tests {
     }
 
     #[test]
-    fn non_ascii_start_extends_burst_window_for_enter() {
+    fn enter_submits_after_single_non_ascii_char() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -2562,9 +2559,37 @@ mod tests {
             false,
         );
 
-        // Simulate pasting "你好\nhi" - non-ASCII chars first, then Enter, then ASCII
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, "あ"),
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn non_ascii_burst_treats_enter_as_newline() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Simulate pasting "你好你\nhi" - non-ASCII chars first, then Enter, then ASCII.
+        // We require enough fast chars to enter burst buffering before suppressing Enter.
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE));
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('好'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE));
 
         // The Enter should be treated as a newline, not a submit
         let (result, _) =
