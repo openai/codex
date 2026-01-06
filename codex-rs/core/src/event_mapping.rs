@@ -39,7 +39,8 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 if is_session_prefix(text) || is_user_shell_command_text(text) {
                     return None;
                 }
-                // user_ide_context is bundled with the user's prompt in its own content item
+                // user_ide_context is bundled with the user's prompt in its own content item.
+                // skip over it, but there might be subsequent content items to include
                 if is_user_ide_context(text) {
                     continue;
                 }
@@ -140,7 +141,7 @@ mod tests {
     use super::parse_turn_item;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::TurnItem;
-    
+
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemContent;
     use codex_protocol::models::ReasoningItemReasoningSummary;
