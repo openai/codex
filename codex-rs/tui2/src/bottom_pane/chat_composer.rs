@@ -1729,7 +1729,9 @@ impl ChatComposer {
 
         let builtin_match = built_in_slash_commands()
             .into_iter()
-            .filter(|(_, cmd)| windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox)
+            .filter(|(_, cmd)| {
+                windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
+            })
             .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {

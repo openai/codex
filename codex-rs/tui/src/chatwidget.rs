@@ -1743,9 +1743,9 @@ impl ChatWidget {
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
-                    let windows_degraded_sandbox_enabled =
-                        codex_core::get_platform_sandbox().is_some()
-                            && !codex_core::is_windows_elevated_sandbox_enabled();
+                    let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox()
+                        .is_some()
+                        && !codex_core::is_windows_elevated_sandbox_enabled();
                     if !windows_degraded_sandbox_enabled {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
@@ -1769,7 +1769,8 @@ impl ChatWidget {
                         return;
                     }
 
-                    self.app_event_tx.send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                    self.app_event_tx
+                        .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -2886,8 +2887,8 @@ impl ChatWidget {
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
-        let show_elevate_sandbox_hint = windows_degraded_sandbox_enabled
-            && presets.iter().any(|preset| preset.id == "auto");
+        let show_elevate_sandbox_hint =
+            windows_degraded_sandbox_enabled && presets.iter().any(|preset| preset.id == "auto");
 
         for preset in presets.into_iter() {
             let is_current =

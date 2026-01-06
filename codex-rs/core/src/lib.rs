@@ -115,9 +115,9 @@ pub use command_safety::is_safe_command;
 pub use exec_policy::ExecPolicyError;
 pub use exec_policy::load_exec_policy;
 pub use safety::get_platform_sandbox;
-pub use safety::set_windows_sandbox_enabled;
 pub use safety::is_windows_elevated_sandbox_enabled;
 pub use safety::set_windows_elevated_sandbox_enabled;
+pub use safety::set_windows_sandbox_enabled;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
 pub use codex_protocol::protocol;

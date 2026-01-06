@@ -452,12 +452,10 @@ impl Renderable for ListSelectionView {
             return;
         }
 
-        let footer_rows = u16::from(self.footer_note.is_some()) + u16::from(self.footer_hint.is_some());
-        let [content_area, footer_area] = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(footer_rows),
-        ])
-        .areas(area);
+        let footer_rows =
+            u16::from(self.footer_note.is_some()) + u16::from(self.footer_hint.is_some());
+        let [content_area, footer_area] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
 
         Block::default()
             .style(user_message_style())
