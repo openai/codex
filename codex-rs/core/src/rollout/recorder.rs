@@ -392,6 +392,118 @@ async fn rollout_writer(
     Ok(())
 }
 
+async fn rewrite_session_title(
+    writer: &mut JsonlWriter,
+    rollout_path: &Path,
+    title: &str,
+) -> std::io::Result<()> {
+    // Flush and close the writer's file handle before swapping the on-disk file,
+    // otherwise subsequent appends would keep writing to the old inode/handle.
+    writer.file.flush().await?;
+
+    // Compute the rewritten contents first so any read/parse/legacy-format errors
+    // don't disturb the active writer handle.
+    let rewritten_contents = rewrite_first_session_meta_line_title(rollout_path, title).await?;
+
+    // Close the active handle using a portable placeholder.
+    let placeholder = tokio::fs::File::from_std(tempfile::tempfile()?);
+    let old_file = std::mem::replace(&mut writer.file, placeholder);
+    drop(old_file);
+
+    if let Err(e) = replace_rollout_file(rollout_path, rewritten_contents).await {
+        // Best-effort: ensure the writer keeps pointing at the rollout file, not the placeholder.
+        let reopened = tokio::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(rollout_path)
+            .await;
+        if let Ok(reopened) = reopened {
+            let placeholder = std::mem::replace(&mut writer.file, reopened);
+            drop(placeholder);
+        }
+        return Err(e);
+    }
+
+    // Re-open the rollout for appends and drop the placeholder handle.
+    let reopened = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(rollout_path)
+        .await?;
+    let placeholder = std::mem::replace(&mut writer.file, reopened);
+    drop(placeholder);
+
+    Ok(())
+}
+
+async fn rewrite_first_session_meta_line_title(
+    rollout_path: &Path,
+    title: &str,
+) -> std::io::Result<String> {
+    let text = tokio::fs::read_to_string(rollout_path).await?;
+    let mut rewritten = false;
+
+    // Rewrite the first non-empty line only. Since 43809a454 ("Introduce rollout items",
+    // 2025-09-09), rollouts we write always start with a RolloutLine wrapping
+    // RolloutItem::SessionMeta(_).
+    let mut out = String::with_capacity(text.len() + 32);
+    for line in text.lines() {
+        if !rewritten && !line.trim().is_empty() {
+            out.push_str(&rewrite_session_meta_line_title(line, title)?);
+            rewritten = true;
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+
+    if !rewritten {
+        return Err(IoError::other(
+            "failed to set session title: rollout has no SessionMeta line",
+        ));
+    }
+
+    Ok(out)
+}
+
+fn rewrite_session_meta_line_title(line: &str, title: &str) -> std::io::Result<String> {
+    let mut rollout_line = serde_json::from_str::<RolloutLine>(line).map_err(IoError::other)?;
+    let RolloutItem::SessionMeta(meta_line) = &mut rollout_line.item else {
+        return Err(IoError::other(
+            "failed to set session title: rollout has no SessionMeta line",
+        ));
+    };
+
+    meta_line.meta.title = Some(title.to_string());
+    serde_json::to_string(&rollout_line).map_err(IoError::other)
+}
+
+async fn replace_rollout_file(path: &Path, contents: String) -> std::io::Result<()> {
+    let Some(dir) = path.parent() else {
+        return Err(IoError::other("rollout path has no parent directory"));
+    };
+
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    use std::io::Write as _;
+    tmp.write_all(contents.as_bytes())?;
+    tmp.flush()?;
+
+    let (_file, tmp_path) = tmp.keep()?;
+    drop(_file);
+
+    #[cfg(windows)]
+    {
+        let _ = std::fs::remove_file(path);
+        std::fs::rename(&tmp_path, path)?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(&tmp_path, path)?;
+    }
+
+    Ok(())
+}
+
 struct JsonlWriter {
     file: tokio::fs::File,
 }
@@ -416,6 +528,68 @@ impl JsonlWriter {
         json.push('\n');
         self.file.write_all(json.as_bytes()).await?;
         self.file.flush().await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tokio::io::AsyncWriteExt;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn set_session_title_rewrites_first_session_meta_line() -> std::io::Result<()> {
+        let config = crate::config::test_config();
+
+        let conversation_id =
+            ConversationId::from_string(&Uuid::new_v4().to_string()).expect("uuid should parse");
+        let recorder = RolloutRecorder::new(
+            &config,
+            RolloutRecorderParams::new(conversation_id, None, SessionSource::Cli),
+        )
+        .await?;
+
+        recorder
+            .set_session_title("My Session Title".to_string())
+            .await?;
+
+        let text = tokio::fs::read_to_string(&recorder.rollout_path).await?;
+        let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        let rollout_line: RolloutLine = serde_json::from_str(first_line)?;
+        let RolloutItem::SessionMeta(meta_line) = rollout_line.item else {
+            panic!("expected SessionMeta as first rollout line");
+        };
+        assert_eq!(meta_line.meta.title.as_deref(), Some("My Session Title"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_session_title_failure_does_not_redirect_future_writes() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let rollout_path = dir.path().join("rollout.jsonl");
+
+        // Invalid JSON as the first non-empty line triggers a parse error in the rewrite step.
+        tokio::fs::write(&rollout_path, "{\n").await?;
+
+        let file = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&rollout_path)
+            .await?;
+        let mut writer = JsonlWriter { file };
+
+        assert!(
+            rewrite_session_title(&mut writer, &rollout_path, "title")
+                .await
+                .is_err()
+        );
+
+        writer.file.write_all(b"AFTER\n").await?;
+        writer.file.flush().await?;
+
+        let text = tokio::fs::read_to_string(&rollout_path).await?;
+        assert!(text.trim_end().ends_with("AFTER"));
         Ok(())
     }
 }
