@@ -1,6 +1,6 @@
-mod pipe;
+pub mod pipe;
 mod process;
-mod pty;
+pub mod pty;
 #[cfg(windows)]
 mod win;
 #[cfg(test)]
