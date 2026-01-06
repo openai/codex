@@ -9,7 +9,6 @@ use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
 use crate::diff_render::DiffSummary;
-use crate::exec_command::render_for_approval_prefix_label;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::key_hint;
@@ -462,9 +461,13 @@ fn exec_options(
     .chain(
         proposed_execpolicy_amendment
             .filter(|_| features.enabled(Feature::ExecPolicy))
-            .map(|prefix| {
-                let rendered_prefix = render_for_approval_prefix_label(prefix.command());
-                ApprovalOption {
+            .and_then(|prefix| {
+                let rendered_prefix = strip_bash_lc_and_escape(prefix.command());
+                if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
+                    return None;
+                }
+
+                Some(ApprovalOption {
                     label: format!(
                         "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
                     ),
@@ -475,7 +478,7 @@ fn exec_options(
                     ),
                     display_shortcut: None,
                     additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
-                }
+                })
             }),
     )
     .chain([ApprovalOption {

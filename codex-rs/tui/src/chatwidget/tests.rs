@@ -2465,10 +2465,11 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Snapshot test: approval modal with a proposed execpolicy prefix that is long enough
-// to trigger truncation in the selection label.
+// Snapshot test: approval modal with a proposed execpolicy prefix that is multi-line;
+// we should not offer adding it to execpolicy.
 #[tokio::test]
-async fn approval_modal_exec_multiline_prefix_truncates_snapshot() -> anyhow::Result<()> {
+async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
+-> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.approval_policy.set(AskForApproval::OnRequest)?;
 
@@ -2498,10 +2499,13 @@ async fn approval_modal_exec_multiline_prefix_truncates_snapshot() -> anyhow::Re
     terminal.set_viewport_area(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw approval modal (multiline prefix truncation)");
+        .expect("draw approval modal (multiline prefix)");
     let contents = terminal.backend().vt100().screen().contents();
-    assert!(contents.contains("(truncated)"));
-    assert_snapshot!("approval_modal_exec_multiline_prefix_truncates", contents);
+    assert!(!contents.contains("don't ask again"));
+    assert_snapshot!(
+        "approval_modal_exec_multiline_prefix_no_execpolicy",
+        contents
+    );
 
     Ok(())
 }
