@@ -1249,6 +1249,22 @@ pub(crate) enum SyncFromStorageResult {
     Applied { changed: bool },
 }
 
+/// Per-request state used to coordinate a limited 401 recovery flow.
+///
+/// This is intentionally managed by `AuthManager` so callers don't need to
+/// understand the recovery stages.
+#[derive(Default, Debug)]
+pub(crate) struct UnauthorizedRecovery {
+    synced_from_storage: bool,
+    refreshed_token: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnauthorizedRecoveryDecision {
+    Retry,
+    GiveUp,
+}
+
 impl AuthManager {
     /// Create a new manager loading the initial auth using the provided
     /// preferred auth method. Errors loading auth are swallowed; `auth()` will
@@ -1520,6 +1536,48 @@ impl AuthManager {
                     return Err(RefreshTokenError::Permanent(failed));
                 }
                 Err(err) => return Err(err),
+            }
+        }
+    }
+
+    pub(crate) async fn recover_from_unauthorized_for_request(
+        &self,
+        expected: &CodexAuth,
+        recovery: &mut UnauthorizedRecovery,
+    ) -> Result<UnauthorizedRecoveryDecision, RefreshTokenError> {
+        if recovery.refreshed_token {
+            return Ok(UnauthorizedRecoveryDecision::GiveUp);
+        }
+
+        if expected.mode != AuthMode::ChatGPT {
+            return Ok(UnauthorizedRecoveryDecision::GiveUp);
+        }
+
+        if !recovery.synced_from_storage {
+            let sync = self
+                .sync_from_storage_for_request(expected)
+                .await
+                .map_err(RefreshTokenError::Transient)?;
+            recovery.synced_from_storage = true;
+            match sync {
+                SyncFromStorageResult::Applied { changed } => {
+                    tracing::debug!(changed, "synced ChatGPT credentials from storage after 401");
+                    Ok(UnauthorizedRecoveryDecision::Retry)
+                }
+                SyncFromStorageResult::SkippedMissingIdentity => {
+                    Ok(UnauthorizedRecoveryDecision::Retry)
+                }
+                SyncFromStorageResult::LoggedOut | SyncFromStorageResult::IdentityMismatch => {
+                    Ok(UnauthorizedRecoveryDecision::GiveUp)
+                }
+            }
+        } else {
+            match self.refresh_token_for_request(expected).await? {
+                Some(_) => {
+                    recovery.refreshed_token = true;
+                    Ok(UnauthorizedRecoveryDecision::Retry)
+                }
+                None => Ok(UnauthorizedRecoveryDecision::GiveUp),
             }
         }
     }

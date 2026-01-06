@@ -17,7 +17,6 @@ use codex_api::TransportError;
 use codex_api::common::Reasoning;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
-use codex_app_server_protocol::AuthMode;
 use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -153,7 +152,7 @@ impl ModelClient {
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
-        let mut recovery = UnauthorizedRecovery::default();
+        let mut recovery = crate::auth::UnauthorizedRecovery::default();
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
             let api_provider = self
@@ -242,7 +241,7 @@ impl ModelClient {
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
-        let mut recovery = UnauthorizedRecovery::default();
+        let mut recovery = crate::auth::UnauthorizedRecovery::default();
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
             let api_provider = self
@@ -485,57 +484,27 @@ where
 /// the mapped `CodexErr` is returned to the caller.
 async fn handle_unauthorized(
     status: StatusCode,
-    recovery: &mut UnauthorizedRecovery,
+    recovery: &mut crate::auth::UnauthorizedRecovery,
     auth_manager: &Option<Arc<AuthManager>>,
     auth: &Option<crate::auth::CodexAuth>,
 ) -> Result<()> {
-    if recovery.refreshed_token {
-        return Err(map_unauthorized_status(status));
-    }
-
     if let Some(manager) = auth_manager.as_ref()
         && let Some(auth) = auth.as_ref()
-        && auth.mode == AuthMode::ChatGPT
     {
-        if !recovery.synced_from_storage {
-            let sync = manager
-                .sync_from_storage_for_request(auth)
-                .await
-                .map_err(CodexErr::Io)?;
-            recovery.synced_from_storage = true;
-            match sync {
-                crate::auth::SyncFromStorageResult::Applied { changed } => {
-                    tracing::debug!(changed, "synced ChatGPT credentials from storage after 401");
-                    Ok(())
-                }
-                crate::auth::SyncFromStorageResult::SkippedMissingIdentity => Ok(()),
-                crate::auth::SyncFromStorageResult::LoggedOut
-                | crate::auth::SyncFromStorageResult::IdentityMismatch => {
-                    Err(map_unauthorized_status(status))
-                }
+        match manager
+            .recover_from_unauthorized_for_request(auth, recovery)
+            .await
+        {
+            Ok(crate::auth::UnauthorizedRecoveryDecision::Retry) => Ok(()),
+            Ok(crate::auth::UnauthorizedRecoveryDecision::GiveUp) => {
+                Err(map_unauthorized_status(status))
             }
-        } else {
-            match manager.refresh_token_for_request(auth).await {
-                Ok(Some(_)) => {
-                    recovery.refreshed_token = true;
-                    Ok(())
-                }
-                Ok(None) => Err(map_unauthorized_status(status)),
-                Err(RefreshTokenError::Permanent(failed)) => {
-                    Err(CodexErr::RefreshTokenFailed(failed))
-                }
-                Err(RefreshTokenError::Transient(other)) => Err(CodexErr::Io(other)),
-            }
+            Err(RefreshTokenError::Permanent(failed)) => Err(CodexErr::RefreshTokenFailed(failed)),
+            Err(RefreshTokenError::Transient(other)) => Err(CodexErr::Io(other)),
         }
     } else {
         Err(map_unauthorized_status(status))
     }
-}
-
-#[derive(Default, Debug)]
-struct UnauthorizedRecovery {
-    synced_from_storage: bool,
-    refreshed_token: bool,
 }
 
 fn map_unauthorized_status(status: StatusCode) -> CodexErr {
