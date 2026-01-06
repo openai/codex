@@ -1580,7 +1580,9 @@ impl ChatWidget {
                     let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox()
                         .is_some()
                         && !codex_core::is_windows_elevated_sandbox_enabled();
-                    if !windows_degraded_sandbox_enabled {
+                    if !windows_degraded_sandbox_enabled
+                        || !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                    {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
                         return;
@@ -2641,8 +2643,9 @@ impl ChatWidget {
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
-        let show_elevate_sandbox_hint =
-            windows_degraded_sandbox_enabled && presets.iter().any(|preset| preset.id == "auto");
+        let show_elevate_sandbox_hint = codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            && windows_degraded_sandbox_enabled
+            && presets.iter().any(|preset| preset.id == "auto");
 
         for preset in presets.into_iter() {
             let is_current =
@@ -2671,10 +2674,12 @@ impl ChatWidget {
                 #[cfg(target_os = "windows")]
                 {
                     if codex_core::get_platform_sandbox().is_none() {
-                        if codex_core::windows_sandbox::sandbox_setup_is_complete(
-                            self.config.codex_home.as_path(),
-                        ) {
-                            let preset_clone = preset.clone();
+                        let preset_clone = preset.clone();
+                        if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                            && codex_core::windows_sandbox::sandbox_setup_is_complete(
+                                self.config.codex_home.as_path(),
+                            )
+                        {
                             vec![Box::new(move |tx| {
                                 tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                                     preset: preset_clone.clone(),
@@ -2682,7 +2687,6 @@ impl ChatWidget {
                                 });
                             })]
                         } else {
-                            let preset_clone = preset.clone();
                             vec![Box::new(move |tx| {
                                 tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
                                     preset: preset_clone.clone(),
@@ -2990,6 +2994,53 @@ impl ChatWidget {
     #[cfg(target_os = "windows")]
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
+
+        if !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
+            // Legacy flow (pre-NUX): explain the experimental sandbox and let the user enable it
+            // directly (no elevation prompts).
+            let mut header = ColumnRenderable::new();
+            header.push(*Box::new(
+                Paragraph::new(vec![
+                    line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
+                    line!["Learn more: https://developers.openai.com/codex/windows"],
+                ])
+                .wrap(Wrap { trim: false }),
+            ));
+
+            let preset_clone = preset;
+            let items = vec![
+                SelectionItem {
+                    name: "Enable experimental sandbox".to_string(),
+                    description: None,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset: preset_clone.clone(),
+                            mode: WindowsSandboxEnableMode::Legacy,
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Go back".to_string(),
+                    description: None,
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::OpenApprovalsPopup);
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ];
+
+            self.bottom_pane.show_selection_view(SelectionViewParams {
+                title: None,
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                header: Box::new(header),
+                ..Default::default()
+            });
+            return;
+        }
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(

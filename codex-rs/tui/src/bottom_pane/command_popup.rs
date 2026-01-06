@@ -17,6 +17,7 @@ use std::collections::HashSet;
 
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
+        && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
         && codex_core::get_platform_sandbox().is_some()
         && !codex_core::is_windows_elevated_sandbox_enabled()
 }

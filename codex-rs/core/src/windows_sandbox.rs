@@ -2,6 +2,12 @@ use crate::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Kill switch for the elevated sandbox NUX on Windows.
+///
+/// When false, revert to the previous sandbox NUX, which only
+/// prompts users to enable the legacy sandbox feature.
+pub const ELEVATED_SANDBOX_NUX_ENABLED: bool = true;
+
 #[cfg(target_os = "windows")]
 pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
     codex_windows_sandbox::sandbox_setup_is_complete(codex_home)
