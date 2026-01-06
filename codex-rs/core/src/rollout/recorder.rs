@@ -422,12 +422,28 @@ async fn rewrite_session_title(
     // otherwise subsequent appends would keep writing to the old inode/handle.
     writer.file.flush().await?;
 
+    // Compute the rewritten contents first so any read/parse/legacy-format errors
+    // don't disturb the active writer handle.
+    let rewritten_contents = rewrite_first_session_meta_line_title(rollout_path, title).await?;
+
     // Close the active handle using a portable placeholder.
     let placeholder = tokio::fs::File::from_std(tempfile::tempfile()?);
     let old_file = std::mem::replace(&mut writer.file, placeholder);
     drop(old_file);
 
-    update_first_session_meta_line_title(rollout_path, title).await?;
+    if let Err(e) = replace_rollout_file(rollout_path, rewritten_contents).await {
+        // Best-effort: ensure the writer keeps pointing at the rollout file, not the placeholder.
+        let reopened = tokio::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(rollout_path)
+            .await;
+        if let Ok(reopened) = reopened {
+            let placeholder = std::mem::replace(&mut writer.file, reopened);
+            drop(placeholder);
+        }
+        return Err(e);
+    }
 
     // Re-open the rollout for appends and drop the placeholder handle.
     let reopened = tokio::fs::OpenOptions::new()
@@ -440,10 +456,10 @@ async fn rewrite_session_title(
     Ok(())
 }
 
-async fn update_first_session_meta_line_title(
+async fn rewrite_first_session_meta_line_title(
     rollout_path: &Path,
     title: &str,
-) -> std::io::Result<()> {
+) -> std::io::Result<String> {
     let text = tokio::fs::read_to_string(rollout_path).await?;
     let mut rewritten = false;
 
@@ -467,7 +483,7 @@ async fn update_first_session_meta_line_title(
         ));
     }
 
-    replace_rollout_file(rollout_path, out).await
+    Ok(out)
 }
 
 fn rewrite_session_meta_line_title(line: &str, title: &str) -> std::io::Result<String> {
@@ -541,6 +557,7 @@ impl JsonlWriter {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use tokio::io::AsyncWriteExt;
     use uuid::Uuid;
 
     #[tokio::test]
@@ -566,6 +583,34 @@ mod tests {
             panic!("expected SessionMeta as first rollout line");
         };
         assert_eq!(meta_line.meta.title.as_deref(), Some("My Session Title"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_session_title_failure_does_not_redirect_future_writes() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let rollout_path = dir.path().join("rollout.jsonl");
+
+        // Invalid JSON as the first non-empty line triggers a parse error in the rewrite step.
+        tokio::fs::write(&rollout_path, "{\n").await?;
+
+        let file = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&rollout_path)
+            .await?;
+        let mut writer = JsonlWriter { file };
+
+        assert!(
+            rewrite_session_title(&mut writer, &rollout_path, "title")
+                .await
+                .is_err()
+        );
+
+        writer.file.write_all(b"AFTER\n").await?;
+        writer.file.flush().await?;
+
+        let text = tokio::fs::read_to_string(&rollout_path).await?;
+        assert!(text.trim_end().ends_with("AFTER"));
         Ok(())
     }
 }
