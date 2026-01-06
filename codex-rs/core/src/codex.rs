@@ -1028,6 +1028,25 @@ impl Session {
         }
     }
 
+    /// Persist the event to the rollout file, flush it, and only then deliver it to clients.
+    ///
+    /// Most events can be delivered immediately after queueing the rollout write, but some
+    /// clients (e.g. app-server thread/rollback) re-read the rollout file synchronously on
+    /// receipt of the event and depend on the marker already being visible on disk.
+    pub(crate) async fn send_event_raw_flushed(&self, event: Event) {
+        // Record the last known agent status.
+        if let Some(status) = agent_status_from_event(&event.msg) {
+            let mut guard = self.agent_status.write().await;
+            *guard = status;
+        }
+        self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
+            .await;
+        self.flush_rollout().await;
+        if let Err(e) = self.tx_event.send(event).await {
+            error!("failed to send tool call event: {e}");
+        }
+    }
+
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
             turn_context,
@@ -2100,16 +2119,11 @@ mod handlers {
         sess.replace_history(history.get_history()).await;
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
-        sess.send_event_raw(Event {
+        sess.send_event_raw_flushed(Event {
             id: turn_context.sub_id.clone(),
             msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
         })
         .await;
-
-        // Ensure the rollback event msg is flushed to the rollout file before the event is
-        // delivered to clients. In app-server, we re-read the rollout file immediately in order
-        // to return the updated Thread object.
-        sess.flush_rollout().await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
