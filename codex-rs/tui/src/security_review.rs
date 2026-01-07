@@ -13839,7 +13839,7 @@ fn build_threat_model_prompt(repository_summary: &str, spec: &SpecGenerationOutc
 
 fn build_threat_model_retry_prompt(base_prompt: &str, previous_output: &str) -> String {
     format!(
-        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required subsections (Primary components, Trust boundaries, Components & Trust Boundary Diagram, Assets, Attacker model, Entry points, Top abuse paths) as `###` headings, followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
+        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required subsections (Primary components, Trust Boundaries (including a `#### Diagram` mermaid block), Assets, Attacker model, Entry points, Top abuse paths) as `###` headings, followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
     )
 }
 
@@ -16464,6 +16464,7 @@ fn ensure_threat_model_heading(markdown: String) -> String {
 
 fn nest_threat_model_subsections(markdown: String) -> String {
     let mut out: Vec<String> = Vec::new();
+    let mut seen_trust_boundaries = false;
     for line in markdown.lines() {
         let trimmed = line.trim_start();
         let Some((hashes, rest)) = trimmed.split_once(' ') else {
@@ -16480,16 +16481,31 @@ fn nest_threat_model_subsections(markdown: String) -> String {
             .trim()
             .trim_end_matches(':')
             .to_ascii_lowercase();
+        if matches!(
+            normalized.as_str(),
+            "trust boundaries" | "trust boundary" | "trust-boundaries"
+        ) {
+            seen_trust_boundaries = true;
+            out.push("### Trust Boundaries".to_string());
+            continue;
+        }
+        if matches!(
+            normalized.as_str(),
+            "components & trust boundary diagram" | "components and trust boundary diagram"
+        ) {
+            if seen_trust_boundaries {
+                out.push("#### Diagram".to_string());
+            } else {
+                seen_trust_boundaries = true;
+                out.push("### Trust Boundaries".to_string());
+                out.push(String::new());
+                out.push("#### Diagram".to_string());
+            }
+            continue;
+        }
         let is_threat_model_subsection = matches!(
             normalized.as_str(),
-            "primary components"
-                | "trust boundaries"
-                | "components & trust boundary diagram"
-                | "components and trust boundary diagram"
-                | "assets"
-                | "attacker model"
-                | "entry points"
-                | "top abuse paths"
+            "primary components" | "assets" | "attacker model" | "entry points" | "top abuse paths"
         );
         if is_threat_model_subsection {
             let title = heading_text.trim_matches('`').trim().trim_end_matches(':');
