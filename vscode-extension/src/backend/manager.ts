@@ -604,7 +604,7 @@ export class BackendManager implements vscode.Disposable {
     await proc.threadRewind({
       threadId: session.threadId,
       turnIndex: args.turnIndex,
-      scope: "both",
+      scope: "conversation",
     });
   }
 

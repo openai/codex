@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as util from "node:util";
 import { parse as shellParse } from "shell-quote";
 import * as vscode from "vscode";
 import { BackendManager } from "./backend/manager";
@@ -81,6 +82,33 @@ async function withTimeout<T>(
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
   }
+}
+
+function formatUnknownError(err: unknown): string {
+  if (err instanceof Error) return err.stack ?? err.message;
+  if (typeof err === "string") return err;
+  if (typeof err === "number" || typeof err === "boolean" || err === null)
+    return String(err);
+
+  if (typeof err === "object" && err !== null) {
+    const record = err as Record<string, unknown>;
+    const msg = record["message"];
+    const code = record["code"];
+    if (typeof msg === "string" && (typeof code === "string" || typeof code === "number")) {
+      return `code=${String(code)} message=${msg}`;
+    }
+    if (typeof msg === "string") return msg;
+  }
+
+  const inspected = util.inspect(err, {
+    depth: 6,
+    breakLength: 120,
+    maxArrayLength: 50,
+    maxStringLength: 10_000,
+  });
+  const maxLen = 12_000;
+  if (inspected.length <= maxLen) return inspected;
+  return `${inspected.slice(0, maxLen)}…(truncated ${inspected.length - maxLen} chars)`;
 }
 
 function requireExtensionContext(): vscode.ExtensionContext {
@@ -322,8 +350,10 @@ type SessionRuntime = {
   blocks: ChatBlock[];
   latestDiff: string | null;
   statusText: string | null;
+  uiHydrationBlockedText: string | null;
   tokenUsage: ThreadTokenUsage | null;
   sending: boolean;
+  reloading: boolean;
   compactInFlight: boolean;
   pendingCompactBlockId: string | null;
   streamingAssistantItemIds: Set<string>;
@@ -445,9 +475,10 @@ export function activate(context: vscode.ExtensionContext): void {
   chatView = new ChatViewProvider(
     context,
     () => buildChatState(),
-    async (text, images = [], rewind = null) => {
-      if (!backendManager) throw new Error("backendManager is not initialized");
-      if (!sessions) throw new Error("sessions is not initialized");
+	    async (text, images = [], rewind = null) => {
+	      if (!backendManager) throw new Error("backendManager is not initialized");
+	      if (!sessions) throw new Error("sessions is not initialized");
+	      const bm = backendManager;
 
       const session = activeSessionId
         ? sessions.getById(activeSessionId)
@@ -502,18 +533,19 @@ export function activate(context: vscode.ExtensionContext): void {
         }
 
         const rewindBlockId = newLocalId("info");
-        upsertBlock(session.id, {
-          id: rewindBlockId,
-          type: "info",
-          title: "Rewind requested",
-          text: `Rewinding to turn #${turnIndex}…`,
-        });
-        chatView?.refresh();
 
-        try {
+        const runRewind = async (): Promise<void> => {
+          upsertBlock(session.id, {
+            id: rewindBlockId,
+            type: "info",
+            title: "Rewind requested",
+            text: `Rewinding to turn #${turnIndex}…`,
+          });
+          chatView?.refresh();
+
           await withTimeout(
             "thread/rewind",
-            backendManager.threadRewind(session, { turnIndex }),
+            bm.threadRewind(session, { turnIndex }),
             REWIND_STEP_TIMEOUT_MS,
           );
 
@@ -527,7 +559,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
           const reloaded = await withTimeout(
             "thread/reload",
-            backendManager.reloadSession(session, getSessionModelState()),
+            bm.reloadSession(session, getSessionModelState()),
             REWIND_STEP_TIMEOUT_MS,
           );
           hydrateRuntimeFromThread(session.id, reloaded.thread, {
@@ -541,15 +573,20 @@ export function activate(context: vscode.ExtensionContext): void {
             text: `Rewound to turn #${turnIndex}.`,
           });
           chatView?.refresh();
+        };
+
+        try {
+          await runRewind();
         } catch (err) {
+          const errText = formatUnknownError(err);
           outputChannel?.appendLine(
-            `[rewind] Failed: threadId=${session.threadId} turnIndex=${turnIndex} err=${String(err)}`,
+            `[rewind] Failed: threadId=${session.threadId} turnIndex=${turnIndex} err=${errText}`,
           );
           upsertBlock(session.id, {
             id: rewindBlockId,
             type: "error",
             title: "Rewind failed",
-            text: `${String(err)}\n\nCheck 'Codex UI' output channel for backend logs.`,
+            text: `${errText}\n\nCheck 'Codex UI' output channel for backend logs.`,
           });
           chatView?.refresh();
           return;
@@ -939,6 +976,11 @@ export function activate(context: vscode.ExtensionContext): void {
         );
         return;
       }
+      if (rt.reloading) return;
+      rt.reloading = true;
+      rt.uiHydrationBlockedText = null;
+      chatView?.refresh();
+      chatView?.toast("info", "Reloading session…");
 
       output.appendLine(
         `[session] Reload requested: threadId=${session.threadId}`,
@@ -951,6 +993,7 @@ export function activate(context: vscode.ExtensionContext): void {
         hydrateRuntimeFromThread(session.id, res.thread, { force: true });
         schedulePersistRuntime(session.id);
         chatView?.refresh();
+        chatView?.toast("success", "Reload completed.");
       } catch (err) {
         output.appendLine(`[session] Reload failed: ${String(err)}`);
         upsertBlock(session.id, {
@@ -959,6 +1002,10 @@ export function activate(context: vscode.ExtensionContext): void {
           title: "Reload failed",
           text: String(err),
         });
+        chatView?.refresh();
+        chatView?.toast("error", "Reload failed.");
+      } finally {
+        rt.reloading = false;
         chatView?.refresh();
       }
     }),
@@ -1480,8 +1527,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
         const picked = await vscode.window.showQuickPick(
           [
-            { label: "Copy Session ID", action: "copySessionId" as const },
             { label: "Rename", action: "rename" as const },
+            { label: "Copy Session ID", action: "copySessionId" as const },
             { label: "Open in Editor Tab", action: "openPanel" as const },
             { label: "Close Tab (Hide)", action: "hide" as const },
           ],
@@ -1732,6 +1779,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
         const rt = ensureRuntime(session.id);
         if (hasConversationBlocks(rt)) {
+          rt.uiHydrationBlockedText = null;
           setActiveSession(session.id);
           return;
         }
@@ -1744,14 +1792,8 @@ export function activate(context: vscode.ExtensionContext): void {
             r.pendingApprovals.size > 0,
         );
         if (anyRunning) {
-          upsertBlock(session.id, {
-            id: newLocalId("info"),
-            type: "info",
-            title: "Session not loaded yet",
-            text:
-              "This session has not been loaded in the UI yet. Wait for the running session to finish, then use Reload/Resume to load history.",
-          });
-          chatView?.refresh();
+          rt.uiHydrationBlockedText =
+            "This session has not been loaded in the UI yet. Wait for the running session to finish, then use Reload/Resume to load history.";
           setActiveSession(session.id);
           return;
         }
@@ -1760,6 +1802,7 @@ export function activate(context: vscode.ExtensionContext): void {
           const res = await backendManager.resumeSession(session);
           void ensureModelsFetched(session);
           hydrateRuntimeFromThread(session.id, res.thread);
+          rt.uiHydrationBlockedText = null;
           setActiveSession(session.id);
         } catch (err) {
           outputChannel?.appendLine(
@@ -3068,8 +3111,10 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     blocks: [],
     latestDiff: null,
     statusText: null,
+    uiHydrationBlockedText: null,
     tokenUsage: null,
     sending: false,
+    reloading: false,
     compactInFlight: false,
     pendingCompactBlockId: null,
     streamingAssistantItemIds: new Set(),
@@ -3158,6 +3203,7 @@ function buildChatState(): ChatViewState {
       blocks: [],
       latestDiff: null,
       sending: false,
+      reloading: false,
       statusText: [globalStatusText, globalRateLimitStatusText]
         .filter(Boolean)
         .join(" • "),
@@ -3186,6 +3232,7 @@ function buildChatState(): ChatViewState {
       blocks: [],
       latestDiff: null,
       sending: false,
+      reloading: false,
       statusText: [globalStatusText, globalRateLimitStatusText]
         .filter(Boolean)
         .join(" • "),
@@ -3198,10 +3245,13 @@ function buildChatState(): ChatViewState {
   const rt = ensureRuntime(activeRaw.id);
   const baseStatusText = rt.statusText ?? null;
   const core: string[] = [];
+  const hydrationBlockedText = rt.uiHydrationBlockedText ?? null;
+  if (hydrationBlockedText) core.push("history not loaded");
   if (baseStatusText) core.push(baseStatusText);
   if (globalRateLimitStatusText) core.push(globalRateLimitStatusText);
   const suffix: string[] = [];
   if (rt.sending) suffix.push("sending…");
+  if (rt.reloading) suffix.push("reloading…");
   const worked = computeWorkedSeconds(rt);
   if (worked !== null) suffix.push(`worked=${worked}s`);
   if (rt.pendingApprovals.size > 0)
@@ -3211,6 +3261,9 @@ function buildChatState(): ChatViewState {
     coreText && suffix.length > 0
       ? `${coreText} • ${suffix.join(" • ")}`
       : coreText || (suffix.length > 0 ? suffix.join(" • ") : null);
+  const statusTooltipParts = [hydrationBlockedText, globalRateLimitStatusTooltip]
+    .filter(Boolean)
+    .join("\n\n");
   return {
     globalBlocks: globalRuntime.blocks,
     capabilities: capsForBackendKey(activeRaw.backendKey),
@@ -3221,10 +3274,11 @@ function buildChatState(): ChatViewState {
     blocks: rt.blocks,
     latestDiff: rt.latestDiff,
     sending: rt.sending,
+    reloading: rt.reloading,
     statusText:
       statusText ??
       [globalStatusText, globalRateLimitStatusText].filter(Boolean).join(" • "),
-    statusTooltip: globalRateLimitStatusTooltip,
+    statusTooltip: statusTooltipParts || null,
     modelState: getSessionModelState(),
     models: getModelOptionsForSession(activeRaw),
     approvals: [...rt.pendingApprovals.entries()].map(([requestKey, v]) => ({
@@ -4761,6 +4815,7 @@ function hydrateRuntimeFromThread(
         return false;
     }
   });
+  if (hasConversationBlocks) rt.uiHydrationBlockedText = null;
   if (!opts?.force && hasConversationBlocks) return;
 
   // Preserve non-conversation blocks that may have arrived before hydration (e.g. legacy warnings).

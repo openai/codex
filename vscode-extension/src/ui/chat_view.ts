@@ -110,6 +110,7 @@ export type ChatViewState = {
   blocks: ChatBlock[];
   latestDiff: string | null;
   sending: boolean;
+  reloading: boolean;
   statusText?: string | null;
   statusTooltip?: string | null;
   modelState?: {
@@ -196,6 +197,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public insertIntoInput(text: string): void {
     this.view?.webview.postMessage({ type: "insertText", text });
+  }
+
+  public toast(kind: "info" | "success" | "error", message: string): void {
+    this.view?.webview.postMessage({ type: "toast", kind, message });
   }
 
   public constructor(
@@ -802,22 +807,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this.statePostDirty) this.postControlState();
     }, 2000);
     const full = this.getState();
-    const controlState = {
-      globalBlocks: full.globalBlocks,
-      capabilities: full.capabilities,
-      sessions: full.sessions,
-      activeSession: full.activeSession,
-      unreadSessionIds: full.unreadSessionIds,
-      runningSessionIds: full.runningSessionIds,
-      latestDiff: full.latestDiff,
-      sending: full.sending,
-      statusText: full.statusText,
-      statusTooltip: full.statusTooltip,
-      modelState: full.modelState,
-      models: full.models,
-      approvals: full.approvals,
-      customPrompts: full.customPrompts,
-    };
+	    const controlState = {
+	      globalBlocks: full.globalBlocks,
+	      capabilities: full.capabilities,
+	      sessions: full.sessions,
+	      activeSession: full.activeSession,
+	      unreadSessionIds: full.unreadSessionIds,
+	      runningSessionIds: full.runningSessionIds,
+	      latestDiff: full.latestDiff,
+	      sending: full.sending,
+	      reloading: full.reloading,
+	      statusText: full.statusText,
+	      statusTooltip: full.statusTooltip,
+	      modelState: full.modelState,
+	      models: full.models,
+	      approvals: full.approvals,
+	      customPrompts: full.customPrompts,
+	    };
     void this.view.webview
       .postMessage({ type: "controlState", seq, state: controlState })
       .then(undefined, (err) => {
@@ -1037,10 +1043,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .autoUrlLink { color: inherit; text-decoration: none; cursor: text; }
       .autoUrlLink.modHover { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; cursor: pointer; }
       .autoUrlLink.modHover:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
-      .fileDiff { margin-top: 8px; }
-    </style>
-  </head>
-  <body>
+	      .fileDiff { margin-top: 8px; }
+	      .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: min(820px, calc(100vw - 32px)); border-radius: 10px; padding: 10px 12px; border: 1px solid rgba(127,127,127,0.35); box-shadow: 0 10px 30px rgba(0,0,0,0.35); background: var(--vscode-notifications-background, rgba(30,30,30,0.95)); color: var(--vscode-notifications-foreground, inherit); display: none; }
+	      .toast.info { border-color: rgba(127,127,127,0.35); }
+	      .toast.success { border-color: rgba(0,200,120,0.55); }
+	      .toast.error { border-color: rgba(220,60,60,0.60); }
+	    </style>
+	  </head>
+	  <body>
     <div class="top">
       <div class="topRow">
         <div id="title" class="title">Codex UI</div>
@@ -1069,15 +1079,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       </div>
       <div id="suggest" class="suggest"></div>
     </div>
-    <div class="footerBar">
-      <div id="modelBar" class="modelBar"></div>
-      <div id="statusText" class="footerStatus" style="display:none"></div>
-          <div id="statusPopover" class="statusPopover" style="display:none"></div>
-    </div>
-    <script nonce="${nonce}" src="${markdownItUriV}"></script>
-    <script nonce="${nonce}" src="${clientScriptUriV}"></script>
-  </body>
-</html>`;
+	    <div class="footerBar">
+	      <div id="modelBar" class="modelBar"></div>
+	      <div id="statusText" class="footerStatus" style="display:none"></div>
+	          <div id="statusPopover" class="statusPopover" style="display:none"></div>
+	    </div>
+	    <div id="toast" class="toast"></div>
+	    <script nonce="${nonce}" src="${markdownItUriV}"></script>
+	    <script nonce="${nonce}" src="${clientScriptUriV}"></script>
+	  </body>
+	</html>`;
   }
 }
 

@@ -123,6 +123,7 @@ type ChatViewState = {
   blocks: ChatBlock[];
   latestDiff: string | null;
   sending: boolean;
+  reloading: boolean;
   statusText?: string | null;
   statusTooltip?: string | null;
   modelState?: ModelState | null;
@@ -184,6 +185,7 @@ function main(): void {
   const approvalsEl = mustGet("approvals");
   const composerEl = mustGet("composer");
   const editBannerEl = mustGet("editBanner");
+  const toastEl = mustGet<HTMLDivElement>("toast");
   const inputRowEl = mustGet("inputRow");
   const inputEl = mustGet<HTMLTextAreaElement>("input");
   const imageInput = mustGet<HTMLInputElement>("imageInput");
@@ -760,10 +762,32 @@ function main(): void {
     blocks: [],
     latestDiff: null,
     sending: false,
+    reloading: false,
     statusText: null,
     modelState: null,
     approvals: [],
     customPrompts: [],
+  };
+
+  let toastTimer: number | null = null;
+  const showToast = (
+    kind: "info" | "success" | "error",
+    message: string,
+    timeoutMs = 2500,
+  ): void => {
+    if (toastTimer !== null) {
+      window.clearTimeout(toastTimer);
+      toastTimer = null;
+    }
+    toastEl.className = `toast ${kind}`;
+    toastEl.textContent = message;
+    toastEl.style.display = "";
+    toastTimer = window.setTimeout(() => {
+      toastEl.style.display = "none";
+      toastEl.textContent = "";
+      toastEl.className = "toast";
+      toastTimer = null;
+    }, timeoutMs);
   };
 
   let domSessionId: string | null = null;
@@ -2058,7 +2082,7 @@ function main(): void {
     attachBtn.disabled = !s.activeSession;
     const variant = s.capabilities?.cliVariant ?? "unknown";
     reloadBtn.disabled =
-      !s.activeSession || s.sending || variant !== "codex-mine";
+      !s.activeSession || s.sending || s.reloading || variant !== "codex-mine";
     reloadBtn.title =
       variant === "codex-mine"
         ? "Reload session (re-read config.toml, agents, etc.)"
@@ -2903,7 +2927,7 @@ function main(): void {
       saveComposerState();
     }
 
-    if (!rewindTurnIndex) {
+    if (rewindTurnIndex === null) {
       editBannerEl.style.display = "none";
       editBannerEl.replaceChildren();
       return;
@@ -2932,7 +2956,7 @@ function main(): void {
         type: "sendWithImages",
         text,
         images: pendingImages.map((img) => ({ name: img.name, url: img.url })),
-        rewind: rewindTurnIndex ? { turnIndex: rewindTurnIndex } : null,
+        rewind: rewindTurnIndex === null ? null : { turnIndex: rewindTurnIndex },
       });
       pendingImages.splice(0, pendingImages.length);
       renderAttachments();
@@ -2940,7 +2964,7 @@ function main(): void {
       vscode.postMessage({
         type: "send",
         text,
-        rewind: rewindTurnIndex ? { turnIndex: rewindTurnIndex } : null,
+        rewind: rewindTurnIndex === null ? null : { turnIndex: rewindTurnIndex },
       });
     }
 
@@ -3090,7 +3114,7 @@ function main(): void {
     vscode.postMessage({ type: "resumeFromHistory" }),
   );
   reloadBtn.addEventListener("click", () =>
-    vscode.postMessage({ type: "reloadSession" }),
+    state.reloading ? undefined : vscode.postMessage({ type: "reloadSession" }),
   );
   statusBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "showStatus" }),
@@ -3281,12 +3305,27 @@ function main(): void {
       agents?: unknown;
       skills?: unknown;
       text?: unknown;
+      kind?: unknown;
+      message?: unknown;
+      timeoutMs?: unknown;
       requestId?: unknown;
       ok?: unknown;
       mimeType?: unknown;
       base64?: unknown;
       error?: unknown;
     };
+    if (anyMsg.type === "toast") {
+      const kind =
+        anyMsg.kind === "success" || anyMsg.kind === "error" ? anyMsg.kind : "info";
+      const message = typeof anyMsg.message === "string" ? anyMsg.message : "";
+      if (!message) return;
+      const timeoutMs =
+        typeof anyMsg.timeoutMs === "number" && Number.isFinite(anyMsg.timeoutMs)
+          ? Math.max(0, Math.trunc(anyMsg.timeoutMs))
+          : 2500;
+      showToast(kind, message, timeoutMs);
+      return;
+    }
     if (anyMsg.type === "imageData") {
       const requestId =
         typeof anyMsg.requestId === "string" ? anyMsg.requestId : null;
