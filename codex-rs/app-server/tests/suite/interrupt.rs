@@ -3,10 +3,12 @@
 
 use std::path::Path;
 
-use codex_app_server_protocol::{AddConversationListenerParams, NewConversationParams, NewConversationResponse};
+use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
