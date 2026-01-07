@@ -32,9 +32,7 @@ use crate::token_data::parse_id_token;
 use crate::util::try_parse_error_message;
 use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
-#[cfg(any(test, feature = "test-support"))]
 use serde_json::Value;
-#[cfg(any(test, feature = "test-support"))]
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
