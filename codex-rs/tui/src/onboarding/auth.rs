@@ -112,7 +112,7 @@ fn begin_device_code_attempt(
     cancel
 }
 
-fn set_state_if_active(
+fn set_device_code_state_for_active_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
     request_frame: &FrameRequester,
     cancel: &Arc<Notify>,
@@ -129,7 +129,7 @@ fn set_state_if_active(
     true
 }
 
-fn set_success_message_if_active(
+fn set_device_code_success_message_for_active_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
     request_frame: &FrameRequester,
     auth_manager: &AuthManager,
@@ -756,7 +756,7 @@ impl AuthModeWidget {
                                 }
                             }
                             Err(_) => {
-                                set_state_if_active(
+                                set_device_code_state_for_active_attempt(
                                     &sign_in_state,
                                     &request_frame,
                                     &cancel,
@@ -765,7 +765,7 @@ impl AuthModeWidget {
                             }
                         }
                     } else {
-                        set_state_if_active(
+                        set_device_code_state_for_active_attempt(
                             &sign_in_state,
                             &request_frame,
                             &cancel,
@@ -777,7 +777,7 @@ impl AuthModeWidget {
                 }
             };
 
-            if !set_state_if_active(
+            if !set_device_code_state_for_active_attempt(
                 &sign_in_state,
                 &request_frame,
                 &cancel,
@@ -794,7 +794,7 @@ impl AuthModeWidget {
                 r = complete_device_code_login(opts, device_code) => {
                     match r {
                         Ok(()) => {
-                            set_success_message_if_active(
+                            set_device_code_success_message_for_active_attempt(
                                 &sign_in_state,
                                 &request_frame,
                                 &auth_manager,
@@ -802,7 +802,7 @@ impl AuthModeWidget {
                             );
                         }
                         Err(_) => {
-                            set_state_if_active(
+                            set_device_code_state_for_active_attempt(
                                 &sign_in_state,
                                 &request_frame,
                                 &cancel,
@@ -997,13 +997,13 @@ mod tests {
     }
 
     #[test]
-    fn set_state_if_active_updates_only_when_active() {
+    fn set_device_code_state_for_active_attempt_updates_only_when_active() {
         let request_frame = FrameRequester::test_dummy();
         let cancel = Arc::new(Notify::new());
         let sign_in_state = device_code_sign_in_state(cancel.clone());
 
         assert_eq!(
-            set_state_if_active(
+            set_device_code_state_for_active_attempt(
                 &sign_in_state,
                 &request_frame,
                 &cancel,
@@ -1018,7 +1018,7 @@ mod tests {
 
         let sign_in_state = device_code_sign_in_state(Arc::new(Notify::new()));
         assert_eq!(
-            set_state_if_active(
+            set_device_code_state_for_active_attempt(
                 &sign_in_state,
                 &request_frame,
                 &cancel,
@@ -1033,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn set_success_message_if_active_updates_only_when_active() {
+    fn set_device_code_success_message_for_active_attempt_updates_only_when_active() {
         let request_frame = FrameRequester::test_dummy();
         let cancel = Arc::new(Notify::new());
         let sign_in_state = device_code_sign_in_state(cancel.clone());
@@ -1045,7 +1045,12 @@ mod tests {
         );
 
         assert_eq!(
-            set_success_message_if_active(&sign_in_state, &request_frame, &auth_manager, &cancel,),
+            set_device_code_success_message_for_active_attempt(
+                &sign_in_state,
+                &request_frame,
+                &auth_manager,
+                &cancel,
+            ),
             true
         );
         assert!(matches!(
@@ -1055,7 +1060,12 @@ mod tests {
 
         let sign_in_state = device_code_sign_in_state(Arc::new(Notify::new()));
         assert_eq!(
-            set_success_message_if_active(&sign_in_state, &request_frame, &auth_manager, &cancel,),
+            set_device_code_success_message_for_active_attempt(
+                &sign_in_state,
+                &request_frame,
+                &auth_manager,
+                &cancel,
+            ),
             false
         );
         assert!(matches!(
