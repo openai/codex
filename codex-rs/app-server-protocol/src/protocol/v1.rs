@@ -49,7 +49,7 @@ pub struct InitializeResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct NewThreadParams {
+pub struct NewConversationParams {
     pub model: Option<String>,
     pub model_provider: Option<String>,
     pub profile: Option<String>,
@@ -67,7 +67,7 @@ pub struct NewThreadParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct NewThreadResponse {
+pub struct NewConversationResponse {
     pub conversation_id: ThreadId,
     pub model: String,
     pub reasoning_effort: Option<ReasoningEffort>,

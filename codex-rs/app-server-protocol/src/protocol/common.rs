@@ -203,9 +203,9 @@ client_request_definitions! {
     },
 
     /// DEPRECATED APIs below
-    NewThread {
-        params: v1::NewThreadParams,
-        response: v1::NewThreadResponse,
+    NewConversation {
+                params: v1::NewConversationParams,
+        response: v1::NewConversationResponse,
     },
     GetConversationSummary {
         params: v1::GetConversationSummaryParams,
@@ -579,9 +579,9 @@ mod tests {
 
     #[test]
     fn serialize_new_conversation() -> Result<()> {
-        let request = ClientRequest::NewThread {
+        let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
-            params: v1::NewThreadParams {
+            params: v1::NewConversationParams {
                 model: Some("gpt-5.1-codex-max".to_string()),
                 model_provider: None,
                 profile: None,
