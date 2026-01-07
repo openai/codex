@@ -247,10 +247,15 @@ impl ModelsManager {
         merged_presets = self.filter_visible_models(merged_presets);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
-        if let Some(default) = merged_presets.first_mut()
-            && !has_default
-        {
-            default.is_default = true;
+        if !has_default {
+            if let Some(default) = merged_presets
+                .iter_mut()
+                .find(|preset| preset.show_in_picker)
+            {
+                default.is_default = true;
+            } else if let Some(default) = merged_presets.first_mut() {
+                default.is_default = true;
+            }
         }
 
         merged_presets
@@ -654,12 +659,13 @@ mod tests {
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
         let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
 
-        let mut expected = ModelPreset::from(visible_model.clone());
-        expected.is_default = true;
+        let expected_hidden = ModelPreset::from(hidden_model.clone());
+        let mut expected_visible = ModelPreset::from(visible_model.clone());
+        expected_visible.is_default = true;
 
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
-        assert_eq!(available, vec![expected]);
+        assert_eq!(available, vec![expected_hidden, expected_visible]);
     }
 
     #[test]
