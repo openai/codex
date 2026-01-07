@@ -59,14 +59,19 @@ pub(crate) struct ThreadManagerState {
 }
 
 impl ThreadManager {
-    pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
+    pub fn new(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+    ) -> Self {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
-                models_manager: Arc::new(ModelsManager::new(auth_manager.clone())),
-                skills_manager: Arc::new(SkillsManager::new(
-                    auth_manager.codex_home().to_path_buf(),
+                models_manager: Arc::new(ModelsManager::new(
+                    codex_home.clone(),
+                    auth_manager.clone(),
                 )),
+                skills_manager: Arc::new(SkillsManager::new(codex_home)),
                 auth_manager,
                 session_source,
             }),
@@ -94,17 +99,16 @@ impl ThreadManager {
         provider: ModelProviderInfo,
         codex_home: PathBuf,
     ) -> Self {
-        let auth_manager = AuthManager::from_auth_for_testing_with_home(auth, codex_home);
+        let auth_manager = AuthManager::from_auth_for_testing(auth);
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 models_manager: Arc::new(ModelsManager::with_provider(
+                    codex_home.clone(),
                     auth_manager.clone(),
                     provider,
                 )),
-                skills_manager: Arc::new(SkillsManager::new(
-                    auth_manager.codex_home().to_path_buf(),
-                )),
+                skills_manager: Arc::new(SkillsManager::new(codex_home)),
                 auth_manager,
                 session_source: SessionSource::Exec,
             }),

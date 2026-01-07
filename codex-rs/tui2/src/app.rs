@@ -407,7 +407,11 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let thread_manager = Arc::new(ThreadManager::new(auth_manager.clone(), SessionSource::Cli));
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            SessionSource::Cli,
+        ));
         let mut model = thread_manager
             .get_models_manager()
             .get_model(&config.model, &config)
