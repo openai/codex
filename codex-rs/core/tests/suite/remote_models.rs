@@ -381,12 +381,11 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     assert_eq!(selected, "gpt-5.2-codex");
 
     let available = manager.list_models(&config).await;
-    assert!(
-        available
-            .iter()
-            .all(|model| model.model != "codex-auto-balanced"),
-        "hidden models should not appear in the picker list"
-    );
+    let hidden = available
+        .iter()
+        .find(|model| model.model == "codex-auto-balanced")
+        .expect("hidden remote model should be listed");
+    assert!(!hidden.show_in_picker, "hidden models should remain hidden");
 
     Ok(())
 }

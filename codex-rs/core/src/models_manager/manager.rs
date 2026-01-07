@@ -149,14 +149,14 @@ impl ModelsManager {
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
         let auth_mode = self.auth_manager.get_auth_mode();
         let remote_models = self.remote_models(config).await;
-        if auth_mode == Some(AuthMode::ChatGPT)
-            && self
+        if auth_mode == Some(AuthMode::ChatGPT) {
+            let has_auto_balanced = self
                 .build_available_models(remote_models)
                 .iter()
-                .any(|m| m.model == CODEX_AUTO_BALANCED_MODEL)
-        {
-            return CODEX_AUTO_BALANCED_MODEL.to_string();
-        } else if auth_mode == Some(AuthMode::ChatGPT) {
+                .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL && model.show_in_picker);
+            if has_auto_balanced {
+                return CODEX_AUTO_BALANCED_MODEL.to_string();
+            }
             return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
