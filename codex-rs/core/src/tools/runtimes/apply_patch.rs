@@ -100,22 +100,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
-        let cwd = req.action.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
             if let Some(reason) = retry_reason {
-                return session
-                    .request_command_approval(
-                        turn,
-                        call_id,
-                        vec!["apply_patch".to_string()],
-                        cwd,
-                        Some(reason),
-                        None,
-                    )
+                let rx_approve = session
+                    .request_patch_approval(turn, call_id, changes.clone(), Some(reason), None)
                     .await;
+                return rx_approve.await.unwrap_or_default();
             }
 
             with_cached_approval(&session.services, approval_keys, || async move {
