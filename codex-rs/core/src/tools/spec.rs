@@ -1569,7 +1569,7 @@ mod tests {
         let config = test_config();
         let model_family =
             ModelsManager::construct_model_family_offline("test-gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
+        let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,

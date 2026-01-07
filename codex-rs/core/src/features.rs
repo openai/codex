@@ -87,8 +87,6 @@ pub enum Feature {
     ShellSnapshot,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
-    /// Enable discovery and injection of skills.
-    Skills,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
 }
@@ -225,7 +223,6 @@ impl Features {
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
-            tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
             ..Default::default()
         };
         base_legacy.apply(&mut features);
@@ -241,7 +238,6 @@ impl Features {
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
             tools_web_search: config_profile.tools_web_search,
-            tools_view_image: config_profile.tools_view_image,
         };
         profile_legacy.apply(&mut features);
         if let Some(profile_features) = config_profile.features.as_ref() {

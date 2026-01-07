@@ -226,29 +226,22 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = if config.features.enabled(Feature::Skills) {
-            Some(skills_manager.skills_for_config(&config))
-        } else {
-            None
-        };
+        let loaded_skills = skills_manager.skills_for_config(&config);
+        // let loaded_skills = if config.features.enabled(Feature::Skills) {
+        //     Some(skills_manager.skills_for_config(&config))
+        // } else {
+        //     None
+        // };
 
-        if let Some(outcome) = &loaded_skills {
-            for err in &outcome.errors {
-                error!(
-                    "failed to load skill {}: {}",
-                    err.path.display(),
-                    err.message
-                );
-            }
+        for err in &loaded_skills.errors {
+            error!(
+                "failed to load skill {}: {}",
+                err.path.display(),
+                err.message
+            );
         }
 
-        let user_instructions = get_user_instructions(
-            &config,
-            loaded_skills
-                .as_ref()
-                .map(|outcome| outcome.skills.as_slice()),
-        )
-        .await;
+        let user_instructions = get_user_instructions(&config, Some(&loaded_skills.skills)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
             .await
@@ -1747,7 +1740,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
-    use crate::features::Feature;
+
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
@@ -2037,29 +2030,20 @@ mod handlers {
         } else {
             cwds
         };
-        let skills = if sess.enabled(Feature::Skills) {
-            let skills_manager = &sess.services.skills_manager;
-            let mut entries = Vec::new();
-            for cwd in cwds {
-                let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
-                let errors = super::errors_to_info(&outcome.errors);
-                let skills = super::skills_to_info(&outcome.skills);
-                entries.push(SkillsListEntry {
-                    cwd,
-                    skills,
-                    errors,
-                });
-            }
-            entries
-        } else {
-            cwds.into_iter()
-                .map(|cwd| SkillsListEntry {
-                    cwd,
-                    skills: Vec::new(),
-                    errors: Vec::new(),
-                })
-                .collect()
-        };
+
+        let skills_manager = &sess.services.skills_manager;
+        let mut skills = Vec::new();
+        for cwd in cwds {
+            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let errors = super::errors_to_info(&outcome.errors);
+            let skills_metadata = super::skills_to_info(&outcome.skills);
+            skills.push(SkillsListEntry {
+                cwd,
+                skills: skills_metadata,
+                errors,
+            });
+        }
+
         let event = Event {
             id: sub_id,
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
@@ -2344,16 +2328,12 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
-    let skills_outcome = if sess.enabled(Feature::Skills) {
-        Some(
-            sess.services
-                .skills_manager
-                .skills_for_cwd(&turn_context.cwd, false)
-                .await,
-        )
-    } else {
-        None
-    };
+    let skills_outcome = Some(
+        sess.services
+            .skills_manager
+            .skills_for_cwd(&turn_context.cwd, false)
+            .await,
+    );
 
     let SkillInjections {
         items: skill_items,
@@ -3649,7 +3629,7 @@ mod tests {
     #[tokio::test]
     async fn record_model_warning_appends_user_message() {
         let (mut session, turn_context) = make_session_and_context().await;
-        let mut features = Features::with_defaults();
+        let features = Features::with_defaults();
         session.features = features;
 
         session
