@@ -21,33 +21,43 @@ const GPT_5_2_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt-5.2-codex_promp
 
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
-fn default_model_info(slug: &str) -> ModelInfo {
-    ModelInfo {
-        slug: slug.to_string(),
-        display_name: slug.to_string(),
-        description: None,
-        // This is primarily used when remote metadata is available. When running
-        // offline, core generally omits the effort field unless explicitly
-        // configured by the user.
-        default_reasoning_level: ReasoningEffort::Medium,
-        supported_reasoning_levels: Vec::new(),
-        shell_type: ConfigShellToolType::Default,
-        visibility: ModelVisibility::None,
-        supported_in_api: true,
-        priority: 0,
-        upgrade: None,
-        base_instructions: BASE_INSTRUCTIONS.to_string(),
-        supports_reasoning_summaries: true,
-        support_verbosity: false,
-        default_verbosity: None,
-        apply_patch_tool_type: None,
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
-        supports_parallel_tool_calls: false,
-        context_window: CONTEXT_WINDOW_272K,
-        auto_compact_token_limit: None,
-        effective_context_window_percent: 95,
-        experimental_supported_tools: Vec::new(),
-    }
+macro_rules! model_info {
+    (
+        $slug:expr $(, $key:ident : $value:expr )* $(,)?
+    ) => {{
+        #[allow(unused_mut)]
+        let mut model = ModelInfo {
+            slug: $slug.to_string(),
+            display_name: $slug.to_string(),
+            description: None,
+            // This is primarily used when remote metadata is available. When running
+            // offline, core generally omits the effort field unless explicitly
+            // configured by the user.
+            default_reasoning_level: ReasoningEffort::Medium,
+            supported_reasoning_levels: Vec::new(),
+            shell_type: ConfigShellToolType::Default,
+            visibility: ModelVisibility::None,
+            supported_in_api: true,
+            priority: 0,
+            upgrade: None,
+            base_instructions: BASE_INSTRUCTIONS.to_string(),
+            supports_reasoning_summaries: true,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            supports_parallel_tool_calls: false,
+            context_window: CONTEXT_WINDOW_272K,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
+            experimental_supported_tools: Vec::new(),
+        };
+
+        $(
+            model.$key = $value;
+        )*
+        model
+    }};
 }
 
 pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> ModelInfo {
@@ -81,145 +91,178 @@ pub(crate) fn merge_remote_overrides(mut model: ModelInfo, remote: Option<ModelI
 
 // todo(aibrahim): remove most of the entries here when enabling models.json
 pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
-    let mut model = default_model_info(slug);
-
     if slug.starts_with("o3") || slug.starts_with("o4-mini") {
-        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
-        model.supports_reasoning_summaries = true;
-        model.context_window = 200_000;
+        model_info!(
+            slug,
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
+            context_window: 200_000,
+        )
     } else if slug.starts_with("codex-mini-latest") {
-        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
-        model.supports_reasoning_summaries = true;
-        model.shell_type = ConfigShellToolType::Local;
-        model.context_window = 200_000;
+        model_info!(
+            slug,
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
+            shell_type: ConfigShellToolType::Local,
+            context_window: 200_000,
+        )
     } else if slug.starts_with("gpt-4.1") {
-        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
-        model.context_window = 1_047_576;
-        model.supports_reasoning_summaries = false;
+        model_info!(
+            slug,
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
+            supports_reasoning_summaries: false,
+            context_window: 1_047_576,
+        )
     } else if slug.starts_with("gpt-oss") || slug.starts_with("openai/gpt-oss") {
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
-        model.context_window = 96_000;
+        model_info!(
+            slug,
+            apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+            context_window: 96_000,
+        )
     } else if slug.starts_with("gpt-4o") {
-        model.supports_reasoning_summaries = false;
-        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
-        model.context_window = 128_000;
+        model_info!(
+            slug,
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
+            supports_reasoning_summaries: false,
+            context_window: 128_000,
+        )
     } else if slug.starts_with("gpt-3.5") {
-        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
-        model.supports_reasoning_summaries = false;
-        model.context_window = 16_385;
+        model_info!(
+            slug,
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
+            supports_reasoning_summaries: false,
+            context_window: 16_385,
+        )
     } else if slug.starts_with("test-gpt-5") {
-        model.supports_reasoning_summaries = true;
-        model.base_instructions = GPT_5_CODEX_INSTRUCTIONS.to_string();
-        model.experimental_supported_tools = vec![
-            "grep_files".to_string(),
-            "list_dir".to_string(),
-            "read_file".to_string(),
-            "test_sync_tool".to_string(),
-        ];
-        model.supports_parallel_tool_calls = true;
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.support_verbosity = true;
-        model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
+        model_info!(
+            slug,
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
+            experimental_supported_tools: vec![
+                "grep_files".to_string(),
+                "list_dir".to_string(),
+                "read_file".to_string(),
+                "test_sync_tool".to_string(),
+            ],
+            supports_parallel_tool_calls: true,
+            shell_type: ConfigShellToolType::ShellCommand,
+            support_verbosity: true,
+            truncation_policy: TruncationPolicyConfig::tokens(10_000),
+        )
     } else if slug.starts_with("exp-codex") || slug.starts_with("codex-1p") {
-        model.supports_reasoning_summaries = true;
-        model.base_instructions = GPT_5_2_CODEX_INSTRUCTIONS.to_string();
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = true;
-        model.support_verbosity = false;
-        model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
-        model.context_window = CONTEXT_WINDOW_272K;
+        model_info!(
+            slug,
+            base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: true,
+            support_verbosity: false,
+            truncation_policy: TruncationPolicyConfig::tokens(10_000),
+            context_window: CONTEXT_WINDOW_272K,
+        )
     } else if slug.starts_with("exp-") {
-        model.supports_reasoning_summaries = true;
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.support_verbosity = true;
-        model.default_verbosity = Some(Verbosity::Low);
-        model.base_instructions = BASE_INSTRUCTIONS.to_string();
-        model.truncation_policy = TruncationPolicyConfig::bytes(10_000);
-        model.shell_type = ConfigShellToolType::UnifiedExec;
-        model.supports_parallel_tool_calls = true;
-        model.context_window = CONTEXT_WINDOW_272K;
+        model_info!(
+            slug,
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            support_verbosity: true,
+            default_verbosity: Some(Verbosity::Low),
+            base_instructions: BASE_INSTRUCTIONS.to_string(),
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            shell_type: ConfigShellToolType::UnifiedExec,
+            supports_parallel_tool_calls: true,
+            context_window: CONTEXT_WINDOW_272K,
+        )
     } else if slug.starts_with("gpt-5.2-codex") || slug.starts_with("bengalfox") {
-        model.supports_reasoning_summaries = true;
-        model.base_instructions = GPT_5_2_CODEX_INSTRUCTIONS.to_string();
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = true;
-        model.support_verbosity = false;
-        model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
-        model.context_window = CONTEXT_WINDOW_272K;
-        model.supported_reasoning_levels = supported_reasoning_level_low_medium_high_xhigh();
+        model_info!(
+            slug,
+            base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: true,
+            support_verbosity: false,
+            truncation_policy: TruncationPolicyConfig::tokens(10_000),
+            context_window: CONTEXT_WINDOW_272K,
+            supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
+        )
     } else if slug.starts_with("gpt-5.1-codex-max") {
-        model.supports_reasoning_summaries = true;
-        model.base_instructions = GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string();
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = false;
-        model.support_verbosity = false;
-        model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
-        model.context_window = CONTEXT_WINDOW_272K;
-        model.supported_reasoning_levels = supported_reasoning_level_low_medium_high_xhigh();
+        model_info!(
+            slug,
+            base_instructions: GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string(),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: false,
+            support_verbosity: false,
+            truncation_policy: TruncationPolicyConfig::tokens(10_000),
+            context_window: CONTEXT_WINDOW_272K,
+            supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
+        )
     } else if (slug.starts_with("gpt-5-codex")
         || slug.starts_with("gpt-5.1-codex")
         || slug.starts_with("codex-"))
         && !slug.contains("-mini")
     {
-        model.supports_reasoning_summaries = true;
-        model.base_instructions = GPT_5_CODEX_INSTRUCTIONS.to_string();
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = false;
-        model.support_verbosity = false;
-        model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
-        model.context_window = CONTEXT_WINDOW_272K;
-        model.supported_reasoning_levels = supported_reasoning_level_low_medium_high();
+        model_info!(
+            slug,
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: false,
+            support_verbosity: false,
+            truncation_policy: TruncationPolicyConfig::tokens(10_000),
+            context_window: CONTEXT_WINDOW_272K,
+            supported_reasoning_levels: supported_reasoning_level_low_medium_high(),
+        )
     } else if slug.starts_with("gpt-5-codex")
         || slug.starts_with("gpt-5.1-codex")
         || slug.starts_with("codex-")
     {
-        model.supports_reasoning_summaries = true;
-        model.base_instructions = GPT_5_CODEX_INSTRUCTIONS.to_string();
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = false;
-        model.support_verbosity = false;
-        model.truncation_policy = TruncationPolicyConfig::tokens(10_000);
-        model.context_window = CONTEXT_WINDOW_272K;
+        model_info!(
+            slug,
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: false,
+            support_verbosity: false,
+            truncation_policy: TruncationPolicyConfig::tokens(10_000),
+            context_window: CONTEXT_WINDOW_272K,
+        )
     } else if (slug.starts_with("gpt-5.2") || slug.starts_with("boomslang"))
         && !slug.contains("codex")
     {
-        model.supports_reasoning_summaries = true;
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.support_verbosity = true;
-        model.default_verbosity = Some(Verbosity::Low);
-        model.base_instructions = GPT_5_2_INSTRUCTIONS.to_string();
-        model.truncation_policy = TruncationPolicyConfig::bytes(10_000);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = true;
-        model.context_window = CONTEXT_WINDOW_272K;
-        model.supported_reasoning_levels =
-            supported_reasoning_level_low_medium_high_xhigh_non_codex();
+        model_info!(
+            slug,
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            support_verbosity: true,
+            default_verbosity: Some(Verbosity::Low),
+            base_instructions: GPT_5_2_INSTRUCTIONS.to_string(),
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: true,
+            context_window: CONTEXT_WINDOW_272K,
+            supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh_non_codex(),
+        )
     } else if slug.starts_with("gpt-5.1") && !slug.contains("codex") {
-        model.supports_reasoning_summaries = true;
-        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-        model.support_verbosity = true;
-        model.default_verbosity = Some(Verbosity::Low);
-        model.base_instructions = GPT_5_1_INSTRUCTIONS.to_string();
-        model.truncation_policy = TruncationPolicyConfig::bytes(10_000);
-        model.shell_type = ConfigShellToolType::ShellCommand;
-        model.supports_parallel_tool_calls = true;
-        model.context_window = CONTEXT_WINDOW_272K;
-        model.supported_reasoning_levels = supported_reasoning_level_low_medium_high_non_codex();
+        model_info!(
+            slug,
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            support_verbosity: true,
+            default_verbosity: Some(Verbosity::Low),
+            base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: true,
+            context_window: CONTEXT_WINDOW_272K,
+            supported_reasoning_levels: supported_reasoning_level_low_medium_high_non_codex(),
+        )
     } else if slug.starts_with("gpt-5") {
-        model.supports_reasoning_summaries = true;
-        model.base_instructions = BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string();
-        model.shell_type = ConfigShellToolType::Default;
-        model.support_verbosity = true;
-        model.truncation_policy = TruncationPolicyConfig::bytes(10_000);
-        model.context_window = CONTEXT_WINDOW_272K;
+        model_info!(
+            slug,
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
+            shell_type: ConfigShellToolType::Default,
+            support_verbosity: true,
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            context_window: CONTEXT_WINDOW_272K,
+        )
+    } else {
+        model_info!(slug)
     }
-
-    model
 }
 
 fn supported_reasoning_level_low_medium_high() -> Vec<ReasoningEffortPreset> {
