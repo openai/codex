@@ -29,7 +29,7 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
     )
     .with_metrics(metrics);
 
-    manager.counter("codex.session_started", 1, &[("source", "tui")])?;
+    manager.counter("codex.session_started", 1, &[("source", "tui")]);
     manager.shutdown_metrics()?;
 
     let resource_metrics = latest_metrics(&exporter);
@@ -79,7 +79,7 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
     )
     .with_metrics_without_metadata_tags(metrics);
 
-    manager.counter("codex.session_started", 1, &[("source", "tui")])?;
+    manager.counter("codex.session_started", 1, &[("source", "tui")]);
     manager.shutdown_metrics()?;
 
     let resource_metrics = latest_metrics(&exporter);

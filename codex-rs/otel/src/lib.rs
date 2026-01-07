@@ -77,33 +77,49 @@ impl OtelManager {
         }
     }
 
-    pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> MetricsResult<()> {
-        let Some(metrics) = &self.metrics else {
-            return Ok(());
-        };
-        let tags = self.tags_with_metadata(tags)?;
-        metrics.counter(name, inc, &tags)
+    pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
+        let res: MetricsResult<()> = (|| {
+            let Some(metrics) = &self.metrics else {
+                return Ok(());
+            };
+
+            let tags = self.tags_with_metadata(tags)?;
+            metrics.counter(name, inc, &tags)
+        })();
+
+        if let Err(e) = res {
+            tracing::warn!("metrics counter failed: {e}");
+        }
     }
 
-    pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> MetricsResult<()> {
-        let Some(metrics) = &self.metrics else {
-            return Ok(());
-        };
-        let tags = self.tags_with_metadata(tags)?;
-        metrics.histogram(name, value, &tags)
+    pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
+        let res: MetricsResult<()> = (|| {
+            let Some(metrics) = &self.metrics else {
+                return Ok(());
+            };
+
+            let tags = self.tags_with_metadata(tags)?;
+            metrics.histogram(name, value, &tags)
+        })();
+
+        if let Err(e) = res {
+            tracing::warn!("metrics histogram failed: {e}");
+        }
     }
 
-    pub fn record_duration(
-        &self,
-        name: &str,
-        duration: Duration,
-        tags: &[(&str, &str)],
-    ) -> MetricsResult<()> {
-        let Some(metrics) = &self.metrics else {
-            return Ok(());
-        };
-        let tags = self.tags_with_metadata(tags)?;
-        metrics.record_duration(name, duration, &tags)
+    pub fn record_duration(&self, name: &str, duration: Duration, tags: &[(&str, &str)]) {
+        let res: MetricsResult<()> = (|| {
+            let Some(metrics) = &self.metrics else {
+                return Ok(());
+            };
+
+            let tags = self.tags_with_metadata(tags)?;
+            metrics.record_duration(name, duration, &tags)
+        })();
+
+        if let Err(e) = res {
+            tracing::warn!("metrics duration failed: {e}");
+        }
     }
 
     pub fn start_timer(&self, name: &str, tags: &[(&str, &str)]) -> Result<Timer, MetricsError> {
