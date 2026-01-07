@@ -187,6 +187,95 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_truncation_policy_without_override_preserves_remote() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    let slug = "codex-test-truncation-policy";
+    let remote_model = test_remote_model_with_policy(
+        slug,
+        ModelVisibility::List,
+        1,
+        TruncationPolicyConfig::bytes(12_000),
+    );
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let harness = build_remote_models_harness(&server, |config| {
+        config.model = Some("gpt-5.1".to_string());
+    })
+    .await?;
+
+    let models_manager = harness.thread_manager.get_models_manager();
+    wait_for_model_available(&models_manager, slug, &harness.config).await;
+
+    let model_info = models_manager
+        .construct_model_info(slug, &harness.config)
+        .await;
+    assert_eq!(
+        model_info.truncation_policy,
+        TruncationPolicyConfig::bytes(12_000)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_truncation_policy_with_tool_output_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    let slug = "codex-test-truncation-override";
+    let remote_model = test_remote_model_with_policy(
+        slug,
+        ModelVisibility::List,
+        1,
+        TruncationPolicyConfig::bytes(10_000),
+    );
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let harness = build_remote_models_harness(&server, |config| {
+        config.model = Some("gpt-5.1".to_string());
+        config.tool_output_token_limit = Some(50);
+    })
+    .await?;
+
+    let models_manager = harness.thread_manager.get_models_manager();
+    wait_for_model_available(&models_manager, slug, &harness.config).await;
+
+    let model_info = models_manager
+        .construct_model_info(slug, &harness.config)
+        .await;
+    assert_eq!(
+        model_info.truncation_policy,
+        TruncationPolicyConfig::bytes(200)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -461,6 +550,20 @@ where
 }
 
 fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> ModelInfo {
+    test_remote_model_with_policy(
+        slug,
+        visibility,
+        priority,
+        TruncationPolicyConfig::bytes(10_000),
+    )
+}
+
+fn test_remote_model_with_policy(
+    slug: &str,
+    visibility: ModelVisibility,
+    priority: i32,
+    truncation_policy: TruncationPolicyConfig,
+) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: format!("{slug} display"),
@@ -480,7 +583,7 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        truncation_policy,
         supports_parallel_tool_calls: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,

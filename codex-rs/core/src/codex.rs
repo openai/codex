@@ -544,10 +544,7 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
-            truncation_policy: TruncationPolicy::new(
-                per_turn_config.as_ref(),
-                model_info.truncation_policy.into(),
-            ),
+            truncation_policy: model_info.truncation_policy.into(),
         }
     }
 
@@ -2244,10 +2241,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
-        truncation_policy: TruncationPolicy::new(
-            &per_turn_config,
-            model_info.truncation_policy.into(),
-        ),
+        truncation_policy: model_info.truncation_policy.into(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
