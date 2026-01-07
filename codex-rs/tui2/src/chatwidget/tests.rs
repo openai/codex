@@ -1732,6 +1732,41 @@ async fn model_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn model_picker_hides_show_in_picker_false_models_from_cache() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
+    let preset = |slug: &str, show_in_picker: bool| ModelPreset {
+        id: slug.to_string(),
+        model: slug.to_string(),
+        display_name: slug.to_string(),
+        description: format!("{slug} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        is_default: false,
+        upgrade: None,
+        show_in_picker,
+        supported_in_api: true,
+    };
+
+    chat.open_model_popup_with_presets(vec![
+        preset("test-visible-model", true),
+        preset("test-hidden-model", false),
+    ]);
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_picker_filters_hidden_models", popup);
+    assert!(
+        popup.contains("test-visible-model"),
+        "expected visible model to appear in picker:\n{popup}"
+    );
+    assert!(
+        !popup.contains("test-hidden-model"),
+        "expected hidden model to be excluded from picker:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
