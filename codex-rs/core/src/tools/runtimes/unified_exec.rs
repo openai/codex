@@ -2,7 +2,7 @@
 Runtime: unified exec
 
 Handles approval + sandbox orchestration for unified exec requests, delegating to
-the session manager to spawn PTYs once an ExecEnv is prepared.
+the process manager to spawn PTYs once an ExecEnv is prepared.
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
@@ -25,8 +25,8 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
-use crate::unified_exec::UnifiedExecSession;
-use crate::unified_exec::UnifiedExecSessionManager;
+use crate::unified_exec::UnifiedExecProcess;
+use crate::unified_exec::UnifiedExecProcessManager;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -50,7 +50,7 @@ pub struct UnifiedExecApprovalKey {
 }
 
 pub struct UnifiedExecRuntime<'a> {
-    manager: &'a UnifiedExecSessionManager,
+    manager: &'a UnifiedExecProcessManager,
 }
 
 impl UnifiedExecRequest {
@@ -74,7 +74,7 @@ impl UnifiedExecRequest {
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
-    pub fn new(manager: &'a UnifiedExecSessionManager) -> Self {
+    pub fn new(manager: &'a UnifiedExecProcessManager) -> Self {
         Self { manager }
     }
 }
@@ -158,13 +158,13 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 }
 
-impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRuntime<'a> {
+impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
     async fn run(
         &mut self,
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
-    ) -> Result<UnifiedExecSession, ToolError> {
+    ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
