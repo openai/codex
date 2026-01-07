@@ -119,7 +119,7 @@ fn set_device_code_state_for_active_attempt(
     next_state: SignInState,
 ) -> bool {
     let mut guard = sign_in_state.write().unwrap();
-    if !device_code_attempt_matches(&*guard, cancel) {
+    if !device_code_attempt_matches(&guard, cancel) {
         return false;
     }
 
@@ -136,7 +136,7 @@ fn set_device_code_success_message_for_active_attempt(
     cancel: &Arc<Notify>,
 ) -> bool {
     let mut guard = sign_in_state.write().unwrap();
-    if !device_code_attempt_matches(&*guard, cancel) {
+    if !device_code_attempt_matches(&guard, cancel) {
         return false;
     }
 
@@ -721,7 +721,7 @@ impl AuthModeWidget {
                     if err.kind() == std::io::ErrorKind::NotFound {
                         let should_fallback = {
                             let guard = sign_in_state.read().unwrap();
-                            device_code_attempt_matches(&*guard, &cancel)
+                            device_code_attempt_matches(&guard, &cancel)
                         };
 
                         if !should_fallback {
@@ -989,9 +989,10 @@ mod tests {
         let cancel = begin_device_code_attempt(&sign_in_state, &request_frame);
         let guard = sign_in_state.read().unwrap();
 
-        assert_eq!(device_code_attempt_matches(&*guard, &cancel), true);
+        let state: &SignInState = &guard;
+        assert_eq!(device_code_attempt_matches(state, &cancel), true);
         assert!(matches!(
-            &*guard,
+            state,
             SignInState::ChatGptDeviceCode(state) if state.device_code.is_none()
         ));
     }
