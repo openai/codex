@@ -41,7 +41,7 @@ macro_rules! model_info {
             priority: 99,
             upgrade: None,
             base_instructions: BASE_INSTRUCTIONS.to_string(),
-            supports_reasoning_summaries: true,
+            supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
