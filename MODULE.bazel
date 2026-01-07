@@ -58,11 +58,7 @@ use_repo(rust, "rust_toolchains")
 
 register_toolchains("@rust_toolchains//:all")
 
-bazel_dep(name = "rules_rs", version = "0.0.20")
-local_path_override(
-    module_name = "rules_rs",
-    path = "../rules_rs",
-)
+bazel_dep(name = "rules_rs", version = "0.0.23")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
