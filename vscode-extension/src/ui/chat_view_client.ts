@@ -1392,13 +1392,36 @@ function main(): void {
     // (require at least one "/") to avoid accidental linkification (e.g. emails).
     // For <code> tokens, we allow basename-style paths like "README.md:10" and
     // ".env.local:23" because they are explicitly formatted by the author.
-    const fileTokenRe =
-      /(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?/g;
-    const fileTokenWithAtRe =
-      /@?(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?/g;
+    // Allow Unicode letters/numbers in path segments so e.g. "docs/日本語/仕様.md:10"
+    // is recognized. Keep other constraints (requires "." extension; plain text
+    // requires at least one "/") to avoid over-linkifying.
+    //
+    // Policy:
+    // - Outside code blocks: allow full-width space (　) but do NOT allow ASCII
+    //   spaces inside path segments. This keeps linkification conservative.
+    // - Inside code blocks (<pre><code>): allow ASCII spaces too, so paths from
+    //   tool output like "確認事項 ver1.1_記入済み.docx" can be linkified.
+    //
+    // We also allow "・" (Japanese middle dot), which commonly appears in names.
+    const pathSegmentNoAsciiSpace = String.raw`[\p{L}\p{N}\p{M}_@.\-・　]+`;
+    const pathSegmentWithAsciiSpace = String.raw`[\p{L}\p{N}\p{M}_@.\-・　 ]+`;
+    const fileTokenRe = new RegExp(
+      String.raw`(?:\.?\/)?${pathSegmentNoAsciiSpace}(?:\/${pathSegmentNoAsciiSpace})+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?`,
+      "gu",
+    );
+    const fileTokenWithAtRe = new RegExp(
+      String.raw`@?(?:\.?\/)?${pathSegmentNoAsciiSpace}(?:\/${pathSegmentNoAsciiSpace})+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?`,
+      "gu",
+    );
+    const codeBlockFileTokenWithAtRe = new RegExp(
+      String.raw`@?(?:\.?\/)?${pathSegmentWithAsciiSpace}(?:\/${pathSegmentWithAsciiSpace})+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?`,
+      "gu",
+    );
 
-    const codeFileTokenRe =
-      /^(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?$/;
+    const codeFileTokenRe = new RegExp(
+      String.raw`^(?:\.?\/)?${pathSegmentNoAsciiSpace}(?:\/${pathSegmentNoAsciiSpace})*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?$`,
+      "u",
+    );
 
     const urlRe = /https?:\/\/[^\s<>()]+/gi;
 
@@ -1415,7 +1438,9 @@ function main(): void {
       const el = code as HTMLElement;
       if (el.dataset.openFile) continue;
       const raw = (el.textContent || "").trim();
-      if (!raw || /\s/.test(raw)) continue;
+      // Keep inline <code> conservative: treat ASCII whitespace as a delimiter,
+      // but allow full-width space (　) in file names.
+      if (!raw || /[ \t\r\n]/.test(raw)) continue;
       if (/^https?:\/\//i.test(raw)) {
         const normalizedUrl = normalizeToken(raw);
         if (!normalizedUrl) continue;
@@ -1446,17 +1471,22 @@ function main(): void {
 
     for (const node of textNodes) {
       const rawText = node.nodeValue || "";
+      const parentEl = node.parentElement;
+      const inCodeBlock = parentEl
+        ? Boolean(parentEl.closest("pre > code, pre code"))
+        : false;
 
       const appendTextWithFileLinks = (
         frag: DocumentFragment,
         text: string,
       ): boolean => {
-        fileTokenWithAtRe.lastIndex = 0;
+        const fileRe = inCodeBlock ? codeBlockFileTokenWithAtRe : fileTokenWithAtRe;
+        fileRe.lastIndex = 0;
         let m: RegExpExecArray | null = null;
         let lastIdx = 0;
         let changed = false;
 
-        while ((m = fileTokenWithAtRe.exec(text))) {
+        while ((m = fileRe.exec(text))) {
           changed = true;
           const start = m.index;
           const end = start + m[0].length;
@@ -3790,8 +3820,10 @@ function main(): void {
     // If the link is explicitly a file reference, treat it as such even if it
     // looks like it has a URI scheme (e.g. "README.md:10" would otherwise be
     // misclassified as scheme="readme.md").
-    const explicitFileRefRe =
-      /^(?:\.{0,2}\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?$/;
+    const explicitFileRefRe = new RegExp(
+      String.raw`^(?:\.{0,2}\/)?[\p{L}\p{N}\p{M}_@.-]+(?:\/[\p{L}\p{N}\p{M}_@.-]+)*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?$`,
+      "u",
+    );
     if (explicitFileRefRe.test(decoded)) {
       const normalized = decoded.replace(/^\/+/, "");
       e.preventDefault();
