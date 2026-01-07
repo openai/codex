@@ -59,6 +59,17 @@ use_repo(rust, "rust_toolchains")
 register_toolchains("@rust_toolchains//:all")
 
 bazel_dep(name = "rules_rs", version = "0.0.23")
+archive_override(
+    module_name = "rules_rs",
+    integrity = "sha256-9PnBBWxkvOolffbfpwTfpwnbo3VqkZQdm03/oQle8yA=",
+    strip_prefix = "rules_rs-85dcdb2a275565aa4bfa236ba22303e56c720270",
+    urls = ["https://github.com/dzbarsky/rules_rs/archive/85dcdb2a275565aa4bfa236ba22303e56c720270/master.tar.gz"],
+)
+
+#local_path_override(
+#    module_name = "rules_rs",
+#    path = "../rules_rs",
+#)
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(

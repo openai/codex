@@ -76,9 +76,11 @@ def codex_rust_crate(
     else:
         maybe_lib = []
 
+    sanitized_binaries = []
     cargo_env = {}
     for binary, main in binaries.items():
         binary = binary.replace("-", "_")
+        sanitized_binaries.append(binary)
         cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath :%s)" % binary
 
         rust_binary(
@@ -100,7 +102,7 @@ def codex_rust_crate(
             name = test_name,
             crate_root = test,
             srcs = [test],
-            data = native.glob(["tests/**"], allow_empty = True) + list(binaries.keys()) + test_data_extra,
+            data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = maybe_lib + deps + dev_deps + integration_deps_extra,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,

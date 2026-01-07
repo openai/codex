@@ -6,7 +6,8 @@ platform(
         "@bazel_tools//tools/cpp:clang",
     ],
     exec_properties = {
-        "container-image": "docker://ubuntu:22.04",
+        # Need git in the image...
+        "container-image": "docker://ghcr.io/cicirello/pyaction:latest",
         "OSFamily": "Linux",
     },
 )
