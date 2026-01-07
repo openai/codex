@@ -92,15 +92,13 @@ impl ModelClient {
         }
     }
 
-    pub fn get_model_context_window(&self) -> Option<i64> {
+    pub fn get_model_context_window(&self) -> i64 {
         let model_info = self.get_model_info();
         let effective_context_window_percent = model_info.effective_context_window_percent;
-        Some(
-            model_info
-                .context_window
-                .saturating_mul(effective_context_window_percent)
-                / 100,
-        )
+        model_info
+            .context_window
+            .saturating_mul(effective_context_window_percent)
+            / 100
     }
 
     pub fn config(&self) -> Arc<Config> {

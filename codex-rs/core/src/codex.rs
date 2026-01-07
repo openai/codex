@@ -1334,7 +1334,7 @@ impl Session {
             if let Some(token_usage) = token_usage {
                 state.update_token_info_from_usage(
                     token_usage,
-                    turn_context.client.get_model_context_window(),
+                    Some(turn_context.client.get_model_context_window()),
                 );
             }
         }
@@ -1366,7 +1366,7 @@ impl Session {
             };
 
             if info.model_context_window.is_none() {
-                info.model_context_window = turn_context.client.get_model_context_window();
+                info.model_context_window = Some(turn_context.client.get_model_context_window());
             }
 
             state.set_token_info(Some(info));
@@ -1397,13 +1397,11 @@ impl Session {
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
         let context_window = turn_context.client.get_model_context_window();
-        if let Some(context_window) = context_window {
-            {
-                let mut state = self.state.lock().await;
-                state.set_token_usage_full(context_window);
-            }
-            self.send_token_count_event(turn_context).await;
+        {
+            let mut state = self.state.lock().await;
+            state.set_token_usage_full(context_window);
         }
+        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn record_response_item_and_emit_turn_item(
@@ -2250,7 +2248,7 @@ pub(crate) async fn run_task(
         run_auto_compact(&sess, &turn_context).await;
     }
     let event = EventMsg::TaskStarted(TaskStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
+        model_context_window: Some(turn_context.client.get_model_context_window()),
     });
     sess.send_event(&turn_context, event).await;
 

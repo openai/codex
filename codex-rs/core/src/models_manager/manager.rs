@@ -128,10 +128,6 @@ impl ModelsManager {
         Ok(self.build_available_models(remote_models))
     }
 
-    fn find_model_info_for_slug(slug: &str) -> ModelInfo {
-        model_info::find_model_info_for_slug(slug)
-    }
-
     /// Look up the requested model metadata while applying remote metadata overrides.
     pub async fn construct_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
@@ -139,7 +135,7 @@ impl ModelsManager {
             .await
             .into_iter()
             .find(|m| m.slug == model);
-        let model = Self::find_model_info_for_slug(model);
+        let model = model_info::find_model_info_for_slug(model);
         model_info::with_config_overrides(model_info::merge_remote_overrides(model, remote), config)
     }
 
@@ -186,7 +182,7 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Offline helper that builds a `ModelInfo` without consulting remote state.
     pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
-        model_info::with_config_overrides(Self::find_model_info_for_slug(model), config)
+        model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
     }
 
     async fn get_etag(&self) -> Option<String> {

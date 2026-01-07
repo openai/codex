@@ -55,7 +55,7 @@ pub(crate) async fn run_compact_task(
     input: Vec<UserInput>,
 ) {
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
+        model_context_window: Some(turn_context.client.get_model_context_window()),
     });
     sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;

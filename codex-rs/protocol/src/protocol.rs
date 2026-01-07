@@ -844,6 +844,7 @@ pub struct TaskCompleteEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskStartedEvent {
+    // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
 }
 
@@ -865,6 +866,7 @@ pub struct TokenUsage {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
 }

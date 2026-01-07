@@ -59,7 +59,7 @@ impl SessionTask for UserShellCommandTask {
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let event = EventMsg::TaskStarted(TaskStartedEvent {
-            model_context_window: turn_context.client.get_model_context_window(),
+            model_context_window: Some(turn_context.client.get_model_context_window()),
         });
         let session = session.clone_session();
         session.send_event(turn_context.as_ref(), event).await;
