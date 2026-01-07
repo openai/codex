@@ -23,10 +23,12 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::load_default_config_for_test;
-use crate::responses::get_responses_request_bodies;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
 use crate::wait_for_event;
+use wiremock::Match;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
@@ -322,7 +324,19 @@ impl TestCodexHarness {
     }
 
     pub async fn request_bodies(&self) -> Vec<Value> {
-        get_responses_request_bodies(&self.server).await
+        let method_matcher = method("POST");
+        let path_matcher = path_regex(".*/responses$");
+        self.server
+            .received_requests()
+            .await
+            .expect("mock server should not fail")
+            .into_iter()
+            .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+            .map(|req| {
+                req.body_json::<Value>()
+                    .expect("request body to be valid JSON")
+            })
+            .collect()
     }
 
     pub async fn function_call_output_value(&self, call_id: &str) -> Value {

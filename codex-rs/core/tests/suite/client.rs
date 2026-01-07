@@ -31,7 +31,6 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::ev_completed_with_tokens;
-use core_test_support::responses::get_responses_requests;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
@@ -47,6 +46,7 @@ use std::io::Write;
 use std::sync::Arc;
 use tempfile::TempDir;
 use uuid::Uuid;
+use wiremock::Match;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -54,6 +54,7 @@ use wiremock::matchers::body_string_contains;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+use wiremock::matchers::path_regex;
 use wiremock::matchers::query_param;
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
@@ -374,7 +375,15 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
-    let requests = get_responses_requests(&server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .collect::<Vec<_>>();
     let request = requests
         .first()
         .expect("expected POST request to /responses");
@@ -500,7 +509,15 @@ async fn chatgpt_auth_sends_correct_request() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
-    let requests = get_responses_requests(&server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .collect::<Vec<_>>();
     let request = requests
         .first()
         .expect("expected POST request to /responses");
@@ -1233,7 +1250,15 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         }
     }
 
-    let requests = get_responses_requests(&server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .collect::<Vec<_>>();
     assert_eq!(requests.len(), 1, "expected a single POST request");
     let body: serde_json::Value = requests[0]
         .body_json()
@@ -1847,7 +1872,15 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Inspect the three captured requests.
-    let requests = get_responses_requests(&server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .collect::<Vec<_>>();
     assert_eq!(requests.len(), 3, "expected 3 requests (one per turn)");
 
     // Replace full-array compare with tail-only raw JSON compare using a single hard-coded value.

@@ -26,7 +26,6 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::get_responses_request_bodies;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::wait_for_event;
@@ -35,7 +34,10 @@ use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
+use wiremock::Match;
 use wiremock::MockServer;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 
@@ -772,7 +774,19 @@ fn normalize_line_endings(value: &mut Value) {
 }
 
 async fn gather_request_bodies(server: &MockServer) -> Vec<Value> {
-    let mut bodies = get_responses_request_bodies(server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let mut bodies = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .map(|req| {
+            req.body_json::<Value>()
+                .expect("request body to be valid JSON")
+        })
+        .collect::<Vec<_>>();
     for body in &mut bodies {
         normalize_line_endings(body);
     }

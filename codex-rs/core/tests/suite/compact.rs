@@ -31,7 +31,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
-use core_test_support::responses::get_responses_requests;
 use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -41,7 +40,10 @@ use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use wiremock::Match;
 use wiremock::MockServer;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -358,7 +360,15 @@ async fn manual_compact_uses_custom_prompt() {
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .collect::<Vec<_>>();
     let body = requests
         .iter()
         .find_map(|req| req.body_json::<serde_json::Value>().ok())
@@ -586,7 +596,15 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // collect the requests payloads from the model
-    let requests_payloads = get_responses_requests(&server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let requests_payloads = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .collect::<Vec<_>>();
 
     let body = requests_payloads[0]
         .body_json::<serde_json::Value>()
@@ -1111,7 +1129,15 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .collect::<Vec<_>>();
     assert_eq!(
         requests.len(),
         4,
@@ -1897,7 +1923,15 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "auto compact should not emit task lifecycle events"
     );
 
-    let requests = get_responses_requests(&server).await;
+    let method_matcher = method("POST");
+    let path_matcher = path_regex(".*/responses$");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .collect::<Vec<_>>();
     let request_bodies: Vec<String> = requests
         .into_iter()
         .map(|request| String::from_utf8(request.body).unwrap_or_default())
