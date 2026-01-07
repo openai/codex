@@ -21,6 +21,7 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
+    pub web_search_cached: bool,
     pub include_view_image_tool: bool,
     pub experimental_supported_tools: Vec<String>,
 }
@@ -38,6 +39,7 @@ impl ToolsConfig {
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
+        let include_web_search_cached = features.enabled(Feature::WebSearchCached);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -69,6 +71,7 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
+            web_search_cached: include_web_search_cached,
             include_view_image_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
@@ -1093,8 +1096,15 @@ pub(crate) fn build_specs(
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
-    if config.web_search_request {
-        builder.push_spec(ToolSpec::WebSearch {});
+    // Prefer web_search_cached flag over web_search_request
+    if config.web_search_cached {
+        builder.push_spec(ToolSpec::WebSearch {
+            external_web_access: Some(false),
+        });
+    } else if config.web_search_request {
+        builder.push_spec(ToolSpec::WebSearch {
+            external_web_access: Some(true),
+        });
     }
 
     if config.include_view_image_tool {
@@ -1137,7 +1147,7 @@ mod tests {
         match tool {
             ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
             ToolSpec::LocalShell {} => "local_shell",
-            ToolSpec::WebSearch {} => "web_search",
+            ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(FreeformTool { name, .. }) => name,
         }
     }
@@ -1215,7 +1225,7 @@ mod tests {
             ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
                 strip_descriptions_schema(parameters);
             }
-            ToolSpec::Freeform(_) | ToolSpec::LocalShell {} | ToolSpec::WebSearch {} => {}
+            ToolSpec::Freeform(_) | ToolSpec::LocalShell {} | ToolSpec::WebSearch { .. } => {}
         }
     }
 
@@ -1259,7 +1269,9 @@ mod tests {
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_apply_patch_freeform_tool(),
-            ToolSpec::WebSearch {},
+            ToolSpec::WebSearch {
+                external_web_access: Some(true),
+            },
             create_view_image_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
@@ -1290,6 +1302,51 @@ mod tests {
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
         assert_eq!(&tool_names, &expected_tools,);
+    }
+
+    #[test]
+    fn web_search_cached_sets_external_web_access_false() {
+        let config = test_config();
+        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchCached);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+
+        let tool = find_tool(&tools, "web_search");
+        assert_eq!(
+            tool.spec,
+            ToolSpec::WebSearch {
+                external_web_access: Some(false),
+            }
+        );
+    }
+
+    #[test]
+    fn web_search_cached_takes_precedence_over_web_search_request() {
+        let config = test_config();
+        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchCached);
+        features.enable(Feature::WebSearchRequest);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+
+        let tool = find_tool(&tools, "web_search");
+        assert_eq!(
+            tool.spec,
+            ToolSpec::WebSearch {
+                external_web_access: Some(false),
+            }
+        );
     }
 
     #[test]

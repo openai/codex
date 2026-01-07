@@ -143,6 +143,7 @@ impl TestCodexBuilder {
             config.model_provider.clone(),
             config.codex_home.clone(),
         );
+        let conversation_manager = Arc::new(conversation_manager);
 
         let new_conversation = match resume_from {
             Some(path) => {
@@ -164,7 +165,7 @@ impl TestCodexBuilder {
             config,
             codex: new_conversation.conversation,
             session_configured: new_conversation.session_configured,
-            conversation_manager: Arc::new(conversation_manager),
+            conversation_manager,
         })
     }
 

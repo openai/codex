@@ -149,14 +149,14 @@ impl ModelsManager {
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
         let auth_mode = self.auth_manager.get_auth_mode();
         let remote_models = self.remote_models(config).await;
-        if auth_mode == Some(AuthMode::ChatGPT)
-            && self
+        if auth_mode == Some(AuthMode::ChatGPT) {
+            let has_auto_balanced = self
                 .build_available_models(remote_models)
                 .iter()
-                .any(|m| m.model == CODEX_AUTO_BALANCED_MODEL)
-        {
-            return CODEX_AUTO_BALANCED_MODEL.to_string();
-        } else if auth_mode == Some(AuthMode::ChatGPT) {
+                .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL && model.show_in_picker);
+            if has_auto_balanced {
+                return CODEX_AUTO_BALANCED_MODEL.to_string();
+            }
             return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
@@ -247,10 +247,15 @@ impl ModelsManager {
         merged_presets = self.filter_visible_models(merged_presets);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
-        if let Some(default) = merged_presets.first_mut()
-            && !has_default
-        {
-            default.is_default = true;
+        if !has_default {
+            if let Some(default) = merged_presets
+                .iter_mut()
+                .find(|preset| preset.show_in_picker)
+            {
+                default.is_default = true;
+            } else if let Some(default) = merged_presets.first_mut() {
+                default.is_default = true;
+            }
         }
 
         merged_presets
@@ -260,7 +265,7 @@ impl ModelsManager {
         let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
         models
             .into_iter()
-            .filter(|model| model.show_in_picker && (chatgpt_mode || model.supported_in_api))
+            .filter(|model| chatgpt_mode || model.supported_in_api)
             .collect()
     }
 
@@ -654,12 +659,13 @@ mod tests {
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
         let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
 
-        let mut expected = ModelPreset::from(visible_model.clone());
-        expected.is_default = true;
+        let expected_hidden = ModelPreset::from(hidden_model.clone());
+        let mut expected_visible = ModelPreset::from(visible_model.clone());
+        expected_visible.is_default = true;
 
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
-        assert_eq!(available, vec![expected]);
+        assert_eq!(available, vec![expected_hidden, expected_visible]);
     }
 
     #[test]

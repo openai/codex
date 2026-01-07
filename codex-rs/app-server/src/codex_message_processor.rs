@@ -91,6 +91,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -178,6 +179,8 @@ use uuid::Uuid;
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
 
+pub(crate) type PendingRollbacks = Arc<Mutex<HashMap<ConversationId, RequestId>>>;
+
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
@@ -220,6 +223,8 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
+    // Queue of pending rollback requests per conversation. We reply when ThreadRollback arrives.
+    pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
@@ -275,6 +280,7 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
             turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
@@ -364,6 +370,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
+            }
+            ClientRequest::ThreadRollback { request_id, params } => {
+                self.thread_rollback(request_id, params).await;
             }
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
@@ -1103,7 +1112,7 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
-        let service = ConfigService::new(self.config.codex_home.clone(), Vec::new());
+        let service = ConfigService::new_with_defaults(self.config.codex_home.clone());
         let user_saved_config: UserSavedConfig = match service.load_user_saved_config().await {
             Ok(config) => config,
             Err(err) => {
@@ -1246,14 +1255,14 @@ impl CodexMessageProcessor {
             cwd,
             approval_policy,
             sandbox: sandbox_mode,
-            config: cli_overrides,
+            config: request_overrides,
             base_instructions,
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool,
         } = params;
 
-        let overrides = ConfigOverrides {
+        let typesafe_overrides = ConfigOverrides {
             model,
             config_profile: profile,
             cwd: cwd.clone().map(PathBuf::from),
@@ -1270,15 +1279,21 @@ impl CodexMessageProcessor {
 
         // Persist windows sandbox feature.
         // TODO: persist default config in general.
-        let mut cli_overrides = cli_overrides.unwrap_or_default();
+        let mut request_overrides = request_overrides.unwrap_or_default();
         if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-            cli_overrides.insert(
+            request_overrides.insert(
                 "features.experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
             );
         }
 
-        let config = match derive_config_from_params(overrides, Some(cli_overrides)).await {
+        let config = match derive_config_from_params(
+            &self.cli_overrides,
+            Some(request_overrides),
+            typesafe_overrides,
+        )
+        .await
+        {
             Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1318,7 +1333,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
-        let overrides = self.build_thread_config_overrides(
+        let typesafe_overrides = self.build_thread_config_overrides(
             params.model,
             params.model_provider,
             params.cwd,
@@ -1328,18 +1343,21 @@ impl CodexMessageProcessor {
             params.developer_instructions,
         );
 
-        let config = match derive_config_from_params(overrides, params.config).await {
-            Ok(config) => config,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config =
+            match derive_config_from_params(&self.cli_overrides, params.config, typesafe_overrides)
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("error deriving config: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
@@ -1506,6 +1524,52 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_rollback(&mut self, request_id: RequestId, params: ThreadRollbackParams) {
+        let ThreadRollbackParams {
+            thread_id,
+            num_turns,
+        } = params;
+
+        if num_turns == 0 {
+            self.send_invalid_request_error(request_id, "numTurns must be >= 1".to_string())
+                .await;
+            return;
+        }
+
+        let (conversation_id, conversation) =
+            match self.conversation_from_thread_id(&thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        {
+            let mut map = self.pending_rollbacks.lock().await;
+            if map.contains_key(&conversation_id) {
+                self.send_invalid_request_error(
+                    request_id,
+                    "rollback already in progress for this thread".to_string(),
+                )
+                .await;
+                return;
+            }
+
+            map.insert(conversation_id, request_id.clone());
+        }
+
+        if let Err(err) = conversation.submit(Op::ThreadRollback { num_turns }).await {
+            // No ThreadRollback event will arrive if an error occurs.
+            // Clean up and reply immediately.
+            let mut map = self.pending_rollbacks.lock().await;
+            map.remove(&conversation_id);
+
+            self.send_internal_error(request_id, format!("failed to start rollback: {err}"))
+                .await;
+        }
+    }
+
     async fn thread_list(&self, request_id: RequestId, params: ThreadListParams) {
         let ThreadListParams {
             cursor,
@@ -1543,7 +1607,7 @@ impl CodexMessageProcessor {
             cwd,
             approval_policy,
             sandbox,
-            config: cli_overrides,
+            config: request_overrides,
             base_instructions,
             developer_instructions,
         } = params;
@@ -1553,12 +1617,12 @@ impl CodexMessageProcessor {
             || cwd.is_some()
             || approval_policy.is_some()
             || sandbox.is_some()
-            || cli_overrides.is_some()
+            || request_overrides.is_some()
             || base_instructions.is_some()
             || developer_instructions.is_some();
 
         let config = if overrides_requested {
-            let overrides = self.build_thread_config_overrides(
+            let typesafe_overrides = self.build_thread_config_overrides(
                 model,
                 model_provider,
                 cwd,
@@ -1567,7 +1631,13 @@ impl CodexMessageProcessor {
                 base_instructions,
                 developer_instructions,
             );
-            match derive_config_from_params(overrides, cli_overrides).await {
+            match derive_config_from_params(
+                &self.cli_overrides,
+                request_overrides,
+                typesafe_overrides,
+            )
+            .await
+            {
                 Ok(config) => config,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -2197,7 +2267,7 @@ impl CodexMessageProcessor {
                     cwd,
                     approval_policy,
                     sandbox: sandbox_mode,
-                    config: cli_overrides,
+                    config: request_overrides,
                     base_instructions,
                     developer_instructions,
                     compact_prompt,
@@ -2205,15 +2275,15 @@ impl CodexMessageProcessor {
                 } = overrides;
 
                 // Persist windows sandbox feature.
-                let mut cli_overrides = cli_overrides.unwrap_or_default();
+                let mut request_overrides = request_overrides.unwrap_or_default();
                 if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-                    cli_overrides.insert(
+                    request_overrides.insert(
                         "features.experimental_windows_sandbox".to_string(),
                         serde_json::json!(true),
                     );
                 }
 
-                let overrides = ConfigOverrides {
+                let typesafe_overrides = ConfigOverrides {
                     model,
                     config_profile: profile,
                     cwd: cwd.map(PathBuf::from),
@@ -2228,7 +2298,12 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 };
 
-                derive_config_from_params(overrides, Some(cli_overrides)).await
+                derive_config_from_params(
+                    &self.cli_overrides,
+                    Some(request_overrides),
+                    typesafe_overrides,
+                )
+                .await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -2579,6 +2654,7 @@ impl CodexMessageProcessor {
         let _ = conversation
             .submit(Op::UserInput {
                 items: mapped_items,
+                final_output_json_schema: None,
             })
             .await;
 
@@ -2598,6 +2674,7 @@ impl CodexMessageProcessor {
             model,
             effort,
             summary,
+            output_schema,
         } = params;
 
         let Ok(conversation) = self
@@ -2632,7 +2709,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
-                final_output_json_schema: None,
+                final_output_json_schema: output_schema,
             })
             .await;
 
@@ -2650,19 +2727,17 @@ impl CodexMessageProcessor {
         };
 
         let skills_manager = self.conversation_manager.skills_manager();
-        let data = cwds
-            .into_iter()
-            .map(|cwd| {
-                let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
-                let errors = errors_to_info(&outcome.errors);
-                let skills = skills_to_info(&outcome.skills);
-                codex_app_server_protocol::SkillsListEntry {
-                    cwd,
-                    skills,
-                    errors,
-                }
-            })
-            .collect();
+        let mut data = Vec::new();
+        for cwd in cwds {
+            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let errors = errors_to_info(&outcome.errors);
+            let skills = skills_to_info(&outcome.skills);
+            data.push(codex_app_server_protocol::SkillsListEntry {
+                cwd,
+                skills,
+                errors,
+            });
+        }
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
@@ -2741,6 +2816,7 @@ impl CodexMessageProcessor {
         let turn_id = conversation
             .submit(Op::UserInput {
                 items: mapped_items,
+                final_output_json_schema: params.output_schema,
             })
             .await;
 
@@ -3094,8 +3170,10 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let pending_rollbacks = self.pending_rollbacks.clone();
         let turn_summary_store = self.turn_summary_store.clone();
         let api_version_for_task = api_version;
+        let fallback_model_provider = self.config.model_provider_id.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -3151,8 +3229,10 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
+                            pending_rollbacks.clone(),
                             turn_summary_store.clone(),
                             api_version_for_task,
+                            fallback_model_provider.clone(),
                         )
                         .await;
                     }
@@ -3340,20 +3420,37 @@ fn errors_to_info(
         .collect()
 }
 
+/// Derive the effective [`Config`] by layering three override sources.
+///
+/// Precedence (lowest to highest):
+/// - `cli_overrides`: process-wide startup `--config` flags.
+/// - `request_overrides`: per-request dotted-path overrides (`params.config`), converted JSON->TOML.
+/// - `typesafe_overrides`: Request objects such as `NewConversationParams` and
+///   `ThreadStartParams` support a limited set of _explicit_ config overrides, so
+///   `typesafe_overrides` is a `ConfigOverrides` derived from the respective request object.
+///   Because the overrides are defined explicitly in the `*Params`, this takes priority over
+///   the more general "bag of config options" provided by `cli_overrides` and `request_overrides`.
 async fn derive_config_from_params(
-    overrides: ConfigOverrides,
-    cli_overrides: Option<HashMap<String, serde_json::Value>>,
+    cli_overrides: &[(String, TomlValue)],
+    request_overrides: Option<HashMap<String, serde_json::Value>>,
+    typesafe_overrides: ConfigOverrides,
 ) -> std::io::Result<Config> {
-    let cli_overrides = cli_overrides
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(k, v)| (k, json_to_toml(v)))
-        .collect();
+    let merged_cli_overrides = cli_overrides
+        .iter()
+        .cloned()
+        .chain(
+            request_overrides
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k, json_to_toml(v))),
+        )
+        .collect::<Vec<_>>();
 
-    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
+    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, typesafe_overrides)
+        .await
 }
 
-async fn read_summary_from_rollout(
+pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
 ) -> std::io::Result<ConversationSummary> {
@@ -3410,6 +3507,24 @@ async fn read_summary_from_rollout(
         source: session_meta.source,
         git_info,
     })
+}
+
+pub(crate) async fn read_event_msgs_from_rollout(
+    path: &Path,
+) -> std::io::Result<Vec<codex_protocol::protocol::EventMsg>> {
+    let items = match RolloutRecorder::get_rollout_history(path).await? {
+        InitialHistory::New => Vec::new(),
+        InitialHistory::Forked(items) => items,
+        InitialHistory::Resumed(resumed) => resumed.history,
+    };
+
+    Ok(items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::EventMsg(event) => Some(event),
+            _ => None,
+        })
+        .collect())
 }
 
 fn extract_conversation_summary(
@@ -3473,7 +3588,7 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
-fn summary_to_thread(summary: ConversationSummary) -> Thread {
+pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
