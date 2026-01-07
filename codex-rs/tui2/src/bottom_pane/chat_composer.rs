@@ -619,15 +619,19 @@ impl ChatComposer {
                         let txt = self.textarea.text();
                         let safe_cur = Self::clamp_to_char_boundary(txt, cur);
                         let before = &txt[..safe_cur];
-                        let start_byte =
-                            super::paste_burst::retro_start_index(before, retro_chars as usize);
-                        let grabbed = before[start_byte..].to_string();
-                        if !grabbed.is_empty() {
-                            self.textarea.replace_range(start_byte..safe_cur, "");
+                        // If decision is to buffer, seed the paste burst buffer with the grabbed chars + new.
+                        // Otherwise, fall through to normal insertion below.
+                        if let Some(grab) =
+                            self.paste_burst
+                                .decide_begin_buffer(now, before, retro_chars as usize)
+                        {
+                            if !grab.grabbed.is_empty() {
+                                self.textarea.replace_range(grab.start_byte..safe_cur, "");
+                            }
+                            // seed the paste burst buffer with everything (grabbed + new)
+                            self.paste_burst.append_char_to_buffer(ch, now);
+                            return (InputResult::None, true);
                         }
-                        self.paste_burst.begin_with_retro_grabbed(grabbed, now);
-                        self.paste_burst.append_char_to_buffer(ch, now);
-                        return (InputResult::None, true);
                     }
                     _ => unreachable!("on_plain_char_no_hold returned unexpected variant"),
                 }

@@ -702,6 +702,8 @@ impl ChatComposer {
                         let txt = self.textarea.text();
                         let safe_cur = Self::clamp_to_char_boundary(txt, cur);
                         let before = &txt[..safe_cur];
+                        // If decision is to buffer, seed the paste burst buffer with the grabbed chars + new.
+                        // Otherwise, fall through to normal insertion below.
                         if let Some(grab) =
                             self.paste_burst
                                 .decide_begin_buffer(now, before, retro_chars as usize)
@@ -713,8 +715,6 @@ impl ChatComposer {
                             self.paste_burst.append_char_to_buffer(ch, now);
                             return (InputResult::None, true);
                         }
-                        // If decide_begin_buffer opted not to start buffering,
-                        // fall through to normal insertion below.
                     }
                     _ => unreachable!("on_plain_char_no_hold returned unexpected variant"),
                 }
