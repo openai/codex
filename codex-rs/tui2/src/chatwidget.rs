@@ -1023,9 +1023,9 @@ impl ChatWidget {
                 self.needs_final_message_separator = false;
                 needs_redraw = true;
             }
-            self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
-            ));
+            // Streaming must not capture the current viewport width: width-derived wraps are
+            // applied later, at render time, so the transcript can reflow on resize.
+            self.stream_controller = Some(StreamController::new());
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)
@@ -1921,6 +1921,7 @@ impl ChatWidget {
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
+            | EventMsg::ThreadRolledBack(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
@@ -2105,7 +2106,7 @@ impl ChatWidget {
         let models = self.models_manager.try_list_models(&self.config).ok()?;
         models
             .iter()
-            .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+            .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
     }
 
@@ -2221,6 +2222,14 @@ impl ChatWidget {
                     return;
                 }
             };
+        self.open_model_popup_with_presets(presets);
+    }
+
+    pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        let presets: Vec<ModelPreset> = presets
+            .into_iter()
+            .filter(|preset| preset.show_in_picker)
+            .collect();
 
         let current_label = presets
             .iter()

@@ -344,10 +344,22 @@ pub(crate) struct App {
     transcript_copy_action: TranscriptCopyAction,
     transcript_scrollbar_ui: TranscriptScrollbarUi,
 
-    // Pager overlay state (Transcript or Static like Diff)
+    // Pager overlay state (Transcript or Static like Diff).
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
-    has_emitted_history_lines: bool,
+    /// History cells received while an overlay is active.
+    ///
+    /// While in an alt-screen overlay, the normal terminal buffer is not visible.
+    /// Instead we queue the incoming cells here and, on overlay close, render them at the *current*
+    /// width and queue them in one batch via `Tui::insert_history_lines`.
+    ///
+    /// This matters for correctness if/when scrollback printing is enabled: if we deferred
+    /// already-rendered `Vec<Line>`, we'd bake viewport-width wrapping based on the width at the
+    /// time the cell arrived (which may differ from the width when the overlay closes).
+    pub(crate) deferred_history_cells: Vec<Arc<dyn HistoryCell>>,
+    /// True once at least one history cell has been inserted into terminal scrollback.
+    ///
+    /// Used to decide whether to insert an extra blank separator line when flushing deferred cells.
+    pub(crate) has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -511,7 +523,7 @@ impl App {
             transcript_copy_action: TranscriptCopyAction::default(),
             transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
+            deferred_history_cells: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             scroll_config,
@@ -1449,21 +1461,8 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    }
+                if self.overlay.is_some() {
+                    self.deferred_history_cells.push(cell);
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -2089,17 +2088,20 @@ mod tests {
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use codex_core::config::ConfigBuilder;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use tempfile::tempdir;
 
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
@@ -2135,7 +2137,7 @@ mod tests {
             transcript_copy_action: TranscriptCopyAction::default(),
             transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
+            deferred_history_cells: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
@@ -2188,7 +2190,7 @@ mod tests {
                 transcript_copy_action: TranscriptCopyAction::default(),
                 transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
                 overlay: None,
-                deferred_history_lines: Vec::new(),
+                deferred_history_cells: Vec::new(),
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
@@ -2207,6 +2209,24 @@ mod tests {
 
     fn all_model_presets() -> Vec<ModelPreset> {
         codex_core::models_manager::model_presets::all_model_presets().clone()
+    }
+
+    fn model_migration_copy_to_plain_text(
+        copy: &crate::model_migration::ModelMigrationCopy,
+    ) -> String {
+        let mut s = String::new();
+        for span in &copy.heading {
+            s.push_str(&span.content);
+        }
+        s.push('\n');
+        s.push('\n');
+        for line in &copy.content {
+            for span in &line.spans {
+                s.push_str(&span.content);
+            }
+            s.push('\n');
+        }
+        s
     }
 
     #[tokio::test]
@@ -2242,6 +2262,59 @@ mod tests {
             &seen,
             &all_model_presets()
         ));
+    }
+
+    #[tokio::test]
+    async fn model_migration_prompt_shows_for_hidden_model() {
+        let codex_home = tempdir().expect("temp codex home");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let available_models = all_model_presets();
+        let current = available_models
+            .iter()
+            .find(|preset| preset.model == "gpt-5.1-codex")
+            .cloned()
+            .expect("gpt-5.1-codex preset present");
+        assert!(
+            !current.show_in_picker,
+            "expected gpt-5.1-codex to be hidden from picker for this test"
+        );
+
+        let upgrade = current.upgrade.as_ref().expect("upgrade configured");
+        assert!(
+            should_show_model_migration_prompt(
+                &current.model,
+                &upgrade.id,
+                &config.notices.model_migrations,
+                &available_models,
+            ),
+            "expected migration prompt to be eligible for hidden model"
+        );
+
+        let target = available_models
+            .iter()
+            .find(|preset| preset.model == upgrade.id)
+            .cloned()
+            .expect("upgrade target present");
+        let target_description =
+            (!target.description.is_empty()).then(|| target.description.clone());
+        let can_opt_out = true;
+        let copy = migration_copy_for_models(
+            &current.model,
+            &upgrade.id,
+            target.display_name,
+            target_description,
+            can_opt_out,
+        );
+
+        assert_snapshot!(
+            "model_migration_prompt_shows_for_hidden_model",
+            model_migration_copy_to_plain_text(&copy)
+        );
     }
 
     #[tokio::test]

@@ -123,12 +123,42 @@ impl App {
     }
 
     /// Close transcript overlay and restore normal UI.
+    ///
+    /// Any history emitted while the overlay was open is flushed to the normal-buffer queue here.
+    ///
+    /// Importantly, we defer *cells* (not rendered lines) so we can render them against the current
+    /// width on close and avoid baking width-derived wrapping based on an earlier viewport size.
+    /// (This matters if/when scrollback printing is enabled; `Tui::insert_history_lines` currently
+    /// queues lines without printing them during the main draw loop.)
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
         let was_backtrack = self.backtrack.overlay_preview_active;
-        if !self.deferred_history_lines.is_empty() {
-            let lines = std::mem::take(&mut self.deferred_history_lines);
-            tui.insert_history_lines(lines);
+        if !self.deferred_history_cells.is_empty() {
+            let cells = std::mem::take(&mut self.deferred_history_cells);
+            let width = tui.terminal.last_known_screen_size.width;
+            let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+            for cell in cells {
+                let mut display = cell.display_lines(width);
+                if display.is_empty() {
+                    continue;
+                }
+
+                // Only insert a separating blank line for new cells that are not part of an
+                // ongoing stream. Streaming continuations should not accrue extra blank lines
+                // between chunks.
+                if !cell.is_stream_continuation() {
+                    if self.has_emitted_history_lines {
+                        display.insert(0, ratatui::text::Line::from(""));
+                    } else {
+                        self.has_emitted_history_lines = true;
+                    }
+                }
+
+                lines.extend(display);
+            }
+            if !lines.is_empty() {
+                tui.insert_history_lines(lines);
+            }
         }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;

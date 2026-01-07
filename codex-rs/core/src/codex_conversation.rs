@@ -1,3 +1,4 @@
+use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::error::Result as CodexResult;
 use crate::protocol::Event;
@@ -31,6 +32,10 @@ impl CodexConversation {
 
     pub async fn next_event(&self) -> CodexResult<Event> {
         self.codex.next_event().await
+    }
+
+    pub async fn agent_status(&self) -> AgentStatus {
+        self.codex.agent_status().await
     }
 
     pub fn rollout_path(&self) -> PathBuf {

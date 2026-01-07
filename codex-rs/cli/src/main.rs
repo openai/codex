@@ -480,7 +480,12 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
-                codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+                codex_app_server::run_main(
+                    codex_linux_sandbox_exe,
+                    root_config_overrides,
+                    codex_core::config_loader::LoaderOverrides::default(),
+                )
+                .await?;
             }
             Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
                 codex_app_server_protocol::generate_ts(

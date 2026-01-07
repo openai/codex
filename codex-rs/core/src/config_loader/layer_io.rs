@@ -93,12 +93,8 @@ pub(super) async fn read_config_from_path(
     }
 }
 
-/// Return the default managed config path (honoring `CODEX_MANAGED_CONFIG_PATH`).
+/// Return the default managed config path.
 pub(super) fn managed_config_default_path(codex_home: &Path) -> PathBuf {
-    if let Ok(path) = std::env::var("CODEX_MANAGED_CONFIG_PATH") {
-        return PathBuf::from(path);
-    }
-
     #[cfg(unix)]
     {
         let _ = codex_home;
