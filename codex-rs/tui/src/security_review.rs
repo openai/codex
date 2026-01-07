@@ -14411,6 +14411,9 @@ async fn execute_bug_command(
     } else {
         format!("[{}] {}", plan.summary_id, plan.title)
     };
+    let bug_id = plan.risk_rank.unwrap_or(plan.summary_id);
+    let bug_work_dir = work_dir.join(format!("bug{bug_id}"));
+    let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
     let file_stem = if let Some(rank) = plan.risk_rank {
         format!("bug_rank_{rank}")
     } else {
@@ -14489,7 +14492,12 @@ async fn execute_bug_command(
                                 Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                         }
                         let (stdout_path, stderr_path) = write_validation_output_files(
-                            &work_dir, &repo_path, &file_stem, "control", &stdout, &stderr,
+                            &bug_work_dir,
+                            &repo_path,
+                            &file_stem,
+                            "control",
+                            &stdout,
+                            &stderr,
                         )
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
@@ -14539,7 +14547,12 @@ async fn execute_bug_command(
                             Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
                     let (stdout_path, stderr_path) = write_validation_output_files(
-                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        &stdout,
+                        &stderr,
                     )
                     .await;
                     validation.stdout_path = Some(stdout_path);
@@ -14561,13 +14574,13 @@ async fn execute_bug_command(
                 if let Some(path) = plan.request.script_path.as_ref() {
                     Some(path.clone())
                 } else if let Some(code) = plan.request.script_inline.as_ref() {
-                    let _ = tokio_fs::create_dir_all(&work_dir).await;
+                    let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
                     let file_name = if let Some(rank) = plan.risk_rank {
                         format!("bug_rank_{rank}.py")
                     } else {
                         format!("bug_{}.py", plan.summary_id)
                     };
-                    let temp_path = work_dir.join(file_name);
+                    let temp_path = bug_work_dir.join(file_name);
                     if let Err(err) = tokio_fs::write(&temp_path, code.as_bytes()).await {
                         validation.status = BugValidationStatus::UnableToValidate;
                         validation.summary = Some(format!(
@@ -14692,7 +14705,12 @@ async fn execute_bug_command(
                             Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
                     let (stdout_path, stderr_path) = write_validation_output_files(
-                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        &stdout,
+                        &stderr,
                     )
                     .await;
                     validation.stdout_path = Some(stdout_path);
@@ -14736,13 +14754,13 @@ async fn execute_bug_command(
                     logs,
                 };
             }
-            let _ = tokio_fs::create_dir_all(&work_dir).await;
-            let screenshot_path = work_dir.join(format!("{file_stem}.png"));
+            let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
+            let screenshot_path = bug_work_dir.join(format!("{file_stem}.png"));
 
             let control_target = base_url_for_control(&target);
             validation.control_target = control_target.clone();
             if let Some(control_target) = control_target.as_ref() {
-                let control_screenshot_path = work_dir.join(format!("{file_stem}_control.png"));
+                let control_screenshot_path = bug_work_dir.join(format!("{file_stem}_control.png"));
                 validation.control_steps.push(format!(
                     "Run: `npx --yes playwright screenshot {control_target} {}`",
                     display_path_for(&control_screenshot_path, &repo_path)
@@ -14781,7 +14799,12 @@ async fn execute_bug_command(
                                 Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                         }
                         let (stdout_path, stderr_path) = write_validation_output_files(
-                            &work_dir, &repo_path, &file_stem, "control", &stdout, &stderr,
+                            &bug_work_dir,
+                            &repo_path,
+                            &file_stem,
+                            "control",
+                            &stdout,
+                            &stderr,
                         )
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
@@ -14839,7 +14862,12 @@ async fn execute_bug_command(
                             Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                     }
                     let (stdout_path, stderr_path) = write_validation_output_files(
-                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        &stdout,
+                        &stderr,
                     )
                     .await;
                     validation.stdout_path = Some(stdout_path);
@@ -15130,6 +15158,10 @@ async fn setup_accounts(
         let success = output.status.success();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout_path = work_dir.join("register_accounts_stdout.txt");
+        let stderr_path = work_dir.join("register_accounts_stderr.txt");
+        let _ = tokio_fs::write(&stdout_path, stdout.as_bytes()).await;
+        let _ = tokio_fs::write(&stderr_path, stderr.as_bytes()).await;
         if !success {
             if let Some(tx) = progress_sender.as_ref() {
                 tx.send(AppEvent::SecurityReviewLog(format!(
@@ -15357,18 +15389,21 @@ async fn run_web_validation(
     }
 
     // Ensure we have test accounts before validation
-    let work_dir = snapshot_path
+    let output_root = snapshot_path
         .parent()
-        .map(|p| p.join("validation"))
+        .and_then(|p| p.parent())
+        .map(PathBuf::from)
         .unwrap_or_else(|| repo_path.join(".codex_validation"));
-    let _ = tokio_fs::create_dir_all(&work_dir).await;
+    let work_dir = output_root.join("validation");
+    let shared_dir = work_dir.join("shared");
+    let _ = tokio_fs::create_dir_all(&shared_dir).await;
     if let Some(creds) = setup_accounts(
         &client,
         &provider,
         &auth,
         &model,
         &snapshot,
-        &work_dir,
+        &shared_dir,
         progress_sender.clone(),
         metrics.clone(),
     )
@@ -15377,12 +15412,13 @@ async fn run_web_validation(
         message: e,
         logs: vec![],
     })? {
-        let path = write_accounts(&work_dir, &creds)
-            .await
-            .map_err(|e| BugVerificationFailure {
-                message: e,
-                logs: vec![],
-            })?;
+        let path =
+            write_accounts(&shared_dir, &creds)
+                .await
+                .map_err(|e| BugVerificationFailure {
+                    message: e,
+                    logs: vec![],
+                })?;
         if let Some(tx) = progress_sender.as_ref() {
             let names: Vec<String> = creds.iter().map(|p| p.username.clone()).collect();
             tx.send(AppEvent::SecurityReviewLog(format!(
