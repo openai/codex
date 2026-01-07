@@ -1379,6 +1379,9 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Helpful information about the user's IDE state. Use judiciously to provide the model with
+    /// useful context.
+    pub user_ide_context: Option<String>,
     /// Override the working directory for this turn and subsequent turns.
     pub cwd: Option<PathBuf>,
     /// Override the approval policy for this turn and subsequent turns.

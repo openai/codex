@@ -131,7 +131,9 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
+use codex_core::normalize_user_ide_context;
 use codex_core::parse_cursor;
+use codex_core::prepend_user_ide_context;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDelivery as CoreReviewDelivery;
@@ -1604,6 +1606,7 @@ impl CodexMessageProcessor {
             config: request_overrides,
             base_instructions,
             developer_instructions,
+            ..
         } = params;
 
         let overrides_requested = model.is_some()
@@ -2744,11 +2747,16 @@ impl CodexMessageProcessor {
         };
 
         // Map v2 input items to core input items.
-        let mapped_items: Vec<CoreInputItem> = params
+        let mut mapped_items: Vec<CoreInputItem> = params
             .input
             .into_iter()
             .map(V2UserInput::into_core)
             .collect();
+
+        if let Some(user_ide_context) = params.user_ide_context.and_then(normalize_user_ide_context)
+        {
+            prepend_user_ide_context(&mut mapped_items, &user_ide_context);
+        }
 
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()

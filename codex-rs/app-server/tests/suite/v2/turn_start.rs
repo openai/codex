@@ -35,11 +35,21 @@ use codex_core::protocol_config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn value_contains_str(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+        Value::String(s) => s.contains(needle),
+        Value::Array(values) => values.iter().any(|v| value_contains_str(v, needle)),
+        Value::Object(map) => map.values().any(|v| value_contains_str(v, needle)),
+    }
+}
 
 #[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
@@ -144,6 +154,71 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     )?;
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_includes_user_ide_context_in_model_request() -> Result<()> {
+    let user_ide_context = "some ide context";
+    let tagged = format!("<user_ide_context>{user_ide_context}</user_ide_context>");
+
+    // Two Codex turns hit the mock model (session start + turn/start).
+    let responses = vec![
+        create_final_assistant_message_sse_response("Done")?,
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_chat_completions_server_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+            }],
+            user_ide_context: Some(user_ide_context.to_string()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server.received_requests().await.expect("received requests");
+    assert!(
+        requests.iter().any(|request| {
+            request
+                .body_json::<Value>()
+                .is_ok_and(|body| value_contains_str(&body, &tagged))
+        }),
+        "expected request body to contain tagged user_ide_context"
+    );
 
     Ok(())
 }
@@ -530,6 +605,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
             }],
+            user_ide_context: None,
             cwd: Some(first_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
@@ -562,6 +638,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
             }],
+            user_ide_context: None,
             cwd: Some(second_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),

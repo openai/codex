@@ -10,6 +10,7 @@ use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::USER_IDE_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::USER_IDE_CONTEXT_OPEN_TAG;
+use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -17,6 +18,28 @@ use std::path::PathBuf;
 
 pub(crate) fn is_user_ide_context(text: &str) -> bool {
     text.starts_with(USER_IDE_CONTEXT_OPEN_TAG) && text.ends_with(USER_IDE_CONTEXT_CLOSE_TAG)
+}
+
+pub fn normalize_user_ide_context(user_ide_context: String) -> Option<String> {
+    let trimmed = user_ide_context.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+pub fn prepend_user_ide_context(items: &mut Vec<UserInput>, user_ide_context: &str) {
+    // Bundle IDE context as its own content item so downstream request builders can place it
+    // into the model input while core can still filter it from user-visible turn items.
+    items.insert(
+        0,
+        UserInput::Text {
+            text: format!(
+                "{USER_IDE_CONTEXT_OPEN_TAG}{user_ide_context}{USER_IDE_CONTEXT_CLOSE_TAG}"
+            ),
+        },
+    );
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -214,6 +237,36 @@ mod tests {
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
+    }
+
+    #[test]
+    fn normalize_user_ide_context_trims_and_drops_empty() {
+        assert_eq!(
+            normalize_user_ide_context("  some context \n".to_string()),
+            Some("some context".to_string())
+        );
+        assert_eq!(normalize_user_ide_context("   \n\t".to_string()), None);
+    }
+
+    #[test]
+    fn prepend_user_ide_context_inserts_tagged_text_first() {
+        let mut items = vec![UserInput::Text {
+            text: "Hello world".to_string(),
+        }];
+
+        prepend_user_ide_context(&mut items, "ctx");
+
+        assert_eq!(
+            items,
+            vec![
+                UserInput::Text {
+                    text: "<user_ide_context>ctx</user_ide_context>".to_string(),
+                },
+                UserInput::Text {
+                    text: "Hello world".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]
