@@ -1288,10 +1288,6 @@ impl Session {
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
-        if !self.enabled(Feature::ModelWarnings) {
-            return;
-        }
-
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -2216,8 +2212,7 @@ async fn spawn_review_thread(
     let mut review_features = sess.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
-        .disable(crate::features::Feature::WebSearchCached)
-        .disable(crate::features::Feature::ViewImageTool);
+        .disable(crate::features::Feature::WebSearchCached);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         features: &review_features,
@@ -2523,7 +2518,7 @@ async fn run_turn(
     let prompt = Prompt {
         input,
         tools: router.specs(),
-        parallel_tool_calls: model_supports_parallel && sess.enabled(Feature::ParallelToolCalls),
+        parallel_tool_calls: model_supports_parallel,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
     };
@@ -3655,7 +3650,6 @@ mod tests {
     async fn record_model_warning_appends_user_message() {
         let (mut session, turn_context) = make_session_and_context().await;
         let mut features = Features::with_defaults();
-        features.enable(Feature::ModelWarnings);
         session.features = features;
 
         session

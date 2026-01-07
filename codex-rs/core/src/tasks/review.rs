@@ -85,8 +85,7 @@ async fn start_review_conversation(
     // re-enable blocked tools (web search, view image).
     sub_agent_config
         .features
-        .disable(crate::features::Feature::WebSearchRequest)
-        .disable(crate::features::Feature::ViewImageTool);
+        .disable(crate::features::Feature::WebSearchRequest);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
