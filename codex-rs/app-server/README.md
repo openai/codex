@@ -505,3 +505,28 @@ Field notes:
 - `usedPercent` is current usage within the OpenAI quota window.
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
+
+
+## Skills
+
+Skills are invoked by sending a text input that starts with `$<skill-name>`. The rest of the text is passed to the skill as its input.
+
+Example:
+
+```
+$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
+```
+
+Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/or with `forceReload`).
+
+```json
+{ "method": "skills/list", "id": 25, "params": {
+    "cwd": "/Users/me/project",
+    "forceReload": false
+} }
+{ "id": 25, "result": {
+    "skills": [
+        { "name": "skill-creator", "description": "Create or update a Codex skill" }
+    ]
+} }
+```
