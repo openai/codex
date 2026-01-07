@@ -154,7 +154,7 @@ struct RunningCommand {
     source: ExecCommandSource,
 }
 
-struct UnifiedExecSessionSummary {
+struct UnifiedExecProcessSummary {
     key: String,
     command_display: String,
 }
@@ -332,7 +332,7 @@ pub(crate) struct ChatWidget {
     suppressed_exec_calls: HashSet<String>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
-    unified_exec_sessions: Vec<UnifiedExecSessionSummary>,
+    unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -801,7 +801,7 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
-        self.unified_exec_sessions.clear();
+        self.unified_exec_processes.clear();
         self.sync_unified_exec_footer();
 
         if reason != TurnAbortReason::ReviewEnded {
@@ -868,7 +868,7 @@ impl ChatWidget {
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
-            self.track_unified_exec_session_begin(&ev);
+            self.track_unified_exec_process_begin(&ev);
             if !is_standard_tool_call(&ev.parsed_cmd) {
                 return;
             }
@@ -887,10 +887,10 @@ impl ChatWidget {
     fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
         self.flush_answer_stream_with_separator();
         let command_display = self
-            .unified_exec_sessions
+            .unified_exec_processes
             .iter()
-            .find(|session| session.key == ev.process_id)
-            .map(|session| session.command_display.clone());
+            .find(|process| process.key == ev.process_id)
+            .map(|process| process.command_display.clone());
         if ev.stdin.is_empty() {
             // Empty stdin means we are still waiting on background output; keep a live shimmer cell.
             if let Some(wait_cell) = self.active_cell.as_mut().and_then(|cell| {
@@ -898,7 +898,7 @@ impl ChatWidget {
                     .downcast_mut::<history_cell::UnifiedExecWaitCell>()
             }) && wait_cell.matches(command_display.as_deref())
             {
-                // Same session still waiting; update command display if it shows up late.
+                // Same process still waiting; update command display if it shows up late.
                 wait_cell.update_command_display(command_display);
                 self.request_redraw();
                 return;
@@ -967,7 +967,7 @@ impl ChatWidget {
 
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
         if is_unified_exec_source(ev.source) {
-            self.track_unified_exec_session_end(&ev);
+            self.track_unified_exec_process_end(&ev);
             if !self.bottom_pane.is_task_running() {
                 return;
             }
@@ -976,20 +976,20 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
     }
 
-    fn track_unified_exec_session_begin(&mut self, ev: &ExecCommandBeginEvent) {
+    fn track_unified_exec_process_begin(&mut self, ev: &ExecCommandBeginEvent) {
         if ev.source != ExecCommandSource::UnifiedExecStartup {
             return;
         }
         let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
         let command_display = strip_bash_lc_and_escape(&ev.command);
         if let Some(existing) = self
-            .unified_exec_sessions
+            .unified_exec_processes
             .iter_mut()
-            .find(|session| session.key == key)
+            .find(|process| process.key == key)
         {
             existing.command_display = command_display;
         } else {
-            self.unified_exec_sessions.push(UnifiedExecSessionSummary {
+            self.unified_exec_processes.push(UnifiedExecProcessSummary {
                 key,
                 command_display,
             });
@@ -997,23 +997,23 @@ impl ChatWidget {
         self.sync_unified_exec_footer();
     }
 
-    fn track_unified_exec_session_end(&mut self, ev: &ExecCommandEndEvent) {
+    fn track_unified_exec_process_end(&mut self, ev: &ExecCommandEndEvent) {
         let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
-        let before = self.unified_exec_sessions.len();
-        self.unified_exec_sessions
-            .retain(|session| session.key != key);
-        if self.unified_exec_sessions.len() != before {
+        let before = self.unified_exec_processes.len();
+        self.unified_exec_processes
+            .retain(|process| process.key != key);
+        if self.unified_exec_processes.len() != before {
             self.sync_unified_exec_footer();
         }
     }
 
     fn sync_unified_exec_footer(&mut self) {
-        let sessions = self
-            .unified_exec_sessions
+        let processes = self
+            .unified_exec_processes
             .iter()
-            .map(|session| session.command_display.clone())
+            .map(|process| process.command_display.clone())
             .collect();
-        self.bottom_pane.set_unified_exec_sessions(sessions);
+        self.bottom_pane.set_unified_exec_processes(processes);
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -1459,7 +1459,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             task_complete_pending: false,
-            unified_exec_sessions: Vec::new(),
+            unified_exec_processes: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1545,7 +1545,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             task_complete_pending: false,
-            unified_exec_sessions: Vec::new(),
+            unified_exec_processes: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2295,12 +2295,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_ps_output(&mut self) {
-        let sessions = self
-            .unified_exec_sessions
+        let processes = self
+            .unified_exec_processes
             .iter()
-            .map(|session| session.command_display.clone())
+            .map(|process| process.command_display.clone())
             .collect();
-        self.add_to_history(history_cell::new_unified_exec_sessions_output(sessions));
+        self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
     }
 
     fn stop_rate_limit_poller(&mut self) {
