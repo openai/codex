@@ -574,7 +574,11 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
-    let thread_manager = ThreadManager::new(auth_manager, SessionSource::Exec);
+    let thread_manager = ThreadManager::new(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        SessionSource::Exec,
+    );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
         .await
