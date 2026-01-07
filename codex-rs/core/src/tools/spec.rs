@@ -408,7 +408,7 @@ fn create_view_image_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "view_image".to_string(),
         description:
-            "Attach a local image (by filesystem path) to the conversation context for this turn."
+            "Attach a local image (by filesystem path) to the thread context for this turn."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {

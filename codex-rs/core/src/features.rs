@@ -346,7 +346,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Beta {
             name: "Background terminal",
             menu_description: "Run long-running terminal commands in the background.",
-            announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
+            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
         },
         default_enabled: false,
     },

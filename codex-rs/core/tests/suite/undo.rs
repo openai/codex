@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -108,7 +108,7 @@ async fn run_apply_patch_turn(
     harness.submit(prompt).await
 }
 
-async fn invoke_undo(codex: &Arc<CodexConversation>) -> Result<UndoCompletedEvent> {
+async fn invoke_undo(codex: &Arc<CodexThread>) -> Result<UndoCompletedEvent> {
     codex.submit(Op::Undo).await?;
     let event = wait_for_event_match(codex, |msg| match msg {
         EventMsg::UndoCompleted(done) => Some(done.clone()),
@@ -118,7 +118,7 @@ async fn invoke_undo(codex: &Arc<CodexConversation>) -> Result<UndoCompletedEven
     Ok(event)
 }
 
-async fn expect_successful_undo(codex: &Arc<CodexConversation>) -> Result<UndoCompletedEvent> {
+async fn expect_successful_undo(codex: &Arc<CodexThread>) -> Result<UndoCompletedEvent> {
     let event = invoke_undo(codex).await?;
     assert!(
         event.success,
@@ -128,7 +128,7 @@ async fn expect_successful_undo(codex: &Arc<CodexConversation>) -> Result<UndoCo
     Ok(event)
 }
 
-async fn expect_failed_undo(codex: &Arc<CodexConversation>) -> Result<UndoCompletedEvent> {
+async fn expect_failed_undo(codex: &Arc<CodexThread>) -> Result<UndoCompletedEvent> {
     let event = invoke_undo(codex).await?;
     assert!(
         !event.success,

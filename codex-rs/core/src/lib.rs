@@ -12,9 +12,9 @@ pub mod bash;
 mod client;
 mod client_common;
 pub mod codex;
-mod codex_conversation;
+mod codex_thread;
 mod compact_remote;
-pub use codex_conversation::CodexConversation;
+pub use codex_thread::CodexThread;
 mod agent;
 mod codex_delegate;
 mod command_safety;
@@ -60,13 +60,19 @@ pub use model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
 pub use model_provider_info::create_oss_provider_with_base_url;
-mod conversation_manager;
 mod event_mapping;
 pub mod review_format;
 pub mod review_prompts;
+mod thread_manager;
 pub use codex_protocol::protocol::InitialHistory;
-pub use conversation_manager::ConversationManager;
-pub use conversation_manager::NewConversation;
+pub use thread_manager::NewThread;
+pub use thread_manager::ThreadManager;
+#[deprecated(note = "use ThreadManager")]
+pub type ConversationManager = ThreadManager;
+#[deprecated(note = "use NewThread")]
+pub type NewConversation = NewThread;
+#[deprecated(note = "use CodexThread")]
+pub type CodexConversation = CodexThread;
 // Re-export common auth types for workspace consumers
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
@@ -87,10 +93,12 @@ pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
+#[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
-pub use rollout::list::ConversationItem;
-pub use rollout::list::ConversationsPage;
+pub use rollout::find_thread_path_by_id_str;
 pub use rollout::list::Cursor;
+pub use rollout::list::ThreadItem;
+pub use rollout::list::ThreadsPage;
 pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;
 mod function_tool;
