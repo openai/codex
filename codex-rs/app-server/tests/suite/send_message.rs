@@ -13,7 +13,7 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RawResponseItemEvent;
@@ -81,7 +81,7 @@ async fn test_send_message_success() -> Result<()> {
 #[expect(clippy::expect_used)]
 async fn send_message(
     message: &str,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     mcp: &mut McpProcess,
 ) -> Result<()> {
     // Now exercise sendUserMessage.
@@ -220,7 +220,7 @@ async fn test_send_message_session_not_found() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let unknown = ConversationId::new();
+    let unknown = ThreadId::new();
     let req_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id: unknown,
@@ -268,10 +268,7 @@ stream_max_retries = 0
 }
 
 #[expect(clippy::expect_used)]
-async fn read_raw_response_item(
-    mcp: &mut McpProcess,
-    conversation_id: ConversationId,
-) -> ResponseItem {
+async fn read_raw_response_item(mcp: &mut McpProcess, conversation_id: ThreadId) -> ResponseItem {
     loop {
         let raw_notification: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,

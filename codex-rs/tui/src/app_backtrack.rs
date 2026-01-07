@@ -9,7 +9,7 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationPathResponseEvent;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -20,14 +20,14 @@ use crossterm::event::KeyEventKind;
 pub(crate) struct BacktrackState {
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
-    /// Session id of the base conversation to fork from.
-    pub(crate) base_id: Option<ConversationId>,
+    /// Session id of the base thread to fork from.
+    pub(crate) base_id: Option<ThreadId>,
     /// Index in the transcript of the last user message.
     pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
     /// Pending fork request: (base_id, nth_user_message, prefill).
-    pub(crate) pending: Option<(ConversationId, usize, String)>,
+    pub(crate) pending: Option<(ThreadId, usize, String)>,
 }
 
 impl App {
@@ -95,11 +95,11 @@ impl App {
         }
     }
 
-    /// Stage a backtrack and request conversation history from the agent.
+    /// Stage a backtrack and request thread history from the agent.
     pub(crate) fn request_backtrack(
         &mut self,
         prefill: String,
-        base_id: ConversationId,
+        base_id: ThreadId,
         nth_user_message: usize,
     ) {
         self.backtrack.pending = Some((base_id, nth_user_message, prefill));
@@ -153,7 +153,7 @@ impl App {
     fn prime_backtrack(&mut self) {
         self.backtrack.primed = true;
         self.backtrack.nth_user_message = usize::MAX;
-        self.backtrack.base_id = self.chat_widget.conversation_id();
+        self.backtrack.base_id = self.chat_widget.thread_id();
         self.chat_widget.show_esc_backtrack_hint();
     }
 
@@ -169,7 +169,7 @@ impl App {
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
         self.backtrack.primed = true;
-        self.backtrack.base_id = self.chat_widget.conversation_id();
+        self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
         let count = user_count(&self.transcript_cells);
         if let Some(last) = count.checked_sub(1) {
@@ -315,28 +315,26 @@ impl App {
         }
     }
 
-    /// Thin wrapper around ConversationManager::fork_conversation.
+    /// Thin wrapper around ThreadManager::fork_thread.
     async fn perform_fork(
         &self,
         path: PathBuf,
         nth_user_message: usize,
         cfg: codex_core::config::Config,
-    ) -> codex_core::error::Result<codex_core::NewConversation> {
-        self.server
-            .fork_conversation(nth_user_message, cfg, path)
-            .await
+    ) -> codex_core::error::Result<codex_core::NewThread> {
+        self.server.fork_thread(nth_user_message, cfg, path).await
     }
 
-    /// Install a forked conversation into the ChatWidget and update UI to reflect selection.
+    /// Install a forked thread into the ChatWidget and update UI to reflect selection.
     fn install_forked_conversation(
         &mut self,
         tui: &mut tui::Tui,
         cfg: codex_core::config::Config,
-        new_conv: codex_core::NewConversation,
+        new_conv: codex_core::NewThread,
         nth_user_message: usize,
         prefill: &str,
     ) {
-        let conv = new_conv.conversation;
+        let thread = new_conv.thread;
         let session_configured = new_conv.session_configured;
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
@@ -352,7 +350,7 @@ impl App {
             is_first_run: false,
         };
         self.chat_widget =
-            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
+            crate::chatwidget::ChatWidget::new_from_existing(init, thread, session_configured);
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);

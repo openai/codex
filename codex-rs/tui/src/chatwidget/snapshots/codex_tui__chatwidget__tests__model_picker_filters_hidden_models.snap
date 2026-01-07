@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 1989
+expression: popup
+---
+  Select Model and Effort
+  Access legacy models by running codex -m <model_name> or in your config.toml
+
+› 1. test-visible-model (current)  test-visible-model description
+
+  Press enter to select reasoning effort, or esc to dismiss.

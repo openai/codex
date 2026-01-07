@@ -45,6 +45,7 @@ use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -197,7 +198,7 @@ impl McpProcess {
     }
 
     /// Send a `removeConversationListener` JSON-RPC request.
-    pub async fn send_remove_conversation_listener_request(
+    pub async fn send_remove_thread_listener_request(
         &mut self,
         params: RemoveConversationListenerParams,
     ) -> anyhow::Result<i64> {
@@ -314,6 +315,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/archive", params).await
+    }
+
+    /// Send a `thread/rollback` JSON-RPC request.
+    pub async fn send_thread_rollback_request(
+        &mut self,
+        params: ThreadRollbackParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/rollback", params).await
     }
 
     /// Send a `thread/list` JSON-RPC request.

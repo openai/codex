@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::ConversationItem;
-use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::ThreadItem;
+use codex_core::ThreadsPage;
 use codex_core::path_utils;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
@@ -61,7 +61,7 @@ enum BackgroundEvent {
     PageLoaded {
         request_token: usize,
         search_token: Option<usize>,
-        page: std::io::Result<ConversationsPage>,
+        page: std::io::Result<ThreadsPage>,
     },
 }
 
@@ -89,7 +89,7 @@ pub async fn run_resume_picker(
         let tx = loader_tx.clone();
         tokio::spawn(async move {
             let provider_filter = vec![request.default_provider.clone()];
-            let page = RolloutRecorder::list_conversations(
+            let page = RolloutRecorder::list_threads(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
@@ -415,7 +415,7 @@ impl PickerState {
         self.pagination.loading = LoadingState::Idle;
     }
 
-    fn ingest_page(&mut self, page: ConversationsPage) {
+    fn ingest_page(&mut self, page: ThreadsPage) {
         if let Some(cursor) = page.next_cursor.clone() {
             self.pagination.next_cursor = Some(cursor);
         } else {
@@ -627,11 +627,11 @@ impl PickerState {
     }
 }
 
-fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
+fn rows_from_items(items: Vec<ThreadItem>) -> Vec<Row> {
     items.into_iter().map(|item| head_to_row(&item)).collect()
 }
 
-fn head_to_row(item: &ConversationItem) -> Row {
+fn head_to_row(item: &ThreadItem) -> Row {
     let created_at = item
         .created_at
         .as_deref()
@@ -1077,8 +1077,8 @@ mod tests {
         ]
     }
 
-    fn make_item(path: &str, ts: &str, preview: &str) -> ConversationItem {
-        ConversationItem {
+    fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
+        ThreadItem {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
             created_at: Some(ts.to_string()),
@@ -1092,12 +1092,12 @@ mod tests {
     }
 
     fn page(
-        items: Vec<ConversationItem>,
+        items: Vec<ThreadItem>,
         next_cursor: Option<Cursor>,
         num_scanned_files: usize,
         reached_scan_cap: bool,
-    ) -> ConversationsPage {
-        ConversationsPage {
+    ) -> ThreadsPage {
+        ThreadsPage {
             items,
             next_cursor,
             num_scanned_files,
@@ -1144,13 +1144,13 @@ mod tests {
     #[test]
     fn rows_from_items_preserves_backend_order() {
         // Construct two items with different timestamps and real user text.
-        let a = ConversationItem {
+        let a = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
-        let b = ConversationItem {
+        let b = ThreadItem {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
             created_at: Some("2025-01-02T00:00:00Z".into()),
@@ -1166,7 +1166,7 @@ mod tests {
     #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
         let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
-        let item = ConversationItem {
+        let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head,
             created_at: Some("2025-01-01T00:00:00Z".into()),
@@ -1351,7 +1351,7 @@ mod tests {
             None,
         );
 
-        let page = RolloutRecorder::list_conversations(
+        let page = RolloutRecorder::list_threads(
             &state.codex_home,
             PAGE_SIZE,
             None,

@@ -45,7 +45,7 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -99,7 +99,7 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
-    let conversation_id = ConversationId::new();
+    let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
@@ -311,7 +311,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
     let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
-    let conversation_manager = Arc::new(ConversationManager::with_models_provider(
+    let thread_manager = Arc::new(ThreadManager::with_models_provider(
         CodexAuth::from_api_key("test"),
         cfg.model_provider.clone(),
     ));
@@ -324,12 +324,12 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
         auth_manager,
-        models_manager: conversation_manager.get_models_manager(),
+        models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: resolved_model,
     };
-    let mut w = ChatWidget::new(init, conversation_manager);
+    let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -363,6 +363,7 @@ async fn make_chatwidget_manual(
         skills: None,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let codex_home = cfg.codex_home.clone();
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -371,7 +372,7 @@ async fn make_chatwidget_manual(
         config: cfg,
         model: resolved_model.clone(),
         auth_manager: auth_manager.clone(),
-        models_manager: Arc::new(ModelsManager::new(auth_manager)),
+        models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
         session_header: SessionHeader::new(resolved_model),
         initial_user_message: None,
         token_info: None,
@@ -410,7 +411,10 @@ async fn make_chatwidget_manual(
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.models_manager = Arc::new(ModelsManager::new(chat.auth_manager.clone()));
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+    ));
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
@@ -1732,6 +1736,41 @@ async fn model_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn model_picker_hides_show_in_picker_false_models_from_cache() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
+    let preset = |slug: &str, show_in_picker: bool| ModelPreset {
+        id: slug.to_string(),
+        model: slug.to_string(),
+        display_name: slug.to_string(),
+        description: format!("{slug} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        is_default: false,
+        upgrade: None,
+        show_in_picker,
+        supported_in_api: true,
+    };
+
+    chat.open_model_popup_with_presets(vec![
+        preset("test-visible-model", true),
+        preset("test-hidden-model", false),
+    ]);
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_picker_filters_hidden_models", popup);
+    assert!(
+        popup.contains("test-visible-model"),
+        "expected visible model to appear in picker:\n{popup}"
+    );
+    assert!(
+        !popup.contains("test-hidden-model"),
+        "expected hidden model to be excluded from picker:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -2120,6 +2159,45 @@ async fn approval_modal_exec_without_reason_snapshot() {
     assert_snapshot!(
         "approval_modal_exec_no_reason",
         terminal.backend().vt100().screen().contents()
+    );
+}
+
+// Snapshot test: approval modal with a proposed execpolicy prefix that is multi-line;
+// we should not offer adding it to execpolicy.
+#[tokio::test]
+async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+
+    let script = "python - <<'PY'\nprint('hello')\nPY".to_string();
+    let command = vec!["bash".into(), "-lc".into(), script];
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-cmd-multiline-trunc".into(),
+        turn_id: "turn-approve-cmd-multiline-trunc".into(),
+        command: command.clone(),
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        parsed_cmd: vec![],
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve-multiline-trunc".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    let width = 100;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw approval modal (multiline prefix)");
+    let contents = terminal.backend().vt100().screen().contents();
+    assert!(!contents.contains("don't ask again"));
+    assert_snapshot!(
+        "approval_modal_exec_multiline_prefix_no_execpolicy",
+        contents
     );
 }
 
