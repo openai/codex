@@ -6,6 +6,7 @@ Strict requirements:
 - Write in plain language that a non-security engineer can understand. Avoid jargon and acronyms; when you must use a security term, briefly explain it.
 - Write like a helpful teammate: clear sentences, short paragraphs, and a natural tone. Do not over-annotate every sentence with parentheses or inline asides; include code citations only where they add evidence.
 - If the affected code path depends on project-specific components or flows that are not obvious from the snippet, briefly explain how those components work and how they are used, based on the provided specification context.
+- If the affected component is a third-party library, CLI, or protocol and real-world usage is unclear, use web/GitHub search (when available) to confirm typical usage patterns and incorporate them into the exploit scenario/PoC and any needed context. Do not include proprietary code or secrets in search queries; search using public names/identifiers only.
 - Only report real vulnerabilities with a plausible attacker-controlled input and a meaningful impact.
 - Quote exact file paths and GitHub-style line fragments, e.g. `src/server/auth.ts#L42-L67`.
 - Provide dataflow analysis (source, propagation, sink) where relevant.
@@ -28,6 +29,7 @@ Follow these rules:
 {scope_reminder}- Start locally: prefer `READ` to open the current file and its immediate neighbors (imports, same directory/module, referenced configs) before using `GREP_FILES`. Use `GREP_FILES` only when you need to locate unknown files across the repository.
 - When writing findings, prioritize clarity over security jargon. Avoid over-annotating prose with parenthetical code references; cite a few key locations where they provide evidence.
 - Use the specification context (if provided) to ground brief explanations of the components involved (what they are, how they fit together, and how this code path is commonly reached) when the context would otherwise be obscure to a reader.
+- When the affected component/interface is obscure (especially third-party libraries, CLIs, or protocols) and web search is enabled, use `web_search` to find public docs/README and GitHub examples of real-world usage; incorporate what you learn into the Context section and make the exploit scenario/PoC match those common usage patterns. Keep queries high-level and do not paste repository code, secrets, or private URLs into a search query.
 - When you reference a function, method, or class, look up its definition and usages across files: search by the identifier, then open the definition and a few call sites to verify behavior end-to-end.
 - The current file is provided in full. Analyze it first; do not issue broad searches for generic or dangerous keywords (e.g., "password", "token") unless you are tracing a concrete dataflow across files.
 - Use the search tools below to inspect additional in-scope files only when tracing data flows or confirming a hypothesis that clearly spans multiple files; cite the relevant variables, functions, and any validation or sanitization steps you discover.
@@ -57,7 +59,7 @@ For each vulnerability, emit a markdown block:
 - **Severity:** <high|medium|low|ignore>
 - **Impact:** <High|Medium|Low> - <1-2 sentences explaining why this impact level applies>
 - **Likelihood:** <High|Medium|Low> - <1-2 sentences explaining why this likelihood level applies>
-- **Context:** Optional. If the component/flow is obscure, add 2-4 sentences explaining (based on the specification context) what the relevant components are and how this code path is typically used or reached. Omit if obvious.
+- **Context:** Optional. If the component/flow is obscure, add 2-4 sentences explaining (based on the specification context, and if needed corroborated by public docs/GitHub usage via `web_search`) what the relevant components are and how this code path is typically used or reached. Omit if obvious.
 - **Description:** Start with a 1-2 sentence plain-language summary (assume the reader is not a security specialist). Then explain the bug and why it matters, citing only the key code locations that support the claim (do not sprinkle parentheses on every sentence).
 - **Snippet:** Fenced code block (specify language) showing only the relevant lines. Use minimal inline comments or numbered markers (avoid over-annotating every line).
 - **Dataflow:** Describe sources, propagation, sanitization, and sinks using relative paths and `L<start>-L<end>` ranges.

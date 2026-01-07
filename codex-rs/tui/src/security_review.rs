@@ -8598,7 +8598,6 @@ async fn run_bug_agent(
     bug_config
         .features
         .disable(Feature::ApplyPatchFreeform)
-        .disable(Feature::WebSearchRequest)
         .disable(Feature::ViewImageTool);
     bug_config.mcp_servers.clear();
 
