@@ -75,11 +75,11 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
 
     let conversation_id = ThreadId::new();
     let model = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
-        model_family.slug.as_str(),
+        model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         Some(AuthMode::ApiKey),
@@ -91,7 +91,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_family,
+        model_info,
         otel_manager,
         provider,
         effort,

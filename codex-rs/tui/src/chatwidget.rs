@@ -2440,19 +2440,16 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
-        let presets: Vec<ModelPreset> =
-            // todo(aibrahim): make this async function
-            match self.models_manager.try_list_models(&self.config) {
-                Ok(models) => models,
-                Err(_) => {
-                    self.add_info_message(
-                        "Models are being updated; please try /model again in a moment."
-                            .to_string(),
-                        None,
-                    );
-                    return;
-                }
-            };
+        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
+            Ok(models) => models,
+            Err(_) => {
+                self.add_info_message(
+                    "Models are being updated; please try /model again in a moment.".to_string(),
+                    None,
+                );
+                return;
+            }
+        };
         self.open_model_popup_with_presets(presets);
     }
 

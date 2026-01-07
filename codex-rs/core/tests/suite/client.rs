@@ -573,7 +573,11 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
-    let thread_manager = ThreadManager::new(auth_manager, SessionSource::Exec);
+    let thread_manager = ThreadManager::new(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        SessionSource::Exec,
+    );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
         .await
@@ -804,7 +808,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_default_reasoning_effort_in_request_when_defined_by_model_family()
+async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
@@ -1140,13 +1144,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let model = ModelsManager::get_model_offline(config.model.as_deref());
     config.model = Some(model.clone());
     let config = Arc::new(config);
-    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let conversation_id = ThreadId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
-        model_family.slug.as_str(),
+        model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         auth_manager.get_auth_mode(),
@@ -1158,7 +1162,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_family,
+        model_info,
         otel_manager,
         provider,
         effort,

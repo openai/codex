@@ -127,7 +127,7 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<SandboxPolicy>,
 
-        /// Updated model slug. When set, the model family is derived
+        /// Updated model slug. When set, the model info is derived
         /// automatically.
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
@@ -874,6 +874,7 @@ pub struct TaskCompleteEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskStartedEvent {
+    // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
 }
 
@@ -895,6 +896,7 @@ pub struct TokenUsage {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
 }
