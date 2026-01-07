@@ -58,7 +58,11 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let thread_manager = Arc::new(ThreadManager::new(auth_manager, SessionSource::Mcp));
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
+            auth_manager,
+            SessionSource::Mcp,
+        ));
         Self {
             outgoing,
             initialized: false,

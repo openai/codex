@@ -316,6 +316,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         ..built_in_model_providers()["openai"].clone()
     };
     let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
         codex_core::auth::AuthManager::from_auth_for_testing(auth),
         provider,
     );
@@ -373,6 +374,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
         ..built_in_model_providers()["openai"].clone()
     };
     let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
         codex_core::auth::AuthManager::from_auth_for_testing(auth),
         provider,
     );
