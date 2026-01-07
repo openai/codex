@@ -92,13 +92,18 @@ impl ModelClient {
         }
     }
 
-    pub fn get_model_context_window(&self) -> i64 {
+    pub fn get_model_context_window(&self) -> Option<i64> {
         let model_info = self.get_model_info();
+        if model_info.context_window <= 0 {
+            return None;
+        }
         let effective_context_window_percent = model_info.effective_context_window_percent;
-        model_info
-            .context_window
-            .saturating_mul(effective_context_window_percent)
-            / 100
+        Some(
+            model_info
+                .context_window
+                .saturating_mul(effective_context_window_percent)
+                / 100,
+        )
     }
 
     pub fn config(&self) -> Arc<Config> {
@@ -206,8 +211,9 @@ impl ModelClient {
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
         let default_reasoning_effort = (!model_info.supported_reasoning_levels.is_empty()
-            && !model_info.slug.contains("codex"))
-        .then_some(model_info.default_reasoning_level);
+            && !model_info.slug.contains("codex")
+            && model_info.default_reasoning_level != ReasoningEffortConfig::None)
+            .then_some(model_info.default_reasoning_level);
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {
                 effort: self.effort.or(default_reasoning_effort),

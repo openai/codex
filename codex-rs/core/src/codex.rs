@@ -1382,7 +1382,7 @@ impl Session {
             if let Some(token_usage) = token_usage {
                 state.update_token_info_from_usage(
                     token_usage,
-                    Some(turn_context.client.get_model_context_window()),
+                    turn_context.client.get_model_context_window(),
                 );
             }
         }
@@ -1414,7 +1414,7 @@ impl Session {
             };
 
             if info.model_context_window.is_none() {
-                info.model_context_window = Some(turn_context.client.get_model_context_window());
+                info.model_context_window = turn_context.client.get_model_context_window();
             }
 
             state.set_token_info(Some(info));
@@ -1444,8 +1444,7 @@ impl Session {
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
-        let context_window = turn_context.client.get_model_context_window();
-        {
+        if let Some(context_window) = turn_context.client.get_model_context_window() {
             let mut state = self.state.lock().await;
             state.set_token_usage_full(context_window);
         }
@@ -2335,13 +2334,14 @@ pub(crate) async fn run_task(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info
         .auto_compact_token_limit
-        .unwrap_or((model_info.context_window * 9) / 10);
+        .or_else(|| (model_info.context_window > 0).then_some((model_info.context_window * 9) / 10))
+        .unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
     }
     let event = EventMsg::TaskStarted(TaskStartedEvent {
-        model_context_window: Some(turn_context.client.get_model_context_window()),
+        model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, event).await;
 

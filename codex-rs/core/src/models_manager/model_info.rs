@@ -8,6 +8,7 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 
 use crate::config::Config;
+use tracing::warn;
 
 const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
 const BASE_INSTRUCTIONS_WITH_APPLY_PATCH: &str =
@@ -33,7 +34,7 @@ macro_rules! model_info {
             // This is primarily used when remote metadata is available. When running
             // offline, core generally omits the effort field unless explicitly
             // configured by the user.
-            default_reasoning_level: ReasoningEffort::Medium,
+            default_reasoning_level: ReasoningEffort::None,
             supported_reasoning_levels: supported_reasoning_level_low_medium_high(),
             shell_type: ConfigShellToolType::Default,
             visibility: ModelVisibility::None,
@@ -169,6 +170,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: BASE_INSTRUCTIONS.to_string(),
+            default_reasoning_level: ReasoningEffort::Medium,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::UnifiedExec,
             supports_parallel_tool_calls: true,
@@ -242,6 +244,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_2_INSTRUCTIONS.to_string(),
+            default_reasoning_level: ReasoningEffort::Medium,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
@@ -256,6 +259,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
+            default_reasoning_level: ReasoningEffort::Medium,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
@@ -273,7 +277,13 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             context_window: CONTEXT_WINDOW_272K,
         )
     } else {
-        model_info!(slug)
+        warn!("Unknown model {slug} is used. This will degrade the performance of Codex.");
+        model_info!(
+            slug,
+            context_window: 0,
+            supported_reasoning_levels: Vec::new(),
+            default_reasoning_level: ReasoningEffort::None
+        )
     }
 }
 
