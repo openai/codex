@@ -52,6 +52,14 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Generate a short terminal title from the initial user request.
+    GenerateTerminalTitle {
+        request: String,
+    },
+
+    /// Set the terminal title to the provided text.
+    SetTerminalTitle(String),
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,

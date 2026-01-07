@@ -120,6 +120,27 @@ impl Command for DisableAlternateScroll {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SetTerminalTitle(pub String);
+
+impl Command for SetTerminalTitle {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b]0;{}\x07", self.0)
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> Result<()> {
+        Err(std::io::Error::other(
+            "tried to execute SetTerminalTitle using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
 fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
     // Pop may fail on platforms that didn't support the push; ignore errors.
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
@@ -283,6 +304,13 @@ impl Tui {
 
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
+    }
+
+    pub fn set_terminal_title(&mut self, title: &str) -> Result<()> {
+        execute!(
+            self.terminal.backend_mut(),
+            SetTerminalTitle(title.to_string())
+        )
     }
 
     pub fn is_alt_screen_active(&self) -> bool {

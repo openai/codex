@@ -368,6 +368,7 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    terminal_title_requested: bool,
 }
 
 struct UserMessage {
@@ -1478,6 +1479,7 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            terminal_title_requested: false,
         };
 
         widget.prefetch_rate_limits();
@@ -1564,6 +1566,7 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            terminal_title_requested: false,
         };
 
         widget.prefetch_rate_limits();
@@ -1942,6 +1945,13 @@ impl ChatWidget {
 
         for path in image_paths {
             items.push(UserInput::LocalImage { path });
+        }
+
+        if !self.terminal_title_requested && !text.is_empty() {
+            self.terminal_title_requested = true;
+            self.app_event_tx.send(AppEvent::GenerateTerminalTitle {
+                request: text.clone(),
+            });
         }
 
         if let Some(skills) = self.bottom_pane.skills() {

@@ -42,6 +42,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::user_input::UserInput;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -66,6 +67,8 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::history_cell::UpdateAvailableHistoryCell;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
+const TERMINAL_TITLE_INSTRUCTIONS: &str =
+    "Generate a short title (max 4 words) for the request. Respond with the title only.";
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -89,6 +92,72 @@ fn session_summary(
         usage_line,
         resume_command,
     })
+}
+
+fn normalize_terminal_title(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let first_line = trimmed.lines().next().unwrap_or(trimmed);
+    let stripped = first_line.trim_matches(|ch| matches!(ch, '"' | '\'' | '`'));
+    let words: Vec<&str> = stripped.split_whitespace().collect();
+    if words.is_empty() {
+        return None;
+    }
+    let title = words.into_iter().take(4).collect::<Vec<_>>().join(" ");
+    let title = title.trim_matches(|ch| matches!(ch, '"' | '\'' | '`'));
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
+}
+
+async fn generate_terminal_title(
+    server: Arc<ConversationManager>,
+    mut config: Config,
+    model: String,
+    request: String,
+) -> Option<String> {
+    config.model = Some(model);
+    config.base_instructions = Some(TERMINAL_TITLE_INSTRUCTIONS.to_string());
+    config.user_instructions = None;
+    config.project_doc_max_bytes = 0;
+
+    let new_conversation = server.new_conversation(config).await.ok()?;
+    let conversation_id = new_conversation.conversation_id;
+    let conversation = new_conversation.conversation;
+
+    let prompt = format!(
+        "Create a concise title (max 4 words) for this request. Respond with only the title.\n\nRequest:\n{request}"
+    );
+    conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+            final_output_json_schema: None,
+        })
+        .await
+        .ok()?;
+
+    let mut output = None;
+    loop {
+        let event = conversation.next_event().await.ok()?;
+        match event.msg {
+            EventMsg::TaskComplete(task_complete) => {
+                output = task_complete.last_agent_message;
+                break;
+            }
+            EventMsg::TurnAborted(_) => break,
+            _ => {}
+        }
+    }
+
+    let _ = conversation.submit(Op::Shutdown).await;
+    let _ = server.remove_conversation(&conversation_id).await;
+
+    output.and_then(|title| normalize_terminal_title(&title))
 }
 
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
@@ -710,6 +779,24 @@ impl App {
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
+            }
+            AppEvent::GenerateTerminalTitle { request } => {
+                let server = self.server.clone();
+                let config = self.config.clone();
+                let model = self.current_model.clone();
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    if let Some(title) =
+                        generate_terminal_title(server, config, model, request).await
+                    {
+                        tx.send(AppEvent::SetTerminalTitle(title));
+                    }
+                });
+            }
+            AppEvent::SetTerminalTitle(title) => {
+                if let Err(err) = tui.set_terminal_title(&title) {
+                    tracing::warn!("failed to set terminal title: {err}");
+                }
             }
             AppEvent::CodexEvent(event) => {
                 if self.suppress_shutdown_complete
