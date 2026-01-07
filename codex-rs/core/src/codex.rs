@@ -226,29 +226,22 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = if config.features.enabled(Feature::Skills) {
-            Some(skills_manager.skills_for_config(&config))
-        } else {
-            None
-        };
+        let loaded_skills = skills_manager.skills_for_config(&config);
+        // let loaded_skills = if config.features.enabled(Feature::Skills) {
+        //     Some(skills_manager.skills_for_config(&config))
+        // } else {
+        //     None
+        // };
 
-        if let Some(outcome) = &loaded_skills {
-            for err in &outcome.errors {
-                error!(
-                    "failed to load skill {}: {}",
-                    err.path.display(),
-                    err.message
-                );
-            }
+        for err in &loaded_skills.errors {
+            error!(
+                "failed to load skill {}: {}",
+                err.path.display(),
+                err.message
+            );
         }
 
-        let user_instructions = get_user_instructions(
-            &config,
-            loaded_skills
-                .as_ref()
-                .map(|outcome| outcome.skills.as_slice()),
-        )
-        .await;
+        let user_instructions = get_user_instructions(&config, Some(&loaded_skills.skills)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
             .await
@@ -551,10 +544,7 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
-            truncation_policy: TruncationPolicy::new(
-                per_turn_config.as_ref(),
-                model_info.truncation_policy.into(),
-            ),
+            truncation_policy: model_info.truncation_policy.into(),
         }
     }
 
@@ -1287,10 +1277,6 @@ impl Session {
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
-        if !self.enabled(Feature::ModelWarnings) {
-            return;
-        }
-
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1747,7 +1733,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
-    use crate::features::Feature;
+
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
@@ -2037,29 +2023,20 @@ mod handlers {
         } else {
             cwds
         };
-        let skills = if sess.enabled(Feature::Skills) {
-            let skills_manager = &sess.services.skills_manager;
-            let mut entries = Vec::new();
-            for cwd in cwds {
-                let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
-                let errors = super::errors_to_info(&outcome.errors);
-                let skills = super::skills_to_info(&outcome.skills);
-                entries.push(SkillsListEntry {
-                    cwd,
-                    skills,
-                    errors,
-                });
-            }
-            entries
-        } else {
-            cwds.into_iter()
-                .map(|cwd| SkillsListEntry {
-                    cwd,
-                    skills: Vec::new(),
-                    errors: Vec::new(),
-                })
-                .collect()
-        };
+
+        let skills_manager = &sess.services.skills_manager;
+        let mut skills = Vec::new();
+        for cwd in cwds {
+            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let errors = super::errors_to_info(&outcome.errors);
+            let skills_metadata = super::skills_to_info(&outcome.skills);
+            skills.push(SkillsListEntry {
+                cwd,
+                skills: skills_metadata,
+                errors,
+            });
+        }
+
         let event = Event {
             id: sub_id,
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
@@ -2212,8 +2189,7 @@ async fn spawn_review_thread(
     let mut review_features = sess.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
-        .disable(crate::features::Feature::WebSearchCached)
-        .disable(crate::features::Feature::ViewImageTool);
+        .disable(crate::features::Feature::WebSearchCached);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
@@ -2265,10 +2241,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
-        truncation_policy: TruncationPolicy::new(
-            &per_turn_config,
-            model_info.truncation_policy.into(),
-        ),
+        truncation_policy: model_info.truncation_policy.into(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2345,16 +2318,12 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
-    let skills_outcome = if sess.enabled(Feature::Skills) {
-        Some(
-            sess.services
-                .skills_manager
-                .skills_for_cwd(&turn_context.cwd, false)
-                .await,
-        )
-    } else {
-        None
-    };
+    let skills_outcome = Some(
+        sess.services
+            .skills_manager
+            .skills_for_cwd(&turn_context.cwd, false)
+            .await,
+    );
 
     let SkillInjections {
         items: skill_items,
@@ -2519,14 +2488,14 @@ async fn run_turn(
     let prompt = Prompt {
         input,
         tools: router.specs(),
-        parallel_tool_calls: model_supports_parallel && sess.enabled(Feature::ParallelToolCalls),
+        parallel_tool_calls: model_supports_parallel,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
     let mut retries = 0;
     loop {
-        match try_run_turn(
+        let err = match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -2536,17 +2505,10 @@ async fn run_turn(
         )
         .await
         {
-            // todo(aibrahim): map special cases and ? on other errors
             Ok(output) => return Ok(output),
-            Err(CodexErr::TurnAborted) => {
-                return Err(CodexErr::TurnAborted);
-            }
-            Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
-            Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
-            Err(e @ CodexErr::Fatal(_)) => return Err(e),
-            Err(e @ CodexErr::ContextWindowExceeded) => {
+            Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
-                return Err(e);
+                return Err(CodexErr::ContextWindowExceeded);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
@@ -2555,39 +2517,38 @@ async fn run_turn(
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
-            Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
-            Err(e @ CodexErr::QuotaExceeded) => return Err(e),
-            Err(e @ CodexErr::InvalidImageRequest()) => return Err(e),
-            Err(e @ CodexErr::InvalidRequest(_)) => return Err(e),
-            Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
-            Err(e) => {
-                // Use the configured provider-specific stream retry budget.
-                let max_retries = turn_context.client.get_provider().stream_max_retries();
-                if retries < max_retries {
-                    retries += 1;
-                    let delay = match e {
-                        CodexErr::Stream(_, Some(delay)) => delay,
-                        _ => backoff(retries),
-                    };
-                    warn!(
-                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
-                    );
+            Err(err) => err,
+        };
 
-                    // Surface retry information to any UI/front‑end so the
-                    // user understands what is happening instead of staring
-                    // at a seemingly frozen screen.
-                    sess.notify_stream_error(
-                        &turn_context,
-                        format!("Reconnecting... {retries}/{max_retries}"),
-                        e,
-                    )
-                    .await;
+        if !err.is_retryable() {
+            return Err(err);
+        }
 
-                    tokio::time::sleep(delay).await;
-                } else {
-                    return Err(e);
+        // Use the configured provider-specific stream retry budget.
+        let max_retries = turn_context.client.get_provider().stream_max_retries();
+        if retries < max_retries {
+            retries += 1;
+            let delay = match &err {
+                CodexErr::Stream(_, requested_delay) => {
+                    requested_delay.unwrap_or_else(|| backoff(retries))
                 }
-            }
+                _ => backoff(retries),
+            };
+            warn!("stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",);
+
+            // Surface retry information to any UI/front‑end so the
+            // user understands what is happening instead of staring
+            // at a seemingly frozen screen.
+            sess.notify_stream_error(
+                &turn_context,
+                format!("Reconnecting... {retries}/{max_retries}"),
+                err,
+            )
+            .await;
+
+            tokio::time::sleep(delay).await;
+        } else {
+            return Err(err);
         }
     }
 }
@@ -3656,8 +3617,7 @@ mod tests {
     #[tokio::test]
     async fn record_model_warning_appends_user_message() {
         let (mut session, turn_context) = make_session_and_context().await;
-        let mut features = Features::with_defaults();
-        features.enable(Feature::ModelWarnings);
+        let features = Features::with_defaults();
         session.features = features;
 
         session

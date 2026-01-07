@@ -1,4 +1,5 @@
 use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConfigRequirementsToml;
 
 use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
@@ -86,18 +87,25 @@ pub struct ConfigLayerStack {
     /// Constraints that must be enforced when deriving a [Config] from the
     /// layers.
     requirements: ConfigRequirements,
+
+    /// Raw requirements data as loaded from requirements.toml/MDM/legacy
+    /// sources. This preserves the original allow-lists so they can be
+    /// surfaced via APIs.
+    requirements_toml: ConfigRequirementsToml,
 }
 
 impl ConfigLayerStack {
     pub fn new(
         layers: Vec<ConfigLayerEntry>,
         requirements: ConfigRequirements,
+        requirements_toml: ConfigRequirementsToml,
     ) -> std::io::Result<Self> {
         let user_layer_index = verify_layer_ordering(&layers)?;
         Ok(Self {
             layers,
             user_layer_index,
             requirements,
+            requirements_toml,
         })
     }
 
@@ -109,6 +117,10 @@ impl ConfigLayerStack {
 
     pub fn requirements(&self) -> &ConfigRequirements {
         &self.requirements
+    }
+
+    pub fn requirements_toml(&self) -> &ConfigRequirementsToml {
+        &self.requirements_toml
     }
 
     /// Creates a new [ConfigLayerStack] using the specified values to inject a
@@ -131,6 +143,7 @@ impl ConfigLayerStack {
                     layers,
                     user_layer_index: self.user_layer_index,
                     requirements: self.requirements.clone(),
+                    requirements_toml: self.requirements_toml.clone(),
                 }
             }
             None => {
@@ -151,6 +164,7 @@ impl ConfigLayerStack {
                     layers,
                     user_layer_index: Some(user_layer_index),
                     requirements: self.requirements.clone(),
+                    requirements_toml: self.requirements_toml.clone(),
                 }
             }
         }

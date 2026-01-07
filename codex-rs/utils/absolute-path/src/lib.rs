@@ -17,7 +17,7 @@ use ts_rs::TS;
 /// using [AbsolutePathBufGuard::new]. If no base path is set, the
 /// deserialization will fail unless the path being deserialized is already
 /// absolute.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema, TS)]
 pub struct AbsolutePathBuf(PathBuf);
 
 impl AbsolutePathBuf {

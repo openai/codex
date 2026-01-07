@@ -147,6 +147,7 @@ use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
+const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -2453,6 +2454,45 @@ impl ChatWidget {
         self.open_model_popup_with_presets(presets);
     }
 
+    fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
+        let title = title.to_string();
+        let subtitle = subtitle.to_string();
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(title.bold()));
+        header.push(Line::from(subtitle.dim()));
+        if let Some(warning) = self.model_menu_warning_line() {
+            header.push(warning);
+        }
+        Box::new(header)
+    }
+
+    fn model_menu_warning_line(&self) -> Option<Line<'static>> {
+        let base_url = self.custom_openai_base_url()?;
+        let warning = format!(
+            "Warning: OPENAI_BASE_URL is set to {base_url}. Selecting models may not be supported or work properly."
+        );
+        Some(Line::from(warning.red()))
+    }
+
+    fn custom_openai_base_url(&self) -> Option<String> {
+        if !self.config.model_provider.is_openai() {
+            return None;
+        }
+
+        let base_url = self.config.model_provider.base_url.as_ref()?;
+        let trimmed = base_url.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let normalized = trimmed.trim_end_matches('/');
+        if normalized == DEFAULT_OPENAI_BASE_URL {
+            return None;
+        }
+
+        Some(trimmed.to_string())
+    }
+
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
@@ -2521,11 +2561,14 @@ impl ChatWidget {
             });
         }
 
+        let header = self.model_menu_header(
+            "Select Model",
+            "Pick a quick auto mode or browse all models.",
+        );
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Model".to_string()),
-            subtitle: Some("Pick a quick auto mode or browse all models.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            header,
             ..Default::default()
         });
     }
@@ -2576,14 +2619,14 @@ impl ChatWidget {
             });
         }
 
+        let header = self.model_menu_header(
+            "Select Model and Effort",
+            "Access legacy models by running codex -m <model_name> or in your config.toml",
+        );
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Model and Effort".to_string()),
-            subtitle: Some(
-                "Access legacy models by running codex -m <model_name> or in your config.toml"
-                    .to_string(),
-            ),
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
             items,
+            header,
             ..Default::default()
         });
     }
