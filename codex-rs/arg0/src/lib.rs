@@ -162,6 +162,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
                     "Refusing to create helper binaries under temporary dir {temp_root:?} (codex_home: {codex_home:?})"
                 ),
             ));
+
         }
     }
 
