@@ -453,22 +453,12 @@ pub struct ConfigReadResponse {
     pub layers: Option<Vec<ConfigLayer>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case", export_to = "v2/")]
-pub enum SandboxModeRequirement {
-    ReadOnly,
-    WorkspaceWrite,
-    DangerFullAccess,
-    ExternalSandbox,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Requirements {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
-    pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
+    pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

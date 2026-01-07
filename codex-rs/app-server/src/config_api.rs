@@ -9,7 +9,7 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequirementListResponse;
 use codex_app_server_protocol::Requirements;
-use codex_app_server_protocol::SandboxModeRequirement;
+use codex_app_server_protocol::SandboxMode;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
 use codex_core::config_loader::ConfigRequirementsToml;
@@ -81,18 +81,40 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> Require
         allowed_sandbox_modes: requirements.allowed_sandbox_modes.map(|modes| {
             modes
                 .into_iter()
-                .map(map_sandbox_mode_requirement_to_api)
+                .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
     }
 }
 
-fn map_sandbox_mode_requirement_to_api(mode: CoreSandboxModeRequirement) -> SandboxModeRequirement {
+fn map_sandbox_mode_requirement_to_api(mode: CoreSandboxModeRequirement) -> Option<SandboxMode> {
     match mode {
-        CoreSandboxModeRequirement::ReadOnly => SandboxModeRequirement::ReadOnly,
-        CoreSandboxModeRequirement::WorkspaceWrite => SandboxModeRequirement::WorkspaceWrite,
-        CoreSandboxModeRequirement::DangerFullAccess => SandboxModeRequirement::DangerFullAccess,
-        CoreSandboxModeRequirement::ExternalSandbox => SandboxModeRequirement::ExternalSandbox,
+        CoreSandboxModeRequirement::ReadOnly => Some(SandboxMode::ReadOnly),
+        CoreSandboxModeRequirement::WorkspaceWrite => Some(SandboxMode::WorkspaceWrite),
+        CoreSandboxModeRequirement::DangerFullAccess => Some(SandboxMode::DangerFullAccess),
+        CoreSandboxModeRequirement::ExternalSandbox => None,
+    }
+}
+
+fn map_error(err: ConfigServiceError) -> JSONRPCErrorError {
+    if let Some(code) = err.write_error_code() {
+        return config_write_error(code, err.to_string());
+    }
+
+    JSONRPCErrorError {
+        code: INTERNAL_ERROR_CODE,
+        message: err.to_string(),
+        data: None,
+    }
+}
+
+fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: INVALID_REQUEST_ERROR_CODE,
+        message: message.into(),
+        data: Some(json!({
+            "config_write_error_code": code,
+        })),
     }
 }
 
@@ -126,32 +148,7 @@ mod tests {
         );
         assert_eq!(
             mapped.allowed_sandbox_modes,
-            Some(vec![
-                SandboxModeRequirement::ReadOnly,
-                SandboxModeRequirement::ExternalSandbox,
-            ])
+            Some(vec![SandboxMode::ReadOnly]),
         );
-    }
-}
-
-fn map_error(err: ConfigServiceError) -> JSONRPCErrorError {
-    if let Some(code) = err.write_error_code() {
-        return config_write_error(code, err.to_string());
-    }
-
-    JSONRPCErrorError {
-        code: INTERNAL_ERROR_CODE,
-        message: err.to_string(),
-        data: None,
-    }
-}
-
-fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message: message.into(),
-        data: Some(json!({
-            "config_write_error_code": code,
-        })),
     }
 }
