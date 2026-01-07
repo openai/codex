@@ -16,8 +16,12 @@ use crate::codex::TurnContext;
 use crate::exec_env::create_env;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
@@ -25,29 +29,28 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
+use crate::unified_exec::ExecCommandRequest;
+use crate::unified_exec::MAX_UNIFIED_EXEC_SESSIONS;
+use crate::unified_exec::SessionEntry;
+use crate::unified_exec::SessionStore;
+use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::UnifiedExecError;
+use crate::unified_exec::UnifiedExecResponse;
+use crate::unified_exec::UnifiedExecSessionManager;
+use crate::unified_exec::WARNING_UNIFIED_EXEC_SESSIONS;
+use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
+use crate::unified_exec::async_watcher::spawn_exit_watcher;
+use crate::unified_exec::async_watcher::start_streaming_output;
+use crate::unified_exec::clamp_yield_time;
+use crate::unified_exec::generate_chunk_id;
+use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
+use crate::unified_exec::resolve_max_tokens;
+use crate::unified_exec::session::OutputBuffer;
+use crate::unified_exec::session::OutputHandles;
+use crate::unified_exec::session::UnifiedExecSession;
 
-use super::CommandTranscript;
-use super::ExecCommandRequest;
-use super::MAX_UNIFIED_EXEC_SESSIONS;
-use super::SessionEntry;
-use super::SessionStore;
-use super::UnifiedExecContext;
-use super::UnifiedExecError;
-use super::UnifiedExecResponse;
-use super::UnifiedExecSessionManager;
-use super::WARNING_UNIFIED_EXEC_SESSIONS;
-use super::WriteStdinRequest;
-use super::async_watcher::emit_exec_end_for_unified_exec;
-use super::async_watcher::spawn_exit_watcher;
-use super::async_watcher::start_streaming_output;
-use super::clamp_yield_time;
-use super::generate_chunk_id;
-use super::resolve_max_tokens;
-use super::session::OutputBuffer;
-use super::session::OutputHandles;
-use super::session::UnifiedExecSession;
-
-const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
+const UNIFIED_EXEC_ENV: [(&str, &str); 9] = [
     ("NO_COLOR", "1"),
     ("TERM", "dumb"),
     ("LANG", "C.UTF-8"),
@@ -56,6 +59,7 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
     ("COLORTERM", ""),
     ("PAGER", "cat"),
     ("GIT_PAGER", "cat"),
+    ("GH_PAGER", "cat"),
 ];
 
 fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
@@ -139,7 +143,21 @@ impl UnifiedExecSessionManager {
             }
         };
 
-        let transcript = Arc::new(tokio::sync::Mutex::new(CommandTranscript::default()));
+        let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+        let event_ctx = ToolEventCtx::new(
+            context.session.as_ref(),
+            context.turn.as_ref(),
+            &context.call_id,
+            None,
+        );
+        let emitter = ToolEmitter::unified_exec(
+            &request.command,
+            cwd.clone(),
+            ExecCommandSource::UnifiedExecStartup,
+            Some(request.process_id.clone()),
+        );
+        emitter.emit(event_ctx, ToolEventStage::Begin).await;
+
         start_streaming_output(&session, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
@@ -390,7 +408,7 @@ impl UnifiedExecSessionManager {
         cwd: PathBuf,
         started_at: Instant,
         process_id: String,
-        transcript: Arc<tokio::sync::Mutex<CommandTranscript>>,
+        transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
         let entry = SessionEntry {
             session: Arc::clone(&session),
@@ -532,11 +550,11 @@ impl UnifiedExecSessionManager {
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let mut exit_signal_received = cancellation_token.is_cancelled();
         loop {
-            let drained_chunks;
+            let drained_chunks: Vec<Vec<u8>>;
             let mut wait_for_output = None;
             {
                 let mut guard = output_buffer.lock().await;
-                drained_chunks = guard.drain();
+                drained_chunks = guard.drain_chunks();
                 if drained_chunks.is_empty() {
                     wait_for_output = Some(output_notify.notified());
                 }
@@ -679,6 +697,7 @@ mod tests {
             ("COLORTERM".to_string(), String::new()),
             ("PAGER".to_string(), "cat".to_string()),
             ("GIT_PAGER".to_string(), "cat".to_string()),
+            ("GH_PAGER".to_string(), "cat".to_string()),
         ]);
 
         assert_eq!(env, expected);

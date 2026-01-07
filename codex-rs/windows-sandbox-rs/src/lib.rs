@@ -5,7 +5,8 @@ macro_rules! windows_modules {
 }
 
 windows_modules!(
-    acl, allow, audit, cap, dpapi, env, identity, logging, policy, process, token, winutil
+    acl, allow, audit, cap, dpapi, env, hide_users, identity, logging, policy, process, token,
+    winutil
 );
 
 #[cfg(target_os = "windows")]
@@ -37,6 +38,10 @@ pub use dpapi::protect as dpapi_protect;
 pub use dpapi::unprotect as dpapi_unprotect;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
+#[cfg(target_os = "windows")]
+pub use hide_users::hide_current_user_profile_dir;
+#[cfg(target_os = "windows")]
+pub use hide_users::hide_newly_created_users;
 #[cfg(target_os = "windows")]
 pub use identity::require_logon_sandbox_creds;
 #[cfg(target_os = "windows")]

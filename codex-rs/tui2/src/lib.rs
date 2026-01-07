@@ -81,6 +81,8 @@ mod transcript_copy_action;
 mod transcript_copy_ui;
 mod transcript_multi_click;
 mod transcript_render;
+mod transcript_scrollbar;
+mod transcript_scrollbar_ui;
 mod transcript_selection;
 mod transcript_view_cache;
 mod tui;
@@ -358,6 +360,8 @@ async fn run_ratatui_app(
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
+
+    tooltips::announcement::prewarm();
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.

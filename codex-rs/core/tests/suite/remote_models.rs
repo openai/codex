@@ -381,12 +381,11 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     assert_eq!(selected, "gpt-5.2-codex");
 
     let available = manager.list_models(&config).await;
-    assert!(
-        available
-            .iter()
-            .all(|model| model.model != "codex-auto-balanced"),
-        "hidden models should not appear in the picker list"
-    );
+    let hidden = available
+        .iter()
+        .find(|model| model.model == "codex-auto-balanced")
+        .expect("hidden remote model should be listed");
+    assert!(!hidden.show_in_picker, "hidden models should remain hidden");
 
     Ok(())
 }
@@ -442,7 +441,8 @@ where
 
     mutate_config(&mut config);
 
-    let conversation_manager = Arc::new(ConversationManager::with_models_provider(auth, provider));
+    let conversation_manager = ConversationManager::with_models_provider(auth, provider);
+    let conversation_manager = Arc::new(conversation_manager);
 
     let new_conversation = conversation_manager
         .new_conversation(config.clone())

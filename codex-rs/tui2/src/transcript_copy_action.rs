@@ -17,8 +17,10 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::history_cell::HistoryCell;
+use crate::transcript_scrollbar::split_transcript_area;
 use crate::transcript_selection::TranscriptSelection;
 use crate::tui;
+use ratatui::layout::Rect;
 
 /// User-visible feedback shown briefly after a copy attempt.
 ///
@@ -162,10 +164,18 @@ pub(crate) fn copy_transcript_selection(
         return CopySelectionOutcome::NoSelection;
     }
 
+    let transcript_full_area = Rect {
+        x: 0,
+        y: 0,
+        width,
+        height: transcript_height,
+    };
+    let (transcript_area, _) = split_transcript_area(transcript_full_area);
+
     let Some(text) = crate::transcript_copy::selection_to_copy_text_for_cells(
         transcript_cells,
         transcript_selection,
-        width,
+        transcript_area.width,
     ) else {
         return CopySelectionOutcome::NoSelection;
     };

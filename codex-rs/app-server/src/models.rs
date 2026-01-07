@@ -15,6 +15,7 @@ pub async fn supported_models(
         .list_models(config)
         .await
         .into_iter()
+        .filter(|preset| preset.show_in_picker)
         .map(model_from_preset)
         .collect()
 }

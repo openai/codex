@@ -74,6 +74,7 @@ async fn fork_conversation_twice_drops_to_first_message() {
                 items: vec![UserInput::Text {
                     text: text.to_string(),
                 }],
+                final_output_json_schema: None,
             })
             .await
             .unwrap();

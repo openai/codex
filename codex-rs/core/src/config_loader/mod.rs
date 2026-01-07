@@ -78,8 +78,14 @@ pub async fn load_config_layers_state(
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsToml::default();
 
-    // TODO(gt): Support an entry in MDM for config requirements and use it
-    // with `config_requirements_toml.merge_unset_fields(...)`, if present.
+    #[cfg(target_os = "macos")]
+    macos::load_managed_admin_requirements_toml(
+        &mut config_requirements_toml,
+        overrides
+            .macos_managed_config_requirements_base64
+            .as_deref(),
+    )
+    .await?;
 
     // Honor /etc/codex/requirements.toml.
     if cfg!(unix) {
@@ -100,8 +106,6 @@ pub async fn load_config_layers_state(
     .await?;
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
-
-    // TODO(gt): Honor managed preferences (macOS only).
 
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.

@@ -95,7 +95,7 @@ pub fn restore() -> Result<()> {
     Ok(())
 }
 
-/// Initialize the terminal (inline viewport; history stays in normal scrollback)
+/// Initialize the terminal (inline viewport; no always-on scrollback printing).
 pub fn init() -> Result<Terminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
