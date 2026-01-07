@@ -181,6 +181,43 @@ impl From<CancelErr> for CodexErr {
     }
 }
 
+impl CodexErr {
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            CodexErr::TurnAborted
+            | CodexErr::Interrupted
+            | CodexErr::EnvVar(_)
+            | CodexErr::Fatal(_)
+            | CodexErr::UsageNotIncluded
+            | CodexErr::QuotaExceeded
+            | CodexErr::InvalidImageRequest()
+            | CodexErr::InvalidRequest(_)
+            | CodexErr::RefreshTokenFailed(_)
+            | CodexErr::ContextWindowExceeded
+            | CodexErr::UsageLimitReached(_) => false,
+            CodexErr::Stream(..)
+            | CodexErr::ThreadNotFound(_)
+            | CodexErr::SessionConfiguredNotFirstEvent
+            | CodexErr::Timeout
+            | CodexErr::Spawn
+            | CodexErr::UnexpectedStatus(_)
+            | CodexErr::ResponseStreamFailed(_)
+            | CodexErr::ConnectionFailed(_)
+            | CodexErr::InternalServerError
+            | CodexErr::RetryLimit(_)
+            | CodexErr::InternalAgentDied
+            | CodexErr::Sandbox(_)
+            | CodexErr::LandlockSandboxExecutableNotProvided
+            | CodexErr::UnsupportedOperation(_)
+            | CodexErr::Io(_)
+            | CodexErr::Json(_)
+            | CodexErr::TokioJoin(_) => true,
+            #[cfg(target_os = "linux")]
+            CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => true,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ConnectionFailedError {
     pub source: reqwest::Error,

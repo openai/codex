@@ -2551,33 +2551,35 @@ async fn run_turn(
             Err(err) => err,
         };
 
-        match err {
-            err @ CodexErr::Stream(_, requested_delay) => {
-                // Use the configured provider-specific stream retry budget.
-                let max_retries = turn_context.client.get_provider().stream_max_retries();
-                if retries < max_retries {
-                    retries += 1;
-                    let delay = requested_delay.unwrap_or_else(|| backoff(retries));
-                    warn!(
-                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
-                    );
+        if !err.is_retryable() {
+            return Err(err);
+        }
 
-                    // Surface retry information to any UI/front‑end so the
-                    // user understands what is happening instead of staring
-                    // at a seemingly frozen screen.
-                    sess.notify_stream_error(
-                        &turn_context,
-                        format!("Reconnecting... {retries}/{max_retries}"),
-                        err,
-                    )
-                    .await;
-
-                    tokio::time::sleep(delay).await;
-                } else {
-                    return Err(err);
+        // Use the configured provider-specific stream retry budget.
+        let max_retries = turn_context.client.get_provider().stream_max_retries();
+        if retries < max_retries {
+            retries += 1;
+            let delay = match &err {
+                CodexErr::Stream(_, requested_delay) => {
+                    requested_delay.unwrap_or_else(|| backoff(retries))
                 }
-            }
-            err => return Err(err),
+                _ => backoff(retries),
+            };
+            warn!("stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",);
+
+            // Surface retry information to any UI/front‑end so the
+            // user understands what is happening instead of staring
+            // at a seemingly frozen screen.
+            sess.notify_stream_error(
+                &turn_context,
+                format!("Reconnecting... {retries}/{max_retries}"),
+                err,
+            )
+            .await;
+
+            tokio::time::sleep(delay).await;
+        } else {
+            return Err(err);
         }
     }
 }
