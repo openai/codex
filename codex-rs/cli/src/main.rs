@@ -285,7 +285,7 @@ struct StdioToUdsCommand {
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
-        conversation_id,
+        thread_id: conversation_id,
         ..
     } = exit_info;
 
@@ -482,7 +482,12 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
-                codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+                codex_app_server::run_main(
+                    codex_linux_sandbox_exe,
+                    root_config_overrides,
+                    codex_core::config_loader::LoaderOverrides::default(),
+                )
+                .await?;
             }
             Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
                 codex_app_server_protocol::generate_ts(
@@ -794,7 +799,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use codex_core::protocol::TokenUsage;
-    use codex_protocol::ConversationId;
+    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
 
     fn finalize_from_args(args: &[&str]) -> TuiCli {
@@ -834,9 +839,7 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
-            conversation_id: conversation
-                .map(ConversationId::from_string)
-                .map(Result::unwrap),
+            thread_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
             update_action: None,
         }
     }
@@ -845,7 +848,7 @@ mod tests {
     fn format_exit_messages_skips_zero_usage() {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
-            conversation_id: None,
+            thread_id: None,
             update_action: None,
         };
         let lines = format_exit_messages(exit_info, false);

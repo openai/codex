@@ -1,15 +1,13 @@
 use crate::client_common::tools::ToolSpec;
 use crate::error::Result;
-use crate::models_manager::model_family::ModelFamily;
 pub use codex_api::common::ResponseEvent;
-use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelInfo;
 use futures::Stream;
 use serde::Deserialize;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -44,28 +42,12 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelFamily) -> Cow<'a, str> {
-        let base = self
-            .base_instructions_override
-            .as_deref()
-            .unwrap_or(model.base_instructions.deref());
-        // When there are no custom instructions, add apply_patch_tool_instructions if:
-        // - the model needs special instructions (4.1)
-        // AND
-        // - there is no apply_patch tool present
-        let is_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
-            ToolSpec::Function(f) => f.name == "apply_patch",
-            ToolSpec::Freeform(f) => f.name == "apply_patch",
-            _ => false,
-        });
-        if self.base_instructions_override.is_none()
-            && model.needs_special_apply_patch_instructions
-            && !is_apply_patch_tool_present
-        {
-            Cow::Owned(format!("{base}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}"))
-        } else {
-            Cow::Borrowed(base)
-        }
+    pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelInfo) -> Cow<'a, str> {
+        Cow::Borrowed(
+            self.base_instructions_override
+                .as_deref()
+                .unwrap_or(model.base_instructions.as_str()),
+        )
     }
 
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
@@ -195,8 +177,13 @@ pub(crate) mod tools {
         LocalShell {},
         // TODO: Understand why we get an error on web_search although the API docs say it's supported.
         // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
+        // The `external_web_access` field determines whether the web search is over cached or live content.
+        // https://platform.openai.com/docs/guides/tools-web-search#live-internet-access
         #[serde(rename = "web_search")]
-        WebSearch {},
+        WebSearch {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            external_web_access: Option<bool>,
+        },
         #[serde(rename = "custom")]
         Freeform(FreeformTool),
     }
@@ -206,7 +193,7 @@ pub(crate) mod tools {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
                 ToolSpec::LocalShell {} => "local_shell",
-                ToolSpec::WebSearch {} => "web_search",
+                ToolSpec::WebSearch { .. } => "web_search",
                 ToolSpec::Freeform(tool) => tool.name.as_str(),
             }
         }
@@ -272,6 +259,8 @@ mod tests {
         let prompt = Prompt {
             ..Default::default()
         };
+        let prompt_with_apply_patch_instructions =
+            include_str!("../prompt_with_apply_patch_instructions.md");
         let test_cases = vec![
             InstructionsTestCase {
                 slug: "gpt-3.5",
@@ -312,19 +301,16 @@ mod tests {
         ];
         for test_case in test_cases {
             let config = test_config();
-            let model_family =
-                ModelsManager::construct_model_family_offline(test_case.slug, &config);
-            let expected = if test_case.expects_apply_patch_instructions {
-                format!(
-                    "{}\n{}",
-                    model_family.clone().base_instructions,
-                    APPLY_PATCH_TOOL_INSTRUCTIONS
-                )
-            } else {
-                model_family.clone().base_instructions
-            };
+            let model_info = ModelsManager::construct_model_info_offline(test_case.slug, &config);
+            if test_case.expects_apply_patch_instructions {
+                assert_eq!(
+                    model_info.base_instructions.as_str(),
+                    prompt_with_apply_patch_instructions
+                );
+            }
 
-            let full = prompt.get_full_instructions(&model_family);
+            let expected = model_info.base_instructions.as_str();
+            let full = prompt.get_full_instructions(&model_info);
             assert_eq!(full, expected);
         }
     }

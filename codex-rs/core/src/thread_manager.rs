@@ -3,10 +3,11 @@ use crate::AuthManager;
 use crate::CodexAuth;
 #[cfg(any(test, feature = "test-support"))]
 use crate::ModelProviderInfo;
+use crate::agent::AgentControl;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
-use crate::codex_conversation::CodexConversation;
+use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -15,12 +16,12 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::truncation;
 use crate::skills::SkillsManager;
-use codex_protocol::ConversationId;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use std::collections::HashMap;
@@ -30,35 +31,50 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
-/// Represents a newly created Codex conversation, including the first event
+/// Represents a newly created Codex thread (formerly called a conversation), including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
-pub struct NewConversation {
-    pub conversation_id: ConversationId,
-    pub conversation: Arc<CodexConversation>,
+pub struct NewThread {
+    pub thread_id: ThreadId,
+    pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
 }
 
-/// [`ConversationManager`] is responsible for creating conversations and
-/// maintaining them in memory.
-pub struct ConversationManager {
-    conversations: Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>,
-    auth_manager: Arc<AuthManager>,
-    models_manager: Arc<ModelsManager>,
-    skills_manager: Arc<SkillsManager>,
-    session_source: SessionSource,
+/// [`ThreadManager`] is responsible for creating threads and maintaining
+/// them in memory.
+pub struct ThreadManager {
+    state: Arc<ThreadManagerState>,
     #[cfg(any(test, feature = "test-support"))]
     _test_codex_home_guard: Option<TempDir>,
 }
 
-impl ConversationManager {
-    pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
-        let skills_manager = Arc::new(SkillsManager::new(auth_manager.codex_home().to_path_buf()));
+/// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
+/// `Arc` reference that can be downgraded to by `AgentControl` while preventing every single
+/// function to require an `Arc<&Self>`.
+pub(crate) struct ThreadManagerState {
+    threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    auth_manager: Arc<AuthManager>,
+    models_manager: Arc<ModelsManager>,
+    skills_manager: Arc<SkillsManager>,
+    session_source: SessionSource,
+}
+
+impl ThreadManager {
+    pub fn new(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+    ) -> Self {
         Self {
-            conversations: Arc::new(RwLock::new(HashMap::new())),
-            auth_manager: auth_manager.clone(),
-            session_source,
-            models_manager: Arc::new(ModelsManager::new(auth_manager)),
-            skills_manager,
+            state: Arc::new(ThreadManagerState {
+                threads: Arc::new(RwLock::new(HashMap::new())),
+                models_manager: Arc::new(ModelsManager::new(
+                    codex_home.clone(),
+                    auth_manager.clone(),
+                )),
+                skills_manager: Arc::new(SkillsManager::new(codex_home)),
+                auth_manager,
+                session_source,
+            }),
             #[cfg(any(test, feature = "test-support"))]
             _test_codex_home_guard: None,
         }
@@ -83,64 +99,165 @@ impl ConversationManager {
         provider: ModelProviderInfo,
         codex_home: PathBuf,
     ) -> Self {
-        let auth_manager = crate::AuthManager::from_auth_for_testing_with_home(auth, codex_home);
-        let skills_manager = Arc::new(SkillsManager::new(auth_manager.codex_home().to_path_buf()));
+        let auth_manager = AuthManager::from_auth_for_testing(auth);
         Self {
-            conversations: Arc::new(RwLock::new(HashMap::new())),
-            auth_manager: auth_manager.clone(),
-            session_source: SessionSource::Exec,
-            models_manager: Arc::new(ModelsManager::with_provider(auth_manager, provider)),
-            skills_manager,
+            state: Arc::new(ThreadManagerState {
+                threads: Arc::new(RwLock::new(HashMap::new())),
+                models_manager: Arc::new(ModelsManager::with_provider(
+                    codex_home.clone(),
+                    auth_manager.clone(),
+                    provider,
+                )),
+                skills_manager: Arc::new(SkillsManager::new(codex_home)),
+                auth_manager,
+                session_source: SessionSource::Exec,
+            }),
             _test_codex_home_guard: None,
         }
     }
 
     pub fn session_source(&self) -> SessionSource {
-        self.session_source.clone()
+        self.state.session_source.clone()
     }
 
     pub fn skills_manager(&self) -> Arc<SkillsManager> {
-        self.skills_manager.clone()
+        self.state.skills_manager.clone()
     }
 
-    pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
-        self.spawn_conversation(
+    pub fn get_models_manager(&self) -> Arc<ModelsManager> {
+        self.state.models_manager.clone()
+    }
+
+    pub async fn list_models(&self, config: &Config) -> Vec<ModelPreset> {
+        self.state.models_manager.list_models(config).await
+    }
+
+    pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
+        self.state.get_thread(thread_id).await
+    }
+
+    pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
+        self.state
+            .spawn_thread(
+                config,
+                InitialHistory::New,
+                Arc::clone(&self.state.auth_manager),
+                self.agent_control(),
+            )
+            .await
+    }
+
+    pub async fn resume_thread_from_rollout(
+        &self,
+        config: Config,
+        rollout_path: PathBuf,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<NewThread> {
+        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        self.resume_thread_with_history(config, initial_history, auth_manager)
+            .await
+    }
+
+    pub async fn resume_thread_with_history(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<NewThread> {
+        self.state
+            .spawn_thread(config, initial_history, auth_manager, self.agent_control())
+            .await
+    }
+
+    /// Removes the thread from the manager's internal map, though the thread is stored
+    /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
+    /// Returns the thread if the thread was found and removed.
+    pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
+        self.state.threads.write().await.remove(thread_id)
+    }
+
+    /// Fork an existing thread by taking messages up to the given position (not including
+    /// the message at the given position) and starting a new thread with identical
+    /// configuration (unless overridden by the caller's `config`). The new thread will have
+    /// a fresh id.
+    pub async fn fork_thread(
+        &self,
+        nth_user_message: usize,
+        config: Config,
+        path: PathBuf,
+    ) -> CodexResult<NewThread> {
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = truncate_before_nth_user_message(history, nth_user_message);
+        self.state
+            .spawn_thread(
+                config,
+                history,
+                Arc::clone(&self.state.auth_manager),
+                self.agent_control(),
+            )
+            .await
+    }
+
+    fn agent_control(&self) -> AgentControl {
+        AgentControl::new(Arc::downgrade(&self.state))
+    }
+}
+
+impl ThreadManagerState {
+    pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
+        let threads = self.threads.read().await;
+        threads
+            .get(&thread_id)
+            .cloned()
+            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
+    }
+
+    pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
+        self.get_thread(thread_id).await?.submit(op).await
+    }
+
+    #[allow(dead_code)] // Used by upcoming multi-agent tooling.
+    pub(crate) async fn spawn_new_thread(
+        &self,
+        config: Config,
+        agent_control: AgentControl,
+    ) -> CodexResult<NewThread> {
+        self.spawn_thread(
             config,
-            self.auth_manager.clone(),
-            self.models_manager.clone(),
+            InitialHistory::New,
+            Arc::clone(&self.auth_manager),
+            agent_control,
         )
         .await
     }
 
-    async fn spawn_conversation(
+    pub(crate) async fn spawn_thread(
         &self,
         config: Config,
+        initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
-        models_manager: Arc<ModelsManager>,
-    ) -> CodexResult<NewConversation> {
+        agent_control: AgentControl,
+    ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
-            codex,
-            conversation_id,
+            codex, thread_id, ..
         } = Codex::spawn(
             config,
             auth_manager,
-            models_manager,
-            self.skills_manager.clone(),
-            InitialHistory::New,
+            Arc::clone(&self.models_manager),
+            Arc::clone(&self.skills_manager),
+            initial_history,
             self.session_source.clone(),
+            agent_control,
         )
         .await?;
-        self.finalize_spawn(codex, conversation_id).await
+        self.finalize_thread_spawn(codex, thread_id).await
     }
 
-    async fn finalize_spawn(
+    async fn finalize_thread_spawn(
         &self,
         codex: Codex,
-        conversation_id: ConversationId,
-    ) -> CodexResult<NewConversation> {
-        // The first event must be `SessionInitialized`. Validate and forward it
-        // to the caller so that they can display it in the conversation
-        // history.
+        thread_id: ThreadId,
+    ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
             Event {
@@ -152,144 +269,25 @@ impl ConversationManager {
             }
         };
 
-        let conversation = Arc::new(CodexConversation::new(
+        let thread = Arc::new(CodexThread::new(
             codex,
             session_configured.rollout_path.clone(),
         ));
-        self.conversations
-            .write()
-            .await
-            .insert(conversation_id, conversation.clone());
+        self.threads.write().await.insert(thread_id, thread.clone());
 
-        Ok(NewConversation {
-            conversation_id,
-            conversation,
+        Ok(NewThread {
+            thread_id,
+            thread,
             session_configured,
         })
-    }
-
-    pub async fn get_conversation(
-        &self,
-        conversation_id: ConversationId,
-    ) -> CodexResult<Arc<CodexConversation>> {
-        let conversations = self.conversations.read().await;
-        conversations
-            .get(&conversation_id)
-            .cloned()
-            .ok_or_else(|| CodexErr::ConversationNotFound(conversation_id))
-    }
-
-    pub async fn resume_conversation_from_rollout(
-        &self,
-        config: Config,
-        rollout_path: PathBuf,
-        auth_manager: Arc<AuthManager>,
-    ) -> CodexResult<NewConversation> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.resume_conversation_with_history(config, initial_history, auth_manager)
-            .await
-    }
-
-    pub async fn resume_conversation_with_history(
-        &self,
-        config: Config,
-        initial_history: InitialHistory,
-        auth_manager: Arc<AuthManager>,
-    ) -> CodexResult<NewConversation> {
-        let CodexSpawnOk {
-            codex,
-            conversation_id,
-        } = Codex::spawn(
-            config,
-            auth_manager,
-            self.models_manager.clone(),
-            self.skills_manager.clone(),
-            initial_history,
-            self.session_source.clone(),
-        )
-        .await?;
-        self.finalize_spawn(codex, conversation_id).await
-    }
-
-    /// Removes the conversation from the manager's internal map, though the
-    /// conversation is stored as `Arc<CodexConversation>`, it is possible that
-    /// other references to it exist elsewhere. Returns the conversation if the
-    /// conversation was found and removed.
-    pub async fn remove_conversation(
-        &self,
-        conversation_id: &ConversationId,
-    ) -> Option<Arc<CodexConversation>> {
-        self.conversations.write().await.remove(conversation_id)
-    }
-
-    /// Fork an existing conversation by taking messages up to the given position
-    /// (not including the message at the given position) and starting a new
-    /// conversation with identical configuration (unless overridden by the
-    /// caller's `config`). The new conversation will have a fresh id.
-    pub async fn fork_conversation(
-        &self,
-        nth_user_message: usize,
-        config: Config,
-        path: PathBuf,
-    ) -> CodexResult<NewConversation> {
-        // Compute the prefix up to the cut point.
-        let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
-
-        // Spawn a new conversation with the computed initial history.
-        let auth_manager = self.auth_manager.clone();
-        let CodexSpawnOk {
-            codex,
-            conversation_id,
-        } = Codex::spawn(
-            config,
-            auth_manager,
-            self.models_manager.clone(),
-            self.skills_manager.clone(),
-            history,
-            self.session_source.clone(),
-        )
-        .await?;
-
-        self.finalize_spawn(codex, conversation_id).await
-    }
-
-    pub async fn list_models(&self, config: &Config) -> Vec<ModelPreset> {
-        self.models_manager.list_models(config).await
-    }
-
-    pub fn get_models_manager(&self) -> Arc<ModelsManager> {
-        self.models_manager.clone()
     }
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message
 /// (0-based) and all items that follow it.
 fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
-    // Work directly on rollout items, and cut the vector at the nth user message input.
     let items: Vec<RolloutItem> = history.get_rollout_items();
-
-    // Find indices of user message inputs in rollout order.
-    let mut user_positions: Vec<usize> = Vec::new();
-    for (idx, item) in items.iter().enumerate() {
-        if let RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) = item
-            && matches!(
-                crate::event_mapping::parse_turn_item(item),
-                Some(TurnItem::UserMessage(_))
-            )
-        {
-            user_positions.push(idx);
-        }
-    }
-
-    // If fewer than or equal to n user messages exist, treat as empty (out of range).
-    if user_positions.len() <= n {
-        return InitialHistory::New;
-    }
-
-    // Cut strictly before the nth user message (do not keep the nth itself).
-    let cut_idx = user_positions[n];
-    let rolled: Vec<RolloutItem> = items.into_iter().take(cut_idx).collect();
+    let rolled = truncation::truncate_rollout_before_nth_user_message_from_start(&items, n);
 
     if rolled.is_empty() {
         InitialHistory::New
@@ -345,14 +343,13 @@ mod tests {
             },
             ResponseItem::FunctionCall {
                 id: None,
+                call_id: "c1".to_string(),
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
-                call_id: "c1".to_string(),
             },
             assistant_msg("a4"),
         ];
 
-        // Wrap as InitialHistory::Forked with response items only.
         let initial: Vec<RolloutItem> = items
             .iter()
             .cloned()

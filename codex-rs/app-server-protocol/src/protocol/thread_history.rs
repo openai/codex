@@ -6,6 +6,7 @@ use crate::protocol::v2::UserInput;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 
@@ -57,6 +58,7 @@ impl ThreadHistoryBuilder {
             EventMsg::TokenCount(_) => {}
             EventMsg::EnteredReviewMode(_) => {}
             EventMsg::ExitedReviewMode(_) => {}
+            EventMsg::ThreadRolledBack(payload) => self.handle_thread_rollback(payload),
             EventMsg::UndoCompleted(_) => {}
             EventMsg::TurnAborted(payload) => self.handle_turn_aborted(payload),
             _ => {}
@@ -128,6 +130,23 @@ impl ThreadHistoryBuilder {
             return;
         };
         turn.status = TurnStatus::Interrupted;
+    }
+
+    fn handle_thread_rollback(&mut self, payload: &ThreadRolledBackEvent) {
+        self.finish_current_turn();
+
+        let n = usize::try_from(payload.num_turns).unwrap_or(usize::MAX);
+        if n >= self.turns.len() {
+            self.turns.clear();
+        } else {
+            self.turns.truncate(self.turns.len().saturating_sub(n));
+        }
+
+        // Re-number subsequent synthetic ids so the pruned history is consistent.
+        self.next_turn_index =
+            i64::try_from(self.turns.len().saturating_add(1)).unwrap_or(i64::MAX);
+        let item_count: usize = self.turns.iter().map(|t| t.items.len()).sum();
+        self.next_item_index = i64::try_from(item_count.saturating_add(1)).unwrap_or(i64::MAX);
     }
 
     fn finish_current_turn(&mut self) {
@@ -213,6 +232,7 @@ mod tests {
     use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::AgentReasoningEvent;
     use codex_protocol::protocol::AgentReasoningRawContentEvent;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::UserMessageEvent;
@@ -409,5 +429,96 @@ mod tests {
                 text: "Second attempt complete.".into(),
             }
         );
+    }
+
+    #[test]
+    fn drops_last_turns_on_thread_rollback() {
+        let events = vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "First".into(),
+                images: None,
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "A1".into(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "Second".into(),
+                images: None,
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "A2".into(),
+            }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "Third".into(),
+                images: None,
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "A3".into(),
+            }),
+        ];
+
+        let turns = build_turns_from_event_msgs(&events);
+        let expected = vec![
+            Turn {
+                id: "turn-1".into(),
+                status: TurnStatus::Completed,
+                error: None,
+                items: vec![
+                    ThreadItem::UserMessage {
+                        id: "item-1".into(),
+                        content: vec![UserInput::Text {
+                            text: "First".into(),
+                        }],
+                    },
+                    ThreadItem::AgentMessage {
+                        id: "item-2".into(),
+                        text: "A1".into(),
+                    },
+                ],
+            },
+            Turn {
+                id: "turn-2".into(),
+                status: TurnStatus::Completed,
+                error: None,
+                items: vec![
+                    ThreadItem::UserMessage {
+                        id: "item-3".into(),
+                        content: vec![UserInput::Text {
+                            text: "Third".into(),
+                        }],
+                    },
+                    ThreadItem::AgentMessage {
+                        id: "item-4".into(),
+                        text: "A3".into(),
+                    },
+                ],
+            },
+        ];
+        assert_eq!(turns, expected);
+    }
+
+    #[test]
+    fn thread_rollback_clears_all_turns_when_num_turns_exceeds_history() {
+        let events = vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "One".into(),
+                images: None,
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "A1".into(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "Two".into(),
+                images: None,
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "A2".into(),
+            }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 99 }),
+        ];
+
+        let turns = build_turns_from_event_msgs(&events);
+        assert_eq!(turns, Vec::<Turn>::new());
     }
 }

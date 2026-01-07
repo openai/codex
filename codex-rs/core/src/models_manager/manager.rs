@@ -24,7 +24,7 @@ use crate::default_client::build_reqwest_client;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::model_family::ModelFamily;
+use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
@@ -36,7 +36,6 @@ const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
-    // todo(aibrahim) merge available_models and model family creation into one struct
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
     auth_manager: Arc<AuthManager>,
@@ -48,8 +47,7 @@ pub struct ModelsManager {
 
 impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager`.
-    pub fn new(auth_manager: Arc<AuthManager>) -> Self {
-        let codex_home = auth_manager.codex_home().to_path_buf();
+    pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
@@ -63,8 +61,11 @@ impl ModelsManager {
 
     #[cfg(any(test, feature = "test-support"))]
     /// Construct a manager scoped to the provided `AuthManager` with a specific provider. Used for integration tests.
-    pub fn with_provider(auth_manager: Arc<AuthManager>, provider: ModelProviderInfo) -> Self {
-        let codex_home = auth_manager.codex_home().to_path_buf();
+    pub fn with_provider(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        provider: ModelProviderInfo,
+    ) -> Self {
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
@@ -128,15 +129,19 @@ impl ModelsManager {
         Ok(self.build_available_models(remote_models))
     }
 
-    fn find_family_for_model(slug: &str) -> ModelFamily {
-        super::model_family::find_family_for_model(slug)
-    }
-
-    /// Look up the requested model family while applying remote metadata overrides.
-    pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
-        Self::find_family_for_model(model)
-            .with_remote_overrides(self.remote_models(config).await)
-            .with_config_overrides(config)
+    /// Look up the requested model metadata while applying remote metadata overrides.
+    pub async fn construct_model_info(&self, model: &str, config: &Config) -> ModelInfo {
+        let remote = self
+            .remote_models(config)
+            .await
+            .into_iter()
+            .find(|m| m.slug == model);
+        let model = if let Some(remote) = remote {
+            remote
+        } else {
+            model_info::find_model_info_for_slug(model)
+        };
+        model_info::with_config_overrides(model, config)
     }
 
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
@@ -149,14 +154,14 @@ impl ModelsManager {
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
         let auth_mode = self.auth_manager.get_auth_mode();
         let remote_models = self.remote_models(config).await;
-        if auth_mode == Some(AuthMode::ChatGPT)
-            && self
+        if auth_mode == Some(AuthMode::ChatGPT) {
+            let has_auto_balanced = self
                 .build_available_models(remote_models)
                 .iter()
-                .any(|m| m.model == CODEX_AUTO_BALANCED_MODEL)
-        {
-            return CODEX_AUTO_BALANCED_MODEL.to_string();
-        } else if auth_mode == Some(AuthMode::ChatGPT) {
+                .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL && model.show_in_picker);
+            if has_auto_balanced {
+                return CODEX_AUTO_BALANCED_MODEL.to_string();
+            }
             return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
@@ -180,9 +185,9 @@ impl ModelsManager {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    /// Offline helper that builds a `ModelFamily` without consulting remote state.
-    pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
-        Self::find_family_for_model(model).with_config_overrides(config)
+    /// Offline helper that builds a `ModelInfo` without consulting remote state.
+    pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
+        model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
     }
 
     async fn get_etag(&self) -> Option<String> {
@@ -247,10 +252,15 @@ impl ModelsManager {
         merged_presets = self.filter_visible_models(merged_presets);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
-        if let Some(default) = merged_presets.first_mut()
-            && !has_default
-        {
-            default.is_default = true;
+        if !has_default {
+            if let Some(default) = merged_presets
+                .iter_mut()
+                .find(|preset| preset.show_in_picker)
+            {
+                default.is_default = true;
+            } else if let Some(default) = merged_presets.first_mut() {
+                default.is_default = true;
+            }
         }
 
         merged_presets
@@ -260,7 +270,7 @@ impl ModelsManager {
         let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
         models
             .into_iter()
-            .filter(|model| model.show_in_picker && (chatgpt_mode || model.supported_in_api))
+            .filter(|model| chatgpt_mode || model.supported_in_api)
             .collect()
     }
 
@@ -358,14 +368,14 @@ mod tests {
             "supported_in_api": true,
             "priority": priority,
             "upgrade": null,
-            "base_instructions": null,
+            "base_instructions": "base instructions",
             "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
             "truncation_policy": {"mode": "bytes", "limit": 10_000},
             "supports_parallel_tool_calls": false,
-            "context_window": null,
+            "context_window": 272_000,
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
@@ -414,7 +424,8 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider(auth_manager, provider);
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
 
         manager
             .refresh_available_models_with_cache(&config)
@@ -473,7 +484,8 @@ mod tests {
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider(auth_manager, provider);
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
 
         manager
             .refresh_available_models_with_cache(&config)
@@ -527,7 +539,8 @@ mod tests {
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider(auth_manager, provider);
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
 
         manager
             .refresh_available_models_with_cache(&config)
@@ -597,7 +610,8 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let mut manager = ModelsManager::with_provider(auth_manager, provider);
+        let mut manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
         manager.cache_ttl = Duration::ZERO;
 
         manager
@@ -645,21 +659,24 @@ mod tests {
 
     #[test]
     fn build_available_models_picks_default_after_hiding_hidden_models() {
+        let codex_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for("http://example.test".to_string());
-        let mut manager = ModelsManager::with_provider(auth_manager, provider);
+        let mut manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
         manager.local_models = Vec::new();
 
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
         let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
 
-        let mut expected = ModelPreset::from(visible_model.clone());
-        expected.is_default = true;
+        let expected_hidden = ModelPreset::from(hidden_model.clone());
+        let mut expected_visible = ModelPreset::from(visible_model.clone());
+        expected_visible.is_default = true;
 
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
-        assert_eq!(available, vec![expected]);
+        assert_eq!(available, vec![expected_hidden, expected_visible]);
     }
 
     #[test]

@@ -22,7 +22,7 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -38,7 +38,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -70,21 +70,17 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
-    pub conversation_id: Option<ConversationId>,
+    pub thread_id: Option<ThreadId>,
     pub update_action: Option<UpdateAction>,
 }
 
-fn session_summary(
-    token_usage: TokenUsage,
-    conversation_id: Option<ConversationId>,
-) -> Option<SessionSummary> {
+fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command =
-        conversation_id.map(|conversation_id| format!("codex resume {conversation_id}"));
+    let resume_command = thread_id.map(|thread_id| format!("codex resume {thread_id}"));
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -275,7 +271,7 @@ async fn handle_model_migration_prompt_if_needed(
             ModelMigrationOutcome::Exit => {
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
-                    conversation_id: None,
+                    thread_id: None,
                     update_action: None,
                 });
             }
@@ -286,7 +282,7 @@ async fn handle_model_migration_prompt_if_needed(
 }
 
 pub(crate) struct App {
-    pub(crate) server: Arc<ConversationManager>,
+    pub(crate) server: Arc<ThreadManager>,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -316,7 +312,7 @@ pub(crate) struct App {
     pub(crate) pending_update_action: Option<UpdateAction>,
 
     /// Ignore the next ShutdownComplete event when we're intentionally
-    /// stopping a conversation (e.g., before starting a new one).
+    /// stopping a thread (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
 
     // One-shot suppression of the next world-writable scan after user confirmation.
@@ -324,11 +320,11 @@ pub(crate) struct App {
 }
 
 impl App {
-    async fn shutdown_current_conversation(&mut self) {
-        if let Some(conversation_id) = self.chat_widget.conversation_id() {
+    async fn shutdown_current_thread(&mut self) {
+        if let Some(thread_id) = self.chat_widget.thread_id() {
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
-            self.server.remove_conversation(&conversation_id).await;
+            self.server.remove_thread(&thread_id).await;
         }
     }
 
@@ -348,11 +344,12 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let conversation_manager = Arc::new(ConversationManager::new(
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::Cli,
         ));
-        let mut model = conversation_manager
+        let mut model = thread_manager
             .get_models_manager()
             .get_model(&config.model, &config)
             .await;
@@ -361,7 +358,7 @@ impl App {
             &mut config,
             model.as_str(),
             &app_event_tx,
-            conversation_manager.get_models_manager(),
+            thread_manager.get_models_manager(),
         )
         .await;
         if let Some(exit_info) = exit_info {
@@ -382,20 +379,16 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: conversation_manager.get_models_manager(),
+                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
                     model: model.clone(),
                 };
-                ChatWidget::new(init, conversation_manager.clone())
+                ChatWidget::new(init, thread_manager.clone())
             }
             ResumeSelection::Resume(path) => {
-                let resumed = conversation_manager
-                    .resume_conversation_from_rollout(
-                        config.clone(),
-                        path.clone(),
-                        auth_manager.clone(),
-                    )
+                let resumed = thread_manager
+                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
                     .await
                     .wrap_err_with(|| {
                         format!("Failed to resume session from {}", path.display())
@@ -408,16 +401,12 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: conversation_manager.get_models_manager(),
+                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
                     model: model.clone(),
                 };
-                ChatWidget::new_from_existing(
-                    init,
-                    resumed.conversation,
-                    resumed.session_configured,
-                )
+                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
         };
 
@@ -428,7 +417,7 @@ impl App {
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
         let mut app = Self {
-            server: conversation_manager.clone(),
+            server: thread_manager.clone(),
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
@@ -501,7 +490,7 @@ impl App {
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            conversation_id: app.chat_widget.conversation_id(),
+            thread_id: app.chat_widget.thread_id(),
             update_action: app.pending_update_action,
         })
     }
@@ -555,18 +544,16 @@ impl App {
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
-        let model_family = self
+        let model_info = self
             .server
             .get_models_manager()
-            .construct_model_family(self.current_model.as_str(), &self.config)
+            .construct_model_info(self.current_model.as_str(), &self.config)
             .await;
         match event {
             AppEvent::NewSession => {
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.conversation_id(),
-                );
-                self.shutdown_current_conversation().await;
+                let summary =
+                    session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
+                self.shutdown_current_thread().await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -581,7 +568,7 @@ impl App {
                     model: self.current_model.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.current_model = model_family.get_model_slug().to_string();
+                self.current_model = model_info.slug.clone();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -604,11 +591,11 @@ impl App {
                     ResumeSelection::Resume(path) => {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
-                            self.chat_widget.conversation_id(),
+                            self.chat_widget.thread_id(),
                         );
                         match self
                             .server
-                            .resume_conversation_from_rollout(
+                            .resume_thread_from_rollout(
                                 self.config.clone(),
                                 path.clone(),
                                 self.auth_manager.clone(),
@@ -616,7 +603,7 @@ impl App {
                             .await
                         {
                             Ok(resumed) => {
-                                self.shutdown_current_conversation().await;
+                                self.shutdown_current_thread().await;
                                 let init = crate::chatwidget::ChatWidgetInit {
                                     config: self.config.clone(),
                                     frame_requester: tui.frame_requester(),
@@ -632,10 +619,10 @@ impl App {
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
-                                    resumed.conversation,
+                                    resumed.thread,
                                     resumed.session_configured,
                                 );
-                                self.current_model = model_family.get_model_slug().to_string();
+                                self.current_model = model_info.slug.clone();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -1333,23 +1320,26 @@ mod tests {
     use crate::history_cell::new_session_info;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
-    use codex_core::ConversationManager;
+    use codex_core::ThreadManager;
+    use codex_core::config::ConfigBuilder;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
-    use codex_protocol::ConversationId;
+    use codex_protocol::ThreadId;
+    use insta::assert_snapshot;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use tempfile::tempdir;
 
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = "gpt-5.2-codex".to_string();
-        let server = Arc::new(ConversationManager::with_models_provider(
+        let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ));
@@ -1388,7 +1378,7 @@ mod tests {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = "gpt-5.2-codex".to_string();
-        let server = Arc::new(ConversationManager::with_models_provider(
+        let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ));
@@ -1425,6 +1415,24 @@ mod tests {
 
     fn all_model_presets() -> Vec<ModelPreset> {
         codex_core::models_manager::model_presets::all_model_presets().clone()
+    }
+
+    fn model_migration_copy_to_plain_text(
+        copy: &crate::model_migration::ModelMigrationCopy,
+    ) -> String {
+        let mut s = String::new();
+        for span in &copy.heading {
+            s.push_str(&span.content);
+        }
+        s.push('\n');
+        s.push('\n');
+        for line in &copy.content {
+            for span in &line.spans {
+                s.push_str(&span.content);
+            }
+            s.push('\n');
+        }
+        s
     }
 
     #[tokio::test]
@@ -1509,6 +1517,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_migration_prompt_shows_for_hidden_model() {
+        let codex_home = tempdir().expect("temp codex home");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let available_models = all_model_presets();
+        let current = available_models
+            .iter()
+            .find(|preset| preset.model == "gpt-5.1-codex")
+            .cloned()
+            .expect("gpt-5.1-codex preset present");
+        assert!(
+            !current.show_in_picker,
+            "expected gpt-5.1-codex to be hidden from picker for this test"
+        );
+
+        let upgrade = current.upgrade.as_ref().expect("upgrade configured");
+        assert!(
+            should_show_model_migration_prompt(
+                &current.model,
+                &upgrade.id,
+                &config.notices.model_migrations,
+                &available_models,
+            ),
+            "expected migration prompt to be eligible for hidden model"
+        );
+
+        let target = target_preset_for_upgrade(&available_models, &upgrade.id)
+            .expect("upgrade target present");
+        let target_description =
+            (!target.description.is_empty()).then(|| target.description.clone());
+        let can_opt_out = true;
+        let copy = migration_copy_for_models(
+            &current.model,
+            &upgrade.id,
+            upgrade.model_link.clone(),
+            upgrade.upgrade_copy.clone(),
+            target.display_name.clone(),
+            target_description,
+            can_opt_out,
+        );
+
+        // Snapshot the copy we would show; rendering is covered by model_migration snapshots.
+        assert_snapshot!(
+            "model_migration_prompt_shows_for_hidden_model",
+            model_migration_copy_to_plain_text(&copy)
+        );
+    }
+
+    #[tokio::test]
     async fn update_reasoning_effort_updates_config() {
         let mut app = make_test_app().await;
         app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
@@ -1545,7 +1606,7 @@ mod tests {
 
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
-                session_id: ConversationId::new(),
+                session_id: ThreadId::new(),
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -1567,7 +1628,7 @@ mod tests {
 
         // Simulate the transcript after trimming for a fork, replaying history, and
         // appending the edited turn. The session header separates the retained history
-        // from the forked conversation's replayed turns.
+        // from the forked thread's replayed turns.
         app.transcript_cells = vec![
             make_header(true),
             user_cell("first question"),
@@ -1583,7 +1644,7 @@ mod tests {
 
         assert_eq!(user_count(&app.transcript_cells), 2);
 
-        app.backtrack.base_id = Some(ConversationId::new());
+        app.backtrack.base_id = Some(ThreadId::new());
         app.backtrack.primed = true;
         app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
 
@@ -1598,9 +1659,9 @@ mod tests {
     async fn new_session_requests_shutdown_for_previous_conversation() {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
-        let conversation_id = ConversationId::new();
+        let thread_id = ThreadId::new();
         let event = SessionConfiguredEvent {
-            session_id: conversation_id,
+            session_id: thread_id,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
@@ -1621,7 +1682,7 @@ mod tests {
         while app_event_rx.try_recv().is_ok() {}
         while op_rx.try_recv().is_ok() {}
 
-        app.shutdown_current_conversation().await;
+        app.shutdown_current_thread().await;
 
         match op_rx.try_recv() {
             Ok(Op::Shutdown) => {}
@@ -1643,8 +1704,7 @@ mod tests {
             total_tokens: 12,
             ..Default::default()
         };
-        let conversation =
-            ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
         let summary = session_summary(usage, Some(conversation)).expect("summary");
         assert_eq!(

@@ -1,3 +1,37 @@
+//! Markdown rendering for `tui2`.
+//!
+//! This module has two related but intentionally distinct responsibilities:
+//!
+//! 1. **Parse Markdown into styled text** (for display).
+//! 2. **Preserve width-agnostic structure for reflow** (for streaming + resize).
+//!
+//! ## Why logical lines exist
+//!
+//! TUI2 supports viewport resize reflow and copy/paste that treats soft-wrapped prose as a single
+//! logical line. If we apply wrapping while rendering and store the resulting `Vec<Line>`, those
+//! width-derived breaks become indistinguishable from hard newlines and cannot be "unwrapped" when
+//! the viewport gets wider.
+//!
+//! To avoid baking width, streaming uses [`MarkdownLogicalLine`] output:
+//!
+//! - `content` holds the styled spans for a single *logical* line (a hard break boundary).
+//! - `initial_indent` / `subsequent_indent` encode markdown-aware indentation rules for wraps
+//!   (list markers, nested lists, blockquotes, etc.).
+//! - `line_style` captures line-level styling (e.g., blockquote green) that must apply to all
+//!   wrapped segments.
+//! - `is_preformatted` marks runs that should not be wrapped like prose (e.g., fenced code).
+//!
+//! History cells can then wrap `content` at the *current* width, applying indents appropriately and
+//! returning soft-wrap joiners for correct copy/paste.
+//!
+//! ## Outputs
+//!
+//! - [`render_markdown_text_with_width`]: emits a `Text` suitable for immediate display and may
+//!   apply wrapping if a width is provided.
+//! - [`render_markdown_logical_lines`]: emits width-agnostic logical lines (no wrapping).
+//!
+//! The underlying `Writer` can emit either (or both) depending on call site needs.
+
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -13,6 +47,31 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+
+/// A single width-agnostic markdown "logical line" plus the metadata required to wrap it later.
+///
+/// A logical line is a hard-break boundary produced by markdown parsing (explicit newlines,
+/// paragraph boundaries, list item boundaries, etc.). It is not a viewport-derived wrap segment.
+///
+/// Wrapping is performed later (typically in `HistoryCell::transcript_lines_with_joiners(width)`),
+/// where a cell can:
+///
+/// - prepend a transcript gutter prefix (`• ` / `  `),
+/// - prepend markdown-specific indents (`initial_indent` / `subsequent_indent`), and
+/// - wrap `content` to the current width while producing joiners for copy/paste.
+#[derive(Clone, Debug)]
+pub(crate) struct MarkdownLogicalLine {
+    /// The raw content for this logical line (does not include markdown prefix/indent spans).
+    pub(crate) content: Line<'static>,
+    /// Prefix/indent spans to apply to the first visual line when wrapping.
+    pub(crate) initial_indent: Line<'static>,
+    /// Prefix/indent spans to apply to wrapped continuation lines.
+    pub(crate) subsequent_indent: Line<'static>,
+    /// Line-level style to apply to all wrapped segments.
+    pub(crate) line_style: Style,
+    /// True when this line is preformatted and should not be wrapped like prose.
+    pub(crate) is_preformatted: bool,
+}
 
 struct MarkdownStyles {
     h1: Style,
@@ -56,8 +115,12 @@ impl Default for MarkdownStyles {
 
 #[derive(Clone, Debug)]
 struct IndentContext {
+    /// Prefix spans to apply for this nesting level (e.g., blockquote `> `, list indentation).
     prefix: Vec<Span<'static>>,
+    /// Optional list marker spans (e.g., `- ` or `1. `) that apply only to the first visual line of
+    /// a list item.
     marker: Option<Vec<Span<'static>>>,
+    /// True if this context represents a list indentation level.
     is_list: bool,
 }
 
@@ -75,21 +138,45 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
     render_markdown_text_with_width(input, None)
 }
 
+/// Render markdown into a ratatui `Text`, optionally wrapping to a specific width.
+///
+/// This is primarily used for non-streaming rendering where storing width-derived wrapping is
+/// acceptable or where the caller immediately consumes the output.
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width);
+    let mut w = Writer::new(parser, width, true, false);
     w.run();
     w.text
 }
 
+/// Render markdown into width-agnostic logical lines (no wrapping).
+///
+/// This is used by streaming so that the transcript can reflow on resize: wrapping is deferred to
+/// the history cell at render time.
+pub(crate) fn render_markdown_logical_lines(input: &str) -> Vec<MarkdownLogicalLine> {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    let parser = Parser::new_ext(input, options);
+    let mut w = Writer::new(parser, None, false, true);
+    w.run();
+    w.logical_lines
+}
+
+/// A markdown event sink that builds either:
+/// - a wrapped `Text` (`emit_text = true`), and/or
+/// - width-agnostic [`MarkdownLogicalLine`]s (`emit_logical_lines = true`).
+///
+/// The writer tracks markdown structure (paragraphs, lists, blockquotes, code blocks) and builds up
+/// a "current logical line". `flush_current_line` commits it to the selected output(s).
 struct Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
     iter: I,
     text: Text<'static>,
+    logical_lines: Vec<MarkdownLogicalLine>,
     styles: MarkdownStyles,
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
@@ -105,16 +192,21 @@ where
     current_subsequent_indent: Vec<Span<'static>>,
     current_line_style: Style,
     current_line_in_code_block: bool,
+
+    emit_text: bool,
+    emit_logical_lines: bool,
+    has_output_lines: bool,
 }
 
 impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
-    fn new(iter: I, wrap_width: Option<usize>) -> Self {
+    fn new(iter: I, wrap_width: Option<usize>, emit_text: bool, emit_logical_lines: bool) -> Self {
         Self {
             iter,
             text: Text::default(),
+            logical_lines: Vec::new(),
             styles: MarkdownStyles::default(),
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
@@ -130,6 +222,9 @@ where
             current_subsequent_indent: Vec::new(),
             current_line_style: Style::default(),
             current_line_in_code_block: false,
+            emit_text,
+            emit_logical_lines,
+            has_output_lines: false,
         }
     }
 
@@ -150,7 +245,7 @@ where
             Event::HardBreak => self.hard_break(),
             Event::Rule => {
                 self.flush_current_line();
-                if !self.text.lines.is_empty() {
+                if self.has_output_lines {
                     self.push_blank_line();
                 }
                 self.push_line(Line::from("———"));
@@ -396,7 +491,7 @@ where
 
     fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
         self.flush_current_line();
-        if !self.text.lines.is_empty() {
+        if self.has_output_lines {
             self.push_blank_line();
         }
         self.in_code_block = true;
@@ -436,30 +531,69 @@ where
         }
     }
 
+    /// Commit the current logical line to configured outputs.
+    ///
+    /// - When emitting logical lines, this records `content` plus indent metadata so callers can
+    ///   wrap later at the current viewport width.
+    /// - When emitting `Text`, wrapping may be applied immediately if `wrap_width` is set.
     fn flush_current_line(&mut self) {
-        if let Some(line) = self.current_line_content.take() {
-            let style = self.current_line_style;
+        let Some(line) = self.current_line_content.take() else {
+            return;
+        };
+
+        let initial_indent: Line<'static> =
+            Line::from(std::mem::take(&mut self.current_initial_indent));
+        let subsequent_indent: Line<'static> =
+            Line::from(std::mem::take(&mut self.current_subsequent_indent));
+        let line_style = self.current_line_style;
+        let is_preformatted = self.current_line_in_code_block;
+
+        if self.emit_logical_lines {
+            if self.emit_text {
+                self.logical_lines.push(MarkdownLogicalLine {
+                    content: line.clone(),
+                    initial_indent: initial_indent.clone(),
+                    subsequent_indent: subsequent_indent.clone(),
+                    line_style,
+                    is_preformatted,
+                });
+            } else {
+                self.logical_lines.push(MarkdownLogicalLine {
+                    content: line,
+                    initial_indent,
+                    subsequent_indent,
+                    line_style,
+                    is_preformatted,
+                });
+                self.has_output_lines = true;
+                self.current_line_in_code_block = false;
+                return;
+            }
+            self.has_output_lines = true;
+        }
+
+        if self.emit_text {
             // NB we don't wrap code in code blocks, in order to preserve whitespace for copy/paste.
-            if !self.current_line_in_code_block
-                && let Some(width) = self.wrap_width
-            {
+            if !is_preformatted && let Some(width) = self.wrap_width {
                 let opts = RtOptions::new(width)
-                    .initial_indent(self.current_initial_indent.clone().into())
-                    .subsequent_indent(self.current_subsequent_indent.clone().into());
+                    .initial_indent(initial_indent)
+                    .subsequent_indent(subsequent_indent);
                 for wrapped in word_wrap_line(&line, opts) {
-                    let owned = line_to_static(&wrapped).style(style);
+                    let owned = line_to_static(&wrapped).style(line_style);
                     self.text.lines.push(owned);
                 }
             } else {
-                let mut spans = self.current_initial_indent.clone();
+                let mut spans = initial_indent.spans;
                 let mut line = line;
                 spans.append(&mut line.spans);
-                self.text.lines.push(Line::from_iter(spans).style(style));
+                self.text
+                    .lines
+                    .push(Line::from_iter(spans).style(line_style));
             }
-            self.current_initial_indent.clear();
-            self.current_subsequent_indent.clear();
-            self.current_line_in_code_block = false;
+            self.has_output_lines = true;
         }
+
+        self.current_line_in_code_block = false;
     }
 
     fn push_line(&mut self, line: Line<'static>) {
@@ -503,13 +637,31 @@ where
     fn push_blank_line(&mut self) {
         self.flush_current_line();
         if self.indent_stack.iter().all(|ctx| ctx.is_list) {
-            self.text.lines.push(Line::default());
+            if self.emit_text {
+                self.text.lines.push(Line::default());
+                self.has_output_lines = true;
+            }
+            if self.emit_logical_lines {
+                self.logical_lines.push(MarkdownLogicalLine {
+                    content: Line::default(),
+                    initial_indent: Line::default(),
+                    subsequent_indent: Line::default(),
+                    line_style: Style::default(),
+                    is_preformatted: false,
+                });
+                self.has_output_lines = true;
+            }
         } else {
             self.push_line(Line::default());
             self.flush_current_line();
         }
     }
 
+    /// Compute the indentation spans for the current nesting stack.
+    ///
+    /// `pending_marker_line` controls whether we are about to emit a list item's marker line
+    /// (e.g., `- ` or `1. `). For marker lines, we include exactly one marker (the most recent) and
+    /// suppress earlier list-level prefixes so nested list markers align correctly.
     fn prefix_spans(&self, pending_marker_line: bool) -> Vec<Span<'static>> {
         let mut prefix: Vec<Span<'static>> = Vec::new();
         let last_marker_index = if pending_marker_line {

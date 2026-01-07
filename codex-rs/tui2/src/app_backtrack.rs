@@ -9,7 +9,7 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationPathResponseEvent;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -21,13 +21,13 @@ pub(crate) struct BacktrackState {
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
     /// Session id of the base conversation to fork from.
-    pub(crate) base_id: Option<ConversationId>,
+    pub(crate) base_id: Option<ThreadId>,
     /// Index in the transcript of the last user message.
     pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
     /// Pending fork request: (base_id, nth_user_message, prefill).
-    pub(crate) pending: Option<(ConversationId, usize, String)>,
+    pub(crate) pending: Option<(ThreadId, usize, String)>,
 }
 
 impl App {
@@ -99,7 +99,7 @@ impl App {
     pub(crate) fn request_backtrack(
         &mut self,
         prefill: String,
-        base_id: ConversationId,
+        base_id: ThreadId,
         nth_user_message: usize,
     ) {
         self.backtrack.pending = Some((base_id, nth_user_message, prefill));
@@ -123,12 +123,42 @@ impl App {
     }
 
     /// Close transcript overlay and restore normal UI.
+    ///
+    /// Any history emitted while the overlay was open is flushed to the normal-buffer queue here.
+    ///
+    /// Importantly, we defer *cells* (not rendered lines) so we can render them against the current
+    /// width on close and avoid baking width-derived wrapping based on an earlier viewport size.
+    /// (This matters if/when scrollback printing is enabled; `Tui::insert_history_lines` currently
+    /// queues lines without printing them during the main draw loop.)
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
         let was_backtrack = self.backtrack.overlay_preview_active;
-        if !self.deferred_history_lines.is_empty() {
-            let lines = std::mem::take(&mut self.deferred_history_lines);
-            tui.insert_history_lines(lines);
+        if !self.deferred_history_cells.is_empty() {
+            let cells = std::mem::take(&mut self.deferred_history_cells);
+            let width = tui.terminal.last_known_screen_size.width;
+            let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+            for cell in cells {
+                let mut display = cell.display_lines(width);
+                if display.is_empty() {
+                    continue;
+                }
+
+                // Only insert a separating blank line for new cells that are not part of an
+                // ongoing stream. Streaming continuations should not accrue extra blank lines
+                // between chunks.
+                if !cell.is_stream_continuation() {
+                    if self.has_emitted_history_lines {
+                        display.insert(0, ratatui::text::Line::from(""));
+                    } else {
+                        self.has_emitted_history_lines = true;
+                    }
+                }
+
+                lines.extend(display);
+            }
+            if !lines.is_empty() {
+                tui.insert_history_lines(lines);
+            }
         }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;
@@ -278,7 +308,7 @@ impl App {
     }
 
     /// Handle a ConversationHistory response while a backtrack is pending.
-    /// If it matches the primed base session, fork and switch to the new conversation.
+    /// If it matches the primed base session, fork and switch to the new thread.
     pub(crate) async fn on_conversation_history_for_backtrack(
         &mut self,
         tui: &mut tui::Tui,
@@ -294,7 +324,7 @@ impl App {
         Ok(())
     }
 
-    /// Fork the conversation using provided history and switch UI/state accordingly.
+    /// Fork the thread using provided history and switch UI/state accordingly.
     async fn fork_and_switch_to_new_conversation(
         &mut self,
         tui: &mut tui::Tui,
@@ -315,28 +345,26 @@ impl App {
         }
     }
 
-    /// Thin wrapper around ConversationManager::fork_conversation.
+    /// Thin wrapper around ThreadManager::fork_thread.
     async fn perform_fork(
         &self,
         path: PathBuf,
         nth_user_message: usize,
         cfg: codex_core::config::Config,
-    ) -> codex_core::error::Result<codex_core::NewConversation> {
-        self.server
-            .fork_conversation(nth_user_message, cfg, path)
-            .await
+    ) -> codex_core::error::Result<codex_core::NewThread> {
+        self.server.fork_thread(nth_user_message, cfg, path).await
     }
 
-    /// Install a forked conversation into the ChatWidget and update UI to reflect selection.
+    /// Install a forked thread into the ChatWidget and update UI to reflect selection.
     fn install_forked_conversation(
         &mut self,
         tui: &mut tui::Tui,
         cfg: codex_core::config::Config,
-        new_conv: codex_core::NewConversation,
+        new_conv: codex_core::NewThread,
         nth_user_message: usize,
         prefill: &str,
     ) {
-        let conv = new_conv.conversation;
+        let thread = new_conv.thread;
         let session_configured = new_conv.session_configured;
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
@@ -352,7 +380,7 @@ impl App {
             is_first_run: false,
         };
         self.chat_widget =
-            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
+            crate::chatwidget::ChatWidget::new_from_existing(init, thread, session_configured);
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);

@@ -1,8 +1,8 @@
 #![allow(clippy::expect_used)]
 use codex_core::CodexAuth;
-use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
+use codex_core::NewThread;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
@@ -62,7 +62,7 @@ const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 
-pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
+pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
 fn auto_summary(summary: &str) -> String {
     summary.to_string()
@@ -144,15 +144,15 @@ async fn summarize_context_three_requests_and_instructions() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let NewConversation {
-        conversation: codex,
+    let NewThread {
+        thread: codex,
         session_configured,
         ..
-    } = conversation_manager.new_conversation(config).await.unwrap();
+    } = thread_manager.start_thread(config).await.unwrap();
     let rollout_path = session_configured.rollout_path;
 
     // 1) Normal user input – should hit server once.
@@ -340,15 +340,15 @@ async fn manual_compact_uses_custom_prompt() {
     config.model_provider = model_provider;
     config.compact_prompt = Some(custom_prompt.to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create conversation")
-        .conversation;
+        .thread;
 
     codex.submit(Op::Compact).await.expect("trigger compact");
     let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
@@ -420,14 +420,11 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager.new_conversation(config).await.unwrap();
+    let NewThread { thread: codex, .. } = thread_manager.start_thread(config).await.unwrap();
 
     // Trigger manual compact and collect TokenCount events for the compact turn.
     codex.submit(Op::Compact).await.unwrap();
@@ -1072,15 +1069,11 @@ async fn auto_compact_runs_after_token_limit_hit() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let codex = thread_manager.start_thread(config).await.unwrap().thread;
 
     codex
         .submit(Op::UserInput {
@@ -1409,15 +1402,15 @@ async fn auto_compact_persists_rollout_entries() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let NewConversation {
-        conversation: codex,
+    let NewThread {
+        thread: codex,
         session_configured,
         ..
-    } = conversation_manager.new_conversation(config).await.unwrap();
+    } = thread_manager.start_thread(config).await.unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -1524,14 +1517,14 @@ async fn manual_compact_retries_after_context_window_error() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let codex = ConversationManager::with_models_provider(
+    let codex = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     )
-    .new_conversation(config)
+    .start_thread(config)
     .await
     .unwrap()
-    .conversation;
+    .thread;
 
     codex
         .submit(Op::UserInput {
@@ -1551,7 +1544,7 @@ async fn manual_compact_retries_after_context_window_error() {
         panic!("expected background event after compact retry");
     };
     assert!(
-        event.message.contains("Trimmed 1 older conversation item"),
+        event.message.contains("Trimmed 1 older thread item"),
         "background event should mention trimmed item count: {}",
         event.message
     );
@@ -1657,14 +1650,14 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
-    let codex = ConversationManager::with_models_provider(
+    let codex = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     )
-    .new_conversation(config)
+    .start_thread(config)
     .await
     .unwrap()
-    .conversation;
+    .thread;
 
     codex
         .submit(Op::UserInput {
@@ -1864,15 +1857,11 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let codex = thread_manager.start_thread(config).await.unwrap().thread;
 
     let mut auto_compact_lifecycle_events = Vec::new();
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
@@ -1978,14 +1967,14 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     config.model_context_window = Some(context_window);
     config.model_auto_compact_token_limit = Some(limit);
 
-    let codex = ConversationManager::with_models_provider(
+    let codex = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     )
-    .new_conversation(config)
+    .start_thread(config)
     .await
     .unwrap()
-    .conversation;
+    .thread;
 
     codex
         .submit(Op::UserInput {

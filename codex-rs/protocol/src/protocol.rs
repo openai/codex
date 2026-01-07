@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::ConversationId;
+use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
@@ -80,7 +80,7 @@ pub enum Op {
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
-    /// for a turn of a [`crate::codex_conversation::CodexConversation`].
+    /// for a turn of a [`crate::codex_thread::CodexThread`].
     UserTurn {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -127,7 +127,7 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<SandboxPolicy>,
 
-        /// Updated model slug. When set, the model family is derived
+        /// Updated model slug. When set, the model info is derived
         /// automatically.
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
@@ -209,6 +209,12 @@ pub enum Op {
 
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
+
+    /// Request Codex to drop the last N user turns from in-memory context.
+    ///
+    /// This does not attempt to revert local filesystem changes. Clients are
+    /// responsible for undoing any edits on disk.
+    ThreadRollback { num_turns: u32 },
 
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
@@ -541,6 +547,9 @@ pub enum EventMsg {
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
+    /// Conversation history was rolled back by dropping the last N user turns.
+    ThreadRolledBack(ThreadRolledBackEvent),
+
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
 
@@ -672,6 +681,26 @@ pub enum EventMsg {
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 }
 
+/// Agent lifecycle status, derived from emitted events.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum AgentStatus {
+    /// Agent is waiting for initialization.
+    #[default]
+    PendingInit,
+    /// Agent is currently running.
+    Running,
+    /// Agent is done. Contains the final assistant message.
+    Completed(Option<String>),
+    /// Agent encountered an error.
+    Errored(String),
+    /// Agent has been shutdowned.
+    Shutdown,
+    /// Agent is not found.
+    NotFound,
+}
+
 /// Codex errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -698,6 +727,7 @@ pub enum CodexErrorInfo {
     ResponseTooManyFailedAttempts {
         http_status_code: Option<u16>,
     },
+    ThreadRollbackFailed,
     Other,
 }
 
@@ -708,7 +738,7 @@ pub struct RawResponseItemEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ItemStartedEvent {
-    pub thread_id: ConversationId,
+    pub thread_id: ThreadId,
     pub turn_id: String,
     pub item: TurnItem,
 }
@@ -726,7 +756,7 @@ impl HasLegacyEvent for ItemStartedEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ItemCompletedEvent {
-    pub thread_id: ConversationId,
+    pub thread_id: ThreadId,
     pub turn_id: String,
     pub item: TurnItem,
 }
@@ -844,6 +874,7 @@ pub struct TaskCompleteEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskStartedEvent {
+    // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
 }
 
@@ -865,6 +896,7 @@ pub struct TokenUsage {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
 }
@@ -1150,17 +1182,18 @@ pub struct WebSearchEndEvent {
     pub query: String,
 }
 
+// Conversation kept for backward compatibility.
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ConversationPathResponseEvent {
-    pub conversation_id: ConversationId,
+    pub conversation_id: ThreadId,
     pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ResumedHistory {
-    pub conversation_id: ConversationId,
+    pub conversation_id: ThreadId,
     pub history: Vec<RolloutItem>,
     pub rollout_path: PathBuf,
 }
@@ -1255,7 +1288,7 @@ impl fmt::Display for SubAgentSource {
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
-    pub id: ConversationId,
+    pub id: ThreadId,
     pub timestamp: String,
     pub cwd: PathBuf,
     pub originator: String,
@@ -1269,7 +1302,7 @@ pub struct SessionMeta {
 impl Default for SessionMeta {
     fn default() -> Self {
         SessionMeta {
-            id: ConversationId::default(),
+            id: ThreadId::default(),
             timestamp: String::new(),
             cwd: PathBuf::new(),
             originator: String::new(),
@@ -1599,6 +1632,12 @@ pub struct UndoCompletedEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadRolledBackEvent {
+    /// Number of user turns that were removed from context.
+    pub num_turns: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
     #[serde(default)]
@@ -1775,8 +1814,8 @@ pub struct SkillsListEntry {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
-    /// Name left as session_id instead of conversation_id for backwards compatibility.
-    pub session_id: ConversationId,
+    /// Name left as session_id instead of thread_id for backwards compatibility.
+    pub session_id: ThreadId,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -1904,7 +1943,7 @@ mod tests {
     #[test]
     fn item_started_event_from_web_search_emits_begin_event() {
         let event = ItemStartedEvent {
-            thread_id: ConversationId::new(),
+            thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
             item: TurnItem::WebSearch(WebSearchItem {
                 id: "search-1".into(),
@@ -1923,7 +1962,7 @@ mod tests {
     #[test]
     fn item_started_event_from_non_web_search_emits_no_legacy_events() {
         let event = ItemStartedEvent {
-            thread_id: ConversationId::new(),
+            thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
             item: TurnItem::UserMessage(UserMessageItem::new(&[])),
         };
@@ -1991,7 +2030,7 @@ mod tests {
     /// amount of nesting.
     #[test]
     fn serialize_event() -> Result<()> {
-        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let conversation_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
         let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1234".to_string(),

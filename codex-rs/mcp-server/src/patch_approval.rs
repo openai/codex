@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
@@ -47,7 +47,7 @@ pub(crate) async fn handle_patch_approval_request(
     grant_root: Option<PathBuf>,
     changes: HashMap<PathBuf, FileChange>,
     outgoing: Arc<OutgoingMessageSender>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
     request_id: RequestId,
     tool_call_id: String,
     event_id: String,
@@ -111,7 +111,7 @@ pub(crate) async fn handle_patch_approval_request(
 pub(crate) async fn on_patch_approval_response(
     event_id: String,
     receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {

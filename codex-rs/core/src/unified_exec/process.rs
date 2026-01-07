@@ -1,6 +1,5 @@
 #![allow(clippy::module_inception)]
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -19,54 +18,11 @@ use crate::truncate::formatted_truncate_text;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
-use super::UNIFIED_EXEC_OUTPUT_MAX_BYTES;
 use super::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
 use super::UnifiedExecError;
+use super::head_tail_buffer::HeadTailBuffer;
 
-#[derive(Debug, Default)]
-pub(crate) struct OutputBufferState {
-    chunks: VecDeque<Vec<u8>>,
-    pub(crate) total_bytes: usize,
-}
-
-impl OutputBufferState {
-    pub(super) fn push_chunk(&mut self, chunk: Vec<u8>) {
-        self.total_bytes = self.total_bytes.saturating_add(chunk.len());
-        self.chunks.push_back(chunk);
-
-        let mut excess = self
-            .total_bytes
-            .saturating_sub(UNIFIED_EXEC_OUTPUT_MAX_BYTES);
-
-        while excess > 0 {
-            match self.chunks.front_mut() {
-                Some(front) if excess >= front.len() => {
-                    excess -= front.len();
-                    self.total_bytes = self.total_bytes.saturating_sub(front.len());
-                    self.chunks.pop_front();
-                }
-                Some(front) => {
-                    front.drain(..excess);
-                    self.total_bytes = self.total_bytes.saturating_sub(excess);
-                    break;
-                }
-                None => break,
-            }
-        }
-    }
-
-    pub(super) fn drain(&mut self) -> Vec<Vec<u8>> {
-        let drained: Vec<Vec<u8>> = self.chunks.drain(..).collect();
-        self.total_bytes = 0;
-        drained
-    }
-
-    pub(super) fn snapshot(&self) -> Vec<Vec<u8>> {
-        self.chunks.iter().cloned().collect()
-    }
-}
-
-pub(crate) type OutputBuffer = Arc<Mutex<OutputBufferState>>;
+pub(crate) type OutputBuffer = Arc<Mutex<HeadTailBuffer>>;
 pub(crate) struct OutputHandles {
     pub(crate) output_buffer: OutputBuffer,
     pub(crate) output_notify: Arc<Notify>,
@@ -74,8 +30,8 @@ pub(crate) struct OutputHandles {
 }
 
 #[derive(Debug)]
-pub(crate) struct UnifiedExecSession {
-    session: ExecCommandSession,
+pub(crate) struct UnifiedExecProcess {
+    process_handle: ExecCommandSession,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
@@ -84,13 +40,13 @@ pub(crate) struct UnifiedExecSession {
     sandbox_type: SandboxType,
 }
 
-impl UnifiedExecSession {
+impl UnifiedExecProcess {
     pub(super) fn new(
-        session: ExecCommandSession,
+        process_handle: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
     ) -> Self {
-        let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
+        let output_buffer = Arc::new(Mutex::new(HeadTailBuffer::default()));
         let output_notify = Arc::new(Notify::new());
         let cancellation_token = CancellationToken::new();
         let output_drained = Arc::new(Notify::new());
@@ -113,7 +69,7 @@ impl UnifiedExecSession {
         });
 
         Self {
-            session,
+            process_handle,
             output_buffer,
             output_notify,
             cancellation_token,
@@ -124,7 +80,7 @@ impl UnifiedExecSession {
     }
 
     pub(super) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
-        self.session.writer_sender()
+        self.process_handle.writer_sender()
     }
 
     pub(super) fn output_handles(&self) -> OutputHandles {
@@ -136,7 +92,7 @@ impl UnifiedExecSession {
     }
 
     pub(super) fn output_receiver(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
-        self.session.output_receiver()
+        self.process_handle.output_receiver()
     }
 
     pub(super) fn cancellation_token(&self) -> CancellationToken {
@@ -148,22 +104,22 @@ impl UnifiedExecSession {
     }
 
     pub(super) fn has_exited(&self) -> bool {
-        self.session.has_exited()
+        self.process_handle.has_exited()
     }
 
     pub(super) fn exit_code(&self) -> Option<i32> {
-        self.session.exit_code()
+        self.process_handle.exit_code()
     }
 
     pub(super) fn terminate(&self) {
-        self.session.terminate();
+        self.process_handle.terminate();
         self.cancellation_token.cancel();
         self.output_task.abort();
     }
 
     async fn snapshot_output(&self) -> Vec<Vec<u8>> {
         let guard = self.output_buffer.lock().await;
-        guard.snapshot()
+        guard.snapshot_chunks()
     }
 
     pub(crate) fn sandbox_type(&self) -> SandboxType {
@@ -208,7 +164,7 @@ impl UnifiedExecSession {
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
             );
             let message = if snippet.is_empty() {
-                format!("Session exited with code {exit_code}")
+                format!("Process exited with code {exit_code}")
             } else {
                 snippet
             };
@@ -222,11 +178,11 @@ impl UnifiedExecSession {
         sandbox_type: SandboxType,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
-            session,
+            session: process_handle,
             output_rx,
             mut exit_rx,
         } = spawned;
-        let managed = Self::new(session, output_rx, sandbox_type);
+        let managed = Self::new(process_handle, output_rx, sandbox_type);
 
         let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));
 
@@ -261,7 +217,7 @@ impl UnifiedExecSession {
     }
 }
 
-impl Drop for UnifiedExecSession {
+impl Drop for UnifiedExecProcess {
     fn drop(&mut self) {
         self.terminate();
     }
