@@ -27,7 +27,7 @@ pub(crate) fn spawn_agent(
         let NewThread {
             thread,
             session_configured,
-            thread_id
+            thread_id,
         } = match server.start_thread(config).await {
             Ok(v) => v,
             #[allow(clippy::print_stderr)]

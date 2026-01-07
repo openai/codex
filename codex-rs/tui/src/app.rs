@@ -74,17 +74,13 @@ pub struct AppExitInfo {
     pub update_action: Option<UpdateAction>,
 }
 
-fn session_summary(
-    token_usage: TokenUsage,
-    thread_id: Option<ThreadId>,
-) -> Option<SessionSummary> {
+fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command =
-        thread_id.map(|thread_id| format!("codex resume {thread_id}"));
+    let resume_command = thread_id.map(|thread_id| format!("codex resume {thread_id}"));
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -406,11 +402,7 @@ impl App {
                     is_first_run,
                     model: model.clone(),
                 };
-                ChatWidget::new_from_existing(
-                    init,
-                    resumed.thread,
-                    resumed.session_configured,
-                )
+                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
         };
 
@@ -555,10 +547,8 @@ impl App {
             .await;
         match event {
             AppEvent::NewSession => {
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                );
+                let summary =
+                    session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
                 self.shutdown_current_thread().await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),

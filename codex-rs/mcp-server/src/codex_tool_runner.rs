@@ -105,13 +105,7 @@ pub async fn run_codex_tool_session(
         return;
     }
 
-    run_codex_tool_session_inner(
-        thread,
-        outgoing,
-        id,
-        running_requests_id_to_codex_uuid,
-    )
-    .await;
+    run_codex_tool_session_inner(thread, outgoing, id, running_requests_id_to_codex_uuid).await;
 }
 
 pub async fn run_codex_tool_session_reply(
