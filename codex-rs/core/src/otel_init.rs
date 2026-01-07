@@ -64,7 +64,11 @@ pub fn build_provider(
 
     let exporter = to_otel_exporter(&config.otel.exporter);
     let trace_exporter = to_otel_exporter(&config.otel.trace_exporter);
-    let metrics_exporter = to_otel_exporter(&config.otel.metrics_exporter);
+    let metrics_exporter = if config.analytics {
+        to_otel_exporter(&config.otel.metrics_exporter)
+    } else {
+        OtelExporter::None
+    };
 
     OtelProvider::from(&OtelSettings {
         service_name: originator().value.to_owned(),
