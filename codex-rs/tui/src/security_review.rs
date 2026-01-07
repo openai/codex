@@ -2786,6 +2786,22 @@ fn is_spec_dir_likely_low_signal(path: &Path) -> bool {
         "test",
         "tests",
         "testing",
+        "bench",
+        "benches",
+        "benchmark",
+        "benchmarks",
+        "ci",
+        "cicd",
+        "circleci",
+        "github",
+        "workflow",
+        "workflows",
+        "gitlab",
+        "buildkite",
+        "pipeline",
+        "pipelines",
+        "fuzz",
+        "fuzzing",
         "spec",
         "specs",
         "example",
@@ -2808,9 +2824,24 @@ fn is_spec_dir_likely_low_signal(path: &Path) -> bool {
         "sample",
         "samples",
     ];
-    components
-        .iter()
-        .any(|segment| skip_markers.iter().any(|marker| segment.contains(marker)))
+    let matches_marker = |segment: &str, marker: &str| {
+        if marker == "ci" {
+            segment == "ci"
+                || segment.starts_with("ci-")
+                || segment.starts_with("ci_")
+                || segment.starts_with("ci.")
+                || segment.ends_with("-ci")
+                || segment.ends_with("_ci")
+                || segment.ends_with(".ci")
+        } else {
+            segment.contains(marker)
+        }
+    };
+    components.iter().any(|segment| {
+        skip_markers
+            .iter()
+            .any(|marker| matches_marker(segment, marker))
+    })
 }
 
 fn prune_low_signal_spec_dirs(dirs: &[(PathBuf, String)]) -> (Vec<(PathBuf, String)>, Vec<String>) {
@@ -2840,7 +2871,7 @@ fn filter_spec_targets(
         if is_spec_dir_likely_low_signal(target) {
             let display = display_path_for(target, repo_root);
             log(format!(
-                "Skipping specification for {display} (looks like tests/utils/scripts)."
+                "Skipping specification for {display} (looks like tests/CI/fuzzing/tooling)."
             ));
             continue;
         }
@@ -5043,6 +5074,7 @@ pub async fn run_security_review(
                 );
                 let combined = sections.join("\n\n");
                 let cleaned = strip_operational_considerations_section(&combined);
+                let cleaned = strip_dev_setup_sections(&cleaned);
                 Some(fix_mermaid_blocks(&cleaned))
             }
         }
@@ -5053,6 +5085,7 @@ pub async fn run_security_review(
                     "Generated findings-only report for bug sweep.".to_string(),
                 );
                 let cleaned = strip_operational_considerations_section(&section);
+                let cleaned = strip_dev_setup_sections(&cleaned);
                 Some(fix_mermaid_blocks(&cleaned))
             } else {
                 record(
@@ -6647,7 +6680,7 @@ async fn generate_specs(
             if is_spec_dir_likely_low_signal(path) {
                 if let Some(tx) = progress_sender.as_ref() {
                     tx.send(AppEvent::SecurityReviewLog(format!(
-                        "Heuristic skip for spec dir {label} (tests/utils/scripts)."
+                        "Heuristic skip for spec dir {label} (tests/CI/fuzzing/tooling)."
                     )));
                 }
             } else {
@@ -8786,6 +8819,8 @@ async fn generate_specs_single_worker(
         sanitized = fix_mermaid_blocks(&outcome.text);
     }
 
+    sanitized = strip_dev_setup_sections(&sanitized);
+
     let slug = slugify_label(&scope_label);
     let file_path = raw_dir.join(format!("{slug}.md"));
     tokio_fs::write(&file_path, sanitized.as_bytes())
@@ -8978,6 +9013,8 @@ async fn generate_spec_for_location(
         logs.extend(outcome.reasoning_logs.clone());
         sanitized = fix_mermaid_blocks(&outcome.text);
     }
+
+    sanitized = strip_dev_setup_sections(&sanitized);
 
     let slug = slugify_label(&location_label);
     let file_path = raw_dir.join(format!("{slug}.md"));
@@ -9716,6 +9753,7 @@ async fn combine_spec_markdown(
         }
     };
     let polished = fix_mermaid_blocks(&polished_response);
+    let polished = strip_dev_setup_sections(&polished);
 
     if let Err(e) = tokio_fs::write(combined_path, polished.as_bytes()).await {
         return Err(SecurityReviewFailure {
@@ -16083,31 +16121,166 @@ fn format_revision_label(commit: &str, branch: Option<&String>, timestamp: Optio
     format!("Analyzed revision: {}", parts.join(" · "))
 }
 
-fn strip_operational_considerations_section(markdown: &str) -> String {
+fn parse_markdown_heading(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.is_empty() || bytes[0] != b'#' {
+        return None;
+    }
+
+    let mut level = 0usize;
+    while level < bytes.len() && bytes[level] == b'#' {
+        level += 1;
+    }
+    if level == 0 || level > 6 {
+        return None;
+    }
+
+    let heading = trimmed[level..].trim_start();
+    if heading.is_empty() {
+        None
+    } else {
+        Some((level, heading))
+    }
+}
+
+fn strip_markdown_sections<F>(markdown: &str, mut should_strip: F) -> String
+where
+    F: FnMut(&str) -> bool,
+{
     let mut lines_out: Vec<String> = Vec::new();
-    let mut skipping = false;
+    let mut skip_level: Option<usize> = None;
 
     for line in markdown.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
-            let heading_text = trimmed.trim_start_matches('#').trim_start();
-            let is_operational = heading_text
-                .to_ascii_lowercase()
-                .starts_with("operational considerations");
-            if is_operational {
-                skipping = true;
+        if let Some((level, heading)) = parse_markdown_heading(line) {
+            if let Some(active) = skip_level
+                && level <= active
+            {
+                skip_level = None;
+            }
+            if skip_level.is_none() && should_strip(heading) {
+                skip_level = Some(level);
                 continue;
             }
-            if skipping {
-                skipping = false;
-            }
         }
-        if !skipping {
+
+        if skip_level.is_none() {
             lines_out.push(line.to_string());
         }
     }
 
     lines_out.join("\n")
+}
+
+fn is_dev_setup_heading(heading: &str) -> bool {
+    let lower = heading.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+
+    if lower == "ci" {
+        return true;
+    }
+
+    if let Some(rest) = lower.strip_prefix("ci")
+        && let Some(next) = rest.chars().next()
+        && matches!(next, ' ' | '/' | '-' | '_' | ':' | '.')
+    {
+        return true;
+    }
+
+    let prefixes = [
+        "ci/cd",
+        "cicd",
+        "continuous integration",
+        "github actions",
+        "gitlab ci",
+        "circleci",
+        "buildkite",
+        "pipeline",
+        "pipelines",
+        "fuzz",
+        "fuzzing",
+        "oss-fuzz",
+        "testing",
+        "tests",
+        "test suite",
+        "bench",
+        "benches",
+        "benchmark",
+        "benchmarks",
+        "development setup",
+        "developer setup",
+        "dev setup",
+        "local development",
+        "build & test",
+        "build and test",
+        "build/test",
+        "build pipeline",
+        "contributing",
+    ];
+    prefixes.iter().any(|prefix| lower.starts_with(prefix))
+}
+
+fn strip_dev_setup_sections(markdown: &str) -> String {
+    strip_markdown_sections(markdown, is_dev_setup_heading)
+}
+
+fn strip_operational_considerations_section(markdown: &str) -> String {
+    strip_markdown_sections(markdown, |heading| {
+        heading
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("operational considerations")
+    })
+}
+
+#[cfg(test)]
+mod report_stripping_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn strips_dev_setup_sections_with_nested_headings() {
+        let input = "\
+# Report
+## Overview
+Keep this.
+## CI/CD
+Drop this.
+### GitHub Actions
+Also drop this.
+## Core
+Keep that.";
+        let expected = "\
+# Report
+## Overview
+Keep this.
+## Core
+Keep that.";
+        assert_eq!(strip_dev_setup_sections(input), expected);
+    }
+
+    #[test]
+    fn strips_operational_considerations_with_nested_headings() {
+        let input = "\
+# Report
+## Overview
+Keep this.
+## Operational Considerations
+Drop this.
+### Rotations
+Still drop this.
+## Core
+Keep that.";
+        let expected = "\
+# Report
+## Overview
+Keep this.
+## Core
+Keep that.";
+        assert_eq!(strip_operational_considerations_section(input), expected);
+    }
 }
 
 fn ensure_threat_model_heading(markdown: String) -> String {
