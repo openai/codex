@@ -107,17 +107,6 @@ impl OutgoingMessageSender {
         }
     }
 
-    /// Best-effort variant for low-priority server notifications.
-    ///
-    /// Returns `true` if queued; `false` if the outbound queue was full or closed.
-    pub(crate) fn try_send_server_notification(&self, notification: ServerNotification) -> bool {
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
-        match self.sender.try_send(outgoing_message) {
-            Ok(()) => true,
-            Err(_err) => false,
-        }
-    }
-
     /// Best-effort variant for low-priority notifications.
     ///
     /// Returns `true` if queued; `false` if the outbound queue was full or closed.

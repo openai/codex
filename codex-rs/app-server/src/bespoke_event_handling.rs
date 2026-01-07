@@ -76,7 +76,6 @@ use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tracing::debug;
 use tracing::error;
 
 type JsonValue = serde_json::Value;
@@ -312,11 +311,9 @@ pub(crate) async fn apply_bespoke_event_handling(event: Event, ctx: &BespokeEven
                 item_id: event.item_id,
                 delta: event.delta,
             };
-            let ok = outgoing
-                .try_send_server_notification(ServerNotification::AgentMessageDelta(notification));
-            if !ok {
-                debug!("dropping agentMessage/delta due to backpressure");
-            }
+            outgoing
+                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
         }
         EventMsg::ContextCompacted(..) => {
             let notification = ContextCompactedNotification {
@@ -344,12 +341,11 @@ pub(crate) async fn apply_bespoke_event_handling(event: Event, ctx: &BespokeEven
                 delta: event.delta,
                 summary_index: event.summary_index,
             };
-            let ok = outgoing.try_send_server_notification(
-                ServerNotification::ReasoningSummaryTextDelta(notification),
-            );
-            if !ok {
-                debug!("dropping reasoning/summaryTextDelta due to backpressure");
-            }
+            outgoing
+                .send_server_notification(ServerNotification::ReasoningSummaryTextDelta(
+                    notification,
+                ))
+                .await;
         }
         EventMsg::ReasoningRawContentDelta(event) => {
             let notification = ReasoningTextDeltaNotification {
@@ -359,11 +355,9 @@ pub(crate) async fn apply_bespoke_event_handling(event: Event, ctx: &BespokeEven
                 delta: event.delta,
                 content_index: event.content_index,
             };
-            let ok = outgoing
-                .try_send_server_notification(ServerNotification::ReasoningTextDelta(notification));
-            if !ok {
-                debug!("dropping reasoning/textDelta due to backpressure");
-            }
+            outgoing
+                .send_server_notification(ServerNotification::ReasoningTextDelta(notification))
+                .await;
         }
         EventMsg::AgentReasoningSectionBreak(event) => {
             let notification = ReasoningSummaryPartAddedNotification {
@@ -632,12 +626,11 @@ pub(crate) async fn apply_bespoke_event_handling(event: Event, ctx: &BespokeEven
                     item_id,
                     delta,
                 };
-                let ok = outgoing.try_send_server_notification(
-                    ServerNotification::CommandExecutionOutputDelta(notification),
-                );
-                if !ok {
-                    debug!("dropping commandExecution/outputDelta due to backpressure");
-                }
+                outgoing
+                    .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
+                        notification,
+                    ))
+                    .await;
             }
         }
         EventMsg::TerminalInteraction(terminal_event) => {
