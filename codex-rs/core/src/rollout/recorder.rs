@@ -215,7 +215,7 @@ impl RolloutRecorder {
         }
 
         let mut items: Vec<RolloutItem> = Vec::new();
-        let mut conversation_id: Option<ThreadId> = None;
+        let mut thread_id: Option<ThreadId> = None;
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -233,9 +233,9 @@ impl RolloutRecorder {
                 Ok(rollout_line) => match rollout_line.item {
                     RolloutItem::SessionMeta(session_meta_line) => {
                         // Use the FIRST SessionMeta encountered in the file as the canonical
-                        // conversation id and main session information. Keep all items intact.
-                        if conversation_id.is_none() {
-                            conversation_id = Some(session_meta_line.meta.id);
+                        // thread id and main session information. Keep all items intact.
+                        if thread_id.is_none() {
+                            thread_id = Some(session_meta_line.meta.id);
                         }
                         items.push(RolloutItem::SessionMeta(session_meta_line));
                     }
@@ -261,9 +261,9 @@ impl RolloutRecorder {
         info!(
             "Resumed rollout with {} items, thread ID: {:?}",
             items.len(),
-            conversation_id
+            thread_id
         );
-        let conversation_id = conversation_id
+        let conversation_id = thread_id
             .ok_or_else(|| IoError::other("failed to parse thread ID from rollout file"))?;
 
         if items.is_empty() {

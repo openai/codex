@@ -1644,7 +1644,7 @@ impl CodexMessageProcessor {
             self.config.as_ref().clone()
         };
 
-        let conversation_history = if let Some(history) = history {
+        let thread_history = if let Some(history) = history {
             if history.is_empty() {
                 self.send_invalid_request_error(
                     request_id,
@@ -1722,7 +1722,7 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(config, conversation_history, self.auth_manager.clone())
+            .resume_thread_with_history(config, thread_history, self.auth_manager.clone())
             .await
         {
             Ok(NewThread {
@@ -2304,7 +2304,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let conversation_history = if let Some(path) = path {
+        let thread_history = if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
                 Err(err) => {
@@ -2371,7 +2371,7 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(config, conversation_history, self.auth_manager.clone())
+            .resume_thread_with_history(config, thread_history, self.auth_manager.clone())
             .await
         {
             Ok(NewThread {
