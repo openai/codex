@@ -197,6 +197,15 @@ pub struct ModelInfo {
     pub experimental_supported_tools: Vec<String>,
 }
 
+impl ModelInfo {
+    pub fn auto_compact_token_limit(&self) -> Option<i64> {
+        self.auto_compact_token_limit.or_else(|| {
+            self.context_window
+                .map(|context_window| (context_window * 9) / 10)
+        })
+    }
+}
+
 /// Response wrapper for `/models`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
 pub struct ModelsResponse {

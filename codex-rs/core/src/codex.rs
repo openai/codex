@@ -2332,9 +2332,7 @@ pub(crate) async fn run_task(
     }
 
     let model_info = turn_context.client.get_model_info();
-    let auto_compact_limit =
-        crate::models_manager::model_info::auto_compact_token_limit(&model_info)
-            .unwrap_or(i64::MAX);
+    let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;

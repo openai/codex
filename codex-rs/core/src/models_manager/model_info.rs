@@ -74,14 +74,6 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
     model
 }
 
-pub(crate) fn auto_compact_token_limit(model_info: &ModelInfo) -> Option<i64> {
-    model_info.auto_compact_token_limit.or_else(|| {
-        model_info
-            .context_window
-            .map(|context_window| (context_window * 9) / 10)
-    })
-}
-
 // todo(aibrahim): remove most of the entries here when enabling models.json
 pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     if slug.starts_with("o3") || slug.starts_with("o4-mini") {
