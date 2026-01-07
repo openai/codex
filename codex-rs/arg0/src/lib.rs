@@ -172,6 +172,10 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
         use std::os::unix::fs::PermissionsExt;
 
         std::fs::set_permissions(&temp_root, std::fs::Permissions::from_mode(0o700))?;
+        // Prefer a CODEX_HOME-scoped temp directory for this process.
+        unsafe {
+            std::env::set_var("TMPDIR", &temp_root);
+        }
     }
     let temp_dir = tempfile::Builder::new()
         .prefix("codex-arg0")
