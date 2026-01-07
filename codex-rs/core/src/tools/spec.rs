@@ -1307,12 +1307,12 @@ mod tests {
     #[test]
     fn web_search_cached_sets_external_web_access_false() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::WebSearchCached);
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
@@ -1329,13 +1329,13 @@ mod tests {
     #[test]
     fn web_search_cached_takes_precedence_over_web_search_request() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::WebSearchCached);
         features.enable(Feature::WebSearchRequest);
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
