@@ -75,7 +75,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let TestCodex {
         codex,
         config,
-        conversation_manager,
+        thread_manager,
         ..
     } = test_codex()
         .with_config(|config| {
@@ -84,7 +84,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let base_instructions = conversation_manager
+    let base_instructions = thread_manager
         .get_models_manager()
         .construct_model_family(
             config

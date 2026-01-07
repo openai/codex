@@ -19,7 +19,7 @@ use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::otel_manager::OtelManager;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -60,7 +60,7 @@ pub struct ModelClient {
     model_family: ModelFamily,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
@@ -76,7 +76,7 @@ impl ModelClient {
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        conversation_id: ConversationId,
+        conversation_id: ThreadId,
         session_source: SessionSource,
     ) -> Self {
         Self {

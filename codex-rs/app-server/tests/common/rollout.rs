@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
@@ -28,7 +28,7 @@ pub fn create_fake_rollout(
 ) -> Result<String> {
     let uuid = Uuid::new_v4();
     let uuid_str = uuid.to_string();
-    let conversation_id = ConversationId::from_string(&uuid_str)?;
+    let conversation_id = ThreadId::from_string(&uuid_str)?;
 
     // sessions/YYYY/MM/DD derived from filename_ts (YYYY-MM-DDThh-mm-ss)
     let year = &filename_ts[0..4];

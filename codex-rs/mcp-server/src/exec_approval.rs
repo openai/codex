@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_protocol::parse_command::ParsedCommand;
@@ -53,7 +53,7 @@ pub(crate) async fn handle_exec_approval_request(
     command: Vec<String>,
     cwd: PathBuf,
     outgoing: Arc<crate::outgoing_message::OutgoingMessageSender>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
     request_id: RequestId,
     tool_call_id: String,
     event_id: String,
@@ -120,7 +120,7 @@ pub(crate) async fn handle_exec_approval_request(
 async fn on_exec_approval_response(
     event_id: String,
     receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
