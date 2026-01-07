@@ -7,10 +7,7 @@ use codex_core::config::Config;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
-pub async fn supported_models(
-    thread_manager: Arc<ThreadManager>,
-    config: &Config,
-) -> Vec<Model> {
+pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Config) -> Vec<Model> {
     thread_manager
         .list_models(config)
         .await

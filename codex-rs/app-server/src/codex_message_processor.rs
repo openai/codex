@@ -406,8 +406,7 @@ impl CodexMessageProcessor {
                 let config = self.config.clone();
 
                 tokio::spawn(async move {
-                    Self::list_models(outgoing, thread_manager, config, request_id, params)
-                        .await;
+                    Self::list_models(outgoing, thread_manager, config, request_id, params).await;
                 });
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {

@@ -1073,11 +1073,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let codex = thread_manager
-        .start_thread(config)
-        .await
-        .unwrap()
-        .thread;
+    let codex = thread_manager.start_thread(config).await.unwrap().thread;
 
     codex
         .submit(Op::UserInput {
@@ -1865,11 +1861,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let codex = thread_manager
-        .start_thread(config)
-        .await
-        .unwrap()
-        .thread;
+    let codex = thread_manager.start_thread(config).await.unwrap().thread;
 
     let mut auto_compact_lifecycle_events = Vec::new();
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
