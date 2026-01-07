@@ -2321,12 +2321,11 @@ impl ChatWidget {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
 
             loop {
-                if let Some(auth) = auth_manager.auth().await {
-                    if auth.mode == AuthMode::ChatGPT {
-                        if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await {
-                            app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
-                        }
-                    }
+                if let Some(auth) = auth_manager.auth().await
+                    && auth.mode == AuthMode::ChatGPT
+                    && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
+                {
+                    app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
                 }
                 interval.tick().await;
             }
