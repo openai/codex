@@ -198,7 +198,7 @@ impl McpProcess {
     }
 
     /// Send a `removeConversationListener` JSON-RPC request.
-    pub async fn send_remove_conversation_listener_request(
+    pub async fn send_remove_thread_listener_request(
         &mut self,
         params: RemoveConversationListenerParams,
     ) -> anyhow::Result<i64> {

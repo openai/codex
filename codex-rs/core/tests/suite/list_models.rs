@@ -1,6 +1,6 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -13,7 +13,7 @@ use tempfile::tempdir;
 async fn list_models_returns_api_key_models() -> Result<()> {
     let codex_home = tempdir()?;
     let config = load_default_config_for_test(&codex_home).await;
-    let manager = ConversationManager::with_models_provider(
+    let manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("sk-test"),
         built_in_model_providers()["openai"].clone(),
     );
@@ -29,7 +29,7 @@ async fn list_models_returns_api_key_models() -> Result<()> {
 async fn list_models_returns_chatgpt_models() -> Result<()> {
     let codex_home = tempdir()?;
     let config = load_default_config_for_test(&codex_home).await;
-    let manager = ConversationManager::with_models_provider(
+    let manager = ThreadManager::with_models_provider(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         built_in_model_providers()["openai"].clone(),
     );

@@ -1,9 +1,9 @@
-use crate::CodexConversation;
+use crate::CodexThread;
 use crate::agent::AgentStatus;
-use crate::conversation_manager::ConversationManagerState;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use codex_protocol::ConversationId;
+use crate::thread_manager::ThreadManagerState;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -15,47 +15,46 @@ use std::sync::Weak;
 /// spawn new agents and the inter-agent communication layer.
 #[derive(Clone, Default)]
 pub(crate) struct AgentControl {
-    /// Weak handle back to the global conversation registry/state.
+    /// Weak handle back to the global thread registry/state.
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
-    /// `ConversationManagerState -> CodexConversation -> Session -> SessionServices -> ConversationManagerState`.
-    manager: Weak<ConversationManagerState>,
+    /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
+    manager: Weak<ThreadManagerState>,
 }
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
-    pub(crate) fn new(manager: Weak<ConversationManagerState>) -> Self {
+    pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
         Self { manager }
     }
 
     #[allow(dead_code)] // Used by upcoming multi-agent tooling.
-    /// Spawn a new agent conversation and submit the initial prompt.
+    /// Spawn a new agent thread and submit the initial prompt.
     ///
     /// If `headless` is true, a background drain task is spawned to prevent unbounded event growth
-    /// of the channel queue when there is no client actively reading the conversation events.
+    /// of the channel queue when there is no client actively reading the thread events.
     pub(crate) async fn spawn_agent(
         &self,
         config: crate::config::Config,
         prompt: String,
         headless: bool,
-    ) -> CodexResult<ConversationId> {
+    ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
-        let new_conversation = state.spawn_new_conversation(config, self.clone()).await?;
+        let new_thread = state.spawn_new_thread(config, self.clone()).await?;
 
         if headless {
-            spawn_headless_drain(Arc::clone(&new_conversation.conversation));
+            spawn_headless_drain(Arc::clone(&new_thread.thread));
         }
 
-        self.send_prompt(new_conversation.conversation_id, prompt)
-            .await?;
+        self.send_prompt(new_thread.thread_id, prompt).await?;
 
-        Ok(new_conversation.conversation_id)
+        Ok(new_thread.thread_id)
     }
 
     #[allow(dead_code)] // Used by upcoming multi-agent tooling.
-    /// Send a `user` prompt to an existing agent conversation.
+    /// Send a `user` prompt to an existing agent thread.
     pub(crate) async fn send_prompt(
         &self,
-        agent_id: ConversationId,
+        agent_id: ThreadId,
         prompt: String,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
@@ -72,32 +71,32 @@ impl AgentControl {
 
     #[allow(dead_code)] // Used by upcoming multi-agent tooling.
     /// Fetch the last known status for `agent_id`, returning `NotFound` when unavailable.
-    pub(crate) async fn get_status(&self, agent_id: ConversationId) -> AgentStatus {
+    pub(crate) async fn get_status(&self, agent_id: ThreadId) -> AgentStatus {
         let Ok(state) = self.upgrade() else {
             // No agent available if upgrade fails.
             return AgentStatus::NotFound;
         };
-        let Ok(conversation) = state.get_conversation(agent_id).await else {
+        let Ok(thread) = state.get_thread(agent_id).await else {
             return AgentStatus::NotFound;
         };
-        conversation.agent_status().await
+        thread.agent_status().await
     }
 
-    fn upgrade(&self) -> CodexResult<Arc<ConversationManagerState>> {
-        self.manager.upgrade().ok_or_else(|| {
-            CodexErr::UnsupportedOperation("conversation manager dropped".to_string())
-        })
+    fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {
+        self.manager
+            .upgrade()
+            .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
     }
 }
 
 /// When an agent is spawned "headless" (no UI/view attached), there may be no consumer polling
-/// `CodexConversation::next_event()`. The underlying event channel is unbounded, so the producer can
+/// `CodexThread::next_event()`. The underlying event channel is unbounded, so the producer can
 /// accumulate events indefinitely. This drain task prevents that memory growth by polling and
 /// discarding events until shutdown.
-fn spawn_headless_drain(conversation: Arc<CodexConversation>) {
+fn spawn_headless_drain(thread: Arc<CodexThread>) {
     tokio::spawn(async move {
         loop {
-            match conversation.next_event().await {
+            match thread.next_event().await {
                 Ok(event) => {
                     if matches!(event.msg, EventMsg::ShutdownComplete) {
                         break;
@@ -127,19 +126,19 @@ mod tests {
     async fn send_prompt_errors_when_manager_dropped() {
         let control = AgentControl::default();
         let err = control
-            .send_prompt(ConversationId::new(), "hello".to_string())
+            .send_prompt(ThreadId::new(), "hello".to_string())
             .await
             .expect_err("send_prompt should fail without a manager");
         assert_eq!(
             err.to_string(),
-            "unsupported operation: conversation manager dropped"
+            "unsupported operation: thread manager dropped"
         );
     }
 
     #[tokio::test]
     async fn get_status_returns_not_found_without_manager() {
         let control = AgentControl::default();
-        let got = control.get_status(ConversationId::new()).await;
+        let got = control.get_status(ThreadId::new()).await;
         assert_eq!(got, AgentStatus::NotFound);
     }
 

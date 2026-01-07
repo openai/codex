@@ -11,10 +11,10 @@ use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
 use codex_core::CodexAuth;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
+use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
+use codex_core::NewThread;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
@@ -171,7 +171,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 2).await;
+    let forked = fork_thread(&manager, &config, resumed_path, 2).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
@@ -623,7 +623,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         "second compact test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 3).await;
+    let forked = fork_thread(&manager, &config, resumed_path, 3).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     compact_conversation(&forked).await;
@@ -855,7 +855,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 async fn start_test_conversation(
     server: &MockServer,
     model: Option<&str>,
-) -> (TempDir, Config, ConversationManager, Arc<CodexConversation>) {
+) -> (TempDir, Config, ThreadManager, Arc<CodexThread>) {
     let model_provider = ModelProviderInfo {
         name: "Non-OpenAI Model provider".into(),
         base_url: Some(format!("{}/v1", server.uri())),
@@ -868,19 +868,19 @@ async fn start_test_conversation(
     if let Some(model) = model {
         config.model = Some(model.to_string());
     }
-    let manager = ConversationManager::with_models_provider(
+    let manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let NewConversation { conversation, .. } = manager
-        .new_conversation(config.clone())
+    let NewThread { thread, .. } = manager
+        .start_thread(config.clone())
         .await
         .expect("create conversation");
 
-    (home, config, manager, conversation)
+    (home, config, manager, thread)
 }
 
-async fn user_turn(conversation: &Arc<CodexConversation>, text: &str) {
+async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
     conversation
         .submit(Op::UserInput {
             items: vec![UserInput::Text { text: text.into() }],
@@ -891,7 +891,7 @@ async fn user_turn(conversation: &Arc<CodexConversation>, text: &str) {
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
-async fn compact_conversation(conversation: &Arc<CodexConversation>) {
+async fn compact_conversation(conversation: &Arc<CodexThread>) {
     conversation
         .submit(Op::Compact)
         .await
@@ -904,34 +904,34 @@ async fn compact_conversation(conversation: &Arc<CodexConversation>) {
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
-async fn fetch_conversation_path(conversation: &Arc<CodexConversation>) -> std::path::PathBuf {
+async fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
     conversation.rollout_path()
 }
 
 async fn resume_conversation(
-    manager: &ConversationManager,
+    manager: &ThreadManager,
     config: &Config,
     path: std::path::PathBuf,
-) -> Arc<CodexConversation> {
+) -> Arc<CodexThread> {
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
-    let NewConversation { conversation, .. } = manager
-        .resume_conversation_from_rollout(config.clone(), path, auth_manager)
+    let NewThread { thread, .. } = manager
+        .resume_thread_from_rollout(config.clone(), path, auth_manager)
         .await
         .expect("resume conversation");
-    conversation
+    thread
 }
 
 #[cfg(test)]
-async fn fork_conversation(
-    manager: &ConversationManager,
+async fn fork_thread(
+    manager: &ThreadManager,
     config: &Config,
     path: std::path::PathBuf,
     nth_user_message: usize,
-) -> Arc<CodexConversation> {
-    let NewConversation { conversation, .. } = manager
-        .fork_conversation(nth_user_message, config.clone(), path)
+) -> Arc<CodexThread> {
+    let NewThread { thread, .. } = manager
+        .fork_thread(nth_user_message, config.clone(), path)
         .await
         .expect("fork conversation");
-    conversation
+    thread
 }

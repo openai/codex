@@ -75,7 +75,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let TestCodex {
         codex,
         config,
-        conversation_manager,
+        thread_manager,
         ..
     } = test_codex()
         .with_config(|config| {
@@ -84,9 +84,9 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let base_instructions = conversation_manager
+    let base_instructions = thread_manager
         .get_models_manager()
-        .construct_model_family(
+        .construct_model_info(
             config
                 .model
                 .as_deref()
@@ -94,8 +94,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             &config,
         )
         .await
-        .base_instructions
-        .clone();
+        .base_instructions;
 
     codex
         .submit(Op::UserInput {
@@ -132,7 +131,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         base_instructions
     } else {
         [
-            base_instructions.clone(),
+            base_instructions,
             include_str!("../../../apply-patch/apply_patch_tool_instructions.md").to_string(),
         ]
         .join("\n")

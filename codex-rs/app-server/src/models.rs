@@ -2,16 +2,13 @@ use std::sync::Arc;
 
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ReasoningEffortOption;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
-pub async fn supported_models(
-    conversation_manager: Arc<ConversationManager>,
-    config: &Config,
-) -> Vec<Model> {
-    conversation_manager
+pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Config) -> Vec<Model> {
+    thread_manager
         .list_models(config)
         .await
         .into_iter()

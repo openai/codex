@@ -13,8 +13,8 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::UnifiedExecResponse;
-use crate::unified_exec::UnifiedExecSessionManager;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -112,7 +112,7 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let manager: &UnifiedExecSessionManager = &session.services.unified_exec_manager;
+        let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
         let response = match tool_name.as_str() {

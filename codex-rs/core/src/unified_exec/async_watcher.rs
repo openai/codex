@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use tokio::time::Sleep;
 
 use super::UnifiedExecContext;
-use super::session::UnifiedExecSession;
+use super::process::UnifiedExecProcess;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
@@ -37,13 +37,13 @@ const UNIFIED_EXEC_OUTPUT_DELTA_MAX_BYTES: usize = 8192;
 /// shared transcript, and emits ExecCommandOutputDelta events on UTF‑8
 /// boundaries.
 pub(crate) fn start_streaming_output(
-    session: &UnifiedExecSession,
+    process: &UnifiedExecProcess,
     context: &UnifiedExecContext,
     transcript: Arc<Mutex<HeadTailBuffer>>,
 ) {
-    let mut receiver = session.output_receiver();
-    let output_drained = session.output_drained_notify();
-    let exit_token = session.cancellation_token();
+    let mut receiver = process.output_receiver();
+    let output_drained = process.output_drained_notify();
+    let exit_token = process.cancellation_token();
 
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.turn);
@@ -104,7 +104,7 @@ pub(crate) fn start_streaming_output(
 /// single ExecCommandEnd event with the aggregated transcript.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_exit_watcher(
-    session: Arc<UnifiedExecSession>,
+    process: Arc<UnifiedExecProcess>,
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,
@@ -114,14 +114,14 @@ pub(crate) fn spawn_exit_watcher(
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
 ) {
-    let exit_token = session.cancellation_token();
-    let output_drained = session.output_drained_notify();
+    let exit_token = process.cancellation_token();
+    let output_drained = process.output_drained_notify();
 
     tokio::spawn(async move {
         exit_token.cancelled().await;
         output_drained.notified().await;
 
-        let exit_code = session.exit_code().unwrap_or(-1);
+        let exit_code = process.exit_code().unwrap_or(-1);
         let duration = Instant::now().saturating_duration_since(started_at);
         emit_exec_end_for_unified_exec(
             session_ref,
