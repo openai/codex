@@ -517,29 +517,29 @@ pub(crate) fn new_unified_exec_wait_live(
 }
 
 #[derive(Debug)]
-struct UnifiedExecSessionsCell {
-    sessions: Vec<String>,
+struct UnifiedExecProcessesCell {
+    processes: Vec<String>,
 }
 
-impl UnifiedExecSessionsCell {
-    fn new(sessions: Vec<String>) -> Self {
-        Self { sessions }
+impl UnifiedExecProcessesCell {
+    fn new(processes: Vec<String>) -> Self {
+        Self { processes }
     }
 }
 
-impl HistoryCell for UnifiedExecSessionsCell {
+impl HistoryCell for UnifiedExecProcessesCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if width == 0 {
             return Vec::new();
         }
 
         let wrap_width = width as usize;
-        let max_sessions = 16usize;
+        let max_processes = 16usize;
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push(vec!["Background terminals".bold()].into());
         out.push("".into());
 
-        if self.sessions.is_empty() {
+        if self.processes.is_empty() {
             out.push("  • No background terminals running.".italic().into());
             return out;
         }
@@ -549,8 +549,8 @@ impl HistoryCell for UnifiedExecSessionsCell {
         let truncation_suffix = " [...]";
         let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
         let mut shown = 0usize;
-        for command in &self.sessions {
-            if shown >= max_sessions {
+        for command in &self.processes {
+            if shown >= max_processes {
                 break;
             }
             let (snippet, snippet_truncated) = {
@@ -590,7 +590,7 @@ impl HistoryCell for UnifiedExecSessionsCell {
             shown += 1;
         }
 
-        let remaining = self.sessions.len().saturating_sub(shown);
+        let remaining = self.processes.len().saturating_sub(shown);
         if remaining > 0 {
             let more_text = format!("... and {remaining} more running");
             if wrap_width <= prefix_width {
@@ -610,9 +610,9 @@ impl HistoryCell for UnifiedExecSessionsCell {
     }
 }
 
-pub(crate) fn new_unified_exec_sessions_output(sessions: Vec<String>) -> CompositeHistoryCell {
+pub(crate) fn new_unified_exec_processes_output(processes: Vec<String>) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
-    let summary = UnifiedExecSessionsCell::new(sessions);
+    let summary = UnifiedExecProcessesCell::new(processes);
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
 }
 
@@ -1819,14 +1819,14 @@ mod tests {
 
     #[test]
     fn ps_output_empty_snapshot() {
-        let cell = new_unified_exec_sessions_output(Vec::new());
+        let cell = new_unified_exec_processes_output(Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
     #[test]
     fn ps_output_multiline_snapshot() {
-        let cell = new_unified_exec_sessions_output(vec![
+        let cell = new_unified_exec_processes_output(vec![
             "echo hello\nand then some extra text".to_string(),
             "rg \"foo\" src".to_string(),
         ]);
@@ -1836,7 +1836,7 @@ mod tests {
 
     #[test]
     fn ps_output_long_command_snapshot() {
-        let cell = new_unified_exec_sessions_output(vec![String::from(
+        let cell = new_unified_exec_processes_output(vec![String::from(
             "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
         )]);
         let rendered = render_lines(&cell.display_lines(36)).join("\n");
@@ -1845,8 +1845,9 @@ mod tests {
 
     #[test]
     fn ps_output_many_sessions_snapshot() {
-        let cell =
-            new_unified_exec_sessions_output((0..20).map(|idx| format!("command {idx}")).collect());
+        let cell = new_unified_exec_processes_output(
+            (0..20).map(|idx| format!("command {idx}")).collect(),
+        );
         let rendered = render_lines(&cell.display_lines(32)).join("\n");
         insta::assert_snapshot!(rendered);
     }
