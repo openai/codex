@@ -375,14 +375,13 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     let request = requests
         .first()
@@ -509,14 +508,13 @@ async fn chatgpt_auth_sends_correct_request() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     let request = requests
         .first()
@@ -1250,14 +1248,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         }
     }
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     assert_eq!(requests.len(), 1, "expected a single POST request");
     let body: serde_json::Value = requests[0]
@@ -1872,14 +1869,13 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Inspect the three captured requests.
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     assert_eq!(requests.len(), 3, "expected 3 requests (one per turn)");
 

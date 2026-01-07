@@ -774,14 +774,13 @@ fn normalize_line_endings(value: &mut Value) {
 }
 
 async fn gather_request_bodies(server: &MockServer) -> Vec<Value> {
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let mut bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")

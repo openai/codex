@@ -42,7 +42,6 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use wiremock::Match;
 use wiremock::MockServer;
-use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 // --- Test helpers -----------------------------------------------------------
 
@@ -360,14 +359,13 @@ async fn manual_compact_uses_custom_prompt() {
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     let body = requests
         .iter()
@@ -596,14 +594,13 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // collect the requests payloads from the model
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests_payloads = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
 
     let body = requests_payloads[0]
@@ -1129,14 +1126,13 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     assert_eq!(
         requests.len(),
@@ -1923,14 +1919,13 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "auto compact should not emit task lifecycle events"
     );
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     let request_bodies: Vec<String> = requests
         .into_iter()

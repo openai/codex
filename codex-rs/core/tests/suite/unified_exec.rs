@@ -1243,14 +1243,13 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -1359,14 +1358,13 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -1496,14 +1494,13 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -1862,14 +1859,13 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -2008,14 +2004,13 @@ PY
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -2129,14 +2124,13 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -2227,14 +2221,13 @@ PY
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -2316,14 +2309,13 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -2426,14 +2418,13 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")
@@ -2528,14 +2519,13 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let bodies = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .map(|req| {
             req.body_json::<Value>()
                 .expect("request body to be valid JSON")

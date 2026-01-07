@@ -35,7 +35,6 @@ use wiremock::Match;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
@@ -427,14 +426,13 @@ async fn review_uses_custom_review_model_from_config() {
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request body model equals the configured review model
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     let request = requests
         .first()
@@ -556,14 +554,13 @@ async fn review_input_isolated_from_parent_history() {
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request `input` contains the environment context followed by the user review prompt.
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     let request = requests
         .first()
@@ -691,14 +688,13 @@ async fn review_history_surfaces_in_parent_session() {
     // Inspect the second request (parent turn) input contents.
     // Parent turns include session initial messages (user_instructions, environment_context).
     // Critically, no messages from the review thread should appear.
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     assert_eq!(requests.len(), 2);
     let body = requests[1].body_json::<serde_json::Value>().unwrap();
@@ -817,14 +813,13 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let method_matcher = method("POST");
     let path_matcher = path_regex(".*/responses$");
     let requests = server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
-        .filter(|req| method_matcher.matches(req) && path_matcher.matches(req))
+        .filter(|req| path_matcher.matches(req))
         .collect::<Vec<_>>();
     assert_eq!(requests.len(), 1);
     let body = requests[0].body_json::<serde_json::Value>().unwrap();
