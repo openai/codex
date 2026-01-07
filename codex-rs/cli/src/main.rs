@@ -283,7 +283,7 @@ struct StdioToUdsCommand {
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
-        conversation_id,
+        thread_id: conversation_id,
         ..
     } = exit_info;
 
@@ -830,7 +830,7 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
-            conversation_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
+            thread_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
             update_action: None,
         }
     }
@@ -839,7 +839,7 @@ mod tests {
     fn format_exit_messages_skips_zero_usage() {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
-            conversation_id: None,
+            thread_id: None,
             update_action: None,
         };
         let lines = format_exit_messages(exit_info, false);

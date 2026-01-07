@@ -89,7 +89,7 @@ pub async fn run_resume_picker(
         let tx = loader_tx.clone();
         tokio::spawn(async move {
             let provider_filter = vec![request.default_provider.clone()];
-            let page = RolloutRecorder::list_conversations(
+            let page = RolloutRecorder::list_threads(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
@@ -1351,7 +1351,7 @@ mod tests {
             None,
         );
 
-        let page = RolloutRecorder::list_conversations(
+        let page = RolloutRecorder::list_threads(
             &state.codex_home,
             PAGE_SIZE,
             None,

@@ -374,20 +374,20 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     {
-        let conversation = conversation.clone();
+        let thread = thread.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
                         tracing::debug!("Keyboard interrupt");
                         // Immediately notify Codex to abort any in‑flight task.
-                        conversation.submit(Op::Interrupt).await.ok();
+                        thread.submit(Op::Interrupt).await.ok();
 
                         // Exit the inner loop and return to the main input prompt. The codex
                         // will emit a `TurnInterrupted` (Error) event which is drained later.
                         break;
                     }
-                    res = conversation.next_event() => match res {
+                    res = thread.next_event() => match res {
                         Ok(event) => {
                             debug!("Received event: {event:?}");
 
@@ -416,7 +416,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             items,
             output_schema,
         } => {
-            let task_id = conversation
+            let task_id = thread
                 .submit(Op::UserTurn {
                     items,
                     cwd: default_cwd,
@@ -432,7 +432,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             task_id
         }
         InitialOperation::Review { review_request } => {
-            let task_id = conversation.submit(Op::Review { review_request }).await?;
+            let task_id = thread.submit(Op::Review { review_request }).await?;
             info!("Sent review request with event ID: {task_id}");
             task_id
         }
@@ -445,7 +445,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     while let Some(event) = rx.recv().await {
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
-            conversation
+            thread
                 .submit(Op::ResolveElicitation {
                     server_name: ev.server_name.clone(),
                     request_id: ev.id.clone(),
@@ -460,7 +460,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                conversation.submit(Op::Shutdown).await?;
+                thread.submit(Op::Shutdown).await?;
             }
             CodexStatus::Shutdown => {
                 break;
@@ -481,7 +481,7 @@ async fn resolve_resume_path(
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
         let default_provider_filter = vec![config.model_provider_id.clone()];
-        match codex_core::RolloutRecorder::list_conversations(
+        match codex_core::RolloutRecorder::list_threads(
             &config.codex_home,
             1,
             None,
@@ -493,7 +493,7 @@ async fn resolve_resume_path(
         {
             Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
             Err(e) => {
-                error!("Error listing conversations: {e}");
+                error!("Error listing threads: {e}");
                 Ok(None)
             }
         }

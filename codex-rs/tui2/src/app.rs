@@ -105,7 +105,7 @@ impl From<AppExitInfo> for codex_tui::AppExitInfo {
     fn from(info: AppExitInfo) -> Self {
         codex_tui::AppExitInfo {
             token_usage: info.token_usage,
-            conversation_id: info.conversation_id,
+            thread_id: info.conversation_id,
             update_action: info.update_action.map(Into::into),
         }
     }

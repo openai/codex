@@ -70,13 +70,13 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
-    pub conversation_id: Option<ThreadId>,
+    pub thread_id: Option<ThreadId>,
     pub update_action: Option<UpdateAction>,
 }
 
 fn session_summary(
     token_usage: TokenUsage,
-    conversation_id: Option<ThreadId>,
+    thread_id: Option<ThreadId>,
 ) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
@@ -84,7 +84,7 @@ fn session_summary(
 
     let usage_line = FinalOutput::from(token_usage).to_string();
     let resume_command =
-        conversation_id.map(|conversation_id| format!("codex resume {conversation_id}"));
+        thread_id.map(|thread_id| format!("codex resume {thread_id}"));
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -275,7 +275,7 @@ async fn handle_model_migration_prompt_if_needed(
             ModelMigrationOutcome::Exit => {
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
-                    conversation_id: None,
+                    thread_id: None,
                     update_action: None,
                 });
             }
@@ -316,7 +316,7 @@ pub(crate) struct App {
     pub(crate) pending_update_action: Option<UpdateAction>,
 
     /// Ignore the next ShutdownComplete event when we're intentionally
-    /// stopping a conversation (e.g., before starting a new one).
+    /// stopping a thread (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
 
     // One-shot suppression of the next world-writable scan after user confirmation.
@@ -324,11 +324,11 @@ pub(crate) struct App {
 }
 
 impl App {
-    async fn shutdown_current_conversation(&mut self) {
-        if let Some(conversation_id) = self.chat_widget.conversation_id() {
+    async fn shutdown_current_thread(&mut self) {
+        if let Some(thread_id) = self.chat_widget.thread_id() {
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
-            self.server.remove_thread(&conversation_id).await;
+            self.server.remove_thread(&thread_id).await;
         }
     }
 
@@ -408,7 +408,7 @@ impl App {
                 };
                 ChatWidget::new_from_existing(
                     init,
-                    resumed.conversation,
+                    resumed.thread,
                     resumed.session_configured,
                 )
             }
@@ -494,7 +494,7 @@ impl App {
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            conversation_id: app.chat_widget.conversation_id(),
+            thread_id: app.chat_widget.thread_id(),
             update_action: app.pending_update_action,
         })
     }
@@ -557,9 +557,9 @@ impl App {
             AppEvent::NewSession => {
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
-                    self.chat_widget.conversation_id(),
+                    self.chat_widget.thread_id(),
                 );
-                self.shutdown_current_conversation().await;
+                self.shutdown_current_thread().await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -597,7 +597,7 @@ impl App {
                     ResumeSelection::Resume(path) => {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
-                            self.chat_widget.conversation_id(),
+                            self.chat_widget.thread_id(),
                         );
                         match self
                             .server
@@ -609,7 +609,7 @@ impl App {
                             .await
                         {
                             Ok(resumed) => {
-                                self.shutdown_current_conversation().await;
+                                self.shutdown_current_thread().await;
                                 let init = crate::chatwidget::ChatWidgetInit {
                                     config: self.config.clone(),
                                     frame_requester: tui.frame_requester(),
@@ -625,7 +625,7 @@ impl App {
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
-                                    resumed.conversation,
+                                    resumed.thread,
                                     resumed.session_configured,
                                 );
                                 self.current_model = model_family.get_model_slug().to_string();
@@ -1634,7 +1634,7 @@ mod tests {
 
         // Simulate the transcript after trimming for a fork, replaying history, and
         // appending the edited turn. The session header separates the retained history
-        // from the forked conversation's replayed turns.
+        // from the forked thread's replayed turns.
         app.transcript_cells = vec![
             make_header(true),
             user_cell("first question"),
@@ -1665,9 +1665,9 @@ mod tests {
     async fn new_session_requests_shutdown_for_previous_conversation() {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
-        let conversation_id = ThreadId::new();
+        let thread_id = ThreadId::new();
         let event = SessionConfiguredEvent {
-            session_id: conversation_id,
+            session_id: thread_id,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
@@ -1688,7 +1688,7 @@ mod tests {
         while app_event_rx.try_recv().is_ok() {}
         while op_rx.try_recv().is_ok() {}
 
-        app.shutdown_current_conversation().await;
+        app.shutdown_current_thread().await;
 
         match op_rx.try_recv() {
             Ok(Op::Shutdown) => {}

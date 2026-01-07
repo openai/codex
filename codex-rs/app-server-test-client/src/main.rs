@@ -16,7 +16,7 @@ use anyhow::bail;
 use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
-use codex_app_server_protocol::AddConversationListenerParams;
+use codex_app_server_protocol::{AddConversationListenerParams, NewConversationParams, NewConversationResponse};
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::AskForApproval;
@@ -38,8 +38,6 @@ use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::NewThreadParams;
-use codex_app_server_protocol::NewThreadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::SendUserMessageParams;
@@ -416,11 +414,11 @@ impl CodexClient {
         self.send_request(request, request_id, "initialize")
     }
 
-    fn start_thread(&mut self) -> Result<NewThreadResponse> {
+    fn start_thread(&mut self) -> Result<NewConversationResponse> {
         let request_id = self.request_id();
-        let request = ClientRequest::NewThread {
+        let request = ClientRequest::NewConversation {
             request_id: request_id.clone(),
-            params: NewThreadParams::default(),
+            params: NewConversationParams::default(),
         };
 
         self.send_request(request, request_id, "newConversation")

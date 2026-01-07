@@ -45,8 +45,8 @@ pub async fn run_codex_tool_session(
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 ) {
     let NewThread {
-        conversation_id,
-        conversation,
+        thread_id,
+        thread,
         session_configured,
     } = match thread_manager.start_thread(config).await {
         Ok(res) => res,
@@ -87,7 +87,7 @@ pub async fn run_codex_tool_session(
     running_requests_id_to_codex_uuid
         .lock()
         .await
-        .insert(id.clone(), conversation_id);
+        .insert(id.clone(), thread_id);
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
@@ -98,7 +98,7 @@ pub async fn run_codex_tool_session(
         },
     };
 
-    if let Err(e) = conversation.submit_with_id(submission).await {
+    if let Err(e) = thread.submit_with_id(submission).await {
         tracing::error!("Failed to submit initial prompt: {e}");
         // unregister the id so we don't keep it in the map
         running_requests_id_to_codex_uuid.lock().await.remove(&id);
@@ -106,7 +106,7 @@ pub async fn run_codex_tool_session(
     }
 
     run_codex_tool_session_inner(
-        conversation,
+        thread,
         outgoing,
         id,
         running_requests_id_to_codex_uuid,

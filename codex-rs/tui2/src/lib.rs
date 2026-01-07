@@ -473,7 +473,7 @@ async fn run_ratatui_app(
         }
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
-        match RolloutRecorder::list_conversations(
+        match RolloutRecorder::list_threads(
             &config.codex_home,
             1,
             None,

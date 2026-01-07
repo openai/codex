@@ -145,7 +145,7 @@ pub struct ResumeConversationParams {
     pub path: Option<PathBuf>,
     pub conversation_id: Option<ThreadId>,
     pub history: Option<Vec<ResponseItem>>,
-    pub overrides: Option<NewThreadParams>,
+    pub overrides: Option<NewConversationParams>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

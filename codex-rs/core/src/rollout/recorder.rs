@@ -92,7 +92,7 @@ impl RolloutRecorderParams {
 
 impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
-    pub async fn list_conversations(
+    pub async fn list_threads(
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,

@@ -35,11 +35,7 @@ use tokio::sync::RwLock;
 /// (which is [`EventMsg::SessionConfigured`]).
 pub struct NewThread {
     pub thread_id: ThreadId,
-    #[deprecated(note = "use thread_id")]
-    pub conversation_id: ThreadId,
     pub thread: Arc<CodexThread>,
-    #[deprecated(note = "use thread")]
-    pub conversation: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
 }
 
@@ -325,9 +321,7 @@ impl ThreadManagerState {
         #[allow(deprecated)]
         Ok(NewThread {
             thread_id,
-            conversation_id: thread_id,
-            thread: thread.clone(),
-            conversation: thread,
+            thread,
             session_configured,
         })
     }

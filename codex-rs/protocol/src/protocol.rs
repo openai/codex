@@ -1811,7 +1811,7 @@ pub struct SkillsListEntry {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
-    /// Name left as session_id instead of conversation_id for backwards compatibility.
+    /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
 
     /// Tell the client what model is being queried.

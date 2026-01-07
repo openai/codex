@@ -371,7 +371,7 @@ async fn run_ratatui_app(
                     crate::tui::restore()?;
                     return Ok(AppExitInfo {
                         token_usage: codex_core::protocol::TokenUsage::default(),
-                        conversation_id: None,
+                        thread_id: None,
                         update_action: Some(action),
                     });
                 }
@@ -410,7 +410,7 @@ async fn run_ratatui_app(
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
                 token_usage: codex_core::protocol::TokenUsage::default(),
-                conversation_id: None,
+                thread_id: None,
                 update_action: None,
             });
         }
@@ -445,14 +445,14 @@ async fn run_ratatui_app(
                 }
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
-                    conversation_id: None,
+                    thread_id: None,
                     update_action: None,
                 });
             }
         }
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
-        match RolloutRecorder::list_conversations(
+        match RolloutRecorder::list_threads(
             &config.codex_home,
             1,
             None,
@@ -483,7 +483,7 @@ async fn run_ratatui_app(
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
-                    conversation_id: None,
+                    thread_id: None,
                     update_action: None,
                 });
             }

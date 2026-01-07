@@ -344,7 +344,7 @@ pub(crate) struct ChatWidget {
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
-    conversation_id: Option<ThreadId>,
+    thread_id: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -435,7 +435,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
-        self.conversation_id = Some(event.session_id);
+        self.thread_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
@@ -478,7 +478,7 @@ impl ChatWidget {
         include_logs: bool,
     ) {
         // Build a fresh snapshot at the time of opening the note overlay.
-        let snapshot = self.feedback.snapshot(self.conversation_id);
+        let snapshot = self.feedback.snapshot(self.thread_id);
         let rollout = if include_logs {
             self.current_rollout_path.clone()
         } else {
@@ -1463,7 +1463,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
-            conversation_id: None,
+            thread_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -1549,7 +1549,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
-            conversation_id: None,
+            thread_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -2253,7 +2253,7 @@ impl ChatWidget {
             self.auth_manager.as_ref(),
             token_info,
             total_usage,
-            &self.conversation_id,
+            &self.thread_id,
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
             Local::now(),
@@ -3516,8 +3516,8 @@ impl ChatWidget {
             .unwrap_or_default()
     }
 
-    pub(crate) fn conversation_id(&self) -> Option<ThreadId> {
-        self.conversation_id
+    pub(crate) fn thread_id(&self) -> Option<ThreadId> {
+        self.thread_id
     }
 
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {

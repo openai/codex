@@ -7,7 +7,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_app_server_protocol::Account;
+use codex_app_server_protocol::{Account, NewConversationParams, NewConversationResponse};
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
@@ -61,8 +61,6 @@ use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::NewThreadParams;
-use codex_app_server_protocol::NewThreadResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -388,7 +386,7 @@ impl CodexMessageProcessor {
             ClientRequest::ReviewStart { request_id, params } => {
                 self.review_start(request_id, params).await;
             }
-            ClientRequest::NewThread { request_id, params } => {
+            ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
                 // asynchronously because we need to ensure the conversation is
                 // created before processing any subsequent messages.
@@ -1245,8 +1243,8 @@ impl CodexMessageProcessor {
         });
     }
 
-    async fn process_new_conversation(&self, request_id: RequestId, params: NewThreadParams) {
-        let NewThreadParams {
+    async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {
+        let NewConversationParams {
             model,
             model_provider,
             profile,
@@ -1311,7 +1309,7 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_thread;
-                let response = NewThreadResponse {
+                let response = NewConversationResponse {
                     conversation_id: thread_id,
                     model: session_configured.model,
                     reasoning_effort: session_configured.reasoning_effort,
@@ -1905,7 +1903,7 @@ impl CodexMessageProcessor {
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
-            let page = RolloutRecorder::list_conversations(
+            let page = RolloutRecorder::list_threads(
                 &self.config.codex_home,
                 page_size,
                 cursor_obj.as_ref(),
@@ -2245,7 +2243,7 @@ impl CodexMessageProcessor {
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = match overrides {
             Some(overrides) => {
-                let NewThreadParams {
+                let NewConversationParams {
                     model,
                     model_provider,
                     profile,

@@ -153,7 +153,7 @@ impl App {
     fn prime_backtrack(&mut self) {
         self.backtrack.primed = true;
         self.backtrack.nth_user_message = usize::MAX;
-        self.backtrack.base_id = self.chat_widget.conversation_id();
+        self.backtrack.base_id = self.chat_widget.thread_id();
         self.chat_widget.show_esc_backtrack_hint();
     }
 
@@ -169,7 +169,7 @@ impl App {
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
         self.backtrack.primed = true;
-        self.backtrack.base_id = self.chat_widget.conversation_id();
+        self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
         let count = user_count(&self.transcript_cells);
         if let Some(last) = count.checked_sub(1) {
