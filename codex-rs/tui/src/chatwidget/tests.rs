@@ -388,7 +388,7 @@ async fn make_chatwidget_manual(
         suppressed_exec_calls: HashSet::new(),
         last_unified_wait: None,
         task_complete_pending: false,
-        unified_exec_sessions: Vec::new(),
+        unified_exec_processes: Vec::new(),
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -2659,12 +2659,12 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_sessions() {
+async fn interrupt_clears_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
     begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
-    assert_eq!(chat.unified_exec_sessions.len(), 2);
+    assert_eq!(chat.unified_exec_processes.len(), 2);
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -2673,7 +2673,7 @@ async fn interrupt_clears_unified_exec_sessions() {
         }),
     });
 
-    assert!(chat.unified_exec_sessions.is_empty());
+    assert!(chat.unified_exec_processes.is_empty());
 
     let _ = drain_insert_history(&mut rx);
 }
