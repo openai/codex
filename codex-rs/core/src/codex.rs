@@ -146,7 +146,7 @@ use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use crate::unified_exec::UnifiedExecSessionManager;
+use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_instructions::DeveloperInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
@@ -677,7 +677,7 @@ impl Session {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
-            unified_exec_manager: UnifiedExecSessionManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
@@ -2130,7 +2130,7 @@ mod handlers {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         sess.services
             .unified_exec_manager
-            .terminate_all_sessions()
+            .terminate_all_processes()
             .await;
         info!("Shutting down Codex instance");
 
@@ -3517,7 +3517,7 @@ mod tests {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
-            unified_exec_manager: UnifiedExecSessionManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
@@ -3608,7 +3608,7 @@ mod tests {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
-            unified_exec_manager: UnifiedExecSessionManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
@@ -3655,7 +3655,7 @@ mod tests {
         session.features = features;
 
         session
-            .record_model_warning("too many unified exec sessions", &turn_context)
+            .record_model_warning("too many unified exec processes", &turn_context)
             .await;
 
         let mut history = session.clone_history().await;
@@ -3668,7 +3668,7 @@ mod tests {
                 assert_eq!(
                     content,
                     &vec![ContentItem::InputText {
-                        text: "Warning: too many unified exec sessions".to_string(),
+                        text: "Warning: too many unified exec processes".to_string(),
                     }]
                 );
             }
