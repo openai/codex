@@ -232,22 +232,25 @@ fn read_diff_git_token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> 
             if c == q {
                 break;
             }
+            if c == '\\' {
+                out.push('\\');
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                continue;
+            }
         } else if c.is_whitespace() {
             break;
-        }
-
-        if c == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
-            }
-            continue;
         }
         out.push(c);
     }
     if out.is_empty() && quote.is_none() {
         None
     } else {
-        Some(out)
+        Some(match quote {
+            Some(_) => unescape_c_string(&out),
+            None => out,
+        })
     }
 }
 
@@ -642,6 +645,13 @@ mod tests {
         let diff = "diff --git a/dev/null b/ok.txt\nnew file mode 100644\n--- /dev/null\n+++ b/ok.txt\n@@ -0,0 +1 @@\n+hi\n";
         let paths = extract_paths_from_patch(diff);
         assert_eq!(paths, vec!["ok.txt".to_string()]);
+    }
+
+    #[test]
+    fn extract_paths_unescapes_c_style_in_quoted_headers() {
+        let diff = "diff --git \"a/hello\\tworld.txt\" \"b/hello\\tworld.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello\tworld.txt\n@@ -0,0 +1 @@\n+hi\n";
+        let paths = extract_paths_from_patch(diff);
+        assert_eq!(paths, vec!["hello\tworld.txt".to_string()]);
     }
 
     #[test]
