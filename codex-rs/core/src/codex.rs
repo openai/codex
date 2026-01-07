@@ -20,7 +20,6 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::models_manager::manager::ModelsManager;
-use crate::models_manager::model_family::ModelFamily;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -35,6 +34,7 @@ use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::items::TurnItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -508,20 +508,20 @@ impl Session {
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
-        model_family: ModelFamily,
+        model_info: ModelInfo,
         conversation_id: ThreadId,
         sub_id: String,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.model.as_str(),
-            model_family.get_model_slug(),
+            model_info.slug.as_str(),
         );
 
         let per_turn_config = Arc::new(per_turn_config);
         let client = ModelClient::new(
             per_turn_config.clone(),
             auth_manager,
-            model_family.clone(),
+            model_info.clone(),
             otel_manager,
             provider,
             session_configuration.model_reasoning_effort,
@@ -531,7 +531,7 @@ impl Session {
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &per_turn_config.features,
         });
 
@@ -553,7 +553,7 @@ impl Session {
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: TruncationPolicy::new(
                 per_turn_config.as_ref(),
-                model_family.truncation_policy,
+                model_info.truncation_policy.into(),
             ),
         }
     }
@@ -944,10 +944,10 @@ impl Session {
             }
         }
 
-        let model_family = self
+        let model_info = self
             .services
             .models_manager
-            .construct_model_family(session_configuration.model.as_str(), &per_turn_config)
+            .construct_model_info(session_configuration.model.as_str(), &per_turn_config)
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -955,7 +955,7 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             per_turn_config,
-            model_family,
+            model_info,
             self.conversation_id,
             sub_id,
         );
@@ -1448,14 +1448,11 @@ impl Session {
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
-        let context_window = turn_context.client.get_model_context_window();
-        if let Some(context_window) = context_window {
-            {
-                let mut state = self.state.lock().await;
-                state.set_token_usage_full(context_window);
-            }
-            self.send_token_count_event(turn_context).await;
+        if let Some(context_window) = turn_context.client.get_model_context_window() {
+            let mut state = self.state.lock().await;
+            state.set_token_usage_full(context_window);
         }
+        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn record_response_item_and_emit_turn_item(
@@ -2207,10 +2204,10 @@ async fn spawn_review_thread(
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
     let model = config.review_model.clone();
-    let review_model_family = sess
+    let review_model_info = sess
         .services
         .models_manager
-        .construct_model_family(&model, &config)
+        .construct_model_info(&model, &config)
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
@@ -2219,7 +2216,7 @@ async fn spawn_review_thread(
         .disable(crate::features::Feature::WebSearchCached)
         .disable(crate::features::Feature::ViewImageTool);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_family: &review_model_family,
+        model_info: &review_model_info,
         features: &review_features,
     });
 
@@ -2227,7 +2224,7 @@ async fn spawn_review_thread(
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
-    let model_family = review_model_family.clone();
+    let model_info = review_model_info.clone();
 
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*config).clone();
@@ -2237,14 +2234,14 @@ async fn spawn_review_thread(
 
     let otel_manager = parent_turn_context.client.get_otel_manager().with_model(
         config.review_model.as_str(),
-        review_model_family.slug.as_str(),
+        review_model_info.slug.as_str(),
     );
 
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
         per_turn_config.clone(),
         auth_manager,
-        model_family.clone(),
+        model_info.clone(),
         otel_manager,
         provider,
         per_turn_config.model_reasoning_effort,
@@ -2269,7 +2266,10 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
-        truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
+        truncation_policy: TruncationPolicy::new(
+            &per_turn_config,
+            model_info.truncation_policy.into(),
+        ),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2335,11 +2335,8 @@ pub(crate) async fn run_task(
         return None;
     }
 
-    let auto_compact_limit = turn_context
-        .client
-        .get_model_family()
-        .auto_compact_token_limit()
-        .unwrap_or(i64::MAX);
+    let model_info = turn_context.client.get_model_info();
+    let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
@@ -2517,7 +2514,7 @@ async fn run_turn(
 
     let model_supports_parallel = turn_context
         .client
-        .get_model_family()
+        .get_model_info()
         .supports_parallel_tool_calls;
 
     let prompt = Prompt {
@@ -3459,13 +3456,13 @@ mod tests {
     fn otel_manager(
         conversation_id: ThreadId,
         config: &Config,
-        model_family: &ModelFamily,
+        model_info: &ModelInfo,
         session_source: SessionSource,
     ) -> OtelManager {
         OtelManager::new(
             conversation_id,
             ModelsManager::get_model_offline(config.model.as_deref()).as_str(),
-            model_family.slug.as_str(),
+            model_info.slug.as_str(),
             None,
             Some("test@test.com".to_string()),
             Some(AuthMode::ChatGPT),
@@ -3504,14 +3501,14 @@ mod tests {
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
-        let model_family = ModelsManager::construct_model_family_offline(
+        let model_info = ModelsManager::construct_model_info_offline(
             session_configuration.model.as_str(),
             &per_turn_config,
         );
         let otel_manager = otel_manager(
             conversation_id,
             config.as_ref(),
-            &model_family,
+            &model_info,
             session_configuration.session_source.clone(),
         );
 
@@ -3541,7 +3538,7 @@ mod tests {
             session_configuration.provider.clone(),
             &session_configuration,
             per_turn_config,
-            model_family,
+            model_info,
             conversation_id,
             "turn_id".to_string(),
         );
@@ -3595,14 +3592,14 @@ mod tests {
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
-        let model_family = ModelsManager::construct_model_family_offline(
+        let model_info = ModelsManager::construct_model_info_offline(
             session_configuration.model.as_str(),
             &per_turn_config,
         );
         let otel_manager = otel_manager(
             conversation_id,
             config.as_ref(),
-            &model_family,
+            &model_info,
             session_configuration.session_source.clone(),
         );
 
@@ -3632,7 +3629,7 @@ mod tests {
             session_configuration.provider.clone(),
             &session_configuration,
             per_turn_config,
-            model_family,
+            model_info,
             conversation_id,
             "turn_id".to_string(),
         ));
