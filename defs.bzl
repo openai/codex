@@ -34,6 +34,7 @@ def codex_rust_crate(
         integration_deps_extra = [],
         integration_compile_data_extra = [],
         test_data_extra = [],
+        test_tags = [],
         visibility = ["//visibility:public"]):
     deps = all_crate_deps(normal = True) + deps_extra
     dev_deps = all_crate_deps(normal_dev = True) + dev_deps_extra
@@ -43,6 +44,10 @@ def codex_rust_crate(
     test_env = {
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
+    }
+
+    rustc_env = {
+        "BAZEL_PACKAGE": native.package_name(),
     }
 
     binaries = DEP_DATA.get(native.package_name())["binaries"]
@@ -70,6 +75,8 @@ def codex_rust_crate(
             env = test_env,
             deps = deps + dev_deps,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            rustc_env = rustc_env,
+            tags = test_tags,
         )
 
         maybe_lib = [name]
@@ -79,13 +86,13 @@ def codex_rust_crate(
     sanitized_binaries = []
     cargo_env = {}
     for binary, main in binaries.items():
-        binary = binary.replace("-", "_")
+        #binary = binary.replace("-", "_")
         sanitized_binaries.append(binary)
         cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath :%s)" % binary
 
         rust_binary(
             name = binary,
-            crate_name = binary,
+            crate_name = binary.replace("-", "_"),
             crate_root = main,
             deps = maybe_lib + deps,
             proc_macro_deps = proc_macro_deps,
@@ -106,5 +113,7 @@ def codex_rust_crate(
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = maybe_lib + deps + dev_deps + integration_deps_extra,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            rustc_env = rustc_env,
             env = test_env | cargo_env,
+            tags = test_tags,
         )

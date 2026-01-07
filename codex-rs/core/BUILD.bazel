@@ -18,4 +18,5 @@ codex_rust_crate(
         "prompt.md",
     ],
     integration_deps_extra = ["//codex-rs/core/tests/common:common"],
+    test_tags = ["no-sandbox"],
 )
