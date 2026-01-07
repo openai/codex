@@ -322,11 +322,7 @@ fn gpt_52_codex_upgrade() -> ModelUpgrade {
 }
 
 pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    PRESETS
-        .iter()
-        .filter(|preset| preset.show_in_picker)
-        .cloned()
-        .collect()
+    PRESETS.iter().cloned().collect()
 }
 
 #[cfg(any(test, feature = "test-support"))]

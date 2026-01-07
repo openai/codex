@@ -260,7 +260,7 @@ impl ModelsManager {
         let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
         models
             .into_iter()
-            .filter(|model| model.show_in_picker && (chatgpt_mode || model.supported_in_api))
+            .filter(|model| chatgpt_mode || model.supported_in_api)
             .collect()
     }
 

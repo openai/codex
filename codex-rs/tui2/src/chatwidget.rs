@@ -2222,6 +2222,14 @@ impl ChatWidget {
                     return;
                 }
             };
+        self.open_model_popup_with_presets(presets);
+    }
+
+    pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        let presets: Vec<ModelPreset> = presets
+            .into_iter()
+            .filter(|preset| preset.show_in_picker)
+            .collect();
 
         let current_label = presets
             .iter()
