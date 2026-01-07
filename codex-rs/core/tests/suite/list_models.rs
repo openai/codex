@@ -1,6 +1,6 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -13,7 +13,7 @@ use tempfile::tempdir;
 async fn list_models_returns_api_key_models() -> Result<()> {
     let codex_home = tempdir()?;
     let config = load_default_config_for_test(&codex_home).await;
-    let manager = ConversationManager::with_models_provider(
+    let manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("sk-test"),
         built_in_model_providers()["openai"].clone(),
     );
@@ -29,7 +29,7 @@ async fn list_models_returns_api_key_models() -> Result<()> {
 async fn list_models_returns_chatgpt_models() -> Result<()> {
     let codex_home = tempdir()?;
     let config = load_default_config_for_test(&codex_home).await;
-    let manager = ConversationManager::with_models_provider(
+    let manager = ThreadManager::with_models_provider(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         built_in_model_providers()["openai"].clone(),
     );
@@ -42,7 +42,18 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 }
 
 fn expected_models_for_api_key() -> Vec<ModelPreset> {
-    vec![gpt_5_1_codex_max(), gpt_5_1_codex_mini(), gpt_5_2()]
+    vec![
+        gpt_5_1_codex_max(),
+        gpt_5_1_codex_mini(),
+        gpt_5_2(),
+        bengalfox(),
+        boomslang(),
+        gpt_5_codex(),
+        gpt_5_codex_mini(),
+        gpt_5_1_codex(),
+        gpt_5(),
+        gpt_5_1(),
+    ]
 }
 
 fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
@@ -53,6 +64,13 @@ fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
         gpt_5_1_codex_max,
         gpt_5_1_codex_mini(),
         gpt_5_2(),
+        bengalfox(),
+        boomslang(),
+        gpt_5_codex(),
+        gpt_5_codex_mini(),
+        gpt_5_1_codex(),
+        gpt_5(),
+        gpt_5_1(),
     ]
 }
 
@@ -168,12 +186,216 @@ fn gpt_5_2() -> ModelPreset {
             ),
             effort(
                 ReasoningEffort::XHigh,
-                "Extra high reasoning for complex problems",
+                "Extra high reasoning depth for complex problems",
             ),
         ],
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
+        supported_in_api: true,
+    }
+}
+
+fn bengalfox() -> ModelPreset {
+    ModelPreset {
+        id: "bengalfox".to_string(),
+        model: "bengalfox".to_string(),
+        display_name: "bengalfox".to_string(),
+        description: "bengalfox".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Fast responses with lighter reasoning",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Balances speed and reasoning depth for everyday tasks",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Greater reasoning depth for complex problems",
+            ),
+            effort(
+                ReasoningEffort::XHigh,
+                "Extra high reasoning depth for complex problems",
+            ),
+        ],
+        is_default: false,
+        upgrade: None,
+        show_in_picker: false,
+        supported_in_api: true,
+    }
+}
+
+fn boomslang() -> ModelPreset {
+    ModelPreset {
+        id: "boomslang".to_string(),
+        model: "boomslang".to_string(),
+        display_name: "boomslang".to_string(),
+        description: "boomslang".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Maximizes reasoning depth for complex or ambiguous problems",
+            ),
+            effort(
+                ReasoningEffort::XHigh,
+                "Extra high reasoning depth for complex problems",
+            ),
+        ],
+        is_default: false,
+        upgrade: None,
+        show_in_picker: false,
+        supported_in_api: true,
+    }
+}
+
+fn gpt_5_codex() -> ModelPreset {
+    ModelPreset {
+        id: "gpt-5-codex".to_string(),
+        model: "gpt-5-codex".to_string(),
+        display_name: "gpt-5-codex".to_string(),
+        description: "Optimized for codex.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Fastest responses with limited reasoning",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Dynamically adjusts reasoning based on the task",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Maximizes reasoning depth for complex or ambiguous problems",
+            ),
+        ],
+        is_default: false,
+        upgrade: Some(gpt52_codex_upgrade()),
+        show_in_picker: false,
+        supported_in_api: true,
+    }
+}
+
+fn gpt_5_codex_mini() -> ModelPreset {
+    ModelPreset {
+        id: "gpt-5-codex-mini".to_string(),
+        model: "gpt-5-codex-mini".to_string(),
+        display_name: "gpt-5-codex-mini".to_string(),
+        description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Medium,
+                "Dynamically adjusts reasoning based on the task",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Maximizes reasoning depth for complex or ambiguous problems",
+            ),
+        ],
+        is_default: false,
+        upgrade: Some(gpt52_codex_upgrade()),
+        show_in_picker: false,
+        supported_in_api: true,
+    }
+}
+
+fn gpt_5_1_codex() -> ModelPreset {
+    ModelPreset {
+        id: "gpt-5.1-codex".to_string(),
+        model: "gpt-5.1-codex".to_string(),
+        display_name: "gpt-5.1-codex".to_string(),
+        description: "Optimized for codex.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Fastest responses with limited reasoning",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Dynamically adjusts reasoning based on the task",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Maximizes reasoning depth for complex or ambiguous problems",
+            ),
+        ],
+        is_default: false,
+        upgrade: Some(gpt52_codex_upgrade()),
+        show_in_picker: false,
+        supported_in_api: true,
+    }
+}
+
+fn gpt_5() -> ModelPreset {
+    ModelPreset {
+        id: "gpt-5".to_string(),
+        model: "gpt-5".to_string(),
+        display_name: "gpt-5".to_string(),
+        description: "Broad world knowledge with strong general reasoning.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Minimal,
+                "Fastest responses with little reasoning",
+            ),
+            effort(
+                ReasoningEffort::Low,
+                "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Maximizes reasoning depth for complex or ambiguous problems",
+            ),
+        ],
+        is_default: false,
+        upgrade: Some(gpt52_codex_upgrade()),
+        show_in_picker: false,
+        supported_in_api: true,
+    }
+}
+
+fn gpt_5_1() -> ModelPreset {
+    ModelPreset {
+        id: "gpt-5.1".to_string(),
+        model: "gpt-5.1".to_string(),
+        display_name: "gpt-5.1".to_string(),
+        description: "Broad world knowledge with strong general reasoning.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Maximizes reasoning depth for complex or ambiguous problems",
+            ),
+        ],
+        is_default: false,
+        upgrade: Some(gpt52_codex_upgrade()),
+        show_in_picker: false,
         supported_in_api: true,
     }
 }

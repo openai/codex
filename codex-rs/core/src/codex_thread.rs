@@ -1,3 +1,4 @@
+use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::error::Result as CodexResult;
 use crate::protocol::Event;
@@ -5,14 +6,14 @@ use crate::protocol::Op;
 use crate::protocol::Submission;
 use std::path::PathBuf;
 
-pub struct CodexConversation {
+pub struct CodexThread {
     codex: Codex,
     rollout_path: PathBuf,
 }
 
-/// Conduit for the bidirectional stream of messages that compose a conversation
-/// in Codex.
-impl CodexConversation {
+/// Conduit for the bidirectional stream of messages that compose a thread
+/// (formerly called a conversation) in Codex.
+impl CodexThread {
     pub(crate) fn new(codex: Codex, rollout_path: PathBuf) -> Self {
         Self {
             codex,
@@ -31,6 +32,10 @@ impl CodexConversation {
 
     pub async fn next_event(&self) -> CodexResult<Event> {
         self.codex.next_event().await
+    }
+
+    pub async fn agent_status(&self) -> AgentStatus {
+        self.codex.agent_status().await
     }
 
     pub fn rollout_path(&self) -> PathBuf {

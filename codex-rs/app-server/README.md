@@ -11,6 +11,8 @@
 - [Initialization](#initialization)
 - [API Overview](#api-overview)
 - [Events](#events)
+- [Approvals](#approvals)
+- [Skills](#skills)
 - [Auth endpoints](#auth-endpoints)
 
 ## Protocol
@@ -72,6 +74,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
+- `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
@@ -162,7 +165,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"image","url":"https://…png"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
-You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread.
+You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {
@@ -178,10 +181,36 @@ You can optionally specify config overrides on the new turn. If specified, these
     },
     "model": "gpt-5.1-codex",
     "effort": "medium",
-    "summary": "concise"
+    "summary": "concise",
+    // Optional JSON Schema to constrain the final assistant message for this turn.
+    "outputSchema": {
+        "type": "object",
+        "properties": { "answer": { "type": "string" } },
+        "required": ["answer"],
+        "additionalProperties": false
+    }
 } }
 { "id": 30, "result": { "turn": {
     "id": "turn_456",
+    "status": "inProgress",
+    "items": [],
+    "error": null
+} } }
+```
+
+### Example: Start a turn (invoke a skill)
+
+Invoke a skill by sending a text input that begins with `$<skill-name>`.
+
+```json
+{ "method": "turn/start", "id": 33, "params": {
+    "threadId": "thr_123",
+    "input": [
+        { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." }
+    ]
+} }
+{ "id": 33, "result": { "turn": {
+    "id": "turn_457",
     "status": "inProgress",
     "items": [],
     "error": null
@@ -396,6 +425,30 @@ Order of messages:
 4. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
+
+## Skills
+
+Skills are invoked by sending a text input that starts with `$<skill-name>`. The rest of the text is passed to the skill as its input.
+
+Example:
+
+```
+$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
+```
+
+Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/or with `forceReload`).
+
+```json
+{ "method": "skills/list", "id": 25, "params": {
+    "cwd": "/Users/me/project",
+    "forceReload": false
+} }
+{ "id": 25, "result": {
+    "skills": [
+        { "name": "skill-creator", "description": "Create or update a Codex skill" }
+    ]
+} }
+```
 
 ## Auth endpoints
 
