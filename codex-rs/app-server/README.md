@@ -428,12 +428,29 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 ## Skills
 
-Skills are invoked by sending a text input that starts with `$<skill-name>`. The rest of the text is passed to the skill as its input.
+Skills can be invoked by including `$<skill-name>` in the text input; the model will look for the named skill and try to use it.
 
 Example:
 
 ```
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
+```
+
+As an optimization, clients that detect `$<skill-name>` can include a `skill` input item in v2 requests.
+The backend can then inject the full skill instructions without relying on the model to resolve the skill name.
+
+```json
+{
+  "method": "thread/turn/start",
+  "id": 101,
+  "params": {
+    "threadId": "thread-1",
+    "input": [
+      { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI." },
+      { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
+    ]
+  }
+}
 ```
 
 Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/or with `forceReload`).
