@@ -356,6 +356,8 @@ type SessionRuntime = {
   reloading: boolean;
   compactInFlight: boolean;
   pendingCompactBlockId: string | null;
+  pendingAssistantDeltas: Map<string, string>;
+  pendingAssistantDeltaFlushTimer: NodeJS.Timeout | null;
   streamingAssistantItemIds: Set<string>;
   activeTurnId: string | null;
   pendingInterrupt: boolean;
@@ -513,6 +515,14 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       if (rewind) {
+        const v = cliVariantForBackendKey(session.backendKey);
+        if (v !== "codex-mine") {
+          void vscode.window.showErrorMessage(
+            `Rewind は codex-mine のみ対応です（現在: ${v}）。CLI を codex-mine に切り替えてください。`,
+          );
+          return;
+        }
+
         const turnIndexRaw = (rewind as any).turnIndex;
         const turnIndex =
           typeof turnIndexRaw === "number" && Number.isFinite(turnIndexRaw)
@@ -968,6 +978,14 @@ export function activate(context: vscode.ExtensionContext): void {
         ? sessions.getById(activeSessionId)
         : null;
       if (!session) return;
+
+      const v = cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
+      if (v !== "codex-mine") {
+        void vscode.window.showErrorMessage(
+          "Reload is only supported when using codex-mine backend.",
+        );
+        return;
+      }
 
       const rt = ensureRuntime(session.id);
       if (rt.sending) {
@@ -2359,6 +2377,21 @@ async function handleSlashCommand(
     });
     return true;
   }
+  if (cmd === "status") {
+    if (arg) {
+      upsertBlock(session.id, {
+        id: newLocalId("statusError"),
+        type: "error",
+        title: "Slash command error",
+        text: "/status does not take arguments.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+    await vscode.commands.executeCommand("codexMine.showStatus");
+    return true;
+  }
   if (cmd === "compact") {
     if (arg) {
       upsertBlock(session.id, {
@@ -2366,6 +2399,19 @@ async function handleSlashCommand(
         type: "error",
         title: "Slash command error",
         text: "/compact does not take arguments.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const v = cliVariantForBackendKey(session.backendKey);
+    if (v !== "codex-mine") {
+      upsertBlock(session.id, {
+        id: newLocalId("compactUnsupported"),
+        type: "error",
+        title: "Compact unsupported",
+        text: `/compact は codex-mine のみ対応です（現在: ${v}）。CLI を codex-mine に切り替えてください。`,
       });
       chatView?.refresh();
       schedulePersistRuntime(session.id);
@@ -2478,15 +2524,19 @@ async function handleSlashCommand(
         return "- /prompts:" + p.name + hint;
       })
       .join("\n");
+    const v = cliVariantForBackendKey(session.backendKey);
     upsertBlock(session.id, {
       id: newLocalId("help"),
       type: "system",
       title: "Help",
       text: [
         "Slash commands:",
-        "- /compact: Compact context (if supported by backend)",
+        v === "codex-mine"
+          ? "- /compact: Compact context"
+          : "- /compact: (codex-mine のみ対応)",
         "- /new: New session",
         "- /resume: Resume from history",
+        "- /status: Show status",
         "- /diff: Open Latest Diff",
         "- /rename <title>: Rename session",
         "- /skills: Browse skills",
@@ -2906,6 +2956,23 @@ function inferCliVariantFromCliVersion(
   return cliVersion.includes("-mine.") ? "codex-mine" : "codex";
 }
 
+function cliVariantForBackendKey(
+  backendKey: string,
+): "unknown" | "codex" | "codex-mine" {
+  const detected = cliVariantByBackendKey.get(backendKey) ?? "unknown";
+  if (detected !== "unknown") return detected;
+
+  // No detected runtime variant yet (e.g. backend not started). Use config as a hint.
+  const folderUri = vscode.Uri.parse(backendKey);
+  const cfg = vscode.workspace.getConfiguration("codexMine", folderUri);
+  const raw = cfg.get<string>("cli.variant") ?? "auto";
+  const normalized =
+    raw === "mine" ? "codex-mine" : raw === "upstream" ? "codex" : raw;
+  if (normalized === "codex-mine") return "codex-mine";
+  if (normalized === "codex") return "codex";
+  return "unknown";
+}
+
 function backendKeyForCwd(cwd: string | null): string | null {
   if (!cwd) return null;
   const folders = vscode.workspace.workspaceFolders ?? [];
@@ -3117,6 +3184,8 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     reloading: false,
     compactInFlight: false,
     pendingCompactBlockId: null,
+    pendingAssistantDeltas: new Map(),
+    pendingAssistantDeltaFlushTimer: null,
     streamingAssistantItemIds: new Set(),
     activeTurnId: null,
     pendingInterrupt: false,
@@ -3167,19 +3236,12 @@ function buildChatState(): ChatViewState {
     argumentHint: p.argumentHint,
     source: p.source,
   }));
-  const capsForBackendKey = (
-    backendKey: string | null,
-  ): {
-    agents: boolean;
-    cliVariant: "unknown" | "codex" | "codex-mine";
-  } => {
-    const detected = backendKey
-      ? (cliVariantByBackendKey.get(backendKey) ?? "unknown")
-      : "unknown";
+  const capsForBackendKey = (backendKey: string | null) => {
+    if (!backendKey) return { agents: false, cliVariant: "unknown" as const };
+    const detected = cliVariantByBackendKey.get(backendKey) ?? "unknown";
     if (detected !== "unknown") {
       return { agents: detected === "codex-mine", cliVariant: detected };
     }
-    if (!backendKey) return { agents: false, cliVariant: "unknown" };
 
     // No detected runtime variant yet (e.g. backend not started). Use config as a hint.
     const folderUri = vscode.Uri.parse(backendKey);
@@ -3188,9 +3250,10 @@ function buildChatState(): ChatViewState {
     const normalized =
       raw === "mine" ? "codex-mine" : raw === "upstream" ? "codex" : raw;
     if (normalized === "codex-mine")
-      return { agents: true, cliVariant: "codex-mine" };
-    if (normalized === "codex") return { agents: false, cliVariant: "codex" };
-    return { agents: false, cliVariant: "unknown" };
+      return { agents: true, cliVariant: "codex-mine" as const };
+    if (normalized === "codex")
+      return { agents: false, cliVariant: "codex" as const };
+    return { agents: false, cliVariant: "unknown" as const };
   };
   if (!sessions)
     return {
@@ -3396,6 +3459,7 @@ function applyServerNotification(
       rt.lastTurnCompletedAtMs = Date.now();
       rt.activeTurnId = null;
       rt.pendingInterrupt = false;
+      flushPendingAssistantDeltas(sessionId, rt);
       for (const id of rt.streamingAssistantItemIds) {
         const idx = rt.blockIndexById.get(id);
         if (idx === undefined) continue;
@@ -3425,15 +3489,13 @@ function applyServerNotification(
       }));
       const delta = (n as any).params.delta as string;
       if (block.type === "assistant") {
-        block.text += delta;
         (block as any).streaming = true;
       }
       rt.streamingAssistantItemIds.add(id);
       markUnreadSession(sessionId);
-      sessionPanels?.appendAssistantDelta(sessionId, delta);
-      chatView?.postBlockAppend(sessionId, id, "assistantText", delta, {
-        streaming: true,
-      });
+      const prev = rt.pendingAssistantDeltas.get(id);
+      rt.pendingAssistantDeltas.set(id, prev ? prev + delta : delta);
+      scheduleAssistantDeltaFlush(sessionId, rt);
       return;
     }
     case "item/reasoning/summaryTextDelta": {
@@ -3835,6 +3897,45 @@ function applyItemLifecycle(
     default:
       // Hide userMessage/agentMessage lifecycle; handled elsewhere.
       break;
+  }
+}
+
+function scheduleAssistantDeltaFlush(
+  sessionId: string,
+  rt: SessionRuntime,
+): void {
+  if (rt.pendingAssistantDeltaFlushTimer) return;
+  rt.pendingAssistantDeltaFlushTimer = setTimeout(() => {
+    rt.pendingAssistantDeltaFlushTimer = null;
+    flushPendingAssistantDeltas(sessionId, rt);
+  }, 16);
+}
+
+function flushPendingAssistantDeltas(sessionId: string, rt: SessionRuntime): void {
+  if (rt.pendingAssistantDeltaFlushTimer) {
+    clearTimeout(rt.pendingAssistantDeltaFlushTimer);
+    rt.pendingAssistantDeltaFlushTimer = null;
+  }
+  if (rt.pendingAssistantDeltas.size === 0) return;
+  const pending = [...rt.pendingAssistantDeltas.entries()];
+  rt.pendingAssistantDeltas.clear();
+
+  for (const [id, delta] of pending) {
+    const idx = rt.blockIndexById.get(id);
+    if (idx === undefined) {
+      outputChannel?.appendLine(
+        `[delta] Dropped pending assistant delta (missing block): sessionId=${sessionId} itemId=${id} bytes=${delta.length}`,
+      );
+      continue;
+    }
+    const b = rt.blocks[idx];
+    if (!b || b.type !== "assistant") continue;
+    b.text += delta;
+    (b as any).streaming = true;
+    sessionPanels?.appendAssistantDelta(sessionId, delta);
+    chatView?.postBlockAppend(sessionId, id, "assistantText", delta, {
+      streaming: true,
+    });
   }
 }
 
