@@ -204,7 +204,7 @@ client_request_definitions! {
 
     /// DEPRECATED APIs below
     NewConversation {
-                params: v1::NewConversationParams,
+        params: v1::NewConversationParams,
         response: v1::NewConversationResponse,
     },
     GetConversationSummary {
