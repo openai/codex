@@ -74,6 +74,14 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
     model
 }
 
+pub(crate) fn auto_compact_token_limit(model_info: &ModelInfo) -> Option<i64> {
+    model_info.auto_compact_token_limit.or_else(|| {
+        model_info
+            .context_window
+            .map(|context_window| (context_window * 9) / 10)
+    })
+}
+
 pub(crate) fn merge_remote_overrides(mut model: ModelInfo, remote: Option<ModelInfo>) -> ModelInfo {
     let Some(remote) = remote else {
         return model;
