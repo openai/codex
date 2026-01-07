@@ -153,6 +153,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     let codex_home = codex_core::config::find_codex_home()?;
     #[cfg(not(debug_assertions))]
     {
+        // Guard against placing helpers in system temp directories outside debug builds.
         let temp_root = std::env::temp_dir();
         if codex_home.starts_with(&temp_root) {
             return Err(std::io::Error::new(
