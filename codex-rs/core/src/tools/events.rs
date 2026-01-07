@@ -305,7 +305,12 @@ impl ToolEmitter {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
                 let normalized = if msg == "rejected by user" {
-                    "exec command rejected by user".to_string()
+                    match self {
+                        Self::Shell { .. } | Self::UnifiedExec { .. } => {
+                            "exec command rejected by user".to_string()
+                        }
+                        Self::ApplyPatch { .. } => "patch rejected by user".to_string(),
+                    }
                 } else {
                     msg
                 };

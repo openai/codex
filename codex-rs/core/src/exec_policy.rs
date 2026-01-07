@@ -421,6 +421,7 @@ mod tests {
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
+    use crate::config_loader::ConfigRequirementsToml;
     use crate::features::Feature;
     use crate::features::Features;
     use codex_app_server_protocol::ConfigLayerSource;
@@ -441,7 +442,12 @@ mod tests {
             ConfigLayerSource::Project { dot_codex_folder },
             TomlValue::Table(Default::default()),
         );
-        ConfigLayerStack::new(vec![layer], ConfigRequirements::default()).expect("ConfigLayerStack")
+        ConfigLayerStack::new(
+            vec![layer],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("ConfigLayerStack")
     }
 
     #[tokio::test]
@@ -573,7 +579,11 @@ mod tests {
                 TomlValue::Table(Default::default()),
             ),
         ];
-        let config_stack = ConfigLayerStack::new(layers, ConfigRequirements::default())?;
+        let config_stack = ConfigLayerStack::new(
+            layers,
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )?;
 
         let policy = load_exec_policy(&config_stack).await?;
 

@@ -268,7 +268,6 @@ pub struct Config {
     /// Additional filenames to try when looking for project-level docs.
     pub project_doc_fallback_filenames: Vec<String>,
 
-    // todo(aibrahim): this should be used in the override model family
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
@@ -316,7 +315,7 @@ pub struct Config {
 
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
-    /// model family's default preference.
+    /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
     pub tools_web_search_request: bool,
@@ -1883,7 +1882,7 @@ trust_level = "trusted"
         profiles.insert(
             "work".to_string(),
             ConfigProfile {
-                tools_view_image: Some(false),
+                tools_web_search: Some(false),
                 ..Default::default()
             },
         );
@@ -1899,7 +1898,7 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
-        assert!(!config.features.enabled(Feature::ViewImageTool));
+        assert!(!config.features.enabled(Feature::WebSearchRequest));
 
         Ok(())
     }

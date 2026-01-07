@@ -34,10 +34,11 @@ where
 {
     let mcp_executable = codex_utils_cargo_bin::cargo_bin("codex-exec-mcp-server")?;
     let execve_wrapper = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")?;
-    // `bash` requires a special lookup when running under Buck because it is a
+
+    // `bash` requires a special lookup when running under Bazel because it is a
     // _resource_ rather than a binary target.
-    let bash = if let Some(root) = codex_utils_cargo_bin::buck_project_root()? {
-        root.join("codex-rs/exec-server/tests/suite/bash")
+    let bash = if let Some(bazel_runfiles_dir) = std::env::var_os("RUNFILES_DIR") {
+        PathBuf::from(bazel_runfiles_dir).join("_main/codex-rs/exec-server/tests/suite/bash")
     } else {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")

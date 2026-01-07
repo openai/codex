@@ -72,7 +72,7 @@ async fn chat_mode_stream_cli() {
 
     // Verify a new session rollout was created and is discoverable via list_conversations
     let provider_filter = vec!["mock".to_string()];
-    let page = RolloutRecorder::list_conversations(
+    let page = RolloutRecorder::list_threads(
         home.path(),
         10,
         None,

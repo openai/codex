@@ -12,7 +12,6 @@ mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
-use crate::config_loader::config_requirements::ConfigRequirementsToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::config_types::SandboxMode;
@@ -25,6 +24,8 @@ use std::path::Path;
 use toml::Value as TomlValue;
 
 pub use config_requirements::ConfigRequirements;
+pub use config_requirements::ConfigRequirementsToml;
+pub use config_requirements::SandboxModeRequirement;
 pub use merge::merge_toml_values;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
@@ -201,7 +202,9 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    ConfigLayerStack::new(layers, config_requirements_toml.try_into()?)
+    let requirements_toml = config_requirements_toml.clone();
+    let requirements = config_requirements_toml.try_into()?;
+    ConfigLayerStack::new(layers, requirements, requirements_toml)
 }
 
 /// Attempts to load a config.toml file from `config_toml`.
