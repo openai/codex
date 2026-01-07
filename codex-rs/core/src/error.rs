@@ -199,11 +199,11 @@ impl CodexErr {
             | CodexErr::RetryLimit(_)
             | CodexErr::ContextWindowExceeded
             | CodexErr::ThreadNotFound(_)
+            | CodexErr::Spawn
+            | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_) => false,
             CodexErr::Stream(..)
-            | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::Timeout
-            | CodexErr::Spawn
             | CodexErr::UnexpectedStatus(_)
             | CodexErr::ResponseStreamFailed(_)
             | CodexErr::ConnectionFailed(_)
