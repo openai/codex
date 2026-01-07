@@ -2262,6 +2262,11 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
             }
         }
         composed.push_str("\n\n#### Validation\n");
+        let expects_asan = snapshot
+            .bug
+            .verification_types
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("crash_poc"));
         let status_label = validation_status_label(&snapshot.bug.validation);
         composed.push_str(&format!("- **Status:** {status_label}\n"));
         if let Some(tool) = snapshot
@@ -2387,7 +2392,8 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
             .as_ref()
             .filter(|snippet| !snippet.is_empty())
         {
-            composed.push_str("- **Output:**\n```\n");
+            let label = if expects_asan { "ASan trace" } else { "Output" };
+            composed.push_str(&format!("- **{label}:**\n```\n"));
             composed.push_str(snippet.trim());
             composed.push_str("\n```\n");
         }
