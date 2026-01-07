@@ -46,7 +46,7 @@ impl Prompt {
         Cow::Borrowed(
             self.base_instructions_override
                 .as_deref()
-                .unwrap_or(model.base_instructions.as_str()),
+                .unwrap_or(model.base_instructions.as_deref().unwrap_or("")),
         )
     }
 
@@ -304,12 +304,12 @@ mod tests {
             let model_info = ModelsManager::construct_model_info_offline(test_case.slug, &config);
             if test_case.expects_apply_patch_instructions {
                 assert_eq!(
-                    model_info.base_instructions.as_str(),
-                    prompt_with_apply_patch_instructions
+                    model_info.base_instructions.as_deref(),
+                    Some(prompt_with_apply_patch_instructions)
                 );
             }
 
-            let expected = model_info.base_instructions.as_str();
+            let expected = model_info.base_instructions.as_deref().unwrap_or("");
             let full = prompt.get_full_instructions(&model_info);
             assert_eq!(full, expected);
         }

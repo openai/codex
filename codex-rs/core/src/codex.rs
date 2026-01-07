@@ -2334,7 +2334,11 @@ pub(crate) async fn run_task(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info
         .auto_compact_token_limit
-        .or_else(|| (model_info.context_window > 0).then_some((model_info.context_window * 9) / 10))
+        .or_else(|| {
+            model_info
+                .context_window
+                .map(|context_window| (context_window * 9) / 10)
+        })
         .unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
     if total_usage_tokens >= auto_compact_limit {

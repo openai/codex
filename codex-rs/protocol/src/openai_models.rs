@@ -176,14 +176,16 @@ pub struct ModelInfo {
     pub supported_in_api: bool,
     pub priority: i32,
     pub upgrade: Option<String>,
-    pub base_instructions: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<String>,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
-    pub context_window: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
     /// from `context_window` (90%).
     #[serde(default, skip_serializing_if = "Option::is_none")]

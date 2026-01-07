@@ -39,7 +39,7 @@ fn test_auth_manager(config: &Config) -> AuthManager {
 
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
     let context_window =
-        Some(ModelsManager::construct_model_info_offline(model_slug, config).context_window);
+        ModelsManager::construct_model_info_offline(model_slug, config).context_window;
     TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage.clone(),
