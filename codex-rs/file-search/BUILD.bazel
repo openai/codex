@@ -1,29 +1,6 @@
-load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
-package(default_visibility = ["//visibility:public"])
+load("//:defs.bzl", "codex_rust_crate")
 
-_DEPS = all_crate_deps(normal = True)
-_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
-
-rust_library(
+codex_rust_crate(
     name = "file-search",
     crate_name = "codex_file_search",
-    deps = _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "codex-file-search",
-    crate_name = "codex_file_search",
-    deps = [":file-search"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_test(
-    name = "file-search-tests",
-    crate = ":file-search",
-    deps = all_crate_deps(normal_dev = True),
-    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
 )

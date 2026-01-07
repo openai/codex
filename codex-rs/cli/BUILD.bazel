@@ -1,77 +1,10 @@
-load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("//:defs.bzl", "rust_release_binary")
+load("//:defs.bzl", "codex_rust_crate", "multiplatform_binaries")
 
-package(default_visibility = ["//visibility:public"])
-_DEPS = all_crate_deps(normal = True)
-_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
-_DEV_DEPS = all_crate_deps(normal_dev = True)
-_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
-
-
-
-
-
-
-
-rust_library(
+codex_rust_crate(
     name = "cli",
     crate_name = "codex_cli",
-    deps = _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
 )
 
-rust_release_binary(
+multiplatform_binaries(
     name = "codex",
-    crate_name = "codex",
-    deps = [":cli"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_test(
-    name = "cli-tests",
-    crate = ":cli",
-    deps = _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-)
-
-
-rust_test(
-    name = "cli-tests-execpolicy",
-    crate_root = "tests/execpolicy.rs",
-    srcs = glob(["tests/**/*.rs"]),
-    data = glob(["tests/**"]) + [":codex"],
-    deps = [":cli"] + _DEPS + _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-    env = {
-        "CARGO_BIN_EXE_codex": "$(rootpath :codex)",
-    },
-)
-
-
-rust_test(
-    name = "cli-tests-mcp-add-remove",
-    crate_root = "tests/mcp_add_remove.rs",
-    srcs = glob(["tests/**/*.rs"]),
-    data = glob(["tests/**"]) + [":codex"],
-    deps = [":cli"] + _DEPS + _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-    env = {
-        "CARGO_BIN_EXE_codex": "$(rootpath :codex)",
-    },
-)
-
-
-rust_test(
-    name = "cli-tests-mcp-list",
-    crate_root = "tests/mcp_list.rs",
-    srcs = glob(["tests/**/*.rs"]),
-    data = glob(["tests/**"]) + [":codex"],
-    deps = [":cli"] + _DEPS + _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-    env = {
-        "CARGO_BIN_EXE_codex": "$(rootpath :codex)",
-    },
 )

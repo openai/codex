@@ -1,65 +1,7 @@
-load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
-package(default_visibility = ["//visibility:public"])
-_DEPS = all_crate_deps(normal = True)
-_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
-_DEV_DEPS = all_crate_deps(normal_dev = True)
-_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
+load("//:defs.bzl", "codex_rust_crate")
 
-
-
-
-
-
-
-rust_library(
+codex_rust_crate(
     name = "exec-server",
     crate_name = "codex_exec_server",
-    deps = _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "codex-execve-wrapper",
-    crate_name = "codex_execve_wrapper",
-    crate_root = "src/bin/main_execve_wrapper.rs",
-    deps = [":exec-server"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "codex-exec-mcp-server",
-    crate_name = "codex_exec_mcp_server",
-    crate_root = "src/bin/main_mcp_server.rs",
-    deps = [":exec-server"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_test(
-    name = "exec-server-tests",
-    crate = ":exec-server",
-    deps = _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-)
-
-
-rust_test(
-    name = "exec-server-integration-tests",
-    crate_root = "tests/all.rs",
-    srcs = glob(["tests/**/*.rs"]),
-    data = glob(["tests/**"]) + [
-        ":codex-exec-mcp-server",
-        ":codex-execve-wrapper",
-    ],
-    deps = [":exec-server", "//codex-rs/exec-server/tests/common:common"] + _DEPS + _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-    env = {
-        "CARGO_BIN_EXE_codex-exec-mcp-server": "$(rootpath :codex-exec-mcp-server)",
-        "CARGO_BIN_EXE_codex_exec_mcp_server": "$(rootpath :codex-exec-mcp-server)",
-        "CARGO_BIN_EXE_codex-execve-wrapper": "$(rootpath :codex-execve-wrapper)",
-        "CARGO_BIN_EXE_codex_execve_wrapper": "$(rootpath :codex-execve-wrapper)",
-    },
+    integration_deps_extra = ["//codex-rs/exec-server/tests/common:common"],
 )

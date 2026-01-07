@@ -1,22 +1,8 @@
-load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
-package(default_visibility = ["//visibility:public"])
-_DEPS = all_crate_deps(normal = True)
-_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
-_DEV_DEPS = all_crate_deps(normal_dev = True)
-_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
+load("//:defs.bzl", "codex_rust_crate")
 
-
-
-
-
-
-
-rust_library(
+codex_rust_crate(
     name = "tui",
     crate_name = "codex_tui",
-    deps = _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
     compile_data = glob(
         include = ["**"],
         exclude = [
@@ -26,43 +12,5 @@ rust_library(
         ],
         allow_empty = True,
     ),
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "codex-tui",
-    crate_name = "codex_tui",
-    deps = [":tui"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "md-events",
-    crate_name = "md_events",
-    deps = [":tui"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_test(
-    name = "tui-tests",
-    crate = ":tui",
-    data = glob(["src/**/snapshots/**"]),
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-        "INSTA_SNAPSHOT_PATH": "src",
-    },
-    deps = _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-)
-
-
-rust_test(
-    name = "tui-integration-tests",
-    crate_root = "tests/all.rs",
-    srcs = glob(["tests/**/*.rs"]),
-    data = glob(["tests/**"]),
-    deps = [":tui"] + _DEPS + _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+    test_data_extra = glob(["src/**/snapshots/**"]),
 )

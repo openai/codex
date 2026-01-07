@@ -1,50 +1,7 @@
-load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
-package(default_visibility = ["//visibility:public"])
-_DEPS = all_crate_deps(normal = True)
-_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
-_DEV_DEPS = all_crate_deps(normal_dev = True)
-_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
+load("//:defs.bzl", "codex_rust_crate")
 
-
-
-
-
-
-
-rust_library(
+codex_rust_crate(
     name = "mcp-server",
     crate_name = "codex_mcp_server",
-    deps = _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "codex-mcp-server",
-    crate_name = "codex_mcp_server",
-    deps = [":mcp-server"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_test(
-    name = "mcp-server-tests",
-    crate = ":mcp-server",
-    deps = _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-)
-
-
-rust_test(
-    name = "mcp-server-integration-tests",
-    crate_root = "tests/all.rs",
-    srcs = glob(["tests/**/*.rs"]),
-    data = glob(["tests/**"]) + [":codex-mcp-server"],
-    deps = [":mcp-server", "//codex-rs/mcp-server/tests/common:common"] + _DEPS + _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-    env = {
-        "CARGO_BIN_EXE_codex-mcp-server": "$(rootpath :codex-mcp-server)",
-        "CARGO_BIN_EXE_codex_mcp_server": "$(rootpath :codex-mcp-server)",
-    },
+    integration_deps_extra = ["//codex-rs/mcp-server/tests/common:common"],
 )

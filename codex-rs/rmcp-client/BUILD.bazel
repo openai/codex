@@ -1,65 +1,6 @@
-load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
-package(default_visibility = ["//visibility:public"])
-_DEPS = all_crate_deps(normal = True)
-_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
-_DEV_DEPS = all_crate_deps(normal_dev = True)
-_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
+load("//:defs.bzl", "codex_rust_crate")
 
-
-
-
-
-
-
-rust_library(
+codex_rust_crate(
     name = "rmcp-client",
     crate_name = "codex_rmcp_client",
-    deps = _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "rmcp_test_server",
-    crate_name = "rmcp_test_server",
-    deps = [":rmcp-client"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "test_stdio_server",
-    crate_name = "test_stdio_server",
-    deps = [":rmcp-client"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_binary(
-    name = "test_streamable_http_server",
-    crate_name = "test_streamable_http_server",
-    deps = [":rmcp-client"] + _DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS,
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_test(
-    name = "rmcp-client-tests",
-    crate = ":rmcp-client",
-    deps = _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-)
-
-
-rust_test(
-    name = "rmcp-client-integration-tests",
-    crate_root = "tests/resources.rs",
-    srcs = glob(["tests/**/*.rs"]),
-    data = glob(["tests/**"]) + [":test_streamable_http_server"],
-    deps = [":rmcp-client"] + _DEPS + _DEV_DEPS,
-    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
-    env = {
-        "CARGO_BIN_EXE_test_streamable_http_server": "$(rootpath :test_streamable_http_server)",
-    },
 )
