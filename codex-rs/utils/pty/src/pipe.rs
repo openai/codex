@@ -97,9 +97,12 @@ pub async fn spawn_process(
     }
 
     let mut command = Command::new(program);
+    #[cfg(unix)]
     if let Some(arg0) = arg0 {
         command.arg0(arg0);
     }
+    #[cfg(not(unix))]
+    let _ = arg0;
     command.current_dir(cwd);
     command.env_clear();
     for (key, value) in env {
