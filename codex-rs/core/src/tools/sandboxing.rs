@@ -65,6 +65,11 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = ReviewDecision>,
 {
+    // To be defensive here, don't bother with checking the cache if keys are empty.
+    if keys.is_empty() {
+        return fetch().await;
+    }
+
     let already_approved = {
         let store = services.tool_approvals.lock().await;
         keys.iter()

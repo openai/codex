@@ -4,7 +4,6 @@ use std::path::Path;
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
-use crate::apply_patch_approval_key::approval_keys_for_action;
 use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
@@ -27,10 +26,37 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ApplyPatchToolArgs;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
+use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchFileChange;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub struct ApplyPatchHandler;
 
 const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("tool_apply_patch.lark");
+
+fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
+    let mut keys = Vec::new();
+    let cwd = action.cwd.as_path();
+
+    for (path, change) in action.changes() {
+        if let Some(key) = to_abs_path(cwd, path) {
+            keys.push(key);
+        }
+
+        if let ApplyPatchFileChange::Update { move_path, .. } = change
+            && let Some(dest) = move_path
+            && let Some(key) = to_abs_path(cwd, dest)
+        {
+            keys.push(key);
+        }
+    }
+
+    keys
+}
+
+fn to_abs_path(cwd: &Path, path: &Path) -> Option<AbsolutePathBuf> {
+    AbsolutePathBuf::resolve_path_against_base(path, cwd).ok()
+}
 
 #[async_trait]
 impl ToolHandler for ApplyPatchHandler {
@@ -93,7 +119,7 @@ impl ToolHandler for ApplyPatchHandler {
                     }
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
-                        let approval_keys = approval_keys_for_action(&apply.action);
+                        let file_paths = file_paths_for_action(&apply.action);
                         let emitter =
                             ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                         let event_ctx = ToolEventCtx::new(
@@ -106,7 +132,7 @@ impl ToolHandler for ApplyPatchHandler {
 
                         let req = ApplyPatchRequest {
                             action: apply.action,
-                            approval_keys,
+                            file_paths,
                             changes,
                             exec_approval_requirement: apply.exec_approval_requirement,
                             timeout_ms: None,
@@ -189,7 +215,7 @@ pub(crate) async fn intercept_apply_patch(
                 }
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
-                    let approval_keys = approval_keys_for_action(&apply.action);
+                    let approval_keys = file_paths_for_action(&apply.action);
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx =
                         ToolEventCtx::new(session, turn, call_id, tracker.as_ref().copied());
@@ -197,7 +223,7 @@ pub(crate) async fn intercept_apply_patch(
 
                     let req = ApplyPatchRequest {
                         action: apply.action,
-                        approval_keys,
+                        file_paths: approval_keys,
                         changes,
                         exec_approval_requirement: apply.exec_approval_requirement,
                         timeout_ms,
@@ -341,4 +367,36 @@ It is important to remember:
             additional_properties: Some(false.into()),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_apply_patch::MaybeApplyPatchVerified;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[test]
+    fn approval_keys_include_move_destination() {
+        let tmp = TempDir::new().expect("tmp");
+        let cwd = tmp.path();
+        std::fs::create_dir_all(cwd.join("old")).expect("create old dir");
+        std::fs::create_dir_all(cwd.join("renamed/dir")).expect("create dest dir");
+        std::fs::write(cwd.join("old/name.txt"), "old content\n").expect("write old file");
+        let patch = r#"*** Begin Patch
+*** Update File: old/name.txt
+*** Move to: renamed/dir/name.txt
+@@
+-old content
++new content
+*** End Patch"#;
+        let argv = vec!["apply_patch".to_string(), patch.to_string()];
+        let action = match codex_apply_patch::maybe_parse_apply_patch_verified(&argv, cwd) {
+            MaybeApplyPatchVerified::Body(action) => action,
+            other => panic!("expected patch body, got: {other:?}"),
+        };
+
+        let keys = file_paths_for_action(&action);
+        assert_eq!(keys.len(), 2);
+    }
 }

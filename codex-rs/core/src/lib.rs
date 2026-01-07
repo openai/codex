@@ -7,7 +7,6 @@
 
 pub mod api_bridge;
 mod apply_patch;
-mod apply_patch_approval_key;
 pub mod auth;
 pub mod bash;
 mod client;

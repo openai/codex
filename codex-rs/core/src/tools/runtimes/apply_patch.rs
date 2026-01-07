@@ -5,7 +5,6 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::CODEX_APPLY_PATCH_ARG1;
-use crate::apply_patch_approval_key::ApplyPatchFileApprovalKey;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
@@ -24,6 +23,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -31,7 +31,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub action: ApplyPatchAction,
-    pub approval_keys: Vec<ApplyPatchFileApprovalKey>,
+    pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub timeout_ms: Option<u64>,
@@ -86,10 +86,10 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = ApplyPatchFileApprovalKey;
+    type ApprovalKey = AbsolutePathBuf;
 
     fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
-        req.approval_keys.clone()
+        req.file_paths.clone()
     }
 
     fn start_approval_async<'a>(
@@ -132,6 +132,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         !matches!(policy, AskForApproval::Never)
     }
 
+    // apply_patch approvals are decided upstream by assess_patch_safety.
+    //
+    // This override ensures the orchestrator runs the patch approval flow when required instead
+    // of falling back to the global exec approval policy.
     fn exec_approval_requirement(
         &self,
         req: &ApplyPatchRequest,
