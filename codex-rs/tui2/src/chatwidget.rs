@@ -1500,6 +1500,9 @@ impl ChatWidget {
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
                     }
+                    InputResult::CommandWithArgs(cmd, args) => {
+                        self.dispatch_command_with_args(cmd, args);
+                    }
                     InputResult::None => {}
                 }
             }
@@ -1662,6 +1665,33 @@ impl ChatWidget {
                     }),
                 }));
             }
+        }
+    }
+
+    fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
+        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            let message = format!(
+                "'/{}' is disabled while a task is in progress.",
+                cmd.command()
+            );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
+
+        let trimmed = args.trim();
+        match cmd {
+            SlashCommand::Review if !trimmed.is_empty() => {
+                self.submit_op(Op::Review {
+                    review_request: ReviewRequest {
+                        target: ReviewTarget::Custom {
+                            instructions: trimmed.to_string(),
+                        },
+                        user_facing_hint: None,
+                    },
+                });
+            }
+            _ => self.dispatch_command(cmd),
         }
     }
 
@@ -2106,7 +2136,7 @@ impl ChatWidget {
         let models = self.models_manager.try_list_models(&self.config).ok()?;
         models
             .iter()
-            .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+            .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
     }
 
@@ -2222,6 +2252,14 @@ impl ChatWidget {
                     return;
                 }
             };
+        self.open_model_popup_with_presets(presets);
+    }
+
+    pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        let presets: Vec<ModelPreset> = presets
+            .into_iter()
+            .filter(|preset| preset.show_in_picker)
+            .collect();
 
         let current_label = presets
             .iter()

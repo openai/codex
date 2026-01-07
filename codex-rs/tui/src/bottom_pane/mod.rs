@@ -416,8 +416,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_unified_exec_sessions(&mut self, sessions: Vec<String>) {
-        if self.unified_exec_footer.set_sessions(sessions) {
+    pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
+        if self.unified_exec_footer.set_processes(processes) {
             self.request_redraw();
         }
     }
