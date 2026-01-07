@@ -6,7 +6,7 @@ use crate::skills::model::SkillMetadata;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
-use dunce::canonicalize as normalize_path;
+use dunce::canonicalize as canonicalize_path;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -36,6 +36,7 @@ const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
+// Traversal depth from the skills root.
 const MAX_SCAN_DEPTH: usize = 6;
 const MAX_SKILLS_DIRS_PER_ROOT: usize = 2000;
 
@@ -167,7 +168,7 @@ pub(crate) fn skill_roots_from_layer_stack(
 }
 
 fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
-    let Ok(root) = normalize_path(root) else {
+    let Ok(root) = canonicalize_path(root) else {
         return;
     };
 
@@ -194,9 +195,11 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
         }
     }
 
-    // Only follow symlinks for user/admin skills. Repo skills have an isolation boundary (do not
-    // escape the repo root), and system skills are written by Codex itself.
-    let follow_symlinks = matches!(scope, SkillScope::User | SkillScope::Admin);
+    // Follow symlinks for user, admin, and repo skills. System skills are written by Codex itself.
+    let follow_symlinks = matches!(
+        scope,
+        SkillScope::Repo | SkillScope::User | SkillScope::Admin
+    );
 
     let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
     visited_dirs.insert(root.clone());
@@ -246,7 +249,7 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                 };
 
                 if metadata.is_dir() {
-                    let Ok(resolved_dir) = normalize_path(&path) else {
+                    let Ok(resolved_dir) = canonicalize_path(&path) else {
                         continue;
                     };
                     enqueue_dir(
@@ -277,7 +280,7 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
             }
 
             if file_type.is_dir() {
-                let Ok(resolved_dir) = normalize_path(&path) else {
+                let Ok(resolved_dir) = canonicalize_path(&path) else {
                     continue;
                 };
                 enqueue_dir(
@@ -344,7 +347,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         )?;
     }
 
-    let resolved_path = normalize_path(path).unwrap_or_else(|_| path.to_path_buf());
+    let resolved_path = canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf());
 
     Ok(SkillMetadata {
         name,
@@ -441,7 +444,7 @@ mod tests {
     }
 
     fn normalized(path: &Path) -> PathBuf {
-        normalize_path(path).unwrap_or_else(|_| path.to_path_buf())
+        canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf())
     }
 
     #[test]
@@ -662,13 +665,14 @@ mod tests {
 
     #[tokio::test]
     #[cfg(unix)]
-    async fn repo_scope_does_not_follow_symlinks() {
+    async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
         let shared = tempfile::tempdir().expect("tempdir");
 
-        write_skill_at(shared.path(), "demo", "repo-should-not-load", "from link");
+        let linked_skill_path =
+            write_skill_at(shared.path(), "demo", "repo-linked-skill", "from link");
         let repo_skills_root = repo_dir
             .path()
             .join(REPO_ROOT_CONFIG_DIR_NAME)
@@ -677,6 +681,38 @@ mod tests {
         symlink_dir(shared.path(), &repo_skills_root.join("shared"));
 
         let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "repo-linked-skill".to_string(),
+                description: "from link".to_string(),
+                short_description: None,
+                path: normalized(&linked_skill_path),
+                scope: SkillScope::Repo,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn system_scope_ignores_symlinked_subdir() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let shared = tempfile::tempdir().expect("tempdir");
+
+        write_skill_at(shared.path(), "demo", "system-linked-skill", "from link");
+
+        let system_root = codex_home.path().join("skills/.system");
+        fs::create_dir_all(&system_root).unwrap();
+        symlink_dir(shared.path(), &system_root.join("shared"));
+
+        let cfg = make_config(&codex_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1324,7 +1360,7 @@ mod tests {
             outcome.errors
         );
         let expected_path =
-            normalize_path(&nested_skill_path).unwrap_or_else(|_| nested_skill_path.clone());
+            canonicalize_path(&nested_skill_path).unwrap_or_else(|_| nested_skill_path.clone());
         assert_eq!(
             vec![SkillMetadata {
                 name: "dupe-skill".to_string(),
