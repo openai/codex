@@ -277,7 +277,7 @@ mod tests {
         };
 
         assert_eq!(
-            assess_patch_safety(&add_inside, AskForApproval::OnRequest, &policy, &cwd,),
+            assess_patch_safety(&add_inside, AskForApproval::OnRequest, &policy, &cwd),
             SafetyCheck::AutoApprove {
                 sandbox_type: SandboxType::None,
                 user_explicitly_approved: false,
