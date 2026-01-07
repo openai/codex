@@ -153,6 +153,22 @@ export class CodexExec {
       });
     }
 
+    const exitPromise = new Promise<void>((resolve, reject) => {
+      child.once("exit", (code, signal) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        const stderrBuffer = Buffer.concat(stderrChunks);
+        const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
+        reject(new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`));
+      });
+    });
+    const exitResult = exitPromise.then(
+      () => ({ ok: true as const }),
+      (error) => ({ ok: false as const, error }),
+    );
+
     const rl = readline.createInterface({
       input: child.stdout,
       crlfDelay: Infinity,
@@ -164,21 +180,11 @@ export class CodexExec {
         yield line as string;
       }
 
-      const exitCode = new Promise((resolve, reject) => {
-        child.once("exit", (code) => {
-          if (code === 0) {
-            resolve(code);
-          } else {
-            const stderrBuffer = Buffer.concat(stderrChunks);
-            reject(
-              new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString("utf8")}`),
-            );
-          }
-        });
-      });
-
       if (spawnError) throw spawnError;
-      await exitCode;
+      const result = await exitResult;
+      if (!result.ok) {
+        throw result.error;
+      }
     } finally {
       rl.close();
       child.removeAllListeners();
