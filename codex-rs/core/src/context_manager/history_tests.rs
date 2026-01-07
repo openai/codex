@@ -593,7 +593,6 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
     assert_truncated_message_matches(&truncated, "line-0-", 17_423);
 }
 
-//TODO(aibrahim): run CI in release mode.
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_function_call() {

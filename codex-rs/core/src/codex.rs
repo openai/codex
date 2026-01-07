@@ -643,7 +643,6 @@ impl Session {
         }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
 
-        // todo(aibrahim): why are we passing model here while it can change?
         let otel_manager = OtelManager::new(
             conversation_id,
             session_configuration.model.as_str(),
