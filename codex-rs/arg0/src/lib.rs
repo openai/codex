@@ -165,12 +165,14 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     }
 
     std::fs::create_dir_all(&codex_home)?;
+    // Use a CODEX_HOME-scoped temp root to avoid cluttering the top-level directory.
     let temp_root = codex_home.join("tmp").join("path");
     std::fs::create_dir_all(&temp_root)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
+        // Ensure only the current user can access the temp directory.
         std::fs::set_permissions(&temp_root, std::fs::Permissions::from_mode(0o700))?;
         // Prefer a CODEX_HOME-scoped temp directory for this process.
         unsafe {
