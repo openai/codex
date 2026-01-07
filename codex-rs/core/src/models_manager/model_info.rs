@@ -34,7 +34,7 @@ macro_rules! model_info {
             // This is primarily used when remote metadata is available. When running
             // offline, core generally omits the effort field unless explicitly
             // configured by the user.
-            default_reasoning_level: ReasoningEffort::None,
+            default_reasoning_level: None,
             supported_reasoning_levels: supported_reasoning_level_low_medium_high(),
             shell_type: ConfigShellToolType::Default,
             visibility: ModelVisibility::None,
@@ -72,14 +72,6 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
         model.auto_compact_token_limit = Some(auto_compact_token_limit);
     }
     model
-}
-
-pub(crate) fn auto_compact_token_limit(model_info: &ModelInfo) -> Option<i64> {
-    model_info.auto_compact_token_limit.or_else(|| {
-        model_info
-            .context_window
-            .map(|context_window| (context_window * 9) / 10)
-    })
 }
 
 pub(crate) fn merge_remote_overrides(mut model: ModelInfo, remote: Option<ModelInfo>) -> ModelInfo {
@@ -180,7 +172,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: Some(BASE_INSTRUCTIONS.to_string()),
-            default_reasoning_level: ReasoningEffort::Medium,
+            default_reasoning_level: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::UnifiedExec,
             supports_parallel_tool_calls: true,
@@ -254,7 +246,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: Some(GPT_5_2_INSTRUCTIONS.to_string()),
-            default_reasoning_level: ReasoningEffort::Medium,
+            default_reasoning_level: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
@@ -269,7 +261,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: Some(GPT_5_1_INSTRUCTIONS.to_string()),
-            default_reasoning_level: ReasoningEffort::Medium,
+            default_reasoning_level: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
@@ -292,7 +284,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             slug,
             context_window: None,
             supported_reasoning_levels: Vec::new(),
-            default_reasoning_level: ReasoningEffort::None
+            default_reasoning_level: None
         )
     }
 }

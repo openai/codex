@@ -64,7 +64,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         slug: REMOTE_MODEL_SLUG.to_string(),
         display_name: "Remote Test".to_string(),
         description: Some("A remote model that requires the test shell".to_string()),
-        default_reasoning_level: ReasoningEffort::Medium,
+        default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
@@ -203,7 +203,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         slug: model.to_string(),
         display_name: "Parallel Remote".to_string(),
         description: Some("A remote model with custom instructions".to_string()),
-        default_reasoning_level: ReasoningEffort::Medium,
+        default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
@@ -465,7 +465,7 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         slug: slug.to_string(),
         display_name: format!("{slug} display"),
         description: Some(format!("{slug} description")),
-        default_reasoning_level: ReasoningEffort::Medium,
+        default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
