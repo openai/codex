@@ -47,6 +47,8 @@ def codex_rust_crate(
 
     binaries = DEP_DATA.get(native.package_name())["binaries"]
 
+    # TODO(zbarsky): cargo_build_script support?
+
     lib_srcs = crate_srcs or native.glob(["src/**/*.rs"], exclude = binaries.values(), allow_empty = True)
 
     if lib_srcs:
@@ -74,23 +76,20 @@ def codex_rust_crate(
     else:
         maybe_lib = []
 
+    cargo_env = {}
     for binary, main in binaries.items():
+        binary = binary.replace("-", "_")
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath :%s)" % binary
+
         rust_binary(
             name = binary,
-            crate_name = binary.replace("-", "_"),
+            crate_name = binary,
             crate_root = main,
             deps = maybe_lib + deps,
             proc_macro_deps = proc_macro_deps,
             edition = crate_edition,
             srcs = native.glob(["src/**/*.rs"]),
         )
-
-    cargo_env = {}
-    for binary in binaries:
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath :%s)" % binary
-        underscore = binary.replace("-", "_")
-        if underscore != binary:
-            cargo_env["CARGO_BIN_EXE_" + underscore] = "$(rootpath :%s)" % binary
 
     for test in native.glob(["tests/*.rs"], allow_empty = True):
         test_name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-")
