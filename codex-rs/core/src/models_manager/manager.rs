@@ -24,7 +24,7 @@ use crate::default_client::build_reqwest_client;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::model_family::ModelFamily;
+use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
@@ -36,7 +36,6 @@ const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
-    // todo(aibrahim) merge available_models and model family creation into one struct
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
     auth_manager: Arc<AuthManager>,
@@ -128,15 +127,19 @@ impl ModelsManager {
         Ok(self.build_available_models(remote_models))
     }
 
-    fn find_family_for_model(slug: &str) -> ModelFamily {
-        super::model_family::find_family_for_model(slug)
-    }
-
-    /// Look up the requested model family while applying remote metadata overrides.
-    pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
-        Self::find_family_for_model(model)
-            .with_remote_overrides(self.remote_models(config).await)
-            .with_config_overrides(config)
+    /// Look up the requested model metadata while applying remote metadata overrides.
+    pub async fn construct_model_info(&self, model: &str, config: &Config) -> ModelInfo {
+        let remote = self
+            .remote_models(config)
+            .await
+            .into_iter()
+            .find(|m| m.slug == model);
+        let model = if let Some(remote) = remote {
+            remote
+        } else {
+            model_info::find_model_info_for_slug(model)
+        };
+        model_info::with_config_overrides(model, config)
     }
 
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
@@ -180,9 +183,9 @@ impl ModelsManager {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    /// Offline helper that builds a `ModelFamily` without consulting remote state.
-    pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
-        Self::find_family_for_model(model).with_config_overrides(config)
+    /// Offline helper that builds a `ModelInfo` without consulting remote state.
+    pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
+        model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
     }
 
     async fn get_etag(&self) -> Option<String> {
@@ -363,14 +366,14 @@ mod tests {
             "supported_in_api": true,
             "priority": priority,
             "upgrade": null,
-            "base_instructions": null,
+            "base_instructions": "base instructions",
             "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
             "truncation_policy": {"mode": "bytes", "limit": 10_000},
             "supports_parallel_tool_calls": false,
-            "context_window": null,
+            "context_window": 272_000,
             "experimental_supported_tools": [],
         }))
         .expect("valid model")

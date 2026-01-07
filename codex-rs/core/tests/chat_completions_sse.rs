@@ -76,11 +76,11 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let auth_mode = auth_manager.get_auth_mode();
     let model = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
-        model_family.slug.as_str(),
+        model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         auth_mode,
@@ -92,7 +92,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_family,
+        model_info,
         otel_manager,
         provider,
         effort,

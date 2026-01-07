@@ -64,7 +64,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         slug: REMOTE_MODEL_SLUG.to_string(),
         display_name: "Remote Test".to_string(),
         description: Some("A remote model that requires the test shell".to_string()),
-        default_reasoning_level: ReasoningEffort::Medium,
+        default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
@@ -74,14 +74,16 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         supported_in_api: true,
         priority: 1,
         upgrade: None,
-        base_instructions: None,
+        base_instructions: "base instructions".to_string(),
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
-        context_window: None,
+        context_window: Some(272_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     };
 
@@ -121,10 +123,10 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     );
     assert_eq!(requests[0].url.path(), "/v1/models");
 
-    let family = models_manager
-        .construct_model_family(REMOTE_MODEL_SLUG, &config)
+    let model_info = models_manager
+        .construct_model_info(REMOTE_MODEL_SLUG, &config)
         .await;
-    assert_eq!(family.shell_type, ConfigShellToolType::UnifiedExec);
+    assert_eq!(model_info.shell_type, ConfigShellToolType::UnifiedExec);
 
     codex
         .submit(Op::OverrideTurnContext {
@@ -201,7 +203,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         slug: model.to_string(),
         display_name: "Parallel Remote".to_string(),
         description: Some("A remote model with custom instructions".to_string()),
-        default_reasoning_level: ReasoningEffort::Medium,
+        default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
@@ -211,14 +213,16 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         supported_in_api: true,
         priority: 1,
         upgrade: None,
-        base_instructions: Some(remote_base.to_string()),
+        base_instructions: remote_base.to_string(),
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
-        context_window: None,
+        context_window: Some(272_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     };
     mount_models_once(
@@ -459,7 +463,7 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         slug: slug.to_string(),
         display_name: format!("{slug} display"),
         description: Some(format!("{slug} description")),
-        default_reasoning_level: ReasoningEffort::Medium,
+        default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
@@ -469,14 +473,16 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         supported_in_api: true,
         priority,
         upgrade: None,
-        base_instructions: None,
+        base_instructions: "base instructions".to_string(),
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
-        context_window: None,
+        context_window: Some(272_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
 }
