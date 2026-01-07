@@ -95,6 +95,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
+            supports_reasoning_summaries: true,
             context_window: 200_000,
         )
     } else if slug.starts_with("codex-mini-latest") {
@@ -102,6 +103,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             slug,
             base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             shell_type: ConfigShellToolType::Local,
+            supports_reasoning_summaries: true,
             context_window: 200_000,
         )
     } else if slug.starts_with("gpt-4.1") {
@@ -142,6 +144,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
                 "test_sync_tool".to_string(),
             ],
             supports_parallel_tool_calls: true,
+            supports_reasoning_summaries: true,
             shell_type: ConfigShellToolType::ShellCommand,
             support_verbosity: true,
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
@@ -153,6 +156,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
+            supports_reasoning_summaries: true,
             support_verbosity: false,
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: CONTEXT_WINDOW_272K,
@@ -161,6 +165,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            supports_reasoning_summaries: true,
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: BASE_INSTRUCTIONS.to_string(),
@@ -176,6 +181,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
+            supports_reasoning_summaries: true,
             support_verbosity: false,
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: CONTEXT_WINDOW_272K,
@@ -188,6 +194,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: false,
+            supports_reasoning_summaries: true,
             support_verbosity: false,
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: CONTEXT_WINDOW_272K,
@@ -204,6 +211,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: false,
+            supports_reasoning_summaries: true,
             support_verbosity: false,
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: CONTEXT_WINDOW_272K,
@@ -219,6 +227,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: false,
+            supports_reasoning_summaries: true,
             support_verbosity: false,
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: CONTEXT_WINDOW_272K,
@@ -229,6 +238,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            supports_reasoning_summaries: true,
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_2_INSTRUCTIONS.to_string(),
@@ -242,6 +252,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            supports_reasoning_summaries: true,
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
@@ -256,6 +267,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             slug,
             base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             shell_type: ConfigShellToolType::Default,
+            supports_reasoning_summaries: true,
             support_verbosity: true,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             context_window: CONTEXT_WINDOW_272K,
