@@ -9236,6 +9236,7 @@ async fn generate_threat_model(
     }
 
     sanitized_response = ensure_threat_model_heading(sanitized_response);
+    sanitized_response = nest_threat_model_subsections(sanitized_response);
 
     let threat_file = threats_dir.join("threat_model.md");
     tokio_fs::write(&threat_file, sanitized_response.as_bytes())
@@ -13838,7 +13839,7 @@ fn build_threat_model_prompt(repository_summary: &str, spec: &SpecGenerationOutc
 
 fn build_threat_model_retry_prompt(base_prompt: &str, previous_output: &str) -> String {
     format!(
-        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required sections (Primary components, Trust boundaries, Components & Trust Boundary Diagram, Assets, Attacker model, Entry points, Top abuse paths) followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
+        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required subsections (Primary components, Trust boundaries, Components & Trust Boundary Diagram, Assets, Attacker model, Entry points, Top abuse paths) as `###` headings, followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
     )
 }
 
@@ -16459,6 +16460,45 @@ fn ensure_threat_model_heading(markdown: String) -> String {
     out.push_str("## Threat Model\n\n");
     out.push_str(trimmed);
     out
+}
+
+fn nest_threat_model_subsections(markdown: String) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        let Some((hashes, rest)) = trimmed.split_once(' ') else {
+            out.push(line.to_string());
+            continue;
+        };
+        if hashes.is_empty() || !hashes.chars().all(|ch| ch == '#') {
+            out.push(line.to_string());
+            continue;
+        }
+        let heading_text = rest.trim();
+        let normalized = heading_text
+            .trim_matches('`')
+            .trim()
+            .trim_end_matches(':')
+            .to_ascii_lowercase();
+        let is_threat_model_subsection = matches!(
+            normalized.as_str(),
+            "primary components"
+                | "trust boundaries"
+                | "components & trust boundary diagram"
+                | "components and trust boundary diagram"
+                | "assets"
+                | "attacker model"
+                | "entry points"
+                | "top abuse paths"
+        );
+        if is_threat_model_subsection {
+            let title = heading_text.trim_matches('`').trim().trim_end_matches(':');
+            out.push(format!("### {title}"));
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    out.join("\n")
 }
 
 fn human_readable_bytes(bytes: usize) -> String {
