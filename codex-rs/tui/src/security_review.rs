@@ -5136,6 +5136,73 @@ pub async fn run_security_review(
             });
         }
     };
+
+    let validation_targets = build_validation_findings_context(&snapshot);
+    if validation_targets.ids.is_empty() {
+        record(
+            &mut logs,
+            "No high-risk findings selected for validation; skipping.".to_string(),
+        );
+    } else {
+        record(
+            &mut logs,
+            "Validating high-risk findings (web + api)...".to_string(),
+        );
+        match run_web_validation(
+            repo_path.clone(),
+            artifacts.snapshot_path.clone(),
+            artifacts.bugs_path.clone(),
+            artifacts.report_path.clone(),
+            artifacts.report_html_path.clone(),
+            request.provider.clone(),
+            request.auth.clone(),
+            request.model.clone(),
+            progress_sender.clone(),
+            metrics.clone(),
+        )
+        .await
+        {
+            Ok(_) => {
+                record(
+                    &mut logs,
+                    "Validation complete; report updated.".to_string(),
+                );
+            }
+            Err(err) => {
+                record(&mut logs, format!("Validation failed: {}", err.message));
+                logs.extend(err.logs);
+            }
+        }
+
+        match tokio_fs::read(&artifacts.snapshot_path).await {
+            Ok(bytes) => match serde_json::from_slice::<SecurityReviewSnapshot>(&bytes) {
+                Ok(updated) => {
+                    findings_summary = updated.findings_summary.clone();
+                    bugs_for_result = snapshot_bugs(&updated);
+                    bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
+                }
+                Err(err) => {
+                    record(
+                        &mut logs,
+                        format!(
+                            "Failed to parse updated bug snapshot {}: {err}",
+                            artifacts.snapshot_path.display()
+                        ),
+                    );
+                }
+            },
+            Err(err) => {
+                record(
+                    &mut logs,
+                    format!(
+                        "Failed to read updated bug snapshot {}: {err}",
+                        artifacts.snapshot_path.display()
+                    ),
+                );
+            }
+        }
+    }
+
     plan_tracker.mark_complete(SecurityReviewPlanStep::AssembleReport);
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     checkpoint.status = SecurityReviewCheckpointStatus::Complete;
@@ -14995,6 +15062,7 @@ async fn setup_accounts(
     snapshot: &SecurityReviewSnapshot,
     work_dir: &Path,
     progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
 ) -> Result<Option<Vec<AccountPair>>, String> {
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(
@@ -15004,7 +15072,6 @@ async fn setup_accounts(
 
     let findings = build_validation_findings_context(snapshot).text;
     let prompt = VALIDATION_ACCOUNTS_PROMPT_TEMPLATE.replace("{findings}", &findings);
-    let metrics = Arc::new(ReviewMetrics::default());
     let response = call_model(
         client,
         provider,
@@ -15254,7 +15321,7 @@ fn indent_block(s: &str, spaces: usize) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_web_validation(
+async fn run_web_validation(
     repo_path: PathBuf,
     snapshot_path: PathBuf,
     bugs_path: PathBuf,
@@ -15264,6 +15331,7 @@ pub(crate) async fn run_web_validation(
     auth: Option<CodexAuth>,
     model: String,
     progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
 ) -> Result<(), BugVerificationFailure> {
     // Load snapshot
     let bytes = tokio_fs::read(&snapshot_path)
@@ -15299,6 +15367,7 @@ pub(crate) async fn run_web_validation(
         &snapshot,
         &work_dir,
         progress_sender.clone(),
+        metrics.clone(),
     )
     .await
     .map_err(|e| BugVerificationFailure {
@@ -15331,7 +15400,6 @@ pub(crate) async fn run_web_validation(
     let findings = build_validation_findings_context(&snapshot);
     let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE.replace("{findings}", &findings.text);
 
-    let metrics = Arc::new(ReviewMetrics::default());
     let response = call_model(
         &client,
         &provider,
