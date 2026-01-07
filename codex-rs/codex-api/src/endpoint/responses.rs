@@ -25,6 +25,7 @@ pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
     streaming: StreamingClient<T, A>,
 }
 
+#[derive(Default)]
 pub struct ResponsesOptions {
     pub reasoning: Option<Reasoning>,
     pub include: Vec<String>,
@@ -35,22 +36,6 @@ pub struct ResponsesOptions {
     pub session_source: Option<SessionSource>,
     pub extra_headers: HeaderMap,
     pub compression: Compression,
-}
-
-impl Default for ResponsesOptions {
-    fn default() -> Self {
-        Self {
-            reasoning: None,
-            include: Vec::new(),
-            prompt_cache_key: None,
-            text: None,
-            store_override: None,
-            conversation_id: None,
-            session_source: None,
-            extra_headers: HeaderMap::new(),
-            compression: Compression::None,
-        }
-    }
 }
 
 impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
