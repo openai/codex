@@ -27,7 +27,7 @@ pub async fn ollama_chat_deprecation_notice(
         return Ok(None);
     }
 
-    if let Ok(Some(detection)) = codex_ollama::detect_wire_api(&config.model_provider).await
+    if let Some(detection) = codex_ollama::detect_wire_api(&config.model_provider).await?
         && detection.wire_api == WireApi::Chat
     {
         let version_suffix = detection

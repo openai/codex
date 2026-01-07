@@ -449,7 +449,13 @@ async fn run_ratatui_app(
         initial_config
     };
 
-    let ollama_chat_support_notice = ollama_chat_deprecation_notice(&config).await?;
+    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
+        Ok(notice) => notice,
+        Err(err) => {
+            tracing::warn!(?err, "Failed to detect Ollama wire API");
+            None
+        }
+    };
 
     // Determine resume behavior: explicit id, then resume last, then picker.
     let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
