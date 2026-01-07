@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
 use anyhow::Result;
+use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -16,8 +17,6 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tokio::time::sleep;
-use tokio::time::Duration as TokioDuration;
 
 use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
@@ -64,6 +63,23 @@ fn kill_process(pid: u32) -> io::Result<()> {
             Err(err)
         } else {
             Ok(())
+        }
+    }
+}
+
+async fn read_output_stream<R>(mut reader: R, output_tx: broadcast::Sender<Vec<u8>>)
+where
+    R: AsyncRead + Unpin,
+{
+    let mut buf = vec![0u8; 8_192];
+    loop {
+        match reader.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                let _ = output_tx.send(buf[..n].to_vec());
+            }
+            Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
         }
     }
 }
@@ -122,47 +138,24 @@ pub async fn spawn_process(
         }
     });
 
-    let output_tx_clone = output_tx.clone();
+    let stdout_handle = stdout.map(|stdout| {
+        let output_tx = output_tx.clone();
+        tokio::spawn(async move {
+            read_output_stream(BufReader::new(stdout), output_tx).await;
+        })
+    });
+    let stderr_handle = stderr.map(|stderr| {
+        let output_tx = output_tx.clone();
+        tokio::spawn(async move {
+            read_output_stream(BufReader::new(stderr), output_tx).await;
+        })
+    });
     let reader_handle = tokio::spawn(async move {
-        let mut stdout_reader = stdout.map(BufReader::new);
-        let mut stderr_reader = stderr.map(BufReader::new);
-        let mut stdout_buf = vec![0u8; 8_192];
-        let mut stderr_buf = vec![0u8; 8_192];
-
-        loop {
-            let mut progressed = false;
-
-            if let Some(reader) = stdout_reader.as_mut() {
-                match reader.read(&mut stdout_buf).await {
-                    Ok(0) => stdout_reader = None,
-                    Ok(n) => {
-                        progressed = true;
-                        let _ = output_tx_clone.send(stdout_buf[..n].to_vec());
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
-                    Err(_) => stdout_reader = None,
-                }
-            }
-
-            if let Some(reader) = stderr_reader.as_mut() {
-                match reader.read(&mut stderr_buf).await {
-                    Ok(0) => stderr_reader = None,
-                    Ok(n) => {
-                        progressed = true;
-                        let _ = output_tx_clone.send(stderr_buf[..n].to_vec());
-                    }
-                    Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
-                    Err(_) => stderr_reader = None,
-                }
-            }
-
-            if stdout_reader.is_none() && stderr_reader.is_none() {
-                break;
-            }
-
-            if !progressed {
-                sleep(TokioDuration::from_millis(5)).await;
-            }
+        if let Some(handle) = stdout_handle {
+            let _ = handle.await;
+        }
+        if let Some(handle) = stderr_handle {
+            let _ = handle.await;
         }
     });
 
