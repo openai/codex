@@ -138,7 +138,7 @@ impl ThreadManager {
             .read()
             .await
             .iter()
-            .map(|(id, _)| id)
+            .map(|(id, _)| id.clone())
             .collect()
     }
 
