@@ -1,13 +1,20 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
+_DEPS = all_crate_deps(normal = True)
+_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+_DEV_DEPS = all_crate_deps(normal_dev = True)
+_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
+
+
+
 
 rust_library(
     name = "core",
     crate_name = "codex_core",
     crate_features = ["test-support"],
-    deps = all_crate_deps(normal = True),
-    proc_macro_deps = all_crate_deps(proc_macro = True),
+    deps = _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
     compile_data = glob(
         include = ["**"],
         exclude = [
@@ -23,6 +30,18 @@ rust_library(
 rust_test(
     name = "core-tests",
     crate = ":core",
-    deps = all_crate_deps(normal_dev = True),
-    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+
+)
+
+
+rust_test(
+    name = "core-integration-tests",
+    crate_root = "tests/all.rs",
+    srcs = glob(["tests/**/*.rs"]),
+    compile_data = glob(["tests/**"]) + ["//codex-rs/apply-patch:apply_patch_tool_instructions.md", "prompt.md"],
+    data = glob(["tests/**"]),
+    deps = [":core", "//codex-rs/core/tests/common:common"] + _DEPS + _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
 )

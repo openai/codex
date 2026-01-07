@@ -1,9 +1,16 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
-
 _DEPS = all_crate_deps(normal = True)
 _PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+_DEV_DEPS = all_crate_deps(normal_dev = True)
+_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
+
+
+
+
+
+
 
 rust_library(
     name = "execpolicy",
@@ -24,6 +31,16 @@ rust_binary(
 rust_test(
     name = "execpolicy-tests",
     crate = ":execpolicy",
-    deps = all_crate_deps(normal_dev = True),
-    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+)
+
+
+rust_test(
+    name = "execpolicy-integration-tests",
+    crate_root = "tests/basic.rs",
+    srcs = glob(["tests/**/*.rs"]),
+    data = glob(["tests/**"]),
+    deps = [":execpolicy"] + _DEPS + _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
 )

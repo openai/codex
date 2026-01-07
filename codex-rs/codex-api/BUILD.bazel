@@ -1,18 +1,56 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
+_DEPS = all_crate_deps(normal = True)
+_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+_DEV_DEPS = all_crate_deps(normal_dev = True)
+_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
+
+
+
 
 rust_library(
     name = "codex-api",
     crate_name = "codex_api",
-    deps = all_crate_deps(normal = True),
-    proc_macro_deps = all_crate_deps(proc_macro = True),
+    deps = _DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS,
     srcs = glob(["src/**/*.rs"]),
 )
 
 rust_test(
     name = "codex-api-tests",
     crate = ":codex-api",
-    deps = all_crate_deps(normal_dev = True),
-    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+
+)
+
+
+rust_test(
+    name = "codex-api-clients-tests",
+    crate_root = "tests/clients.rs",
+    srcs = ["tests/clients.rs"],
+    data = glob(["tests/**"]),
+    deps = [":codex-api"] + _DEPS + _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+)
+
+
+rust_test(
+    name = "codex-api-models-integration-tests",
+    crate_root = "tests/models_integration.rs",
+    srcs = ["tests/models_integration.rs"],
+    data = glob(["tests/**"]),
+    deps = [":codex-api"] + _DEPS + _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+)
+
+
+rust_test(
+    name = "codex-api-sse-end-to-end-tests",
+    crate_root = "tests/sse_end_to_end.rs",
+    srcs = ["tests/sse_end_to_end.rs"],
+    data = glob(["tests/**"]),
+    deps = [":codex-api"] + _DEPS + _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
 )

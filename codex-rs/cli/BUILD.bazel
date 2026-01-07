@@ -3,9 +3,16 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//:defs.bzl", "rust_release_binary")
 
 package(default_visibility = ["//visibility:public"])
-
 _DEPS = all_crate_deps(normal = True)
 _PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+_DEV_DEPS = all_crate_deps(normal_dev = True)
+_DEV_PROC_MACRO_DEPS = all_crate_deps(proc_macro_dev = True)
+
+
+
+
+
+
 
 rust_library(
     name = "cli",
@@ -26,6 +33,45 @@ rust_release_binary(
 rust_test(
     name = "cli-tests",
     crate = ":cli",
-    deps = all_crate_deps(normal_dev = True),
-    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+)
+
+
+rust_test(
+    name = "cli-tests-execpolicy",
+    crate_root = "tests/execpolicy.rs",
+    srcs = glob(["tests/**/*.rs"]),
+    data = glob(["tests/**"]) + [":codex"],
+    deps = [":cli"] + _DEPS + _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+    env = {
+        "CARGO_BIN_EXE_codex": "$(rootpath :codex)",
+    },
+)
+
+
+rust_test(
+    name = "cli-tests-mcp-add-remove",
+    crate_root = "tests/mcp_add_remove.rs",
+    srcs = glob(["tests/**/*.rs"]),
+    data = glob(["tests/**"]) + [":codex"],
+    deps = [":cli"] + _DEPS + _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+    env = {
+        "CARGO_BIN_EXE_codex": "$(rootpath :codex)",
+    },
+)
+
+
+rust_test(
+    name = "cli-tests-mcp-list",
+    crate_root = "tests/mcp_list.rs",
+    srcs = glob(["tests/**/*.rs"]),
+    data = glob(["tests/**"]) + [":codex"],
+    deps = [":cli"] + _DEPS + _DEV_DEPS,
+    proc_macro_deps = _PROC_MACRO_DEPS + _DEV_PROC_MACRO_DEPS,
+    env = {
+        "CARGO_BIN_EXE_codex": "$(rootpath :codex)",
+    },
 )
