@@ -30,8 +30,8 @@ pub(crate) struct OutputHandles {
 }
 
 #[derive(Debug)]
-pub(crate) struct UnifiedExecSession {
-    session: ExecCommandSession,
+pub(crate) struct UnifiedExecProcess {
+    process_handle: ExecCommandSession,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
@@ -40,9 +40,9 @@ pub(crate) struct UnifiedExecSession {
     sandbox_type: SandboxType,
 }
 
-impl UnifiedExecSession {
+impl UnifiedExecProcess {
     pub(super) fn new(
-        session: ExecCommandSession,
+        process_handle: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
     ) -> Self {
@@ -69,7 +69,7 @@ impl UnifiedExecSession {
         });
 
         Self {
-            session,
+            process_handle,
             output_buffer,
             output_notify,
             cancellation_token,
@@ -80,7 +80,7 @@ impl UnifiedExecSession {
     }
 
     pub(super) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
-        self.session.writer_sender()
+        self.process_handle.writer_sender()
     }
 
     pub(super) fn output_handles(&self) -> OutputHandles {
@@ -92,7 +92,7 @@ impl UnifiedExecSession {
     }
 
     pub(super) fn output_receiver(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
-        self.session.output_receiver()
+        self.process_handle.output_receiver()
     }
 
     pub(super) fn cancellation_token(&self) -> CancellationToken {
@@ -104,15 +104,15 @@ impl UnifiedExecSession {
     }
 
     pub(super) fn has_exited(&self) -> bool {
-        self.session.has_exited()
+        self.process_handle.has_exited()
     }
 
     pub(super) fn exit_code(&self) -> Option<i32> {
-        self.session.exit_code()
+        self.process_handle.exit_code()
     }
 
     pub(super) fn terminate(&self) {
-        self.session.terminate();
+        self.process_handle.terminate();
         self.cancellation_token.cancel();
         self.output_task.abort();
     }
@@ -164,7 +164,7 @@ impl UnifiedExecSession {
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
             );
             let message = if snippet.is_empty() {
-                format!("Session exited with code {exit_code}")
+                format!("Process exited with code {exit_code}")
             } else {
                 snippet
             };
@@ -178,11 +178,11 @@ impl UnifiedExecSession {
         sandbox_type: SandboxType,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
-            session,
+            session: process_handle,
             output_rx,
             mut exit_rx,
         } = spawned;
-        let managed = Self::new(session, output_rx, sandbox_type);
+        let managed = Self::new(process_handle, output_rx, sandbox_type);
 
         let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));
 
@@ -217,7 +217,7 @@ impl UnifiedExecSession {
     }
 }
 
-impl Drop for UnifiedExecSession {
+impl Drop for UnifiedExecProcess {
     fn drop(&mut self) {
         self.terminate();
     }

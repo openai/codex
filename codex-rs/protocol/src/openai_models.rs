@@ -159,28 +159,51 @@ impl TruncationPolicyConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 pub struct ClientVersion(pub i32, pub i32, pub i32);
 
+const fn default_effective_context_window_percent() -> i64 {
+    95
+}
+
 /// Model metadata returned by the Codex backend `/models` endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
     pub slug: String,
     pub display_name: String,
     pub description: Option<String>,
-    pub default_reasoning_level: ReasoningEffort,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_level: Option<ReasoningEffort>,
     pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
     pub shell_type: ConfigShellToolType,
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
     pub upgrade: Option<String>,
-    pub base_instructions: Option<String>,
+    pub base_instructions: String,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
+    /// Token threshold for automatic compaction. When omitted, core derives it
+    /// from `context_window` (90%).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_token_limit: Option<i64>,
+    /// Percentage of the context window considered usable for inputs, after
+    /// reserving headroom for system prompts, tool overhead, and model output.
+    #[serde(default = "default_effective_context_window_percent")]
+    pub effective_context_window_percent: i64,
     pub experimental_supported_tools: Vec<String>,
+}
+
+impl ModelInfo {
+    pub fn auto_compact_token_limit(&self) -> Option<i64> {
+        self.auto_compact_token_limit.or_else(|| {
+            self.context_window
+                .map(|context_window| (context_window * 9) / 10)
+        })
+    }
 }
 
 /// Response wrapper for `/models`.
@@ -197,7 +220,9 @@ impl From<ModelInfo> for ModelPreset {
             model: info.slug.clone(),
             display_name: info.display_name,
             description: info.description.unwrap_or_default(),
-            default_reasoning_effort: info.default_reasoning_level,
+            default_reasoning_effort: info
+                .default_reasoning_level
+                .unwrap_or(ReasoningEffort::None),
             supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade_slug| ModelUpgrade {

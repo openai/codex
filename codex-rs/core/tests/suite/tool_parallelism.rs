@@ -301,8 +301,11 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
         "perl -MTime::HiRes -e 'print int(Time::HiRes::time()*1000), \"\\n\"' >> \"{}\"",
         output_path.display()
     );
+    // Use a non-login shell to avoid slow, user-specific shell init (e.g. zsh profiles)
+    // from making this timing-based test flaky.
     let args = json!({
         "command": command,
+        "login": false,
         "timeout_ms": 1_000,
     });
 
