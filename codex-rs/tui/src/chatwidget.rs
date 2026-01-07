@@ -677,7 +677,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: true,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -751,7 +750,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: true,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -775,7 +773,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: false,
                     resume_from: Some(resume_candidate.output_root.clone()),
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -4187,7 +4184,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: false,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -4205,7 +4201,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: false,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -4262,7 +4257,6 @@ impl ChatWidget {
         linear_issue: Option<String>,
         force_new: bool,
         resume_from: Option<PathBuf>,
-        rebuild_completed_review: bool,
     ) {
         if self.bottom_pane.is_task_running() || self.security_review_context.is_some() {
             self.add_error_message(
@@ -4420,7 +4414,6 @@ impl ChatWidget {
 
         if let Some(cp) = resume_checkpoint.as_ref()
             && cp.status == SecurityReviewCheckpointStatus::Complete
-            && !rebuild_completed_review
         {
             match crate::security_review::resume_completed_review_from_checkpoint(
                 cp.clone(),
@@ -4552,7 +4545,6 @@ impl ChatWidget {
             skip_auto_scope_confirmation,
             auto_scope_prompt: annotated_scope_prompt,
             resume_checkpoint,
-            rebuild_completed_review,
             linear_issue,
         };
 
@@ -4670,7 +4662,6 @@ impl ChatWidget {
                     linear_issue,
                     force_new: false,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             }),
         );

@@ -482,8 +482,6 @@ pub struct SecurityReviewRequest {
     pub skip_auto_scope_confirmation: bool,
     pub auto_scope_prompt: Option<String>,
     pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
-    // When true, rebuild artifacts even if the checkpoint is already complete.
-    pub rebuild_completed_review: bool,
     // Optional Linear issue reference to sync status and create child tickets.
     pub linear_issue: Option<String>,
 }
@@ -3349,7 +3347,6 @@ pub async fn run_security_review(
     let resuming = checkpoint.is_some();
     if let Some(checkpoint) = checkpoint.as_ref()
         && checkpoint.status == SecurityReviewCheckpointStatus::Complete
-        && !request.rebuild_completed_review
     {
         return resume_completed_review_from_checkpoint(
             checkpoint.clone(),
