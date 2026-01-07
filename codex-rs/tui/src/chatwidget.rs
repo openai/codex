@@ -677,7 +677,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: true,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -751,7 +750,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: true,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -775,7 +773,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: false,
                     resume_from: Some(resume_candidate.output_root.clone()),
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -2407,85 +2404,6 @@ impl ChatWidget {
             }
             SlashCommand::SecReview => {
                 self.open_security_review_popup();
-            }
-            SlashCommand::Validate => {
-                // Web/API validation for high-risk findings from the last review
-                if self.bottom_pane.is_task_running() || self.security_review_context.is_some() {
-                    self.add_error_message(
-                        "Cannot run /validate while a task is in progress.".to_string(),
-                    );
-                    self.request_redraw();
-                    return;
-                }
-                let Some(artifacts) = self.security_review_artifacts.clone() else {
-                    self.add_error_message(
-                        "No security review results to validate. Run /secreview first.".to_string(),
-                    );
-                    self.request_redraw();
-                    return;
-                };
-
-                self.bottom_pane.set_task_running(true);
-                self.bottom_pane
-                    .update_status_header("Validating findings — preparing".to_string());
-
-                let provider = self.config.model_provider.clone();
-                let auth = self.auth_manager.auth();
-                let model = self
-                    .config
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| self.model_family.get_model_slug().to_string());
-                let tx = self.app_event_tx.clone();
-                let repo_path = self.config.cwd.clone();
-                tokio::spawn(async move {
-                    use crate::security_review::run_web_validation;
-                    match run_web_validation(
-                        repo_path,
-                        artifacts.snapshot_path.clone(),
-                        artifacts.bugs_path.clone(),
-                        artifacts.report_path.clone(),
-                        artifacts.report_html_path.clone(),
-                        provider,
-                        auth,
-                        model,
-                        Some(tx.clone()),
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            tx.send(AppEvent::SecurityReviewLog(
-                                "Validation complete; report updated.".to_string(),
-                            ));
-                        }
-                        Err(err) => {
-                            tx.send(AppEvent::SecurityReviewLog(format!(
-                                "Validation failed: {}",
-                                err.message
-                            )));
-                        }
-                    }
-                    // Clear the in-progress flag regardless of outcome.
-                    tx.send(AppEvent::SecurityReviewComplete {
-                        result: crate::security_review::SecurityReviewResult {
-                            findings_summary: String::new(),
-                            bug_summary_table: None,
-                            bugs: Vec::new(),
-                            bugs_path: artifacts.bugs_path,
-                            report_path: artifacts.report_path,
-                            report_html_path: artifacts.report_html_path,
-                            snapshot_path: artifacts.snapshot_path,
-                            metadata_path: artifacts.metadata_path,
-                            api_overview_path: artifacts.api_overview_path,
-                            classification_json_path: artifacts.classification_json_path,
-                            classification_table_path: artifacts.classification_table_path,
-                            logs: vec![],
-                            token_usage: codex_core::protocol::TokenUsage::default(),
-                            estimated_cost_usd: None,
-                            rate_limit_wait: Duration::ZERO,
-                        },
-                    });
-                });
             }
             SlashCommand::Model => {
                 self.open_model_popup();
@@ -4254,11 +4172,6 @@ impl ChatWidget {
 
     pub(crate) fn open_security_review_popup(&mut self) {
         let mut items: Vec<SelectionItem> = Vec::new();
-        let repo_path = self.config.cwd.clone();
-        let storage_root = crate::security_review_storage_root(&repo_path);
-        let latest_completed = completed_security_review_candidates(&storage_root)
-            .into_iter()
-            .next();
 
         items.push(SelectionItem {
             name: "Full security review".to_string(),
@@ -4271,43 +4184,11 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: false,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
             ..Default::default()
         });
-
-        if let Some(candidate) = latest_completed {
-            let display_path = display_path_for(&candidate.output_root, &repo_path);
-            let folder_name = candidate.folder_name.clone();
-            let age = candidate.age_label.clone();
-            let mode_label = candidate.metadata.mode.as_str();
-            let linear_issue = candidate.metadata.linear_issue.clone();
-            let output_root = candidate.output_root.clone();
-            let mode = candidate.metadata.mode;
-
-            items.push(SelectionItem {
-                name: "Rebuild last completed report".to_string(),
-                description: Some(format!(
-                    "Mode: {mode_label} • Folder: {folder_name} • Age: {age} • Path: {display_path}"
-                )),
-                actions: vec![Box::new(move |tx: &AppEventSender| {
-                    tx.send(AppEvent::StartSecurityReview {
-                        mode,
-                        include_paths: Vec::new(),
-                        scope_prompt: None,
-                        linear_issue: linear_issue.clone(),
-                        force_new: false,
-                        resume_from: Some(output_root.clone()),
-                        rebuild_completed_review: true,
-                    });
-                })],
-                dismiss_on_select: true,
-                search_value: Some(display_path),
-                ..Default::default()
-            });
-        }
 
         items.push(SelectionItem {
             name: "Quick bug sweep".to_string(),
@@ -4320,7 +4201,6 @@ impl ChatWidget {
                     linear_issue: None,
                     force_new: false,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             })],
             dismiss_on_select: true,
@@ -4377,7 +4257,6 @@ impl ChatWidget {
         linear_issue: Option<String>,
         force_new: bool,
         resume_from: Option<PathBuf>,
-        rebuild_completed_review: bool,
     ) {
         if self.bottom_pane.is_task_running() || self.security_review_context.is_some() {
             self.add_error_message(
@@ -4535,7 +4414,6 @@ impl ChatWidget {
 
         if let Some(cp) = resume_checkpoint.as_ref()
             && cp.status == SecurityReviewCheckpointStatus::Complete
-            && !rebuild_completed_review
         {
             match crate::security_review::resume_completed_review_from_checkpoint(
                 cp.clone(),
@@ -4667,7 +4545,6 @@ impl ChatWidget {
             skip_auto_scope_confirmation,
             auto_scope_prompt: annotated_scope_prompt,
             resume_checkpoint,
-            rebuild_completed_review,
             linear_issue,
         };
 
@@ -4785,7 +4662,6 @@ impl ChatWidget {
                     linear_issue,
                     force_new: false,
                     resume_from: None,
-                    rebuild_completed_review: false,
                 });
             }),
         );

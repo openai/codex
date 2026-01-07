@@ -482,8 +482,6 @@ pub struct SecurityReviewRequest {
     pub skip_auto_scope_confirmation: bool,
     pub auto_scope_prompt: Option<String>,
     pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
-    // When true, rebuild artifacts even if the checkpoint is already complete.
-    pub rebuild_completed_review: bool,
     // Optional Linear issue reference to sync status and create child tickets.
     pub linear_issue: Option<String>,
 }
@@ -1980,6 +1978,7 @@ pub enum BugValidationStatus {
     Pending,
     Passed,
     Failed,
+    UnableToValidate,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -2085,6 +2084,7 @@ struct BugCommandPlan {
     request: BugVerificationRequest,
     title: String,
     risk_rank: Option<usize>,
+    expect_asan: bool,
 }
 
 struct BugCommandResult {
@@ -2093,7 +2093,7 @@ struct BugCommandResult {
     logs: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum BugIdentifier {
     RiskRank(usize),
     SummaryId(usize),
@@ -2261,148 +2261,152 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
                 composed.push_str(&format!("Suggested owner: {handle}\n"));
             }
         }
-        if !matches!(snapshot.bug.validation.status, BugValidationStatus::Pending) {
-            composed.push_str("\n\n#### Validation\n");
-            let status_label = validation_status_label(&snapshot.bug.validation);
-            composed.push_str(&format!("- **Status:** {status_label}\n"));
-            if let Some(tool) = snapshot
-                .bug
-                .validation
-                .tool
-                .as_ref()
-                .filter(|tool| !tool.is_empty())
-            {
-                composed.push_str(&format!("- **Tool:** `{tool}`\n"));
+        composed.push_str("\n\n#### Validation\n");
+        let expects_asan = snapshot
+            .bug
+            .verification_types
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("crash_poc"));
+        let status_label = validation_status_label(&snapshot.bug.validation);
+        composed.push_str(&format!("- **Status:** {status_label}\n"));
+        if let Some(tool) = snapshot
+            .bug
+            .validation
+            .tool
+            .as_ref()
+            .filter(|tool| !tool.is_empty())
+        {
+            composed.push_str(&format!("- **Tool:** `{tool}`\n"));
+        }
+        if let Some(target) = snapshot
+            .bug
+            .validation
+            .target
+            .as_ref()
+            .filter(|target| !target.is_empty())
+        {
+            composed.push_str(&format!("- **Target:** `{target}`\n"));
+        }
+        if let Some(control_target) = snapshot
+            .bug
+            .validation
+            .control_target
+            .as_ref()
+            .filter(|target| !target.is_empty())
+        {
+            composed.push_str(&format!("- **Control target:** `{control_target}`\n"));
+        }
+        if let Some(run_at) = snapshot.bug.validation.run_at
+            && let Ok(formatted) = run_at.format(&Rfc3339)
+        {
+            composed.push_str(&format!("- **Checked:** {formatted}\n"));
+        }
+        if let Some(summary) = snapshot
+            .bug
+            .validation
+            .summary
+            .as_ref()
+            .filter(|summary| !summary.is_empty())
+        {
+            let summary = summary.trim();
+            composed.push_str(&format!("- **Summary:** {summary}\n"));
+        }
+        if let Some(control_summary) = snapshot
+            .bug
+            .validation
+            .control_summary
+            .as_ref()
+            .filter(|summary| !summary.is_empty())
+        {
+            let control_summary = control_summary.trim();
+            composed.push_str(&format!("- **Control summary:** {control_summary}\n"));
+        }
+        if !snapshot.bug.validation.repro_steps.is_empty() {
+            composed.push_str("- **Repro steps:**\n");
+            for (i, step) in snapshot.bug.validation.repro_steps.iter().enumerate() {
+                let n = i + 1;
+                let step = step.trim();
+                composed.push_str(&format!("  {n}. {step}\n"));
             }
-            if let Some(target) = snapshot
-                .bug
-                .validation
-                .target
-                .as_ref()
-                .filter(|target| !target.is_empty())
-            {
-                composed.push_str(&format!("- **Target:** `{target}`\n"));
+        }
+        if !snapshot.bug.validation.control_steps.is_empty() {
+            composed.push_str("- **Control steps:**\n");
+            for (i, step) in snapshot.bug.validation.control_steps.iter().enumerate() {
+                let n = i + 1;
+                let step = step.trim();
+                composed.push_str(&format!("  {n}. {step}\n"));
             }
-            if let Some(control_target) = snapshot
-                .bug
-                .validation
-                .control_target
-                .as_ref()
-                .filter(|target| !target.is_empty())
-            {
-                composed.push_str(&format!("- **Control target:** `{control_target}`\n"));
+        }
+        let mut artifacts: Vec<String> = Vec::new();
+        if let Some(path) = snapshot
+            .bug
+            .validation
+            .stdout_path
+            .as_ref()
+            .filter(|path| !path.is_empty())
+        {
+            artifacts.push(format!("stdout: `{path}`"));
+        }
+        if let Some(path) = snapshot
+            .bug
+            .validation
+            .stderr_path
+            .as_ref()
+            .filter(|path| !path.is_empty())
+        {
+            artifacts.push(format!("stderr: `{path}`"));
+        }
+        if let Some(path) = snapshot
+            .bug
+            .validation
+            .control_stdout_path
+            .as_ref()
+            .filter(|path| !path.is_empty())
+        {
+            artifacts.push(format!("control stdout: `{path}`"));
+        }
+        if let Some(path) = snapshot
+            .bug
+            .validation
+            .control_stderr_path
+            .as_ref()
+            .filter(|path| !path.is_empty())
+        {
+            artifacts.push(format!("control stderr: `{path}`"));
+        }
+        artifacts.extend(snapshot.bug.validation.artifacts.iter().filter_map(|a| {
+            let trimmed = a.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(format!("`{trimmed}`"))
             }
-            if let Some(run_at) = snapshot.bug.validation.run_at
-                && let Ok(formatted) = run_at.format(&Rfc3339)
-            {
-                composed.push_str(&format!("- **Checked:** {formatted}\n"));
-            }
-            if let Some(summary) = snapshot
-                .bug
-                .validation
-                .summary
-                .as_ref()
-                .filter(|summary| !summary.is_empty())
-            {
-                let summary = summary.trim();
-                composed.push_str(&format!("- **Summary:** {summary}\n"));
-            }
-            if let Some(control_summary) = snapshot
-                .bug
-                .validation
-                .control_summary
-                .as_ref()
-                .filter(|summary| !summary.is_empty())
-            {
-                let control_summary = control_summary.trim();
-                composed.push_str(&format!("- **Control summary:** {control_summary}\n"));
-            }
-            if !snapshot.bug.validation.repro_steps.is_empty() {
-                composed.push_str("- **Repro steps:**\n");
-                for (i, step) in snapshot.bug.validation.repro_steps.iter().enumerate() {
-                    let n = i + 1;
-                    let step = step.trim();
-                    composed.push_str(&format!("  {n}. {step}\n"));
-                }
-            }
-            if !snapshot.bug.validation.control_steps.is_empty() {
-                composed.push_str("- **Control steps:**\n");
-                for (i, step) in snapshot.bug.validation.control_steps.iter().enumerate() {
-                    let n = i + 1;
-                    let step = step.trim();
-                    composed.push_str(&format!("  {n}. {step}\n"));
-                }
-            }
-            let mut artifacts: Vec<String> = Vec::new();
-            if let Some(path) = snapshot
-                .bug
-                .validation
-                .stdout_path
-                .as_ref()
-                .filter(|path| !path.is_empty())
-            {
-                artifacts.push(format!("stdout: `{path}`"));
-            }
-            if let Some(path) = snapshot
-                .bug
-                .validation
-                .stderr_path
-                .as_ref()
-                .filter(|path| !path.is_empty())
-            {
-                artifacts.push(format!("stderr: `{path}`"));
-            }
-            if let Some(path) = snapshot
-                .bug
-                .validation
-                .control_stdout_path
-                .as_ref()
-                .filter(|path| !path.is_empty())
-            {
-                artifacts.push(format!("control stdout: `{path}`"));
-            }
-            if let Some(path) = snapshot
-                .bug
-                .validation
-                .control_stderr_path
-                .as_ref()
-                .filter(|path| !path.is_empty())
-            {
-                artifacts.push(format!("control stderr: `{path}`"));
-            }
-            artifacts.extend(snapshot.bug.validation.artifacts.iter().filter_map(|a| {
-                let trimmed = a.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(format!("`{trimmed}`"))
-                }
-            }));
-            if !artifacts.is_empty() {
-                composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
-            }
-            if let Some(snippet) = snapshot
-                .bug
-                .validation
-                .output_snippet
-                .as_ref()
-                .filter(|snippet| !snippet.is_empty())
-            {
-                composed.push_str("- **Output:**\n```\n");
-                composed.push_str(snippet.trim());
-                composed.push_str("\n```\n");
-            }
-            if let Some(control_snippet) = snapshot
-                .bug
-                .validation
-                .control_output_snippet
-                .as_ref()
-                .filter(|snippet| !snippet.is_empty())
-            {
-                composed.push_str("- **Control output:**\n```\n");
-                composed.push_str(control_snippet.trim());
-                composed.push_str("\n```\n");
-            }
+        }));
+        if !artifacts.is_empty() {
+            composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
+        }
+        if let Some(snippet) = snapshot
+            .bug
+            .validation
+            .output_snippet
+            .as_ref()
+            .filter(|snippet| !snippet.is_empty())
+        {
+            let label = if expects_asan { "ASan trace" } else { "Output" };
+            composed.push_str(&format!("- **{label}:**\n```\n"));
+            composed.push_str(snippet.trim());
+            composed.push_str("\n```\n");
+        }
+        if let Some(control_snippet) = snapshot
+            .bug
+            .validation
+            .control_output_snippet
+            .as_ref()
+            .filter(|snippet| !snippet.is_empty())
+        {
+            composed.push_str("- **Control output:**\n```\n");
+            composed.push_str(control_snippet.trim());
+            composed.push_str("\n```\n");
         }
         sections.push(composed);
     }
@@ -3380,7 +3384,6 @@ pub async fn run_security_review(
     let resuming = checkpoint.is_some();
     if let Some(checkpoint) = checkpoint.as_ref()
         && checkpoint.status == SecurityReviewCheckpointStatus::Complete
-        && !request.rebuild_completed_review
     {
         return resume_completed_review_from_checkpoint(
             checkpoint.clone(),
@@ -5169,6 +5172,73 @@ pub async fn run_security_review(
             });
         }
     };
+
+    let validation_targets = build_validation_findings_context(&snapshot);
+    if validation_targets.ids.is_empty() {
+        record(
+            &mut logs,
+            "No high-risk findings selected for validation; skipping.".to_string(),
+        );
+    } else {
+        record(
+            &mut logs,
+            "Validating high-risk findings (web + api)...".to_string(),
+        );
+        match run_web_validation(
+            repo_path.clone(),
+            artifacts.snapshot_path.clone(),
+            artifacts.bugs_path.clone(),
+            artifacts.report_path.clone(),
+            artifacts.report_html_path.clone(),
+            request.provider.clone(),
+            request.auth.clone(),
+            request.model.clone(),
+            progress_sender.clone(),
+            metrics.clone(),
+        )
+        .await
+        {
+            Ok(_) => {
+                record(
+                    &mut logs,
+                    "Validation complete; report updated.".to_string(),
+                );
+            }
+            Err(err) => {
+                record(&mut logs, format!("Validation failed: {}", err.message));
+                logs.extend(err.logs);
+            }
+        }
+
+        match tokio_fs::read(&artifacts.snapshot_path).await {
+            Ok(bytes) => match serde_json::from_slice::<SecurityReviewSnapshot>(&bytes) {
+                Ok(updated) => {
+                    findings_summary = updated.findings_summary.clone();
+                    bugs_for_result = snapshot_bugs(&updated);
+                    bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
+                }
+                Err(err) => {
+                    record(
+                        &mut logs,
+                        format!(
+                            "Failed to parse updated bug snapshot {}: {err}",
+                            artifacts.snapshot_path.display()
+                        ),
+                    );
+                }
+            },
+            Err(err) => {
+                record(
+                    &mut logs,
+                    format!(
+                        "Failed to read updated bug snapshot {}: {err}",
+                        artifacts.snapshot_path.display()
+                    ),
+                );
+            }
+        }
+    }
+
     plan_tracker.mark_complete(SecurityReviewPlanStep::AssembleReport);
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     checkpoint.status = SecurityReviewCheckpointStatus::Complete;
@@ -8631,7 +8701,6 @@ async fn run_bug_agent(
     bug_config
         .features
         .disable(Feature::ApplyPatchFreeform)
-        .disable(Feature::WebSearchRequest)
         .disable(Feature::ViewImageTool);
     bug_config.mcp_servers.clear();
 
@@ -9204,6 +9273,7 @@ async fn generate_threat_model(
     }
 
     sanitized_response = ensure_threat_model_heading(sanitized_response);
+    sanitized_response = nest_threat_model_subsections(sanitized_response);
 
     let threat_file = threats_dir.join("threat_model.md");
     tokio_fs::write(&threat_file, sanitized_response.as_bytes())
@@ -12088,9 +12158,10 @@ fn validation_display(state: &BugValidationState) -> String {
 
 fn validation_status_label(state: &BugValidationState) -> String {
     let mut label = match state.status {
-        BugValidationStatus::Pending => "Pending".to_string(),
-        BugValidationStatus::Passed => "Passed".to_string(),
-        BugValidationStatus::Failed => "Failed".to_string(),
+        BugValidationStatus::Pending => "Not validated".to_string(),
+        BugValidationStatus::Passed => "Validated".to_string(),
+        BugValidationStatus::Failed => "Not validated".to_string(),
+        BugValidationStatus::UnableToValidate => "Not able to validate".to_string(),
     };
     if let Some(tool) = state.tool.as_ref().filter(|tool| !tool.is_empty())
         && state.status != BugValidationStatus::Pending
@@ -13806,7 +13877,7 @@ fn build_threat_model_prompt(repository_summary: &str, spec: &SpecGenerationOutc
 
 fn build_threat_model_retry_prompt(base_prompt: &str, previous_output: &str) -> String {
     format!(
-        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required sections (Primary components, Trust boundaries, Components & Trust Boundary Diagram, Assets, Attacker model, Entry points, Top abuse paths) followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
+        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required subsections (Primary components, Trust Boundaries (including a `#### Diagram` mermaid block), Assets, Attacker model, Entry points, Top abuse paths) as `###` headings, followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
     )
 }
 
@@ -14299,6 +14370,25 @@ fn base_url_for_control(target: &str) -> Option<String> {
     Some(control.to_string())
 }
 
+fn is_local_target_url(target: &str) -> bool {
+    let Ok(url) = Url::parse(target) else {
+        return false;
+    };
+    matches!(
+        url.host_str(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1")
+    )
+}
+
+fn contains_asan_signature(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("addresssanitizer")
+        || lower.contains("leaksan")
+        || lower.contains("heap-buffer-overflow")
+        || lower.contains("stack-buffer-overflow")
+        || lower.contains("use-after-free")
+}
+
 async fn write_validation_output_files(
     work_dir: &Path,
     repo_path: &Path,
@@ -14360,6 +14450,9 @@ async fn execute_bug_command(
     } else {
         format!("[{}] {}", plan.summary_id, plan.title)
     };
+    let bug_id = plan.risk_rank.unwrap_or(plan.summary_id);
+    let bug_work_dir = work_dir.join(format!("bug{bug_id}"));
+    let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
     let file_stem = if let Some(rank) = plan.risk_rank {
         format!("bug_rank_{rank}")
     } else {
@@ -14382,7 +14475,7 @@ async fn execute_bug_command(
     match plan.request.tool {
         BugVerificationTool::Curl => {
             let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
-                validation.status = BugValidationStatus::Failed;
+                validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for curl"));
                 validation.run_at = Some(OffsetDateTime::now_utc());
@@ -14392,6 +14485,21 @@ async fn execute_bug_command(
                     logs,
                 };
             };
+            if !is_local_target_url(&target) {
+                validation.status = BugValidationStatus::UnableToValidate;
+                validation.summary = Some(format!(
+                    "Refusing to validate against non-local target: {target}"
+                ));
+                logs.push(format!(
+                    "{label}: refusing to validate against non-local target {target}"
+                ));
+                validation.run_at = Some(OffsetDateTime::now_utc());
+                return BugCommandResult {
+                    index: plan.index,
+                    validation,
+                    logs,
+                };
+            }
 
             let control_target = base_url_for_control(&target);
             validation.control_target = control_target.clone();
@@ -14423,7 +14531,12 @@ async fn execute_bug_command(
                                 Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                         }
                         let (stdout_path, stderr_path) = write_validation_output_files(
-                            &work_dir, &repo_path, &file_stem, "control", &stdout, &stderr,
+                            &bug_work_dir,
+                            &repo_path,
+                            &file_stem,
+                            "control",
+                            &stdout,
+                            &stderr,
                         )
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
@@ -14458,6 +14571,8 @@ async fn execute_bug_command(
                     let success = output.status.success();
                     validation.status = if success {
                         BugValidationStatus::Passed
+                    } else if matches!(output.status.code(), Some(6 | 7 | 28)) {
+                        BugValidationStatus::UnableToValidate
                     } else {
                         BugValidationStatus::Failed
                     };
@@ -14471,7 +14586,12 @@ async fn execute_bug_command(
                             Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
                     let (stdout_path, stderr_path) = write_validation_output_files(
-                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        &stdout,
+                        &stderr,
                     )
                     .await;
                     validation.stdout_path = Some(stdout_path);
@@ -14482,7 +14602,7 @@ async fn execute_bug_command(
                     ));
                 }
                 Err(err) => {
-                    validation.status = BugValidationStatus::Failed;
+                    validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run curl: {err}"));
                     logs.push(format!("{label}: failed to run curl: {err}"));
                 }
@@ -14493,15 +14613,15 @@ async fn execute_bug_command(
                 if let Some(path) = plan.request.script_path.as_ref() {
                     Some(path.clone())
                 } else if let Some(code) = plan.request.script_inline.as_ref() {
-                    let _ = tokio_fs::create_dir_all(&work_dir).await;
+                    let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
                     let file_name = if let Some(rank) = plan.risk_rank {
                         format!("bug_rank_{rank}.py")
                     } else {
                         format!("bug_{}.py", plan.summary_id)
                     };
-                    let temp_path = work_dir.join(file_name);
+                    let temp_path = bug_work_dir.join(file_name);
                     if let Err(err) = tokio_fs::write(&temp_path, code.as_bytes()).await {
-                        validation.status = BugValidationStatus::Failed;
+                        validation.status = BugValidationStatus::UnableToValidate;
                         validation.summary = Some(format!(
                             "Failed to write inline python to {}: {err}",
                             temp_path.display()
@@ -14524,7 +14644,7 @@ async fn execute_bug_command(
                 };
 
             let Some(script_path) = script_path_owned.as_ref() else {
-                validation.status = BugValidationStatus::Failed;
+                validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing python script path".to_string());
                 logs.push(format!("{label}: no python script provided"));
                 validation.run_at = Some(OffsetDateTime::now_utc());
@@ -14539,7 +14659,7 @@ async fn execute_bug_command(
                 .artifacts
                 .push(display_path_for(script_path, &repo_path));
             if !script_path.exists() {
-                validation.status = BugValidationStatus::Failed;
+                validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary =
                     Some(format!("Python script {} not found", script_path.display()));
                 logs.push(format!(
@@ -14575,22 +14695,61 @@ async fn execute_bug_command(
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                     let success = output.status.success();
-                    validation.status = if success {
+                    let duration_label = fmt_elapsed_compact(duration.as_secs());
+                    let observed_asan = plan.expect_asan
+                        && (contains_asan_signature(&stdout) || contains_asan_signature(&stderr));
+                    validation.status = if plan.expect_asan {
+                        if observed_asan {
+                            BugValidationStatus::Passed
+                        } else {
+                            BugValidationStatus::Failed
+                        }
+                    } else if success {
                         BugValidationStatus::Passed
                     } else {
                         BugValidationStatus::Failed
                     };
-                    let summary_line = summarize_process_output(success, &stdout, &stderr);
-                    let duration_label = fmt_elapsed_compact(duration.as_secs());
-                    validation.summary = Some(format!("{summary_line} · {duration_label}"));
-                    let snippet_source = if success { &stdout } else { &stderr };
+
+                    if plan.expect_asan {
+                        if observed_asan {
+                            validation.summary =
+                                Some(format!("ASan signature observed · {duration_label}"));
+                        } else {
+                            let summary_line = summarize_process_output(success, &stdout, &stderr);
+                            validation.summary = Some(format!(
+                                "{summary_line} (no ASan signature) · {duration_label}"
+                            ));
+                        }
+                    } else {
+                        let summary_line = summarize_process_output(success, &stdout, &stderr);
+                        validation.summary = Some(format!("{summary_line} · {duration_label}"));
+                    }
+
+                    let snippet_source = if plan.expect_asan {
+                        if contains_asan_signature(&stderr) {
+                            &stderr
+                        } else if stderr.trim().is_empty() || contains_asan_signature(&stdout) {
+                            &stdout
+                        } else {
+                            &stderr
+                        }
+                    } else if success {
+                        &stdout
+                    } else {
+                        &stderr
+                    };
                     let trimmed_snippet = snippet_source.trim();
                     if !trimmed_snippet.is_empty() {
                         validation.output_snippet =
                             Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
                     let (stdout_path, stderr_path) = write_validation_output_files(
-                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        &stdout,
+                        &stderr,
                     )
                     .await;
                     validation.stdout_path = Some(stdout_path);
@@ -14601,7 +14760,7 @@ async fn execute_bug_command(
                     ));
                 }
                 Err(err) => {
-                    validation.status = BugValidationStatus::Failed;
+                    validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run python: {err}"));
                     logs.push(format!("{label}: failed to run python: {err}"));
                 }
@@ -14609,7 +14768,7 @@ async fn execute_bug_command(
         }
         BugVerificationTool::Playwright => {
             let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
-                validation.status = BugValidationStatus::Failed;
+                validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for playwright"));
                 validation.run_at = Some(OffsetDateTime::now_utc());
@@ -14619,13 +14778,28 @@ async fn execute_bug_command(
                     logs,
                 };
             };
-            let _ = tokio_fs::create_dir_all(&work_dir).await;
-            let screenshot_path = work_dir.join(format!("{file_stem}.png"));
+            if !is_local_target_url(&target) {
+                validation.status = BugValidationStatus::UnableToValidate;
+                validation.summary = Some(format!(
+                    "Refusing to validate against non-local target: {target}"
+                ));
+                logs.push(format!(
+                    "{label}: refusing to validate against non-local target {target}"
+                ));
+                validation.run_at = Some(OffsetDateTime::now_utc());
+                return BugCommandResult {
+                    index: plan.index,
+                    validation,
+                    logs,
+                };
+            }
+            let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
+            let screenshot_path = bug_work_dir.join(format!("{file_stem}.png"));
 
             let control_target = base_url_for_control(&target);
             validation.control_target = control_target.clone();
             if let Some(control_target) = control_target.as_ref() {
-                let control_screenshot_path = work_dir.join(format!("{file_stem}_control.png"));
+                let control_screenshot_path = bug_work_dir.join(format!("{file_stem}_control.png"));
                 validation.control_steps.push(format!(
                     "Run: `npx --yes playwright screenshot {control_target} {}`",
                     display_path_for(&control_screenshot_path, &repo_path)
@@ -14664,7 +14838,12 @@ async fn execute_bug_command(
                                 Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                         }
                         let (stdout_path, stderr_path) = write_validation_output_files(
-                            &work_dir, &repo_path, &file_stem, "control", &stdout, &stderr,
+                            &bug_work_dir,
+                            &repo_path,
+                            &file_stem,
+                            "control",
+                            &stdout,
+                            &stderr,
                         )
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
@@ -14700,7 +14879,7 @@ async fn execute_bug_command(
                     validation.status = if success {
                         BugValidationStatus::Passed
                     } else {
-                        BugValidationStatus::Failed
+                        BugValidationStatus::UnableToValidate
                     };
                     let duration_label = fmt_elapsed_compact(duration.as_secs());
                     if success {
@@ -14722,7 +14901,12 @@ async fn execute_bug_command(
                             Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                     }
                     let (stdout_path, stderr_path) = write_validation_output_files(
-                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        &stdout,
+                        &stderr,
                     )
                     .await;
                     validation.stdout_path = Some(stdout_path);
@@ -14733,7 +14917,7 @@ async fn execute_bug_command(
                     ));
                 }
                 Err(err) => {
-                    validation.status = BugValidationStatus::Failed;
+                    validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run playwright: {err}"));
                     logs.push(format!("{label}: failed to run playwright: {err}"));
                 }
@@ -14770,53 +14954,52 @@ pub(crate) async fn verify_bugs(
 
     if batch.requests.is_empty() {
         logs.push("No verification requests provided.".to_string());
-        let bugs = snapshot_bugs(&snapshot);
-        return Ok(BugVerificationOutcome { bugs, logs });
-    }
-
-    let mut plans: Vec<BugCommandPlan> = Vec::new();
-    for request in &batch.requests {
-        let Some(index) = find_bug_index(&snapshot, request.id) else {
-            return Err(BugVerificationFailure {
-                message: "Requested bug identifier not found in snapshot".to_string(),
-                logs,
+    } else {
+        let mut plans: Vec<BugCommandPlan> = Vec::new();
+        for request in &batch.requests {
+            let Some(index) = find_bug_index(&snapshot, request.id) else {
+                return Err(BugVerificationFailure {
+                    message: "Requested bug identifier not found in snapshot".to_string(),
+                    logs,
+                });
+            };
+            let entry = snapshot
+                .bugs
+                .get(index)
+                .ok_or_else(|| BugVerificationFailure {
+                    message: "Snapshot bug index out of bounds".to_string(),
+                    logs: logs.clone(),
+                })?;
+            plans.push(BugCommandPlan {
+                index,
+                summary_id: entry.bug.summary_id,
+                request: request.clone(),
+                title: entry.bug.title.clone(),
+                risk_rank: entry.bug.risk_rank,
+                expect_asan: has_verification_type(&entry.bug, "crash_poc"),
             });
-        };
-        let entry = snapshot
-            .bugs
-            .get(index)
-            .ok_or_else(|| BugVerificationFailure {
-                message: "Snapshot bug index out of bounds".to_string(),
-                logs: logs.clone(),
-            })?;
-        plans.push(BugCommandPlan {
-            index,
-            summary_id: entry.bug.summary_id,
-            request: request.clone(),
-            title: entry.bug.title.clone(),
-            risk_rank: entry.bug.risk_rank,
-        });
-    }
+        }
 
-    // Ensure work dir exists for artifacts/scripts
-    let _ = tokio_fs::create_dir_all(&batch.work_dir).await;
+        // Ensure work dir exists for artifacts/scripts
+        let _ = tokio_fs::create_dir_all(&batch.work_dir).await;
 
-    let mut command_results: Vec<BugCommandResult> = Vec::new();
-    let mut futures = futures::stream::iter(plans.into_iter().map(|plan| {
-        let repo_path = batch.repo_path.clone();
-        let work_dir = batch.work_dir.clone();
-        async move { execute_bug_command(plan, repo_path, work_dir).await }
-    }))
-    .buffer_unordered(8)
-    .collect::<Vec<_>>()
-    .await;
+        let mut command_results: Vec<BugCommandResult> = Vec::new();
+        let mut futures = futures::stream::iter(plans.into_iter().map(|plan| {
+            let repo_path = batch.repo_path.clone();
+            let work_dir = batch.work_dir.clone();
+            async move { execute_bug_command(plan, repo_path, work_dir).await }
+        }))
+        .buffer_unordered(8)
+        .collect::<Vec<_>>()
+        .await;
 
-    command_results.append(&mut futures);
+        command_results.append(&mut futures);
 
-    for result in command_results {
-        if let Some(entry) = snapshot.bugs.get_mut(result.index) {
-            entry.bug.validation = result.validation;
-            logs.extend(result.logs);
+        for result in command_results {
+            if let Some(entry) = snapshot.bugs.get_mut(result.index) {
+                entry.bug.validation = result.validation;
+                logs.extend(result.logs);
+            }
         }
     }
 
@@ -14949,6 +15132,7 @@ async fn setup_accounts(
     snapshot: &SecurityReviewSnapshot,
     work_dir: &Path,
     progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
 ) -> Result<Option<Vec<AccountPair>>, String> {
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(
@@ -14956,9 +15140,8 @@ async fn setup_accounts(
         ));
     }
 
-    let findings = build_validation_findings_context(snapshot);
+    let findings = build_validation_findings_context(snapshot).text;
     let prompt = VALIDATION_ACCOUNTS_PROMPT_TEMPLATE.replace("{findings}", &findings);
-    let metrics = Arc::new(ReviewMetrics::default());
     let response = call_model(
         client,
         provider,
@@ -15014,6 +15197,10 @@ async fn setup_accounts(
         let success = output.status.success();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout_path = work_dir.join("register_accounts_stdout.txt");
+        let stderr_path = work_dir.join("register_accounts_stderr.txt");
+        let _ = tokio_fs::write(&stdout_path, stdout.as_bytes()).await;
+        let _ = tokio_fs::write(&stderr_path, stderr.as_bytes()).await;
         if !success {
             if let Some(tx) = progress_sender.as_ref() {
                 tx.send(AppEvent::SecurityReviewLog(format!(
@@ -15057,12 +15244,16 @@ async fn setup_accounts(
 #[derive(Debug, Deserialize)]
 struct ValidationPlanItem {
     id_kind: String,
-    id_value: usize,
-    tool: String,
+    #[serde(default)]
+    id_value: Option<usize>,
+    #[serde(default)]
+    tool: Option<String>,
     #[serde(default)]
     target: Option<String>,
     #[serde(default)]
     script: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 fn is_high_risk(bug: &SecurityReviewBug) -> bool {
@@ -15076,18 +15267,82 @@ fn is_high_risk(bug: &SecurityReviewBug) -> bool {
     false
 }
 
-fn build_validation_findings_context(snapshot: &SecurityReviewSnapshot) -> String {
-    let mut selected: Vec<&BugSnapshot> = snapshot
+fn is_priority_validation_vuln_tag(tag: &str) -> bool {
+    let tag = tag.trim().to_ascii_lowercase();
+    if tag.is_empty() {
+        return false;
+    }
+    matches!(
+        tag.as_str(),
+        "idor"
+            | "auth-bypass"
+            | "authn-bypass"
+            | "authz-bypass"
+            | "missing-authz-check"
+            | "sql-injection"
+            | "xxe"
+    ) || tag.starts_with("path-traversal")
+}
+
+fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
+    bug.verification_types
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case(needle))
+}
+
+struct ValidationFindingsContext {
+    text: String,
+    ids: Vec<BugIdentifier>,
+}
+
+fn build_validation_findings_context(
+    snapshot: &SecurityReviewSnapshot,
+) -> ValidationFindingsContext {
+    let mut required: Vec<&BugSnapshot> = snapshot
+        .bugs
+        .iter()
+        .filter(|b| {
+            let sev = b.bug.severity.to_ascii_lowercase();
+            let is_high = sev.contains("critical") || sev.contains("high");
+            if !is_high {
+                return false;
+            }
+            if has_verification_type(&b.bug, "crash_poc") {
+                return true;
+            }
+            let tag = b.bug.vulnerability_tag.clone().or_else(|| {
+                extract_vulnerability_tag_from_bug_markdown(b.original_markdown.as_str())
+            });
+            tag.as_deref().is_some_and(is_priority_validation_vuln_tag)
+        })
+        .collect();
+    required.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
+
+    let mut selected: Vec<&BugSnapshot> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    for item in &required {
+        if seen.insert(item.bug.summary_id) {
+            selected.push(*item);
+        }
+    }
+
+    let mut high_risk: Vec<&BugSnapshot> = snapshot
         .bugs
         .iter()
         .filter(|b| is_high_risk(&b.bug))
         .collect();
-    // Keep to a reasonable number to bound prompt size
-    selected.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
-    if selected.len() > 6 {
-        selected.truncate(6);
+    high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
+    for item in high_risk {
+        if selected.len() >= 5 {
+            break;
+        }
+        if seen.insert(item.bug.summary_id) {
+            selected.push(item);
+        }
     }
+
     let mut out = String::new();
+    let mut ids: Vec<BugIdentifier> = Vec::new();
     for item in selected {
         let rank = item
             .bug
@@ -15099,24 +15354,36 @@ fn build_validation_findings_context(snapshot: &SecurityReviewSnapshot) -> Strin
         } else {
             format!("{:?}", item.bug.verification_types)
         };
+        let vuln_tag = item
+            .bug
+            .vulnerability_tag
+            .clone()
+            .or_else(|| {
+                extract_vulnerability_tag_from_bug_markdown(item.original_markdown.as_str())
+            })
+            .unwrap_or_default();
+        let (id_kind, id_value, identifier) = if let Some(risk_rank) = item.bug.risk_rank {
+            ("risk_rank", risk_rank, BugIdentifier::RiskRank(risk_rank))
+        } else {
+            (
+                "summary_id",
+                item.bug.summary_id,
+                BugIdentifier::SummaryId(item.bug.summary_id),
+            )
+        };
+        ids.push(identifier);
         // Include the original markdown so the model can infer concrete targets
         let _ = writeln!(
             &mut out,
-            "- id_kind: {}\n  id_value: {}\n  risk_rank: {}\n  title: {}\n  severity: {}\n  verification_types: {}\n  details:\n{}\n---\n",
-            if item.bug.risk_rank.is_some() {
-                "risk_rank"
-            } else {
-                "summary_id"
-            },
-            item.bug.risk_rank.unwrap_or(item.bug.summary_id),
-            rank,
-            item.bug.title,
-            item.bug.severity,
-            types,
-            indent_block(&item.original_markdown, 2)
+            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}\n  details:\n{details}\n---\n",
+            title = item.bug.title,
+            severity = item.bug.severity,
+            types = types,
+            details = indent_block(&item.original_markdown, 2)
         );
     }
-    out
+
+    ValidationFindingsContext { text: out, ids }
 }
 
 fn indent_block(s: &str, spaces: usize) -> String {
@@ -15128,7 +15395,7 @@ fn indent_block(s: &str, spaces: usize) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_web_validation(
+async fn run_web_validation(
     repo_path: PathBuf,
     snapshot_path: PathBuf,
     bugs_path: PathBuf,
@@ -15138,6 +15405,7 @@ pub(crate) async fn run_web_validation(
     auth: Option<CodexAuth>,
     model: String,
     progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
 ) -> Result<(), BugVerificationFailure> {
     // Load snapshot
     let bytes = tokio_fs::read(&snapshot_path)
@@ -15146,7 +15414,7 @@ pub(crate) async fn run_web_validation(
             message: format!("Failed to read {}: {e}", snapshot_path.display()),
             logs: vec![],
         })?;
-    let snapshot: SecurityReviewSnapshot =
+    let mut snapshot: SecurityReviewSnapshot =
         serde_json::from_slice(&bytes).map_err(|e| BugVerificationFailure {
             message: format!("Failed to parse {}: {e}", snapshot_path.display()),
             logs: vec![],
@@ -15160,31 +15428,36 @@ pub(crate) async fn run_web_validation(
     }
 
     // Ensure we have test accounts before validation
-    let work_dir = snapshot_path
+    let output_root = snapshot_path
         .parent()
-        .map(|p| p.join("validation"))
+        .and_then(|p| p.parent())
+        .map(PathBuf::from)
         .unwrap_or_else(|| repo_path.join(".codex_validation"));
-    let _ = tokio_fs::create_dir_all(&work_dir).await;
+    let work_dir = output_root.join("validation");
+    let shared_dir = work_dir.join("shared");
+    let _ = tokio_fs::create_dir_all(&shared_dir).await;
     if let Some(creds) = setup_accounts(
         &client,
         &provider,
         &auth,
         &model,
         &snapshot,
-        &work_dir,
+        &shared_dir,
         progress_sender.clone(),
+        metrics.clone(),
     )
     .await
     .map_err(|e| BugVerificationFailure {
         message: e,
         logs: vec![],
     })? {
-        let path = write_accounts(&work_dir, &creds)
-            .await
-            .map_err(|e| BugVerificationFailure {
-                message: e,
-                logs: vec![],
-            })?;
+        let path =
+            write_accounts(&shared_dir, &creds)
+                .await
+                .map_err(|e| BugVerificationFailure {
+                    message: e,
+                    logs: vec![],
+                })?;
         if let Some(tx) = progress_sender.as_ref() {
             let names: Vec<String> = creds.iter().map(|p| p.username.clone()).collect();
             tx.send(AppEvent::SecurityReviewLog(format!(
@@ -15203,9 +15476,8 @@ pub(crate) async fn run_web_validation(
 
     // Build prompt
     let findings = build_validation_findings_context(&snapshot);
-    let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE.replace("{findings}", &findings);
+    let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE.replace("{findings}", &findings.text);
 
-    let metrics = Arc::new(ReviewMetrics::default());
     let response = call_model(
         &client,
         &provider,
@@ -15227,6 +15499,8 @@ pub(crate) async fn run_web_validation(
         log_model_reasoning(reasoning, &progress_sender, &None, &mut logs);
     }
 
+    let mut handled: HashSet<BugIdentifier> = HashSet::new();
+    let run_at = OffsetDateTime::now_utc();
     let mut requests: Vec<BugVerificationRequest> = Vec::new();
     for line in response.text.lines() {
         let trimmed = line.trim();
@@ -15241,25 +15515,87 @@ pub(crate) async fn run_web_validation(
             // Already handled by setup_accounts() pre-step; skip.
             continue;
         }
+        let Some(id_value) = parsed.id_value else {
+            continue;
+        };
         let id = match parsed.id_kind.as_str() {
-            "risk_rank" => BugIdentifier::RiskRank(parsed.id_value),
-            "summary_id" => BugIdentifier::SummaryId(parsed.id_value),
+            "risk_rank" => BugIdentifier::RiskRank(id_value),
+            "summary_id" => BugIdentifier::SummaryId(id_value),
             _ => continue,
         };
-        let tool = match parsed.tool.to_ascii_lowercase().as_str() {
-            "playwright" => BugVerificationTool::Playwright,
-            "curl" => BugVerificationTool::Curl,
-            "python" => BugVerificationTool::Python,
-            _ => continue,
+        handled.insert(id);
+
+        let Some(tool_raw) = parsed.tool.as_ref() else {
+            continue;
         };
-        requests.push(BugVerificationRequest {
-            id,
-            tool,
-            target: parsed.target.clone(),
-            script_path: None,
-            script_inline: parsed.script.clone(),
-        });
+        match tool_raw.to_ascii_lowercase().as_str() {
+            "none" => {
+                if let Some(index) = find_bug_index(&snapshot, id) {
+                    let entry = &mut snapshot.bugs[index];
+                    if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                        let reason = parsed
+                            .reason
+                            .as_ref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("No safe validation available in this environment.");
+                        entry.bug.validation.status = BugValidationStatus::UnableToValidate;
+                        entry.bug.validation.tool = Some("none".to_string());
+                        entry.bug.validation.target = None;
+                        entry.bug.validation.summary = Some(reason.to_string());
+                        entry.bug.validation.run_at = Some(run_at);
+                    }
+                }
+            }
+            "playwright" | "curl" | "python" => {
+                let tool = match tool_raw.to_ascii_lowercase().as_str() {
+                    "playwright" => BugVerificationTool::Playwright,
+                    "curl" => BugVerificationTool::Curl,
+                    "python" => BugVerificationTool::Python,
+                    _ => continue,
+                };
+                requests.push(BugVerificationRequest {
+                    id,
+                    tool,
+                    target: parsed.target.clone(),
+                    script_path: None,
+                    script_inline: parsed.script.clone(),
+                });
+            }
+            _ => {}
+        }
     }
+
+    for id in findings.ids.iter().copied() {
+        if handled.contains(&id) {
+            continue;
+        }
+        if let Some(index) = find_bug_index(&snapshot, id) {
+            let entry = &mut snapshot.bugs[index];
+            if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                entry.bug.validation.status = BugValidationStatus::UnableToValidate;
+                entry.bug.validation.tool = Some("none".to_string());
+                entry.bug.validation.target = None;
+                entry.bug.validation.summary = Some(
+                    "Validation planning did not produce a safe check for this finding."
+                        .to_string(),
+                );
+                entry.bug.validation.run_at = Some(run_at);
+            }
+        }
+    }
+
+    let snapshot_bytes =
+        serde_json::to_vec_pretty(&snapshot).map_err(|err| BugVerificationFailure {
+            message: format!("Failed to serialize bug snapshot: {err}"),
+            logs: logs.clone(),
+        })?;
+    tokio_fs::write(&snapshot_path, snapshot_bytes)
+        .await
+        .map_err(|err| BugVerificationFailure {
+            message: format!("Failed to write {}: {err}", snapshot_path.display()),
+            logs: logs.clone(),
+        })?;
 
     let batch = BugVerificationBatchRequest {
         snapshot_path,
@@ -16297,6 +16633,61 @@ fn ensure_threat_model_heading(markdown: String) -> String {
     out.push_str("## Threat Model\n\n");
     out.push_str(trimmed);
     out
+}
+
+fn nest_threat_model_subsections(markdown: String) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen_trust_boundaries = false;
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        let Some((hashes, rest)) = trimmed.split_once(' ') else {
+            out.push(line.to_string());
+            continue;
+        };
+        if hashes.is_empty() || !hashes.chars().all(|ch| ch == '#') {
+            out.push(line.to_string());
+            continue;
+        }
+        let heading_text = rest.trim();
+        let normalized = heading_text
+            .trim_matches('`')
+            .trim()
+            .trim_end_matches(':')
+            .to_ascii_lowercase();
+        if matches!(
+            normalized.as_str(),
+            "trust boundaries" | "trust boundary" | "trust-boundaries"
+        ) {
+            seen_trust_boundaries = true;
+            out.push("### Trust Boundaries".to_string());
+            continue;
+        }
+        if matches!(
+            normalized.as_str(),
+            "components & trust boundary diagram" | "components and trust boundary diagram"
+        ) {
+            if seen_trust_boundaries {
+                out.push("#### Diagram".to_string());
+            } else {
+                seen_trust_boundaries = true;
+                out.push("### Trust Boundaries".to_string());
+                out.push(String::new());
+                out.push("#### Diagram".to_string());
+            }
+            continue;
+        }
+        let is_threat_model_subsection = matches!(
+            normalized.as_str(),
+            "primary components" | "assets" | "attacker model" | "entry points" | "top abuse paths"
+        );
+        if is_threat_model_subsection {
+            let title = heading_text.trim_matches('`').trim().trim_end_matches(':');
+            out.push(format!("### {title}"));
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    out.join("\n")
 }
 
 fn human_readable_bytes(bytes: usize) -> String {
