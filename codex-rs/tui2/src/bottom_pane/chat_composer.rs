@@ -1192,17 +1192,16 @@ impl ChatComposer {
                     }
                 }
 
-                if !input_starts_with_space {
-                    if let Some((name, rest)) = parse_slash_name(&text)
-                        && !rest.is_empty()
-                        && !name.contains('/')
-                        && let Some((_n, cmd)) = built_in_slash_commands()
-                            .into_iter()
-                            .find(|(command_name, _)| *command_name == name)
-                        && cmd == SlashCommand::Review
-                    {
-                        return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
-                    }
+                if !input_starts_with_space
+                    && let Some((name, rest)) = parse_slash_name(&text)
+                    && !rest.is_empty()
+                    && !name.contains('/')
+                    && let Some((_n, cmd)) = built_in_slash_commands()
+                        .into_iter()
+                        .find(|(command_name, _)| *command_name == name)
+                    && cmd == SlashCommand::Review
+                {
+                    return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
                 }
 
                 let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
