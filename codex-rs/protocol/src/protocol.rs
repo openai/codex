@@ -1180,6 +1180,7 @@ pub struct WebSearchEndEvent {
     pub query: String,
 }
 
+// Conversation kept for backward compatibility.
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

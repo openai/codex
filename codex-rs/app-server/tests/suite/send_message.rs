@@ -3,13 +3,11 @@ use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::to_response;
-use codex_app_server_protocol::AddConversationListenerParams;
+use codex_app_server_protocol::{AddConversationListenerParams, NewConversationParams, NewConversationResponse};
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewThreadParams;
-use codex_app_server_protocol::NewThreadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
@@ -44,7 +42,7 @@ async fn test_send_message_success() -> Result<()> {
 
     // Start a conversation using the new wire API.
     let new_conv_id = mcp
-        .send_new_conversation_request(NewThreadParams {
+        .send_new_conversation_request(NewConversationParams {
             ..Default::default()
         })
         .await?;
@@ -53,7 +51,7 @@ async fn test_send_message_success() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let NewThreadResponse {
+    let NewConversationResponse {
         conversation_id, ..
     } = to_response::<_>(new_conv_resp)?;
 
@@ -145,7 +143,7 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
-        .send_new_conversation_request(NewThreadParams {
+        .send_new_conversation_request(NewConversationParams {
             developer_instructions: Some("Use the test harness tools.".to_string()),
             ..Default::default()
         })
@@ -155,7 +153,7 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let NewThreadResponse {
+    let NewConversationResponse {
         conversation_id, ..
     } = to_response::<_>(new_conv_resp)?;
 

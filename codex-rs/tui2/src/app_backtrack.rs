@@ -308,7 +308,7 @@ impl App {
     }
 
     /// Handle a ConversationHistory response while a backtrack is pending.
-    /// If it matches the primed base session, fork and switch to the new conversation.
+    /// If it matches the primed base session, fork and switch to the new thread.
     pub(crate) async fn on_conversation_history_for_backtrack(
         &mut self,
         tui: &mut tui::Tui,
@@ -324,7 +324,7 @@ impl App {
         Ok(())
     }
 
-    /// Fork the conversation using provided history and switch UI/state accordingly.
+    /// Fork the thread using provided history and switch UI/state accordingly.
     async fn fork_and_switch_to_new_conversation(
         &mut self,
         tui: &mut tui::Tui,
@@ -355,7 +355,7 @@ impl App {
         self.server.fork_thread(nth_user_message, cfg, path).await
     }
 
-    /// Install a forked conversation into the ChatWidget and update UI to reflect selection.
+    /// Install a forked thread into the ChatWidget and update UI to reflect selection.
     fn install_forked_conversation(
         &mut self,
         tui: &mut tui::Tui,
@@ -364,7 +364,7 @@ impl App {
         nth_user_message: usize,
         prefill: &str,
     ) {
-        let conv = new_conv.conversation;
+        let thread = new_conv.thread;
         let session_configured = new_conv.session_configured;
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
@@ -380,7 +380,7 @@ impl App {
             is_first_run: false,
         };
         self.chat_widget =
-            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
+            crate::chatwidget::ChatWidget::new_from_existing(init, thread, session_configured);
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);

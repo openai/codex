@@ -5,14 +5,12 @@ use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell;
 use app_test_support::to_response;
-use codex_app_server_protocol::AddConversationListenerParams;
+use codex_app_server_protocol::{AddConversationListenerParams, NewConversationParams, NewConversationResponse};
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewThreadParams;
-use codex_app_server_protocol::NewThreadResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -74,7 +72,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
 
     // 1) newConversation
     let new_conv_id = mcp
-        .send_new_conversation_request(NewThreadParams {
+        .send_new_conversation_request(NewConversationParams {
             cwd: Some(working_directory.to_string_lossy().into_owned()),
             ..Default::default()
         })
@@ -84,8 +82,8 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let new_conv_resp = to_response::<NewThreadResponse>(new_conv_resp)?;
-    let NewThreadResponse {
+    let new_conv_resp = to_response::<NewConversationResponse>(new_conv_resp)?;
+    let NewConversationResponse {
         conversation_id,
         model,
         reasoning_effort: _,
@@ -206,7 +204,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
 
     // 1) Start conversation with approval_policy=untrusted
     let new_conv_id = mcp
-        .send_new_conversation_request(NewThreadParams {
+        .send_new_conversation_request(NewConversationParams {
             cwd: Some(working_directory.to_string_lossy().into_owned()),
             ..Default::default()
         })
@@ -216,9 +214,9 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let NewThreadResponse {
+    let NewConversationResponse {
         conversation_id, ..
-    } = to_response::<NewThreadResponse>(new_conv_resp)?;
+    } = to_response::<NewConversationResponse>(new_conv_resp)?;
 
     // 2) addConversationListener
     let add_listener_id = mcp
@@ -370,7 +368,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
-        .send_new_conversation_request(NewThreadParams {
+        .send_new_conversation_request(NewConversationParams {
             cwd: Some(first_cwd.to_string_lossy().into_owned()),
             approval_policy: Some(AskForApproval::Never),
             sandbox: Some(SandboxMode::WorkspaceWrite),
@@ -382,11 +380,11 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let NewThreadResponse {
+    let NewConversationResponse {
         conversation_id,
         model,
         ..
-    } = to_response::<NewThreadResponse>(new_conv_resp)?;
+    } = to_response::<NewConversationResponse>(new_conv_resp)?;
 
     let add_listener_id = mcp
         .send_add_conversation_listener_request(AddConversationListenerParams {

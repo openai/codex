@@ -20,7 +20,7 @@ use crossterm::event::KeyEventKind;
 pub(crate) struct BacktrackState {
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
-    /// Session id of the base conversation to fork from.
+    /// Session id of the base thread to fork from.
     pub(crate) base_id: Option<ThreadId>,
     /// Index in the transcript of the last user message.
     pub(crate) nth_user_message: usize,
@@ -95,7 +95,7 @@ impl App {
         }
     }
 
-    /// Stage a backtrack and request conversation history from the agent.
+    /// Stage a backtrack and request thread history from the agent.
     pub(crate) fn request_backtrack(
         &mut self,
         prefill: String,
@@ -325,7 +325,7 @@ impl App {
         self.server.fork_thread(nth_user_message, cfg, path).await
     }
 
-    /// Install a forked conversation into the ChatWidget and update UI to reflect selection.
+    /// Install a forked thread into the ChatWidget and update UI to reflect selection.
     fn install_forked_conversation(
         &mut self,
         tui: &mut tui::Tui,
@@ -334,7 +334,7 @@ impl App {
         nth_user_message: usize,
         prefill: &str,
     ) {
-        let conv = new_conv.conversation;
+        let thread = new_conv.thread;
         let session_configured = new_conv.session_configured;
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
@@ -350,7 +350,7 @@ impl App {
             is_first_run: false,
         };
         self.chat_widget =
-            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
+            crate::chatwidget::ChatWidget::new_from_existing(init, thread, session_configured);
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);

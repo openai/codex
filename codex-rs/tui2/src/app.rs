@@ -465,11 +465,7 @@ impl App {
                     is_first_run,
                     model: model.clone(),
                 };
-                ChatWidget::new_from_existing(
-                    init,
-                    resumed.conversation,
-                    resumed.session_configured,
-                )
+                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
         };
 
@@ -1417,7 +1413,7 @@ impl App {
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
-                                    resumed.conversation,
+                                    resumed.thread,
                                     resumed.session_configured,
                                 );
                                 if let Some(summary) = summary {

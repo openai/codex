@@ -4,8 +4,8 @@ use app_test_support::to_response;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewThreadParams;
-use codex_app_server_protocol::NewThreadResponse;
+use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use std::path::Path;
@@ -23,7 +23,7 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_request_id = mcp
-        .send_new_conversation_request(NewThreadParams {
+        .send_new_conversation_request(NewConversationParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -34,11 +34,11 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
     )
     .await??;
 
-    let NewThreadResponse {
+    let NewConversationResponse {
         conversation_id,
         rollout_path,
         ..
-    } = to_response::<NewThreadResponse>(new_response)?;
+    } = to_response::<NewConversationResponse>(new_response)?;
 
     assert!(
         rollout_path.exists(),

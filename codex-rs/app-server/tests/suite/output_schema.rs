@@ -4,8 +4,8 @@ use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewThreadParams;
-use codex_app_server_protocol::NewThreadResponse;
+use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
@@ -41,7 +41,7 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
-        .send_new_conversation_request(NewThreadParams {
+        .send_new_conversation_request(NewConversationParams {
             ..Default::default()
         })
         .await?;
@@ -50,9 +50,9 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let NewThreadResponse {
+    let NewConversationResponse {
         conversation_id, ..
-    } = to_response::<NewThreadResponse>(new_conv_resp)?;
+    } = to_response::<NewConversationResponse>(new_conv_resp)?;
 
     let listener_id = mcp
         .send_add_conversation_listener_request(AddConversationListenerParams {
@@ -142,7 +142,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
-        .send_new_conversation_request(NewThreadParams {
+        .send_new_conversation_request(NewConversationParams {
             ..Default::default()
         })
         .await?;
@@ -151,9 +151,9 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let NewThreadResponse {
+    let NewConversationResponse {
         conversation_id, ..
-    } = to_response::<NewThreadResponse>(new_conv_resp)?;
+    } = to_response::<NewConversationResponse>(new_conv_resp)?;
 
     let listener_id = mcp
         .send_add_conversation_listener_request(AddConversationListenerParams {
