@@ -210,9 +210,8 @@ impl ModelClient {
         let instructions = prompt.get_full_instructions(&model_info).into_owned();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
-        let default_reasoning_effort = (!model_info.supported_reasoning_levels.is_empty()
-            && !model_info.slug.contains("codex")
-            && model_info.default_reasoning_level != ReasoningEffortConfig::None)
+        let default_reasoning_effort = (model_info.default_reasoning_level
+            != ReasoningEffortConfig::None)
             .then_some(model_info.default_reasoning_level);
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {
