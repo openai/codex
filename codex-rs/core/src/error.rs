@@ -213,7 +213,7 @@ impl CodexErr {
             | CodexErr::Json(_)
             | CodexErr::TokioJoin(_) => true,
             #[cfg(target_os = "linux")]
-            CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => true,
+            CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => false,
         }
     }
 }
