@@ -5,6 +5,9 @@ use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
+use crate::user_instructions::SkillInstructions;
+use crate::user_instructions::UserInstructions;
+use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -152,6 +155,39 @@ impl ContextManager {
         }
     }
 
+    /// Drop the last `num_turns` user turns from this history.
+    ///
+    /// "User turns" are identified as `ResponseItem::Message` entries whose role is `"user"`.
+    ///
+    /// This mirrors thread-rollback semantics:
+    /// - `num_turns == 0` is a no-op
+    /// - if there are no user turns, this is a no-op
+    /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
+    ///   preserving any items that occurred before the first user message.
+    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
+        if num_turns == 0 {
+            return;
+        }
+
+        // Keep behavior consistent with call sites that previously operated on `get_history()`:
+        // normalize first (call/output invariants), then truncate based on the normalized view.
+        let snapshot = self.get_history();
+        let user_positions = user_message_positions(&snapshot);
+        let Some(&first_user_idx) = user_positions.first() else {
+            self.replace(snapshot);
+            return;
+        };
+
+        let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        let cut_idx = if n_from_end >= user_positions.len() {
+            first_user_idx
+        } else {
+            user_positions[user_positions.len() - n_from_end]
+        };
+
+        self.replace(snapshot[..cut_idx].to_vec());
+    }
+
     pub(crate) fn update_token_info(
         &mut self,
         usage: &TokenUsage,
@@ -289,6 +325,56 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .checked_div(4)
         .unwrap_or(0)
         .saturating_sub(650)
+}
+
+fn is_session_prefix(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let lowered = trimmed.to_ascii_lowercase();
+    lowered.starts_with("<environment_context>")
+}
+
+fn is_user_turn_boundary(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+
+    if role != "user" {
+        return false;
+    }
+
+    if UserInstructions::is_user_instructions(content)
+        || SkillInstructions::is_skill_instructions(content)
+    {
+        return false;
+    }
+
+    for content_item in content {
+        match content_item {
+            ContentItem::InputText { text } => {
+                if is_session_prefix(text) || is_user_shell_command_text(text) {
+                    return false;
+                }
+            }
+            ContentItem::OutputText { text } => {
+                if is_session_prefix(text) {
+                    return false;
+                }
+            }
+            ContentItem::InputImage { .. } => {}
+        }
+    }
+
+    true
+}
+
+fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {
+    let mut positions = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        if is_user_turn_boundary(item) {
+            positions.push(idx);
+        }
+    }
+    positions
 }
 
 #[cfg(test)]

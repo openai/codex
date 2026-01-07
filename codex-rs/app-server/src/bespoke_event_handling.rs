@@ -1,7 +1,13 @@
 use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::PendingInterrupts;
+use crate::codex_message_processor::PendingRollbacks;
 use crate::codex_message_processor::TurnSummary;
 use crate::codex_message_processor::TurnSummaryStore;
+use crate::codex_message_processor::read_event_msgs_from_rollout;
+use crate::codex_message_processor::read_summary_from_rollout;
+use crate::codex_message_processor::summary_to_thread;
+use crate::error_code::INTERNAL_ERROR_CODE;
+use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -27,6 +33,7 @@ use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
@@ -40,6 +47,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
@@ -50,9 +58,11 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_core::CodexConversation;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -78,14 +88,17 @@ use tracing::error;
 
 type JsonValue = serde_json::Value;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
     conversation_id: ConversationId,
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
+    pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
     api_version: ApiVersion,
+    fallback_model_provider: String,
 ) {
     let Event {
         id: event_turn_id,
@@ -337,6 +350,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::Error(ev) => {
+            let message = ev.message.clone();
+            let codex_error_info = ev.codex_error_info.clone();
+
+            // If this error belongs to an in-flight `thread/rollback` request, fail that request
+            // (and clear pending state) so subsequent rollbacks are unblocked.
+            //
+            // Don't send a notification for this error.
+            if matches!(
+                codex_error_info,
+                Some(CoreCodexErrorInfo::ThreadRollbackFailed)
+            ) {
+                return handle_thread_rollback_failed(
+                    conversation_id,
+                    message,
+                    &pending_rollbacks,
+                    &outgoing,
+                )
+                .await;
+            };
+
             let turn_error = TurnError {
                 message: ev.message,
                 codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
@@ -345,7 +378,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             handle_error(conversation_id, turn_error.clone(), &turn_summary_store).await;
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error,
+                    error: turn_error.clone(),
                     will_retry: false,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
@@ -690,6 +723,58 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
+        EventMsg::ThreadRolledBack(_rollback_event) => {
+            let pending = {
+                let mut map = pending_rollbacks.lock().await;
+                map.remove(&conversation_id)
+            };
+
+            if let Some(request_id) = pending {
+                let rollout_path = conversation.rollout_path();
+                let response = match read_summary_from_rollout(
+                    rollout_path.as_path(),
+                    fallback_model_provider.as_str(),
+                )
+                .await
+                {
+                    Ok(summary) => {
+                        let mut thread = summary_to_thread(summary);
+                        match read_event_msgs_from_rollout(rollout_path.as_path()).await {
+                            Ok(events) => {
+                                thread.turns = build_turns_from_event_msgs(&events);
+                                ThreadRollbackResponse { thread }
+                            }
+                            Err(err) => {
+                                let error = JSONRPCErrorError {
+                                    code: INTERNAL_ERROR_CODE,
+                                    message: format!(
+                                        "failed to load rollout `{}`: {err}",
+                                        rollout_path.display()
+                                    ),
+                                    data: None,
+                                };
+                                outgoing.send_error(request_id, error).await;
+                                return;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!(
+                                "failed to load rollout `{}`: {err}",
+                                rollout_path.display()
+                            ),
+                            data: None,
+                        };
+                        outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                };
+
+                outgoing.send_response(request_id, response).await;
+            }
+        }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(
                 conversation_id,
@@ -904,6 +989,31 @@ async fn handle_turn_interrupted(
         outgoing,
     )
     .await;
+}
+
+async fn handle_thread_rollback_failed(
+    conversation_id: ConversationId,
+    message: String,
+    pending_rollbacks: &PendingRollbacks,
+    outgoing: &OutgoingMessageSender,
+) {
+    let pending_rollback = {
+        let mut map = pending_rollbacks.lock().await;
+        map.remove(&conversation_id)
+    };
+
+    if let Some(request_id) = pending_rollback {
+        outgoing
+            .send_error(
+                request_id,
+                JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: message.clone(),
+                    data: None,
+                },
+            )
+            .await;
+    }
 }
 
 async fn handle_token_count_event(

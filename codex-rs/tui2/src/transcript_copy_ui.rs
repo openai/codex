@@ -287,6 +287,13 @@ impl TranscriptCopyUi {
         let icon_style = base_style.add_modifier(Modifier::BOLD).fg(Color::LightCyan);
         let bold_style = base_style.add_modifier(Modifier::BOLD);
 
+        // Clear background so underlying text doesn't bleed through the pill.
+        for position in pill_area.positions() {
+            let cell = &mut buf[position];
+            cell.set_symbol(" ");
+            cell.set_style(base_style);
+        }
+
         let mut spans: Vec<Span<'static>> = vec![
             Span::styled(" ", base_style),
             Span::styled("⧉", icon_style),
@@ -305,6 +312,7 @@ impl TranscriptCopyUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
 
     fn buf_to_string(buf: &Buffer, area: Rect) -> String {
@@ -358,5 +366,22 @@ mod tests {
         let rect = ui.affordance_rect.expect("expected pill to render");
         assert_eq!(rect.y, 1);
         assert!(ui.hit_test(rect.x, rect.y));
+    }
+
+    #[test]
+    fn copy_pill_clears_background() {
+        let area = Rect::new(0, 0, 40, 3);
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buf[(x, y)].set_symbol("x");
+            }
+        }
+
+        let mut ui = TranscriptCopyUi::new_with_shortcut(CopySelectionShortcut::CtrlShiftC);
+        ui.render_copy_pill(area, &mut buf, (1, 2), (1, 6), 0, 3);
+
+        let rendered = buf_to_string(&buf, area);
+        assert_snapshot!("copy_pill_clears_background", rendered);
     }
 }

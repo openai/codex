@@ -8,6 +8,9 @@ use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
 use crate::SandboxState;
+use crate::agent::AgentControl;
+use crate::agent::AgentStatus;
+use crate::agent::agent_status_from_event;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -167,6 +170,8 @@ pub struct Codex {
     pub(crate) next_id: AtomicU64,
     pub(crate) tx_sub: Sender<Submission>,
     pub(crate) rx_event: Receiver<Event>,
+    // Last known status of the agent.
+    pub(crate) agent_status: Arc<RwLock<AgentStatus>>,
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -207,13 +212,14 @@ fn maybe_push_chat_wire_api_deprecation(
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(
+    pub(crate) async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
+        agent_control: AgentControl,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -273,6 +279,7 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
+        let agent_status = Arc::new(RwLock::new(AgentStatus::PendingInit));
 
         let session = Session::new(
             session_configuration,
@@ -281,9 +288,11 @@ impl Codex {
             models_manager.clone(),
             exec_policy,
             tx_event.clone(),
+            Arc::clone(&agent_status),
             conversation_history,
             session_source_clone,
             skills_manager,
+            agent_control,
         )
         .await
         .map_err(|e| {
@@ -298,6 +307,7 @@ impl Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
+            agent_status,
         };
 
         Ok(CodexSpawnOk {
@@ -335,6 +345,11 @@ impl Codex {
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(event)
     }
+
+    pub(crate) async fn agent_status(&self) -> AgentStatus {
+        let status = self.agent_status.read().await;
+        status.clone()
+    }
 }
 
 /// Context for an initialized model agent
@@ -343,6 +358,7 @@ impl Codex {
 pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
+    agent_status: Arc<RwLock<AgentStatus>>,
     state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
@@ -546,9 +562,11 @@ impl Session {
         models_manager: Arc<ModelsManager>,
         exec_policy: ExecPolicyManager,
         tx_event: Sender<Event>,
+        agent_status: Arc<RwLock<AgentStatus>>,
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
+        agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -670,11 +688,13 @@ impl Session {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
+            agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
             active_turn: Mutex::new(None),
@@ -995,9 +1015,33 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        // Record the last known agent status.
+        if let Some(status) = agent_status_from_event(&event.msg) {
+            let mut guard = self.agent_status.write().await;
+            *guard = status;
+        }
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
+        if let Err(e) = self.tx_event.send(event).await {
+            error!("failed to send tool call event: {e}");
+        }
+    }
+
+    /// Persist the event to the rollout file, flush it, and only then deliver it to clients.
+    ///
+    /// Most events can be delivered immediately after queueing the rollout write, but some
+    /// clients (e.g. app-server thread/rollback) re-read the rollout file synchronously on
+    /// receipt of the event and depend on the marker already being visible on disk.
+    pub(crate) async fn send_event_raw_flushed(&self, event: Event) {
+        // Record the last known agent status.
+        if let Some(status) = agent_status_from_event(&event.msg) {
+            let mut guard = self.agent_status.write().await;
+            *guard = status;
+        }
+        self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
+            .await;
+        self.flush_rollout().await;
         if let Err(e) = self.tx_event.send(event).await {
             error!("failed to send tool call event: {e}");
         }
@@ -1219,6 +1263,9 @@ impl Session {
                         );
                         history.replace(rebuilt);
                     }
+                }
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    history.drop_last_n_user_turns(rollback.num_turns);
                 }
                 _ => {}
             }
@@ -1659,6 +1706,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
+            Op::ThreadRollback { num_turns } => {
+                handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -1716,6 +1766,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
 
@@ -2035,6 +2086,46 @@ mod handlers {
         .await;
     }
 
+    pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
+        if num_turns == 0 {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "num_turns must be >= 1".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        let has_active_turn = { sess.active_turn.lock().await.is_some() };
+        if has_active_turn {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Cannot rollback while a turn is in progress.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+
+        let mut history = sess.clone_history().await;
+        history.drop_last_n_user_turns(num_turns);
+        sess.replace_history(history.get_history()).await;
+        sess.recompute_token_usage(turn_context.as_ref()).await;
+
+        sess.send_event_raw_flushed(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
+        })
+        .await;
+    }
+
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         sess.services
@@ -2121,6 +2212,7 @@ async fn spawn_review_thread(
     let mut review_features = sess.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
+        .disable(crate::features::Feature::WebSearchCached)
         .disable(crate::features::Feature::ViewImageTool);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
@@ -2949,6 +3041,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_rollback_drops_last_turn_from_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref());
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let turn_1 = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "turn 1 user".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn 1 assistant".to_string(),
+                }],
+            },
+        ];
+        sess.record_into_history(&turn_1, tc.as_ref()).await;
+
+        let turn_2 = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "turn 2 user".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn 2 assistant".to_string(),
+                }],
+            },
+        ];
+        sess.record_into_history(&turn_2, tc.as_ref()).await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+
+        let mut expected = Vec::new();
+        expected.extend(initial_context);
+        expected.extend(turn_1);
+
+        let actual = sess.clone_history().await.get_history();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref());
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let turn_1 = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "turn 1 user".to_string(),
+            }],
+        }];
+        sess.record_into_history(&turn_1, tc.as_ref()).await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 99).await;
+
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 99);
+
+        let actual = sess.clone_history().await.get_history();
+        assert_eq!(initial_context, actual);
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_fails_when_turn_in_progress() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref());
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        *sess.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+
+        let error_event = wait_for_thread_rollback_failed(&rx).await;
+        assert_eq!(
+            error_event.codex_error_info,
+            Some(CodexErrorInfo::ThreadRollbackFailed)
+        );
+
+        let actual = sess.clone_history().await.get_history();
+        assert_eq!(initial_context, actual);
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_fails_when_num_turns_is_zero() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref());
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 0).await;
+
+        let error_event = wait_for_thread_rollback_failed(&rx).await;
+        assert_eq!(error_event.message, "num_turns must be >= 1");
+        assert_eq!(
+            error_event.codex_error_info,
+            Some(CodexErrorInfo::ThreadRollbackFailed)
+        );
+
+        let actual = sess.clone_history().await.get_history();
+        assert_eq!(initial_context, actual);
+    }
+
+    #[tokio::test]
     async fn set_rate_limits_retains_previous_credits() {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
@@ -3181,6 +3398,44 @@ mod tests {
         assert_eq!(expected, got);
     }
 
+    async fn wait_for_thread_rolled_back(
+        rx: &async_channel::Receiver<Event>,
+    ) -> crate::protocol::ThreadRolledBackEvent {
+        let deadline = StdDuration::from_secs(2);
+        let start = std::time::Instant::now();
+        loop {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::ThreadRolledBack(payload) => return payload,
+                _ => continue,
+            }
+        }
+    }
+
+    async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) -> ErrorEvent {
+        let deadline = StdDuration::from_secs(2);
+        let start = std::time::Instant::now();
+        loop {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::Error(payload)
+                    if payload.codex_error_info == Some(CodexErrorInfo::ThreadRollbackFailed) =>
+                {
+                    return payload;
+                }
+                _ => continue,
+            }
+        }
+    }
+
     fn text_block(s: &str) -> ContentBlock {
         ContentBlock::TextContent(TextContent {
             annotations: None,
@@ -3225,7 +3480,9 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
+        let agent_status = Arc::new(RwLock::new(AgentStatus::PendingInit));
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -3271,6 +3528,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let turn_context = Session::make_turn_context(
@@ -3287,6 +3545,7 @@ mod tests {
         let session = Session {
             conversation_id,
             tx_event,
+            agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
             active_turn: Mutex::new(None),
@@ -3312,7 +3571,9 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
+        let agent_status = Arc::new(RwLock::new(AgentStatus::PendingInit));
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -3358,6 +3619,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
@@ -3374,6 +3636,7 @@ mod tests {
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
+            agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
             active_turn: Mutex::new(None),
