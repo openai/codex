@@ -1,7 +1,7 @@
 use codex_core::CodexAuth;
-use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
+use codex_core::NewThread;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::parse_turn_item;
 use codex_core::protocol::EventMsg;
@@ -26,7 +26,7 @@ fn sse_completed(id: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fork_conversation_twice_drops_to_first_message() {
+async fn fork_thread_twice_drops_to_first_message() {
     skip_if_no_network!();
 
     // Start a mock server that completes three turns.
@@ -55,15 +55,12 @@ async fn fork_conversation_twice_drops_to_first_message() {
     config.model_provider = model_provider.clone();
     let config_for_fork = config.clone();
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
+    let NewThread { thread: codex, .. } = thread_manager
+        .start_thread(config)
         .await
         .expect("create conversation");
 
@@ -129,11 +126,11 @@ async fn fork_conversation_twice_drops_to_first_message() {
     // After dropping again (n=1 on fork1), compute expected relative to fork1's rollout.
 
     // Fork once with n=1 → drops the last user input and everything after.
-    let NewConversation {
-        conversation: codex_fork1,
+    let NewThread {
+        thread: codex_fork1,
         ..
-    } = conversation_manager
-        .fork_conversation(1, config_for_fork.clone(), base_path.clone())
+    } = thread_manager
+        .fork_thread(1, config_for_fork.clone(), base_path.clone())
         .await
         .expect("fork 1");
 
@@ -147,11 +144,11 @@ async fn fork_conversation_twice_drops_to_first_message() {
     );
 
     // Fork again with n=0 → drops the (new) last user message, leaving only the first.
-    let NewConversation {
-        conversation: codex_fork2,
+    let NewThread {
+        thread: codex_fork2,
         ..
-    } = conversation_manager
-        .fork_conversation(0, config_for_fork.clone(), fork1_path.clone())
+    } = thread_manager
+        .fork_thread(0, config_for_fork.clone(), fork1_path.clone())
         .await
         .expect("fork 2");
 
