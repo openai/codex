@@ -9,9 +9,9 @@ jest.mock("node:child_process", () => {
   return { ...actual, spawn: jest.fn() };
 });
 
-const actualChildProcess =
+const _actualChildProcess =
   jest.requireActual<typeof import("node:child_process")>("node:child_process");
-const spawnMock = child_process.spawn as jest.MockedFunction<typeof actualChildProcess.spawn>;
+const spawnMock = child_process.spawn as jest.MockedFunction<typeof _actualChildProcess.spawn>;
 
 class FakeChildProcess extends EventEmitter {
   stdin = new PassThrough();
