@@ -410,6 +410,7 @@ mod tests {
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
+    use crate::config_loader::ConfigRequirementsToml;
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -471,7 +472,11 @@ mod tests {
                 TomlValue::Table(toml::map::Map::new()),
             ),
         ];
-        let stack = ConfigLayerStack::new(layers, ConfigRequirements::default())?;
+        let stack = ConfigLayerStack::new(
+            layers,
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )?;
 
         let got = skill_roots_from_layer_stack(&stack)
             .into_iter()
