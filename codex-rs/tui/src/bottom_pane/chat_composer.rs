@@ -698,16 +698,19 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                     CharDecision::BeginBuffer { retro_chars } => {
+                        // Grab recent chars
                         let cur = self.textarea.cursor();
                         let txt = self.textarea.text();
                         let safe_cur = Self::clamp_to_char_boundary(txt, cur);
                         let before = &txt[..safe_cur];
                         let start_byte =
                             super::paste_burst::retro_start_index(before, retro_chars as usize);
+                        // remove the recent chars we grabbed
                         let grabbed = before[start_byte..].to_string();
                         if !grabbed.is_empty() {
                             self.textarea.replace_range(start_byte..safe_cur, "");
                         }
+                        // seed the paste burst buffer with everything (grabbed + new)
                         self.paste_burst.begin_with_retro_grabbed(grabbed, now);
                         self.paste_burst.append_char_to_buffer(ch, now);
                         return (InputResult::None, true);
