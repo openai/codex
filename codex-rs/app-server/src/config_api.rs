@@ -3,11 +3,11 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::RequirementListResponse;
 use codex_app_server_protocol::Requirements;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::config::ConfigService;
@@ -42,9 +42,9 @@ impl ConfigApi {
         self.service.read(params).await.map_err(map_error)
     }
 
-    pub(crate) async fn requirement_list(
+    pub(crate) async fn config_requirements_read(
         &self,
-    ) -> Result<RequirementListResponse, JSONRPCErrorError> {
+    ) -> Result<ConfigRequirementsReadResponse, JSONRPCErrorError> {
         let requirements = self
             .service
             .read_requirements()
@@ -52,7 +52,7 @@ impl ConfigApi {
             .map_err(map_error)?
             .map(map_requirements_toml_to_api);
 
-        Ok(RequirementListResponse { requirements })
+        Ok(ConfigRequirementsReadResponse { requirements })
     }
 
     pub(crate) async fn write_value(

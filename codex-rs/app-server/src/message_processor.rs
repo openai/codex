@@ -158,11 +158,11 @@ impl MessageProcessor {
             ClientRequest::ConfigBatchWrite { request_id, params } => {
                 self.handle_config_batch_write(request_id, params).await;
             }
-            ClientRequest::RequirementList {
+            ClientRequest::ConfigRequirementsRead {
                 request_id,
                 params: _,
             } => {
-                self.handle_requirement_list(request_id).await;
+                self.handle_config_requirements_read(request_id).await;
             }
             other => {
                 self.codex_message_processor.process_request(other).await;
@@ -217,8 +217,8 @@ impl MessageProcessor {
         }
     }
 
-    async fn handle_requirement_list(&self, request_id: RequestId) {
-        match self.config_api.requirement_list().await {
+    async fn handle_config_requirements_read(&self, request_id: RequestId) {
+        match self.config_api.config_requirements_read().await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }

@@ -197,9 +197,9 @@ client_request_definitions! {
         response: v2::ConfigWriteResponse,
     },
 
-    RequirementList => "requirements/list" {
+    ConfigRequirementsRead => "configRequirements/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::RequirementListResponse,
+        response: v2::ConfigRequirementsReadResponse,
     },
 
     GetAccount => "account/read" {
@@ -709,6 +709,22 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
+                "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_config_requirements_read() -> Result<()> {
+        let request = ClientRequest::ConfigRequirementsRead {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        assert_eq!(
+            json!({
+                "method": "configRequirements/read",
                 "id": 1,
             }),
             serde_json::to_value(&request)?,

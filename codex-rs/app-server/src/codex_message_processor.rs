@@ -510,8 +510,8 @@ impl CodexMessageProcessor {
             | ClientRequest::ConfigBatchWrite { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
             }
-            ClientRequest::RequirementList { .. } => {
-                warn!("RequirementList request reached CodexMessageProcessor unexpectedly");
+            ClientRequest::ConfigRequirementsRead { .. } => {
+                warn!("ConfigRequirementsRead request reached CodexMessageProcessor unexpectedly");
             }
             ClientRequest::GetAccountRateLimits {
                 request_id,
