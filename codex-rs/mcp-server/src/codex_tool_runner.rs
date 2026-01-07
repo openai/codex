@@ -9,9 +9,9 @@ use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
+use codex_core::CodexThread;
+use codex_core::NewThread;
+use codex_core::ThreadManager;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -21,7 +21,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::user_input::UserInput;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
@@ -41,14 +41,14 @@ pub async fn run_codex_tool_session(
     initial_prompt: String,
     config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
-    conversation_manager: Arc<ConversationManager>,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
+    thread_manager: Arc<ThreadManager>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 ) {
-    let NewConversation {
-        conversation_id,
-        conversation,
+    let NewThread {
+        thread_id,
+        thread,
         session_configured,
-    } = match conversation_manager.new_conversation(config).await {
+    } = match thread_manager.start_thread(config).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -87,7 +87,7 @@ pub async fn run_codex_tool_session(
     running_requests_id_to_codex_uuid
         .lock()
         .await
-        .insert(id.clone(), conversation_id);
+        .insert(id.clone(), thread_id);
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
@@ -98,29 +98,23 @@ pub async fn run_codex_tool_session(
         },
     };
 
-    if let Err(e) = conversation.submit_with_id(submission).await {
+    if let Err(e) = thread.submit_with_id(submission).await {
         tracing::error!("Failed to submit initial prompt: {e}");
         // unregister the id so we don't keep it in the map
         running_requests_id_to_codex_uuid.lock().await.remove(&id);
         return;
     }
 
-    run_codex_tool_session_inner(
-        conversation,
-        outgoing,
-        id,
-        running_requests_id_to_codex_uuid,
-    )
-    .await;
+    run_codex_tool_session_inner(thread, outgoing, id, running_requests_id_to_codex_uuid).await;
 }
 
 pub async fn run_codex_tool_session_reply(
-    conversation: Arc<CodexConversation>,
+    conversation: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     prompt: String,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
-    conversation_id: ConversationId,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
+    conversation_id: ThreadId,
 ) {
     running_requests_id_to_codex_uuid
         .lock()
@@ -152,10 +146,10 @@ pub async fn run_codex_tool_session_reply(
 }
 
 async fn run_codex_tool_session_inner(
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 ) {
     let request_id_str = match &request_id {
         RequestId::String(s) => s.clone(),
