@@ -99,7 +99,7 @@ pub async fn spawn_process(
     let mut child = command.spawn()?;
     let pid = child
         .id()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing child pid"))?;
+        .ok_or_else(|| io::Error::other("missing child pid"))?;
 
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();

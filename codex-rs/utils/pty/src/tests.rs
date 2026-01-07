@@ -145,13 +145,11 @@ async fn pipe_and_pty_share_interface() -> anyhow::Result<()> {
     assert_eq!(pty_code, 0);
     assert!(
         String::from_utf8_lossy(&pipe_out).contains("pipe_ok"),
-        "pipe output mismatch: {:?}",
-        pipe_out
+        "pipe output mismatch: {pipe_out:?}"
     );
     assert!(
         String::from_utf8_lossy(&pty_out).contains("pty_ok"),
-        "pty output mismatch: {:?}",
-        pty_out
+        "pty output mismatch: {pty_out:?}"
     );
 
     Ok(())
