@@ -163,10 +163,19 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
             ));
         }
     }
+
     std::fs::create_dir_all(&codex_home)?;
+    let temp_root = codex_home.join("tmp").join("path");
+    std::fs::create_dir_all(&temp_root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(&temp_root, std::fs::Permissions::from_mode(0o700))?;
+    }
     let temp_dir = tempfile::Builder::new()
         .prefix("codex-arg0")
-        .tempdir_in(codex_home)?;
+        .tempdir_in(&temp_root)?;
     let path = temp_dir.path();
 
     for filename in &[
