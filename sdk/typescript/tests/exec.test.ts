@@ -1,58 +1,70 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import * as child_process from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "@jest/globals";
 
-import { CodexExec } from "../src/exec";
+jest.mock("node:child_process", () => {
+  const actual = jest.requireActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, spawn: jest.fn() };
+});
 
-async function createExitExecutable(): Promise<{ filePath: string; dirPath: string }> {
-  const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-exec-test-"));
-  const isWindows = process.platform === "win32";
-  const fileName = isWindows ? "codex-exit.cmd" : "codex-exit";
-  const filePath = path.join(dirPath, fileName);
-  const contents = isWindows
-    ? "@echo off\r\nfor /l %%i in (1,1,200) do @echo line %%i\r\nexit /b 2\r\n"
-    : "#!/usr/bin/env node\nfor (let i = 0; i < 200; i += 1) {\n  process.stdout.write(`line ${i}\\n`);\n}\nprocess.exit(2);\n";
-  await fs.writeFile(filePath, contents, { mode: 0o755 });
-  if (!isWindows) {
-    await fs.chmod(filePath, 0o755);
+const actualChildProcess =
+  jest.requireActual<typeof import("node:child_process")>("node:child_process");
+const spawnMock = child_process.spawn as jest.MockedFunction<typeof actualChildProcess.spawn>;
+
+class FakeChildProcess extends EventEmitter {
+  stdin = new PassThrough();
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  killed = false;
+
+  kill(): boolean {
+    this.killed = true;
+    return true;
   }
-  return { filePath, dirPath };
 }
 
+function createEarlyExitChild(exitCode = 2): FakeChildProcess {
+  const child = new FakeChildProcess();
+  setImmediate(() => {
+    child.stderr.write("boom");
+    child.emit("exit", exitCode, null);
+    setImmediate(() => {
+      child.stdout.end();
+      child.stderr.end();
+    });
+  });
+  return child;
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 describe("CodexExec", () => {
-  it("rejects promptly when the child exits before stdout is read", async () => {
-    const { filePath, dirPath } = await createExitExecutable();
+  it("rejects when exit happens before stdout closes", async () => {
+    const { CodexExec } = await import("../src/exec");
+    const child = createEarlyExitChild();
+    spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
 
-    try {
-      const exec = new CodexExec(filePath);
-      const controller = new AbortController();
-      const runResultPromise = (async () => {
-        for await (const _ of exec.run({ input: "hi", signal: controller.signal })) {
-          await new Promise((resolve) => setTimeout(resolve, 2));
-        }
-        return { status: "resolved" as const };
-      })().catch((error) => ({ status: "rejected" as const, error }));
-      let timeoutId: NodeJS.Timeout | undefined;
-      const timeout = new Promise<{ status: "timeout" }>((resolve) => {
-        timeoutId = setTimeout(() => {
-          controller.abort();
-          resolve({ status: "timeout" });
-        }, 2000);
-      });
-      const result = await Promise.race([runResultPromise, timeout]);
-      if (timeoutId) {
-        clearTimeout(timeoutId);
+    const exec = new CodexExec("codex");
+    const runPromise = (async () => {
+      for await (const _ of exec.run({ input: "hi" })) {
+        // no-op
       }
+    })().then(
+      () => ({ status: "resolved" as const }),
+      (error) => ({ status: "rejected" as const, error }),
+    );
 
-      expect(result.status).toBe("rejected");
-      if (result.status === "rejected") {
-        expect(result.error).toBeInstanceOf(Error);
-        expect(result.error.message).toMatch(/Codex Exec exited/);
-      }
-    } finally {
-      await fs.rm(dirPath, { recursive: true, force: true });
+    const result = await Promise.race([
+      runPromise,
+      delay(500).then(() => ({ status: "timeout" as const })),
+    ]);
+
+    expect(result.status).toBe("rejected");
+    if (result.status === "rejected") {
+      expect(result.error).toBeInstanceOf(Error);
+      expect(result.error.message).toMatch(/Codex Exec exited/);
     }
   });
 });

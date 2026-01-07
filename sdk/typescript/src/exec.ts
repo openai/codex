@@ -153,20 +153,12 @@ export class CodexExec {
       });
     }
 
-    const exitPromise = new Promise<void>((resolve, reject) => {
-      child.once("exit", (code, signal) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        const stderrBuffer = Buffer.concat(stderrChunks);
-        const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
-        reject(new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`));
-      });
-    });
-    const exitResult = exitPromise.then(
-      () => ({ ok: true as const }),
-      (error) => ({ ok: false as const, error }),
+    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        child.once("exit", (code, signal) => {
+          resolve({ code, signal });
+        });
+      },
     );
 
     const rl = readline.createInterface({
@@ -181,9 +173,11 @@ export class CodexExec {
       }
 
       if (spawnError) throw spawnError;
-      const result = await exitResult;
-      if (!result.ok) {
-        throw result.error;
+      const { code, signal } = await exitPromise;
+      if (code !== 0 || signal) {
+        const stderrBuffer = Buffer.concat(stderrChunks);
+        const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
+        throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
       }
     } finally {
       rl.close();
