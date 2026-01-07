@@ -58,6 +58,21 @@ async fn collect_output_until_exit(
             }
             res = &mut exit_rx => {
                 let code = res.unwrap_or(-1);
+                // On Windows (ConPTY in particular), it's possible to observe the exit notification
+                // before the final bytes are drained from the PTY reader thread. Drain for a brief
+                // "quiet" window to make output assertions deterministic.
+                let (quiet_ms, max_ms) = if cfg!(windows) { (200, 2_000) } else { (50, 500) };
+                let quiet = tokio::time::Duration::from_millis(quiet_ms);
+                let max_deadline =
+                    tokio::time::Instant::now() + tokio::time::Duration::from_millis(max_ms);
+                while tokio::time::Instant::now() < max_deadline {
+                    match tokio::time::timeout(quiet, output_rx.recv()).await {
+                        Ok(Ok(chunk)) => collected.extend_from_slice(&chunk),
+                        Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                        Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                        Err(_) => break,
+                    }
+                }
                 return (collected, code);
             }
             _ = tokio::time::sleep_until(deadline) => {
