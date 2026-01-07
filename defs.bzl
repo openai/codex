@@ -24,34 +24,55 @@ def rust_release_binary(name, platforms = PLATFORMS, **kwargs):
             target = name,
         )
 
-def codex_rust_crate(name, crate_name):
-    deps = all_crate_deps(normal = True)
-    dev_deps = all_crate_deps(normal_dev = True)
-    proc_macro_deps = all_crate_deps(proc_macro = True)
-    proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True)
+def codex_rust_crate(
+        name,
+        crate_name,
+        crate_features = [],
+        crate_srcs = None,
+        compile_data = [],
+        deps_extra = [],
+        proc_macro_deps_extra = [],
+        dev_deps_extra = [],
+        dev_proc_macro_deps_extra = [],
+        integration_deps_extra = [],
+        integration_compile_data_extra = [],
+        test_data_extra = [],
+        visibility = ["//visibility:public"]):
+
+    deps = all_crate_deps(normal = True) + deps_extra
+    dev_deps = all_crate_deps(normal_dev = True) + dev_deps_extra
+    proc_macro_deps = all_crate_deps(proc_macro = True) + proc_macro_deps_extra
+    proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True) + dev_proc_macro_deps_extra
 
     rust_library(
         name = name,
         crate_name = crate_name,
+        crate_features = crate_features,
         deps = deps,
         proc_macro_deps = proc_macro_deps,
-        srcs = native.glob(["src/**/*.rs"]),
-        visibility = ["//visibility:public"],
+        compile_data = compile_data,
+        srcs = crate_srcs if crate_srcs else native.glob(["src/**/*.rs"]),
+        visibility = visibility,
     )
 
     rust_test(
-        name = name + "-tests",
+        name = name + "-unit-tests",
         crate = name,
         deps = deps + dev_deps,
         proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
     )
 
-    for test in native.glob(["tests/**/*.rs"]):
+    for test in native.glob(["tests/*.rs"], allow_empty = True):
+        test_name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-")
+        if not test_name.endswith("-test"):
+            test_name += "-test"
+
         rust_test(
-            name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-"),
+            name = test_name,
             crate_root = test,
             srcs = [test],
-            data = native.glob(["tests/**"]),
-            deps = [name] + deps + dev_deps,
+            data = native.glob(["tests/**"], allow_empty = True) + test_data_extra,
+            compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
+            deps = [name] + deps + dev_deps + integration_deps_extra,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
         )

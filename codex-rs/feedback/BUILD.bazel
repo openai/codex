@@ -1,18 +1,6 @@
-load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-package(default_visibility = ["//visibility:public"])
+load("//:defs.bzl", "codex_rust_crate")
 
-rust_library(
+codex_rust_crate(
     name = "feedback",
     crate_name = "codex_feedback",
-    deps = all_crate_deps(normal = True),
-    proc_macro_deps = all_crate_deps(proc_macro = True),
-    srcs = glob(["src/**/*.rs"]),
-)
-
-rust_test(
-    name = "feedback-tests",
-    crate = ":feedback",
-    deps = all_crate_deps(normal_dev = True),
-    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
 )
