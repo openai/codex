@@ -97,7 +97,6 @@ pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 use std::io::Write as _;
-
 // (tests access modules directly within the crate)
 
 pub async fn run_main(
@@ -343,6 +342,8 @@ async fn run_ratatui_app(
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
+
+    tooltips::announcement::prewarm();
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.

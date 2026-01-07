@@ -817,11 +817,11 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 
 #[derive(Debug)]
 struct TooltipHistoryCell {
-    tip: &'static str,
+    tip: String,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: &'static str) -> Self {
+    fn new(tip: String) -> Self {
         Self { tip }
     }
 }

@@ -25,7 +25,7 @@ app-server-test-client *args:
 
 # format code
 fmt:
-    cargo fmt -- --config imports_granularity=Item
+    cargo fmt -- --config imports_granularity=Item 2>/dev/null
 
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
