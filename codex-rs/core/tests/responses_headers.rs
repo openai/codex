@@ -212,7 +212,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
 }
 
 #[tokio::test]
-async fn responses_respects_model_family_overrides_from_config() {
+async fn responses_respects_model_info_overrides_from_config() {
     core_test_support::skip_if_no_network!();
 
     let server = responses::start_mock_server().await;

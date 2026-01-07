@@ -1515,7 +1515,7 @@ mod tests {
     }
 
     #[test]
-    fn test_test_model_family_includes_sync_tool() {
+    fn test_test_model_info_includes_sync_tool() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
         let mut features = Features::with_defaults();

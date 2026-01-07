@@ -807,7 +807,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_default_reasoning_effort_in_request_when_defined_by_model_family()
+async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;

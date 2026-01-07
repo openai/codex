@@ -48,7 +48,7 @@ macro_rules! model_info {
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
             context_window: CONTEXT_WINDOW_272K,
-            auto_compact_token_limit: Some(CONTEXT_WINDOW_272K * 90 / 100),
+            auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
         };

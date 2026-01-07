@@ -36,7 +36,6 @@ const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
-    // todo(aibrahim) merge available_models and model family creation into one struct
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
     auth_manager: Arc<AuthManager>,
