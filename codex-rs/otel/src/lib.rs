@@ -6,7 +6,9 @@ mod otlp;
 
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
+use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
+use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::traces::otel_provider::OtelProvider;
@@ -104,30 +106,12 @@ impl OtelManager {
         metrics.record_duration(name, duration, &tags)
     }
 
-    pub fn time<T>(
-        &self,
-        name: &str,
-        tags: &[(&str, &str)],
-        f: impl FnOnce() -> T,
-    ) -> MetricsResult<T> {
+    pub fn start_timer(&self, name: &str, tags: &[(&str, &str)]) -> Result<Timer, MetricsError> {
         let Some(metrics) = &self.metrics else {
-            return Ok(f());
+            return Err(MetricsError::ExporterDisabled);
         };
         let tags = self.tags_with_metadata(tags)?;
-        metrics.time(name, &tags, f)
-    }
-
-    pub fn time_result<T>(
-        &self,
-        name: &str,
-        tags: &[(&str, &str)],
-        f: impl FnOnce() -> MetricsResult<T>,
-    ) -> MetricsResult<T> {
-        let Some(metrics) = &self.metrics else {
-            return f();
-        };
-        let tags = self.tags_with_metadata(tags)?;
-        metrics.time_result(name, &tags, f)
+        metrics.start_timer(name, &tags)
     }
 
     pub fn shutdown_metrics(&self) -> MetricsResult<()> {

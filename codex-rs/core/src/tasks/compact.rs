@@ -24,19 +24,21 @@ impl SessionTask for CompactTask {
         input: Vec<UserInput>,
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
-        let _ = session
-            .session
-            .services
-            .otel_manager
-            .counter("codex.task.compact", 1, &[]);
-
         let session = session.clone_session();
         if crate::compact::should_use_remote_compact_task(
             session.as_ref(),
             &ctx.client.get_provider(),
         ) {
+            let _ = session
+                .services
+                .otel_manager
+                .counter("codex.task.compact.remote", 1, &[]);
             crate::compact_remote::run_remote_compact_task(session, ctx).await
         } else {
+            let _ = session
+                .services
+                .otel_manager
+                .counter("codex.task.compact.local", 1, &[]);
             crate::compact::run_compact_task(session, ctx, input).await
         }
 

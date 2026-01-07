@@ -4,6 +4,7 @@ use crate::metrics::MetricsError;
 use crate::metrics::Result;
 use crate::metrics::config::MetricsConfig;
 use crate::metrics::config::MetricsExporter;
+use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
@@ -29,7 +30,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
-use std::time::Instant;
 use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
@@ -179,34 +179,12 @@ impl MetricsClient {
         )
     }
 
-    /// Measure a closure and emit a histogram sample for the elapsed time.
-    pub fn time<T>(&self, name: &str, tags: &[(&str, &str)], f: impl FnOnce() -> T) -> Result<T> {
-        let start = Instant::now();
-        let output = f();
-        self.record_duration(name, start.elapsed(), tags)?;
-        Ok(output)
-    }
-
-    /// Measure a closure that returns a metrics result without nesting results.
-    pub fn time_result<T>(
+    pub fn start_timer(
         &self,
         name: &str,
         tags: &[(&str, &str)],
-        f: impl FnOnce() -> Result<T>,
-    ) -> Result<T> {
-        let start = Instant::now();
-        let output = f();
-        let duration_result = self.record_duration(name, start.elapsed(), tags);
-        match output {
-            Ok(value) => {
-                duration_result?;
-                Ok(value)
-            }
-            Err(err) => {
-                let _ = duration_result;
-                Err(err)
-            }
-        }
+    ) -> std::result::Result<Timer, MetricsError> {
+        Ok(Timer::new(name, tags, self))
     }
 
     /// Flush metrics and stop the underlying OTEL meter provider.

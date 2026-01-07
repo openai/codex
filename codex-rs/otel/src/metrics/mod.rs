@@ -1,6 +1,7 @@
 mod client;
 mod config;
 mod error;
+pub(crate) mod timer;
 pub(crate) mod validation;
 
 pub use crate::metrics::client::MetricsClient;
