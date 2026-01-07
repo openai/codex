@@ -169,53 +169,6 @@ impl ThreadManager {
             .await
     }
 
-    #[deprecated(note = "use get_thread")]
-    pub async fn get_conversation(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
-        self.get_thread(thread_id).await
-    }
-
-    #[deprecated(note = "use start_thread")]
-    pub async fn new_conversation(&self, config: Config) -> CodexResult<NewThread> {
-        self.start_thread(config).await
-    }
-
-    #[deprecated(note = "use resume_thread_from_rollout")]
-    pub async fn resume_conversation_from_rollout(
-        &self,
-        config: Config,
-        rollout_path: PathBuf,
-        auth_manager: Arc<AuthManager>,
-    ) -> CodexResult<NewThread> {
-        self.resume_thread_from_rollout(config, rollout_path, auth_manager)
-            .await
-    }
-
-    #[deprecated(note = "use resume_thread_with_history")]
-    pub async fn resume_conversation_with_history(
-        &self,
-        config: Config,
-        initial_history: InitialHistory,
-        auth_manager: Arc<AuthManager>,
-    ) -> CodexResult<NewThread> {
-        self.resume_thread_with_history(config, initial_history, auth_manager)
-            .await
-    }
-
-    #[deprecated(note = "use remove_thread")]
-    pub async fn remove_conversation(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.remove_thread(thread_id).await
-    }
-
-    #[deprecated(note = "use fork_thread")]
-    pub async fn fork_conversation(
-        &self,
-        nth_user_message: usize,
-        config: Config,
-        path: PathBuf,
-    ) -> CodexResult<NewThread> {
-        self.fork_thread(nth_user_message, config, path).await
-    }
-
     /// Removes the thread from the manager's internal map, though the thread is stored
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
@@ -322,7 +275,6 @@ impl ThreadManagerState {
         ));
         self.threads.write().await.insert(thread_id, thread.clone());
 
-        #[allow(deprecated)]
         Ok(NewThread {
             thread_id,
             thread,
