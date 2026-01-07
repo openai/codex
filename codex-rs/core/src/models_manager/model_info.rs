@@ -41,7 +41,7 @@ macro_rules! model_info {
             supported_in_api: true,
             priority: 99,
             upgrade: None,
-            base_instructions: Some(BASE_INSTRUCTIONS.to_string()),
+            base_instructions: BASE_INSTRUCTIONS.to_string(),
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
@@ -82,37 +82,19 @@ pub(crate) fn auto_compact_token_limit(model_info: &ModelInfo) -> Option<i64> {
     })
 }
 
-pub(crate) fn merge_remote_overrides(mut model: ModelInfo, remote: Option<ModelInfo>) -> ModelInfo {
-    let Some(remote) = remote else {
-        return model;
-    };
-
-    // Remote metadata is authoritative for most fields, but some optional
-    // fields should preserve locally-derived defaults when absent.
-    let base_instructions = remote.base_instructions.clone().or(model.base_instructions);
-    let auto_compact_token_limit = remote
-        .auto_compact_token_limit
-        .or(model.auto_compact_token_limit);
-
-    model = remote;
-    model.base_instructions = base_instructions;
-    model.auto_compact_token_limit = auto_compact_token_limit;
-    model
-}
-
 // todo(aibrahim): remove most of the entries here when enabling models.json
 pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     if slug.starts_with("o3") || slug.starts_with("o4-mini") {
         model_info!(
             slug,
-            base_instructions: Some(BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string()),
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             supports_reasoning_summaries: true,
             context_window: Some(200_000),
         )
     } else if slug.starts_with("codex-mini-latest") {
         model_info!(
             slug,
-            base_instructions: Some(BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string()),
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             shell_type: ConfigShellToolType::Local,
             supports_reasoning_summaries: true,
             context_window: Some(200_000),
@@ -120,7 +102,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     } else if slug.starts_with("gpt-4.1") {
         model_info!(
             slug,
-            base_instructions: Some(BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string()),
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             supports_reasoning_summaries: false,
             context_window: Some(1_047_576),
         )
@@ -133,21 +115,21 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     } else if slug.starts_with("gpt-4o") {
         model_info!(
             slug,
-            base_instructions: Some(BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string()),
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             supports_reasoning_summaries: false,
             context_window: Some(128_000),
         )
     } else if slug.starts_with("gpt-3.5") {
         model_info!(
             slug,
-            base_instructions: Some(BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string()),
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             supports_reasoning_summaries: false,
             context_window: Some(16_385),
         )
     } else if slug.starts_with("test-gpt-5") {
         model_info!(
             slug,
-            base_instructions: Some(GPT_5_CODEX_INSTRUCTIONS.to_string()),
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             experimental_supported_tools: vec![
                 "grep_files".to_string(),
                 "list_dir".to_string(),
@@ -163,7 +145,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     } else if slug.starts_with("exp-codex") || slug.starts_with("codex-1p") {
         model_info!(
             slug,
-            base_instructions: Some(GPT_5_2_CODEX_INSTRUCTIONS.to_string()),
+            base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
@@ -179,7 +161,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_reasoning_summaries: true,
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
-            base_instructions: Some(BASE_INSTRUCTIONS.to_string()),
+            base_instructions: BASE_INSTRUCTIONS.to_string(),
             default_reasoning_level: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::UnifiedExec,
@@ -189,7 +171,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     } else if slug.starts_with("gpt-5.2-codex") || slug.starts_with("bengalfox") {
         model_info!(
             slug,
-            base_instructions: Some(GPT_5_2_CODEX_INSTRUCTIONS.to_string()),
+            base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
@@ -202,7 +184,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     } else if slug.starts_with("gpt-5.1-codex-max") {
         model_info!(
             slug,
-            base_instructions: Some(GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string()),
+            base_instructions: GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: false,
@@ -219,7 +201,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     {
         model_info!(
             slug,
-            base_instructions: Some(GPT_5_CODEX_INSTRUCTIONS.to_string()),
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: false,
@@ -235,7 +217,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     {
         model_info!(
             slug,
-            base_instructions: Some(GPT_5_CODEX_INSTRUCTIONS.to_string()),
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: false,
@@ -253,7 +235,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_reasoning_summaries: true,
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
-            base_instructions: Some(GPT_5_2_INSTRUCTIONS.to_string()),
+            base_instructions: GPT_5_2_INSTRUCTIONS.to_string(),
             default_reasoning_level: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
@@ -268,7 +250,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_reasoning_summaries: true,
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
-            base_instructions: Some(GPT_5_1_INSTRUCTIONS.to_string()),
+            base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
             default_reasoning_level: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
@@ -279,7 +261,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     } else if slug.starts_with("gpt-5") {
         model_info!(
             slug,
-            base_instructions: Some(BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string()),
+            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             shell_type: ConfigShellToolType::Default,
             supports_reasoning_summaries: true,
             support_verbosity: true,

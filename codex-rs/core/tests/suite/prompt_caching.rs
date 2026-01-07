@@ -94,8 +94,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             &config,
         )
         .await
-        .base_instructions
-        .unwrap_or_default();
+        .base_instructions;
 
     codex
         .submit(Op::UserInput {

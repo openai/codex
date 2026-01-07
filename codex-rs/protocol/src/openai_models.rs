@@ -177,8 +177,7 @@ pub struct ModelInfo {
     pub supported_in_api: bool,
     pub priority: i32,
     pub upgrade: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_instructions: Option<String>,
+    pub base_instructions: String,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,

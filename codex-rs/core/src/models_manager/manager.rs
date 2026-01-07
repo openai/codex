@@ -134,8 +134,12 @@ impl ModelsManager {
             .await
             .into_iter()
             .find(|m| m.slug == model);
-        let model = model_info::find_model_info_for_slug(model);
-        model_info::with_config_overrides(model_info::merge_remote_overrides(model, remote), config)
+        let model = if let Some(remote) = remote {
+            remote
+        } else {
+            model_info::find_model_info_for_slug(model)
+        };
+        model_info::with_config_overrides(model, config)
     }
 
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {

@@ -84,7 +84,7 @@ impl ContextManager {
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
         let model_info = turn_context.client.get_model_info();
-        let base_instructions = model_info.base_instructions.as_deref().unwrap_or("");
+        let base_instructions = model_info.base_instructions.as_str();
         let base_tokens = i64::try_from(approx_token_count(base_instructions)).unwrap_or(i64::MAX);
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
