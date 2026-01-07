@@ -13,6 +13,7 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
@@ -20,7 +21,6 @@ use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
-use super::selection_popup_common::wrap_styled_line;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
