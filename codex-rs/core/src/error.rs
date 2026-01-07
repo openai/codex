@@ -193,10 +193,14 @@ impl CodexErr {
             | CodexErr::InvalidImageRequest()
             | CodexErr::InvalidRequest(_)
             | CodexErr::RefreshTokenFailed(_)
+            | CodexErr::UnsupportedOperation(_)
+            | CodexErr::Sandbox(_)
+            | CodexErr::LandlockSandboxExecutableNotProvided
+            | CodexErr::RetryLimit(_)
             | CodexErr::ContextWindowExceeded
+            | CodexErr::ThreadNotFound(_)
             | CodexErr::UsageLimitReached(_) => false,
             CodexErr::Stream(..)
-            | CodexErr::ThreadNotFound(_)
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::Timeout
             | CodexErr::Spawn
@@ -204,11 +208,7 @@ impl CodexErr {
             | CodexErr::ResponseStreamFailed(_)
             | CodexErr::ConnectionFailed(_)
             | CodexErr::InternalServerError
-            | CodexErr::RetryLimit(_)
             | CodexErr::InternalAgentDied
-            | CodexErr::Sandbox(_)
-            | CodexErr::LandlockSandboxExecutableNotProvided
-            | CodexErr::UnsupportedOperation(_)
             | CodexErr::Io(_)
             | CodexErr::Json(_)
             | CodexErr::TokioJoin(_) => true,
