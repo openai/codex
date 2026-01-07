@@ -8,12 +8,12 @@ use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::model_family::ModelFamily;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use insta::assert_snapshot;
@@ -37,8 +37,14 @@ fn test_auth_manager(config: &Config) -> AuthManager {
     )
 }
 
-fn test_model_family(model_slug: &str, config: &Config) -> ModelFamily {
-    ModelsManager::construct_model_family_offline(model_slug, config)
+fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
+    let context_window =
+        ModelsManager::construct_model_info_offline(model_slug, config).context_window;
+    TokenUsageInfo {
+        total_token_usage: usage.clone(),
+        last_token_usage: usage.clone(),
+        model_context_window: context_window,
+    }
 }
 
 fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -132,14 +138,13 @@ async fn status_snapshot_includes_reasoning_details() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
 
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -155,7 +160,6 @@ async fn status_snapshot_includes_reasoning_details() {
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
 }
-
 #[tokio::test]
 async fn status_snapshot_includes_monthly_limit() {
     let temp_home = TempDir::new().expect("temp home");
@@ -190,13 +194,12 @@ async fn status_snapshot_includes_monthly_limit() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -212,7 +215,6 @@ async fn status_snapshot_includes_monthly_limit() {
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
 }
-
 #[tokio::test]
 async fn status_snapshot_shows_unlimited_credits() {
     let temp_home = TempDir::new().expect("temp home");
@@ -235,13 +237,12 @@ async fn status_snapshot_shows_unlimited_credits() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -279,13 +280,12 @@ async fn status_snapshot_shows_positive_credits() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -323,13 +323,12 @@ async fn status_snapshot_hides_zero_credits() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -365,13 +364,12 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -407,13 +405,12 @@ async fn status_card_token_usage_excludes_cached_tokens() {
         .expect("timestamp");
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         None,
         None,
@@ -464,13 +461,12 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -510,13 +506,12 @@ async fn status_snapshot_shows_missing_limits_message() {
         .expect("timestamp");
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         None,
         None,
@@ -532,7 +527,6 @@ async fn status_snapshot_shows_missing_limits_message() {
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
 }
-
 #[tokio::test]
 async fn status_snapshot_includes_credits_and_limits() {
     let temp_home = TempDir::new().expect("temp home");
@@ -574,13 +568,12 @@ async fn status_snapshot_includes_credits_and_limits() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -626,13 +619,12 @@ async fn status_snapshot_shows_empty_limits_message() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -687,13 +679,12 @@ async fn status_snapshot_shows_stale_limits_message() {
     let now = captured_at + ChronoDuration::minutes(20);
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -752,13 +743,12 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let now = captured_at + ChronoDuration::minutes(20);
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,
@@ -803,13 +793,16 @@ async fn status_context_window_uses_last_usage() {
         .expect("timestamp");
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = TokenUsageInfo {
+        total_token_usage: total_usage.clone(),
+        last_token_usage: last_usage,
+        model_context_window: config.model_context_window,
+    };
     let composite = new_status_output(
         &config,
         &auth_manager,
-        &model_family,
+        Some(&token_info),
         &total_usage,
-        Some(&last_usage),
         &None,
         None,
         None,

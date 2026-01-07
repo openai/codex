@@ -12,7 +12,6 @@ mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
-use crate::config_loader::config_requirements::ConfigRequirementsToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::config_types::SandboxMode;
@@ -25,6 +24,8 @@ use std::path::Path;
 use toml::Value as TomlValue;
 
 pub use config_requirements::ConfigRequirements;
+pub use config_requirements::ConfigRequirementsToml;
+pub use config_requirements::SandboxModeRequirement;
 pub use merge::merge_toml_values;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
@@ -78,8 +79,14 @@ pub async fn load_config_layers_state(
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsToml::default();
 
-    // TODO(gt): Support an entry in MDM for config requirements and use it
-    // with `config_requirements_toml.merge_unset_fields(...)`, if present.
+    #[cfg(target_os = "macos")]
+    macos::load_managed_admin_requirements_toml(
+        &mut config_requirements_toml,
+        overrides
+            .macos_managed_config_requirements_base64
+            .as_deref(),
+    )
+    .await?;
 
     // Honor /etc/codex/requirements.toml.
     if cfg!(unix) {
@@ -100,8 +107,6 @@ pub async fn load_config_layers_state(
     .await?;
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
-
-    // TODO(gt): Honor managed preferences (macOS only).
 
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
@@ -197,7 +202,9 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    ConfigLayerStack::new(layers, config_requirements_toml.try_into()?)
+    let requirements_toml = config_requirements_toml.clone();
+    let requirements = config_requirements_toml.try_into()?;
+    ConfigLayerStack::new(layers, requirements, requirements_toml)
 }
 
 /// Attempts to load a config.toml file from `config_toml`.

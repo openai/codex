@@ -44,6 +44,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
             items: vec![UserInput::Text {
                 text: "quota?".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();

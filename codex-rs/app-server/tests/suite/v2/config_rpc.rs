@@ -184,7 +184,10 @@ writable_roots = [{}]
 
     let mut mcp = McpProcess::new_with_env(
         codex_home.path(),
-        &[("CODEX_MANAGED_CONFIG_PATH", Some(&managed_path_str))],
+        &[(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            Some(&managed_path_str),
+        )],
     )
     .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

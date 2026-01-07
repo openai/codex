@@ -1,27 +1,26 @@
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
-use codex_core::ConversationManager;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
 use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
+use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
+use codex_core::ThreadManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::otel_manager::OtelManager;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ReasoningItemContent;
@@ -259,19 +258,19 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     // Also configure user instructions to ensure they are NOT delivered on resume.
     config.user_instructions = Some("be nice".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let NewConversation {
-        conversation: codex,
+    let NewThread {
+        thread: codex,
         session_configured,
         ..
-    } = conversation_manager
-        .resume_conversation_from_rollout(config, session_path.clone(), auth_manager)
+    } = thread_manager
+        .resume_thread_from_rollout(config, session_path.clone(), auth_manager)
         .await
         .expect("resume conversation");
 
@@ -290,6 +289,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -346,17 +346,18 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        conversation_id,
+    let NewThread {
+        thread: codex,
+        thread_id: conversation_id,
         session_configured: _,
-    } = conversation_manager
-        .new_conversation(config)
+        ..
+    } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -365,6 +366,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -408,22 +410,23 @@ async fn includes_base_instructions_override_in_request() {
     config.base_instructions = Some("test instructions".to_string());
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -469,17 +472,18 @@ async fn chatgpt_auth_sends_correct_request() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        conversation_id,
+    let NewThread {
+        thread: codex,
+        thread_id: conversation_id,
         session_configured: _,
-    } = conversation_manager
-        .new_conversation(config)
+        ..
+    } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -488,6 +492,7 @@ async fn chatgpt_auth_sends_correct_request() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -568,12 +573,13 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
-    let conversation_manager = ConversationManager::new(auth_manager, SessionSource::Exec);
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
+    let thread_manager = ThreadManager::new(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        SessionSource::Exec,
+    );
+    let NewThread { thread: codex, .. } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -582,6 +588,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -606,22 +613,23 @@ async fn includes_user_instructions_message_in_request() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be nice".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -674,24 +682,24 @@ async fn skills_append_to_instructions() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
     config.cwd = codex_home.path().to_path_buf();
-    config.features.enable(Feature::Skills);
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -741,6 +749,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -777,6 +786,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -798,7 +808,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_default_reasoning_effort_in_request_when_defined_by_model_family()
+async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
@@ -811,6 +821,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_fami
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -849,6 +860,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -887,6 +899,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -919,6 +932,7 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -958,6 +972,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -996,6 +1011,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1034,22 +1050,23 @@ async fn includes_developer_instructions_message_in_request() {
     config.user_instructions = Some("be nice".to_string());
     config.developer_instructions = Some("be useful".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1127,13 +1144,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let model = ModelsManager::get_model_offline(config.model.as_deref());
     config.model = Some(model.clone());
     let config = Arc::new(config);
-    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
-    let conversation_id = ConversationId::new();
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let conversation_id = ThreadId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
-        model_family.slug.as_str(),
+        model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         auth_manager.get_auth_mode(),
@@ -1145,7 +1162,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_family,
+        model_info,
         otel_manager,
         provider,
         effort,
@@ -1264,22 +1281,23 @@ async fn token_count_includes_rate_limits_snapshot() {
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1437,6 +1455,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .expect("submission should succeed while emitting usage limit error events");
@@ -1506,6 +1525,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
             items: vec![UserInput::Text {
                 text: "seed turn".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -1516,6 +1536,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
             items: vec![UserInput::Text {
                 text: "trigger context window".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -1619,22 +1640,23 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1701,22 +1723,23 @@ async fn env_var_overrides_loaded_auth() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1783,16 +1806,13 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
+    let NewThread { thread: codex, .. } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -1800,6 +1820,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text { text: "U1".into() }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1809,6 +1830,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text { text: "U2".into() }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1818,6 +1840,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text { text: "U3".into() }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();

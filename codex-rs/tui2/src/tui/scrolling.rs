@@ -17,7 +17,7 @@
 //!   the newly flattened line list on the next frame.
 //!
 //! Spacer rows between non-continuation cells are represented as `TranscriptLineMeta::Spacer`.
-//! They are not valid anchors; `anchor_for` will pick the nearest non-spacer line when needed.
+//! They are valid scroll anchors so 1-line scrolling does not "stick" at cell boundaries.
 
 pub(crate) mod mouse;
 pub(crate) use mouse::MouseScrollState;
@@ -78,6 +78,13 @@ pub(crate) enum TranscriptScroll {
         cell_index: usize,
         line_in_cell: usize,
     },
+    /// Anchor the viewport to the spacer row immediately before a cell.
+    ///
+    /// This exists because spacer rows are real, visible transcript rows, and users may scroll
+    /// through them one line at a time (especially with trackpads). Without a dedicated spacer
+    /// anchor, a 1-line scroll that lands on a spacer would snap back to the adjacent cell line
+    /// and appear to "stick" at boundaries.
+    ScrolledSpacerBeforeCell { cell_index: usize },
 }
 
 impl TranscriptScroll {
@@ -103,6 +110,13 @@ impl TranscriptScroll {
                 line_in_cell,
             } => {
                 let anchor = anchor_index(line_meta, cell_index, line_in_cell);
+                match anchor {
+                    Some(idx) => (self, idx.min(max_start)),
+                    None => (Self::ToBottom, max_start),
+                }
+            }
+            Self::ScrolledSpacerBeforeCell { cell_index } => {
+                let anchor = spacer_before_cell_index(line_meta, cell_index);
                 match anchor {
                     Some(idx) => (self, idx.min(max_start)),
                     None => (Self::ToBottom, max_start),
@@ -142,6 +156,11 @@ impl TranscriptScroll {
             } => anchor_index(line_meta, cell_index, line_in_cell)
                 .unwrap_or(max_start)
                 .min(max_start),
+            Self::ScrolledSpacerBeforeCell { cell_index } => {
+                spacer_before_cell_index(line_meta, cell_index)
+                    .unwrap_or(max_start)
+                    .min(max_start)
+            }
         };
 
         let new_top = if delta_lines < 0 {
@@ -164,15 +183,35 @@ impl TranscriptScroll {
     /// This is the inverse of "resolving a scroll state to a top-row offset":
     /// given a concrete flattened line index, pick a stable `(cell_index, line_in_cell)` anchor.
     ///
-    /// See `resolve_top` for `line_meta` semantics. This prefers the nearest line at or after `start`
-    /// (skipping spacer rows), falling back to the nearest line before it when needed.
+    /// See `resolve_top` for `line_meta` semantics. This prefers the line at `start` (including
+    /// spacer rows), falling back to the nearest non-spacer line after or before it when needed.
     pub(crate) fn anchor_for(line_meta: &[TranscriptLineMeta], start: usize) -> Option<Self> {
-        let anchor =
-            anchor_at_or_after(line_meta, start).or_else(|| anchor_at_or_before(line_meta, start));
-        anchor.map(|(cell_index, line_in_cell)| Self::Scrolled {
-            cell_index,
-            line_in_cell,
-        })
+        if line_meta.is_empty() {
+            return None;
+        }
+
+        let start = start.min(line_meta.len().saturating_sub(1));
+        match line_meta[start] {
+            TranscriptLineMeta::CellLine {
+                cell_index,
+                line_in_cell,
+            } => Some(Self::Scrolled {
+                cell_index,
+                line_in_cell,
+            }),
+            TranscriptLineMeta::Spacer => {
+                if let Some((cell_index, _)) = anchor_at_or_after(line_meta, start) {
+                    Some(Self::ScrolledSpacerBeforeCell { cell_index })
+                } else {
+                    anchor_at_or_before(line_meta, start).map(|(cell_index, line_in_cell)| {
+                        Self::Scrolled {
+                            cell_index,
+                            line_in_cell,
+                        }
+                    })
+                }
+            }
+        }
     }
 }
 
@@ -196,6 +235,26 @@ fn anchor_index(
             } if ci == cell_index && li == line_in_cell => Some(idx),
             _ => None,
         })
+}
+
+/// Locate the flattened line index for the spacer row immediately before `cell_index`.
+///
+/// The spacer itself is not uniquely tagged in `TranscriptLineMeta`, so we locate the first
+/// visual line of the cell (`line_in_cell == 0`) and, if it is preceded by a spacer row, return
+/// that spacer's index. If the spacer is missing (for example when the cell is a stream
+/// continuation), we fall back to the cell's first line index so scrolling remains usable.
+fn spacer_before_cell_index(line_meta: &[TranscriptLineMeta], cell_index: usize) -> Option<usize> {
+    let cell_first = anchor_index(line_meta, cell_index, 0)?;
+    if cell_first > 0
+        && matches!(
+            line_meta.get(cell_first.saturating_sub(1)),
+            Some(TranscriptLineMeta::Spacer)
+        )
+    {
+        Some(cell_first.saturating_sub(1))
+    } else {
+        Some(cell_first)
+    }
 }
 
 /// Find the first transcript line at or after the given flattened index.
@@ -270,6 +329,33 @@ mod tests {
 
         assert_eq!(state, scroll);
         assert_eq!(top, 2);
+    }
+
+    #[test]
+    fn scrolled_by_can_land_on_spacer_rows() {
+        let meta = meta(&[
+            cell_line(0, 0),
+            TranscriptLineMeta::Spacer,
+            cell_line(1, 0),
+            cell_line(1, 1),
+        ]);
+
+        let scroll = TranscriptScroll::Scrolled {
+            cell_index: 1,
+            line_in_cell: 0,
+        };
+
+        assert_eq!(
+            scroll.scrolled_by(-1, &meta, 2),
+            TranscriptScroll::ScrolledSpacerBeforeCell { cell_index: 1 }
+        );
+        assert_eq!(
+            TranscriptScroll::ScrolledSpacerBeforeCell { cell_index: 1 }.scrolled_by(-1, &meta, 2),
+            TranscriptScroll::Scrolled {
+                cell_index: 0,
+                line_in_cell: 0
+            }
+        );
     }
 
     #[test]
@@ -350,17 +436,11 @@ mod tests {
 
         assert_eq!(
             TranscriptScroll::anchor_for(&meta, 0),
-            Some(TranscriptScroll::Scrolled {
-                cell_index: 0,
-                line_in_cell: 0
-            })
+            Some(TranscriptScroll::ScrolledSpacerBeforeCell { cell_index: 0 })
         );
         assert_eq!(
             TranscriptScroll::anchor_for(&meta, 2),
-            Some(TranscriptScroll::Scrolled {
-                cell_index: 1,
-                line_in_cell: 0
-            })
+            Some(TranscriptScroll::ScrolledSpacerBeforeCell { cell_index: 1 })
         );
         assert_eq!(
             TranscriptScroll::anchor_for(&meta, 3),

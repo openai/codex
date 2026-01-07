@@ -119,9 +119,10 @@ pub fn require_logon_sandbox_creds(
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = gather_read_roots(command_cwd, policy);
-    let mut needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
-    // Ensure the sandbox directory itself is writable by sandbox users.
-    needed_write.push(sandbox_dir.clone());
+    let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
+    // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
+    // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
+    // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
     let mut _existing_marker: Option<SetupMarker> = None;
 

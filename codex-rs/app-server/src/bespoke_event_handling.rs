@@ -1,15 +1,21 @@
 use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::PendingInterrupts;
+use crate::codex_message_processor::PendingRollbacks;
 use crate::codex_message_processor::TurnSummary;
 use crate::codex_message_processor::TurnSummaryStore;
+use crate::codex_message_processor::read_event_msgs_from_rollout;
+use crate::codex_message_processor::read_summary_from_rollout;
+use crate::codex_message_processor::summary_to_thread;
+use crate::error_code::INTERNAL_ERROR_CODE;
+use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
-use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -20,6 +26,7 @@ use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -27,6 +34,7 @@ use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
@@ -40,6 +48,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
@@ -50,9 +59,11 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
-use codex_core::CodexConversation;
+use codex_app_server_protocol::build_turns_from_event_msgs;
+use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -66,7 +77,7 @@ use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use std::collections::HashMap;
@@ -78,14 +89,17 @@ use tracing::error;
 
 type JsonValue = serde_json::Value;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
-    conversation_id: ConversationId,
-    conversation: Arc<CodexConversation>,
+    conversation_id: ThreadId,
+    conversation: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
+    pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
     api_version: ApiVersion,
+    fallback_model_provider: String,
 ) {
     let Event {
         id: event_turn_id,
@@ -337,6 +351,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::Error(ev) => {
+            let message = ev.message.clone();
+            let codex_error_info = ev.codex_error_info.clone();
+
+            // If this error belongs to an in-flight `thread/rollback` request, fail that request
+            // (and clear pending state) so subsequent rollbacks are unblocked.
+            //
+            // Don't send a notification for this error.
+            if matches!(
+                codex_error_info,
+                Some(CoreCodexErrorInfo::ThreadRollbackFailed)
+            ) {
+                return handle_thread_rollback_failed(
+                    conversation_id,
+                    message,
+                    &pending_rollbacks,
+                    &outgoing,
+                )
+                .await;
+            };
+
             let turn_error = TurnError {
                 message: ev.message,
                 codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
@@ -345,7 +379,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             handle_error(conversation_id, turn_error.clone(), &turn_summary_store).await;
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error,
+                    error: turn_error.clone(),
                     will_retry: false,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
@@ -690,6 +724,58 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
+        EventMsg::ThreadRolledBack(_rollback_event) => {
+            let pending = {
+                let mut map = pending_rollbacks.lock().await;
+                map.remove(&conversation_id)
+            };
+
+            if let Some(request_id) = pending {
+                let rollout_path = conversation.rollout_path();
+                let response = match read_summary_from_rollout(
+                    rollout_path.as_path(),
+                    fallback_model_provider.as_str(),
+                )
+                .await
+                {
+                    Ok(summary) => {
+                        let mut thread = summary_to_thread(summary);
+                        match read_event_msgs_from_rollout(rollout_path.as_path()).await {
+                            Ok(events) => {
+                                thread.turns = build_turns_from_event_msgs(&events);
+                                ThreadRollbackResponse { thread }
+                            }
+                            Err(err) => {
+                                let error = JSONRPCErrorError {
+                                    code: INTERNAL_ERROR_CODE,
+                                    message: format!(
+                                        "failed to load rollout `{}`: {err}",
+                                        rollout_path.display()
+                                    ),
+                                    data: None,
+                                };
+                                outgoing.send_error(request_id, error).await;
+                                return;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!(
+                                "failed to load rollout `{}`: {err}",
+                                rollout_path.display()
+                            ),
+                            data: None,
+                        };
+                        outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                };
+
+                outgoing.send_response(request_id, response).await;
+            }
+        }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(
                 conversation_id,
@@ -716,7 +802,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 }
 
 async fn handle_turn_diff(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: &str,
     turn_diff_event: TurnDiffEvent,
     api_version: ApiVersion,
@@ -735,7 +821,7 @@ async fn handle_turn_diff(
 }
 
 async fn handle_turn_plan_update(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: &str,
     plan_update_event: UpdatePlanArgs,
     api_version: ApiVersion,
@@ -759,7 +845,7 @@ async fn handle_turn_plan_update(
 }
 
 async fn emit_turn_completed_with_status(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: String,
     status: TurnStatus,
     error: Option<TurnError>,
@@ -780,7 +866,7 @@ async fn emit_turn_completed_with_status(
 }
 
 async fn complete_file_change_item(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
     status: PatchApplyStatus,
@@ -812,7 +898,7 @@ async fn complete_file_change_item(
 
 #[allow(clippy::too_many_arguments)]
 async fn complete_command_execution_item(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_id: String,
     item_id: String,
     command: String,
@@ -845,7 +931,7 @@ async fn complete_command_execution_item(
 
 async fn maybe_emit_raw_response_item_completed(
     api_version: ApiVersion,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_id: &str,
     item: codex_protocol::models::ResponseItem,
     outgoing: &OutgoingMessageSender,
@@ -865,7 +951,7 @@ async fn maybe_emit_raw_response_item_completed(
 }
 
 async fn find_and_remove_turn_summary(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_summary_store: &TurnSummaryStore,
 ) -> TurnSummary {
     let mut map = turn_summary_store.lock().await;
@@ -873,7 +959,7 @@ async fn find_and_remove_turn_summary(
 }
 
 async fn handle_turn_complete(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: String,
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
@@ -889,7 +975,7 @@ async fn handle_turn_complete(
 }
 
 async fn handle_turn_interrupted(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: String,
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
@@ -906,8 +992,33 @@ async fn handle_turn_interrupted(
     .await;
 }
 
+async fn handle_thread_rollback_failed(
+    conversation_id: ThreadId,
+    message: String,
+    pending_rollbacks: &PendingRollbacks,
+    outgoing: &OutgoingMessageSender,
+) {
+    let pending_rollback = {
+        let mut map = pending_rollbacks.lock().await;
+        map.remove(&conversation_id)
+    };
+
+    if let Some(request_id) = pending_rollback {
+        outgoing
+            .send_error(
+                request_id,
+                JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: message.clone(),
+                    data: None,
+                },
+            )
+            .await;
+    }
+}
+
 async fn handle_token_count_event(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_id: String,
     token_count_event: TokenCountEvent,
     outgoing: &OutgoingMessageSender,
@@ -935,7 +1046,7 @@ async fn handle_token_count_event(
 }
 
 async fn handle_error(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     error: TurnError,
     turn_summary_store: &TurnSummaryStore,
 ) {
@@ -946,7 +1057,7 @@ async fn handle_error(
 async fn on_patch_approval_response(
     event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
@@ -988,7 +1099,7 @@ async fn on_patch_approval_response(
 async fn on_exec_approval_response(
     event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
-    conversation: Arc<CodexConversation>,
+    conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
@@ -1083,14 +1194,29 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
     }
 }
 
+fn map_file_change_approval_decision(
+    decision: FileChangeApprovalDecision,
+) -> (ReviewDecision, Option<PatchApplyStatus>) {
+    match decision {
+        FileChangeApprovalDecision::Accept => (ReviewDecision::Approved, None),
+        FileChangeApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
+        FileChangeApprovalDecision::Decline => {
+            (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
+        }
+        FileChangeApprovalDecision::Cancel => {
+            (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn on_file_change_request_approval_response(
     event_turn_id: String,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
     receiver: oneshot::Receiver<JsonValue>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
     turn_summary_store: TurnSummaryStore,
 ) {
@@ -1101,23 +1227,12 @@ async fn on_file_change_request_approval_response(
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
                     FileChangeRequestApprovalResponse {
-                        decision: ApprovalDecision::Decline,
+                        decision: FileChangeApprovalDecision::Decline,
                     }
                 });
 
-            let (decision, completion_status) = match response.decision {
-                ApprovalDecision::Accept
-                | ApprovalDecision::AcceptForSession
-                | ApprovalDecision::AcceptWithExecpolicyAmendment { .. } => {
-                    (ReviewDecision::Approved, None)
-                }
-                ApprovalDecision::Decline => {
-                    (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
-                }
-                ApprovalDecision::Cancel => {
-                    (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
-                }
-            };
+            let (decision, completion_status) =
+                map_file_change_approval_decision(response.decision);
             // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
             // Only short-circuit on declines/cancels/failures.
             (decision, completion_status)
@@ -1155,13 +1270,13 @@ async fn on_file_change_request_approval_response(
 #[allow(clippy::too_many_arguments)]
 async fn on_command_execution_request_approval_response(
     event_turn_id: String,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     item_id: String,
     command: String,
     cwd: PathBuf,
     command_actions: Vec<V2ParsedCommand>,
     receiver: oneshot::Receiver<JsonValue>,
-    conversation: Arc<CodexConversation>,
+    conversation: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
 ) {
     let response = receiver.await;
@@ -1171,16 +1286,18 @@ async fn on_command_execution_request_approval_response(
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
                     CommandExecutionRequestApprovalResponse {
-                        decision: ApprovalDecision::Decline,
+                        decision: CommandExecutionApprovalDecision::Decline,
                     }
                 });
 
             let decision = response.decision;
 
             let (decision, completion_status) = match decision {
-                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
-                ApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
-                ApprovalDecision::AcceptWithExecpolicyAmendment {
+                CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                CommandExecutionApprovalDecision::AcceptForSession => {
+                    (ReviewDecision::ApprovedForSession, None)
+                }
+                CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
                     execpolicy_amendment,
                 } => (
                     ReviewDecision::ApprovedExecpolicyAmendment {
@@ -1188,11 +1305,11 @@ async fn on_command_execution_request_approval_response(
                     },
                     None,
                 ),
-                ApprovalDecision::Decline => (
+                CommandExecutionApprovalDecision::Decline => (
                     ReviewDecision::Denied,
                     Some(CommandExecutionStatus::Declined),
                 ),
-                ApprovalDecision::Cancel => (
+                CommandExecutionApprovalDecision::Cancel => (
                     ReviewDecision::Abort,
                     Some(CommandExecutionStatus::Declined),
                 ),
@@ -1332,9 +1449,17 @@ mod tests {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
+    #[test]
+    fn file_change_accept_for_session_maps_to_approved_for_session() {
+        let (decision, completion_status) =
+            map_file_change_approval_decision(FileChangeApprovalDecision::AcceptForSession);
+        assert_eq!(decision, ReviewDecision::ApprovedForSession);
+        assert_eq!(completion_status, None);
+    }
+
     #[tokio::test]
     async fn test_handle_error_records_message() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let turn_summary_store = new_turn_summary_store();
 
         handle_error(
@@ -1362,7 +1487,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_turn_complete_emits_completed_without_error() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let event_turn_id = "complete1".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
@@ -1394,7 +1519,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_turn_interrupted_emits_interrupted_with_error() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let event_turn_id = "interrupt1".to_string();
         let turn_summary_store = new_turn_summary_store();
         handle_error(
@@ -1436,7 +1561,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_turn_complete_emits_failed_with_error() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let event_turn_id = "complete_err1".to_string();
         let turn_summary_store = new_turn_summary_store();
         handle_error(
@@ -1501,7 +1626,7 @@ mod tests {
             ],
         };
 
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
 
         handle_turn_plan_update(
             conversation_id,
@@ -1535,7 +1660,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_token_count_event_emits_usage_and_rate_limits() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let turn_id = "turn-123".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
@@ -1620,7 +1745,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_token_count_event_without_usage_info() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let turn_id = "turn-456".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
@@ -1654,7 +1779,7 @@ mod tests {
             },
         };
 
-        let thread_id = ConversationId::new().to_string();
+        let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_1".to_string();
         let notification = construct_mcp_tool_call_notification(
             begin_event.clone(),
@@ -1684,8 +1809,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_complete_emits_error_multiple_turns() -> Result<()> {
         // Conversation A will have two turns; Conversation B will have one turn.
-        let conversation_a = ConversationId::new();
-        let conversation_b = ConversationId::new();
+        let conversation_a = ThreadId::new();
+        let conversation_b = ThreadId::new();
         let turn_summary_store = new_turn_summary_store();
 
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -1812,7 +1937,7 @@ mod tests {
             },
         };
 
-        let thread_id = ConversationId::new().to_string();
+        let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_2".to_string();
         let notification = construct_mcp_tool_call_notification(
             begin_event.clone(),
@@ -1863,7 +1988,7 @@ mod tests {
             result: Ok(result),
         };
 
-        let thread_id = ConversationId::new().to_string();
+        let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_3".to_string();
         let notification = construct_mcp_tool_call_end_notification(
             end_event.clone(),
@@ -1906,7 +2031,7 @@ mod tests {
             result: Err("boom".to_string()),
         };
 
-        let thread_id = ConversationId::new().to_string();
+        let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_4".to_string();
         let notification = construct_mcp_tool_call_end_notification(
             end_event.clone(),
@@ -1940,7 +2065,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
         let unified_diff = "--- a\n+++ b\n".to_string();
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
 
         handle_turn_diff(
             conversation_id,
@@ -1975,7 +2100,7 @@ mod tests {
     async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
 
         handle_turn_diff(
             conversation_id,

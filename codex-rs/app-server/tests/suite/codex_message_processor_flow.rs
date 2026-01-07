@@ -145,9 +145,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
 
     // 4) removeConversationListener
     let remove_listener_id = mcp
-        .send_remove_conversation_listener_request(RemoveConversationListenerParams {
-            subscription_id,
-        })
+        .send_remove_thread_listener_request(RemoveConversationListenerParams { subscription_id })
         .await?;
     let remove_listener_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -305,6 +303,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            output_schema: None,
         })
         .await?;
     // Acknowledge sendUserTurn
@@ -418,6 +417,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            output_schema: None,
         })
         .await?;
     timeout(
@@ -443,6 +443,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            output_schema: None,
         })
         .await?;
     timeout(
