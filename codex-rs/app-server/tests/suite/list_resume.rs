@@ -6,7 +6,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::NewConversationParams; // reused for overrides shape
+use codex_app_server_protocol::NewThreadParams; // reused for overrides shape
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
@@ -180,7 +180,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
             path: Some(first_item.path.clone()),
             conversation_id: None,
             history: None,
-            overrides: Some(NewConversationParams {
+            overrides: Some(NewThreadParams {
                 model: Some("o3".to_string()),
                 ..Default::default()
             }),
@@ -244,7 +244,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
             path: None,
             conversation_id: Some(first_item.conversation_id),
             history: None,
-            overrides: Some(NewConversationParams {
+            overrides: Some(NewThreadParams {
                 model: Some("o3".to_string()),
                 ..Default::default()
             }),
@@ -313,7 +313,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
             path: None,
             conversation_id: None,
             history: Some(history),
-            overrides: Some(NewConversationParams {
+            overrides: Some(NewThreadParams {
                 model: Some("o3".to_string()),
                 ..Default::default()
             }),

@@ -6,14 +6,14 @@ use crate::protocol::Op;
 use crate::protocol::Submission;
 use std::path::PathBuf;
 
-pub struct CodexConversation {
+pub struct CodexThread {
     codex: Codex,
     rollout_path: PathBuf,
 }
 
-/// Conduit for the bidirectional stream of messages that compose a conversation
-/// in Codex.
-impl CodexConversation {
+/// Conduit for the bidirectional stream of messages that compose a thread
+/// (formerly called a conversation) in Codex.
+impl CodexThread {
     pub(crate) fn new(codex: Codex, rollout_path: PathBuf) -> Self {
         Self {
             codex,

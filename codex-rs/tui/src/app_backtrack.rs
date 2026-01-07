@@ -9,7 +9,7 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationPathResponseEvent;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -21,13 +21,13 @@ pub(crate) struct BacktrackState {
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
     /// Session id of the base conversation to fork from.
-    pub(crate) base_id: Option<ConversationId>,
+    pub(crate) base_id: Option<ThreadId>,
     /// Index in the transcript of the last user message.
     pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
     /// Pending fork request: (base_id, nth_user_message, prefill).
-    pub(crate) pending: Option<(ConversationId, usize, String)>,
+    pub(crate) pending: Option<(ThreadId, usize, String)>,
 }
 
 impl App {
@@ -99,7 +99,7 @@ impl App {
     pub(crate) fn request_backtrack(
         &mut self,
         prefill: String,
-        base_id: ConversationId,
+        base_id: ThreadId,
         nth_user_message: usize,
     ) {
         self.backtrack.pending = Some((base_id, nth_user_message, prefill));
@@ -315,16 +315,14 @@ impl App {
         }
     }
 
-    /// Thin wrapper around ConversationManager::fork_conversation.
+    /// Thin wrapper around ThreadManager::fork_thread.
     async fn perform_fork(
         &self,
         path: PathBuf,
         nth_user_message: usize,
         cfg: codex_core::config::Config,
-    ) -> codex_core::error::Result<codex_core::NewConversation> {
-        self.server
-            .fork_conversation(nth_user_message, cfg, path)
-            .await
+    ) -> codex_core::error::Result<codex_core::NewThread> {
+        self.server.fork_thread(nth_user_message, cfg, path).await
     }
 
     /// Install a forked conversation into the ChatWidget and update UI to reflect selection.
@@ -332,7 +330,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         cfg: codex_core::config::Config,
-        new_conv: codex_core::NewConversation,
+        new_conv: codex_core::NewThread,
         nth_user_message: usize,
         prefill: &str,
     ) {

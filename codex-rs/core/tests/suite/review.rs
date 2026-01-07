@@ -1,10 +1,10 @@
 use codex_core::CodexAuth;
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::ContentItem;
-use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::REVIEW_PROMPT;
 use codex_core::ResponseItem;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
@@ -832,7 +832,7 @@ async fn new_conversation_for_server<F>(
     server: &MockServer,
     codex_home: &TempDir,
     mutator: F,
-) -> Arc<CodexConversation>
+) -> Arc<CodexThread>
 where
     F: FnOnce(&mut Config),
 {
@@ -843,15 +843,15 @@ where
     let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
     );
-    conversation_manager
-        .new_conversation(config)
+    thread_manager
+        .start_thread(config)
         .await
         .expect("create conversation")
-        .conversation
+        .thread
 }
 
 /// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
@@ -861,7 +861,7 @@ async fn resume_conversation_for_server<F>(
     codex_home: &TempDir,
     resume_path: std::path::PathBuf,
     mutator: F,
-) -> Arc<CodexConversation>
+) -> Arc<CodexThread>
 where
     F: FnOnce(&mut Config),
 {
@@ -872,15 +872,15 @@ where
     let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
     );
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    conversation_manager
-        .resume_conversation_from_rollout(config, resume_path, auth_manager)
+    thread_manager
+        .resume_thread_from_rollout(config, resume_path, auth_manager)
         .await
         .expect("resume conversation")
-        .conversation
+        .thread
 }

@@ -33,7 +33,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::ModelListParams;
-use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::NewThreadParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
@@ -163,7 +163,7 @@ impl McpProcess {
     /// Send a `newConversation` JSON-RPC request.
     pub async fn send_new_conversation_request(
         &mut self,
-        params: NewConversationParams,
+        params: NewThreadParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("newConversation", params).await
@@ -198,7 +198,7 @@ impl McpProcess {
     }
 
     /// Send a `removeConversationListener` JSON-RPC request.
-    pub async fn send_remove_conversation_listener_request(
+    pub async fn send_remove_thread_listener_request(
         &mut self,
         params: RemoveConversationListenerParams,
     ) -> anyhow::Result<i64> {

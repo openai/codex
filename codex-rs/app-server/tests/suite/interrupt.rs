@@ -7,8 +7,8 @@ use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::NewThreadParams;
+use codex_app_server_protocol::NewThreadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
@@ -71,7 +71,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
 
     // 1) newConversation
     let new_conv_id = mcp
-        .send_new_conversation_request(NewConversationParams {
+        .send_new_conversation_request(NewThreadParams {
             cwd: Some(working_directory.to_string_lossy().into_owned()),
             ..Default::default()
         })
@@ -81,8 +81,8 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let new_conv_resp = to_response::<NewConversationResponse>(new_conv_resp)?;
-    let NewConversationResponse {
+    let new_conv_resp = to_response::<NewThreadResponse>(new_conv_resp)?;
+    let NewThreadResponse {
         conversation_id, ..
     } = new_conv_resp;
 

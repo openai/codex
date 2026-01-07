@@ -7,8 +7,8 @@ use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::NewThreadParams;
+use codex_app_server_protocol::NewThreadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
@@ -36,7 +36,7 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
 
     // Create a conversation via the new JSON-RPC API.
     let new_conv_id = mcp
-        .send_new_conversation_request(NewConversationParams {
+        .send_new_conversation_request(NewThreadParams {
             model: Some("o3".to_string()),
             ..Default::default()
         })
@@ -46,12 +46,12 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let NewConversationResponse {
+    let NewThreadResponse {
         conversation_id,
         model,
         reasoning_effort: _,
         rollout_path: _,
-    } = to_response::<NewConversationResponse>(new_conv_resp)?;
+    } = to_response::<NewThreadResponse>(new_conv_resp)?;
     assert_eq!(model, "o3");
 
     // Add a listener so we receive notifications for this conversation (not strictly required for this test).

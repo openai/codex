@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
+use codex_core::CodexThread;
+use codex_core::NewThread;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -18,17 +18,17 @@ use crate::app_event_sender::AppEventSender;
 pub(crate) fn spawn_agent(
     config: Config,
     app_event_tx: AppEventSender,
-    server: Arc<ConversationManager>,
+    server: Arc<ThreadManager>,
 ) -> UnboundedSender<Op> {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
-        let NewConversation {
+        let NewThread {
             conversation_id: _,
             conversation,
             session_configured,
-        } = match server.new_conversation(config).await {
+        } = match server.start_thread(config).await {
             Ok(v) => v,
             #[allow(clippy::print_stderr)]
             Err(err) => {
@@ -74,7 +74,7 @@ pub(crate) fn spawn_agent(
 /// Sends the provided `SessionConfiguredEvent` immediately, then forwards subsequent
 /// events and accepts Ops for submission.
 pub(crate) fn spawn_agent_from_existing(
-    conversation: std::sync::Arc<CodexConversation>,
+    conversation: std::sync::Arc<CodexThread>,
     session_configured: codex_core::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
 ) -> UnboundedSender<Op> {

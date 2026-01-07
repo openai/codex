@@ -203,9 +203,9 @@ client_request_definitions! {
     },
 
     /// DEPRECATED APIs below
-    NewConversation {
-        params: v1::NewConversationParams,
-        response: v1::NewConversationResponse,
+    NewThread {
+        params: v1::NewThreadParams,
+        response: v1::NewThreadResponse,
     },
     GetConversationSummary {
         params: v1::GetConversationSummaryParams,
@@ -569,7 +569,7 @@ client_notification_definitions! {
 mod tests {
     use super::*;
     use anyhow::Result;
-    use codex_protocol::ConversationId;
+    use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AskForApproval;
@@ -579,9 +579,9 @@ mod tests {
 
     #[test]
     fn serialize_new_conversation() -> Result<()> {
-        let request = ClientRequest::NewConversation {
+        let request = ClientRequest::NewThread {
             request_id: RequestId::Integer(42),
-            params: v1::NewConversationParams {
+            params: v1::NewThreadParams {
                 model: Some("gpt-5.1-codex-max".to_string()),
                 model_provider: None,
                 profile: None,
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn conversation_id_serializes_as_plain_string() -> Result<()> {
-        let id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
 
         assert_eq!(
             json!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
@@ -629,11 +629,10 @@ mod tests {
 
     #[test]
     fn conversation_id_deserializes_from_plain_string() -> Result<()> {
-        let id: ConversationId =
-            serde_json::from_value(json!("67e55044-10b1-426f-9247-bb680e5fe0c8"))?;
+        let id: ThreadId = serde_json::from_value(json!("67e55044-10b1-426f-9247-bb680e5fe0c8"))?;
 
         assert_eq!(
-            ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?,
+            ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?,
             id,
         );
         Ok(())
@@ -654,7 +653,7 @@ mod tests {
 
     #[test]
     fn serialize_server_request() -> Result<()> {
-        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let conversation_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
         let params = v1::ExecCommandApprovalParams {
             conversation_id,
             call_id: "call-42".to_string(),

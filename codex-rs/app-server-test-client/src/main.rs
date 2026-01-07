@@ -38,8 +38,8 @@ use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::NewThreadParams;
+use codex_app_server_protocol::NewThreadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::SendUserMessageParams;
@@ -52,7 +52,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use serde::Serialize;
@@ -176,7 +176,7 @@ fn send_message(codex_bin: &str, config_overrides: &[String], user_message: Stri
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
 
-    let conversation = client.new_conversation()?;
+    let conversation = client.start_thread()?;
     println!("< newConversation response: {conversation:?}");
 
     let subscription = client.add_conversation_listener(&conversation.conversation_id)?;
@@ -187,7 +187,7 @@ fn send_message(codex_bin: &str, config_overrides: &[String], user_message: Stri
 
     client.stream_conversation(&conversation.conversation_id)?;
 
-    client.remove_conversation_listener(subscription.subscription_id)?;
+    client.remove_thread_listener(subscription.subscription_id)?;
 
     Ok(())
 }
@@ -416,11 +416,11 @@ impl CodexClient {
         self.send_request(request, request_id, "initialize")
     }
 
-    fn new_conversation(&mut self) -> Result<NewConversationResponse> {
+    fn start_thread(&mut self) -> Result<NewThreadResponse> {
         let request_id = self.request_id();
-        let request = ClientRequest::NewConversation {
+        let request = ClientRequest::NewThread {
             request_id: request_id.clone(),
-            params: NewConversationParams::default(),
+            params: NewThreadParams::default(),
         };
 
         self.send_request(request, request_id, "newConversation")
@@ -428,7 +428,7 @@ impl CodexClient {
 
     fn add_conversation_listener(
         &mut self,
-        conversation_id: &ConversationId,
+        conversation_id: &ThreadId,
     ) -> Result<AddConversationSubscriptionResponse> {
         let request_id = self.request_id();
         let request = ClientRequest::AddConversationListener {
@@ -442,7 +442,7 @@ impl CodexClient {
         self.send_request(request, request_id, "addConversationListener")
     }
 
-    fn remove_conversation_listener(&mut self, subscription_id: Uuid) -> Result<()> {
+    fn remove_thread_listener(&mut self, subscription_id: Uuid) -> Result<()> {
         let request_id = self.request_id();
         let request = ClientRequest::RemoveConversationListener {
             request_id: request_id.clone(),
@@ -460,7 +460,7 @@ impl CodexClient {
 
     fn send_user_message(
         &mut self,
-        conversation_id: &ConversationId,
+        conversation_id: &ThreadId,
         message: &str,
     ) -> Result<SendUserMessageResponse> {
         let request_id = self.request_id();
@@ -527,7 +527,7 @@ impl CodexClient {
         self.send_request(request, request_id, "model/list")
     }
 
-    fn stream_conversation(&mut self, conversation_id: &ConversationId) -> Result<()> {
+    fn stream_conversation(&mut self, conversation_id: &ThreadId) -> Result<()> {
         loop {
             let notification = self.next_notification()?;
 
@@ -664,7 +664,7 @@ impl CodexClient {
     fn extract_event(
         &self,
         notification: JSONRPCNotification,
-        conversation_id: &ConversationId,
+        conversation_id: &ThreadId,
     ) -> Result<Option<Event>> {
         let params = notification
             .params
@@ -678,7 +678,7 @@ impl CodexClient {
         let conversation_value = map
             .remove("conversationId")
             .context("event missing conversationId")?;
-        let notification_conversation: ConversationId = serde_json::from_value(conversation_value)
+        let notification_conversation: ThreadId = serde_json::from_value(conversation_value)
             .context("conversationId was not a valid UUID")?;
 
         if &notification_conversation != conversation_id {

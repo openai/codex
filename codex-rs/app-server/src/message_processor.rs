@@ -18,7 +18,7 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::USER_AGENT_SUFFIX;
@@ -51,13 +51,13 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let conversation_manager = Arc::new(ConversationManager::new(
+        let thread_manager = Arc::new(ThreadManager::new(
             auth_manager.clone(),
             SessionSource::VSCode,
         ));
         let codex_message_processor = CodexMessageProcessor::new(
             auth_manager,
-            conversation_manager,
+            thread_manager,
             outgoing.clone(),
             codex_linux_sandbox_exe,
             Arc::clone(&config),

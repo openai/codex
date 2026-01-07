@@ -790,7 +790,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use codex_core::protocol::TokenUsage;
-    use codex_protocol::ConversationId;
+    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
 
     fn finalize_from_args(args: &[&str]) -> TuiCli {
@@ -830,9 +830,7 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
-            conversation_id: conversation
-                .map(ConversationId::from_string)
-                .map(Result::unwrap),
+            conversation_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
             update_action: None,
         }
     }

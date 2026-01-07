@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
+use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
@@ -103,11 +103,11 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         codex,
         cwd,
         config,
-        conversation_manager,
+        thread_manager,
         ..
     } = harness;
 
-    let models_manager = conversation_manager.get_models_manager();
+    let models_manager = thread_manager.get_models_manager();
     let available_model =
         wait_for_model_available(&models_manager, REMOTE_MODEL_SLUG, &config).await;
 
@@ -249,11 +249,11 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         codex,
         cwd,
         config,
-        conversation_manager,
+        thread_manager,
         ..
     } = harness;
 
-    let models_manager = conversation_manager.get_models_manager();
+    let models_manager = thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, model, &config).await;
 
     codex
@@ -411,10 +411,10 @@ async fn wait_for_model_available(
 }
 
 struct RemoteModelsHarness {
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
     cwd: Arc<TempDir>,
     config: Config,
-    conversation_manager: Arc<ConversationManager>,
+    thread_manager: Arc<ThreadManager>,
 }
 
 // todo(aibrahim): move this to with_model_provier in test_codex
@@ -441,18 +441,16 @@ where
 
     mutate_config(&mut config);
 
-    let conversation_manager = ConversationManager::with_models_provider(auth, provider);
-    let conversation_manager = Arc::new(conversation_manager);
+    let thread_manager = ThreadManager::with_models_provider(auth, provider);
+    let thread_manager = Arc::new(thread_manager);
 
-    let new_conversation = conversation_manager
-        .new_conversation(config.clone())
-        .await?;
+    let new_conversation = thread_manager.start_thread(config.clone()).await?;
 
     Ok(RemoteModelsHarness {
-        codex: new_conversation.conversation,
+        codex: new_conversation.thread,
         cwd,
         config,
-        conversation_manager,
+        thread_manager,
     })
 }
 

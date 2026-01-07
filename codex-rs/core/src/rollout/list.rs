@@ -20,11 +20,11 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
 
-/// Returned page of conversation summaries.
+/// Returned page of thread (thread) summaries.
 #[derive(Debug, Default, PartialEq)]
-pub struct ConversationsPage {
-    /// Conversation summaries ordered newest first.
-    pub items: Vec<ConversationItem>,
+pub struct ThreadsPage {
+    /// Thread summaries ordered newest first.
+    pub items: Vec<ThreadItem>,
     /// Opaque pagination token to resume after the last item, or `None` if end.
     pub next_cursor: Option<Cursor>,
     /// Total number of files touched while scanning this request.
@@ -33,9 +33,9 @@ pub struct ConversationsPage {
     pub reached_scan_cap: bool,
 }
 
-/// Summary information for a conversation rollout file.
+/// Summary information for a thread rollout file.
 #[derive(Debug, PartialEq)]
-pub struct ConversationItem {
+pub struct ThreadItem {
     /// Absolute path to the rollout file.
     pub path: PathBuf,
     /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
@@ -45,6 +45,13 @@ pub struct ConversationItem {
     /// RFC3339 timestamp string for the most recent update (from file mtime).
     pub updated_at: Option<String>,
 }
+
+#[allow(dead_code)]
+#[deprecated(note = "use ThreadItem")]
+pub type ConversationItem = ThreadItem;
+#[allow(dead_code)]
+#[deprecated(note = "use ThreadsPage")]
+pub type ConversationsPage = ThreadsPage;
 
 #[derive(Default)]
 struct HeadTailSummary {
@@ -99,22 +106,22 @@ impl<'de> serde::Deserialize<'de> for Cursor {
     }
 }
 
-/// Retrieve recorded conversation file paths with token pagination. The returned `next_cursor`
+/// Retrieve recorded thread file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
 /// concurrent new sessions being appended. Ordering is stable by timestamp desc, then UUID desc.
-pub(crate) async fn get_conversations(
+pub(crate) async fn get_threads(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     default_provider: &str,
-) -> io::Result<ConversationsPage> {
+) -> io::Result<ThreadsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
 
     if !root.exists() {
-        return Ok(ConversationsPage {
+        return Ok(ThreadsPage {
             items: Vec::new(),
             next_cursor: None,
             num_scanned_files: 0,
@@ -138,7 +145,7 @@ pub(crate) async fn get_conversations(
     Ok(result)
 }
 
-/// Load conversation file paths from disk using directory traversal.
+/// Load thread file paths from disk using directory traversal.
 ///
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
 /// Returned newest (latest) first.
@@ -148,8 +155,8 @@ async fn traverse_directories_for_paths(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
-) -> io::Result<ConversationsPage> {
-    let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
+) -> io::Result<ThreadsPage> {
+    let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
     let mut anchor_passed = anchor.is_none();
     let (anchor_ts, anchor_id) = match anchor {
@@ -232,7 +239,7 @@ async fn traverse_directories_for_paths(
                                 .unwrap_or(None)
                                 .or_else(|| created_at.clone());
                         }
-                        items.push(ConversationItem {
+                        items.push(ThreadItem {
                             path,
                             head,
                             created_at,
@@ -254,7 +261,7 @@ async fn traverse_directories_for_paths(
     } else {
         None
     };
-    Ok(ConversationsPage {
+    Ok(ThreadsPage {
         items,
         next_cursor: next,
         num_scanned_files: scanned_files,
@@ -279,7 +286,7 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
     Some(Cursor::new(ts, uuid))
 }
 
-fn build_next_cursor(items: &[ConversationItem]) -> Option<Cursor> {
+fn build_next_cursor(items: &[ThreadItem]) -> Option<Cursor> {
     let last = items.last()?;
     let file_name = last.path.file_name()?.to_string_lossy();
     let (ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
@@ -455,10 +462,10 @@ async fn file_modified_rfc3339(path: &Path) -> io::Result<Option<String>> {
     Ok(dt.format(&Rfc3339).ok())
 }
 
-/// Locate a recorded conversation rollout file by its UUID string using the existing
+/// Locate a recorded thread rollout file by its UUID string using the existing
 /// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
 /// or the id is invalid.
-pub async fn find_conversation_path_by_id_str(
+pub async fn find_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {

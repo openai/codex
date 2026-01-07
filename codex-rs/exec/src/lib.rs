@@ -16,10 +16,10 @@ pub use cli::ReviewArgs;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
-use codex_core::NewConversation;
+use codex_core::NewThread;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
+use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -55,7 +55,7 @@ use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_originator;
-use codex_core::find_conversation_path_by_id_str;
+use codex_core::find_thread_path_by_id_str;
 
 enum InitialOperation {
     UserTurn {
@@ -286,33 +286,29 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
-    let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
-    let default_model = conversation_manager
+    let thread_manager = ThreadManager::new(auth_manager.clone(), SessionSource::Exec);
+    let default_model = thread_manager
         .get_models_manager()
         .get_model(&config.model, &config)
         .await;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
-    let NewConversation {
-        conversation_id: _,
-        conversation,
+    let NewThread {
+        thread_id: _,
+        thread,
         session_configured,
     } = if let Some(ExecCommand::Resume(args)) = command.as_ref() {
         let resume_path = resolve_resume_path(&config, args).await?;
 
         if let Some(path) = resume_path {
-            conversation_manager
-                .resume_conversation_from_rollout(config.clone(), path, auth_manager.clone())
+            thread_manager
+                .resume_thread_from_rollout(config.clone(), path, auth_manager.clone())
                 .await?
         } else {
-            conversation_manager
-                .new_conversation(config.clone())
-                .await?
+            thread_manager.start_thread(config.clone()).await?
         }
     } else {
-        conversation_manager
-            .new_conversation(config.clone())
-            .await?
+        thread_manager.start_thread(config.clone()).await?
     };
     let (initial_operation, prompt_summary) = match (command, prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
@@ -502,7 +498,7 @@ async fn resolve_resume_path(
             }
         }
     } else if let Some(id_str) = args.session_id.as_deref() {
-        let path = find_conversation_path_by_id_str(&config.codex_home, id_str).await?;
+        let path = find_thread_path_by_id_str(&config.codex_home, id_str).await?;
         Ok(path)
     } else {
         Ok(None)
