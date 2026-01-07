@@ -2651,7 +2651,7 @@ impl ChatWidget {
             let is_current =
                 Self::preset_matches_current(current_approval, current_sandbox, &preset);
             let name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
-                "Agent (degraded)".to_string()
+                "Agent (non-elevated sandbox)".to_string()
             } else {
                 preset.label.to_string()
             };
@@ -2728,8 +2728,8 @@ impl ChatWidget {
 
         let footer_note = show_elevate_sandbox_hint.then(|| {
             vec![
-                "To upgrade to the elevated sandbox, run ".dim(),
-                "/elevate-sandbox".cyan(),
+                "The non-elevated sandbox protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected. To upgrade to the elevated sandbox, run ".dim(),
+                "/setup-elevated-sandbox".cyan(),
                 ".".dim(),
             ]
             .into()
@@ -3042,40 +3042,59 @@ impl ChatWidget {
             return;
         }
 
+        let current_approval = self.config.approval_policy.value();
+        let current_sandbox = self.config.sandbox_policy.get();
+        let presets = builtin_approval_presets();
+        let stay_full_access = presets
+            .iter()
+            .find(|preset| preset.id == "full-access")
+            .is_some_and(|preset| {
+                Self::preset_matches_current(current_approval, current_sandbox, preset)
+            });
+        let stay_actions = if stay_full_access {
+            Vec::new()
+        } else {
+            presets
+                .iter()
+                .find(|preset| preset.id == "read-only")
+                .map(|preset| {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                })
+                .unwrap_or_default()
+        };
+        let stay_label = if stay_full_access {
+            "Stay in Agent Full Access".to_string()
+        } else {
+            "Stay in Read-Only".to_string()
+        };
+
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
             Paragraph::new(vec![
-                line!["Codex works best in Agent mode.".bold()],
-                line!["To use Agent mode on Windows, we need to configure the sandbox."],
-                line!["This setup requires elevation. Do you accept?"],
+                line!["Set Up Agent Sandbox".bold()],
+                line![""],
+                line!["Agent mode uses an experimental Windows sandbox that protects your files and prevents network access by default."],
                 line!["Learn more: https://developers.openai.com/codex/windows"],
             ])
             .wrap(Wrap { trim: false }),
         ));
 
-        let preset_accept = preset.clone();
-        let preset_decline = preset;
         let items = vec![
             SelectionItem {
-                name: "Yes, I accept".to_string(),
+                name: "Set up agent sandbox (requires elevation)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
-                        preset: preset_accept.clone(),
+                        preset: preset.clone(),
                     });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "No, I do not accept".to_string(),
+                name: stay_label,
                 description: None,
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt {
-                        preset: preset_decline.clone(),
-                        reason: WindowsSandboxFallbackReason::DeclinedElevation,
-                    });
-                })],
+                actions: stay_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -3101,41 +3120,65 @@ impl ChatWidget {
     ) {
         use ratatui_macros::line;
 
+        let _ = reason;
+
+        let current_approval = self.config.approval_policy.value();
+        let current_sandbox = self.config.sandbox_policy.get();
+        let presets = builtin_approval_presets();
+        let stay_full_access = presets
+            .iter()
+            .find(|preset| preset.id == "full-access")
+            .is_some_and(|preset| {
+                Self::preset_matches_current(current_approval, current_sandbox, preset)
+            });
+        let stay_actions = if stay_full_access {
+            Vec::new()
+        } else {
+            presets
+                .iter()
+                .find(|preset| preset.id == "read-only")
+                .map(|preset| {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                })
+                .unwrap_or_default()
+        };
+        let stay_label = if stay_full_access {
+            "Stay in Agent Full Access".to_string()
+        } else {
+            "Stay in Read-Only".to_string()
+        };
+
         let mut lines = Vec::new();
-        if reason == WindowsSandboxFallbackReason::ElevationFailed {
-            lines.push(line!["The elevated setup did not complete.".bold()]);
-        }
+        lines.push(line!["Use Non-Elevated Sandbox?".bold()]);
+        lines.push(line![""]);
         lines.push(line![
-            "You can still use a degraded sandbox without elevation."
+            "Elevation failed. You can also use a non-elevated sandbox, which protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected."
         ]);
-        lines.push(line!["It is less watertight, but still secure."]);
-        lines.push(line![
-            "Learn more: https://developers.openai.com/codex/windows"
-        ]);
+        lines.push(line!["Learn more: https://developers.openai.com/codex/windows"]);
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
 
-        let preset_retry = preset.clone();
-        let preset_degraded = preset;
+        let elevated_preset = preset.clone();
+        let legacy_preset = preset.clone();
         let items = vec![
             SelectionItem {
-                name: "Try elevated setup again".to_string(),
+                name: "Try elevated agent sandbox setup again".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
-                        preset: preset_retry.clone(),
+                        preset: elevated_preset.clone(),
                     });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Use degraded sandbox".to_string(),
+                name: "Use non-elevated agent sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                        preset: preset_degraded.clone(),
+                        preset: legacy_preset.clone(),
                         mode: WindowsSandboxEnableMode::Legacy,
                     });
                 })],
@@ -3143,11 +3186,9 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Use no sandbox".to_string(),
+                name: stay_label,
                 description: None,
-                actions: vec![Box::new(|tx| {
-                    tx.send(AppEvent::OpenApprovalsPopup);
-                })],
+                actions: stay_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -3196,8 +3237,7 @@ impl ChatWidget {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
         self.set_status_header(
-            "Setting up the elevated Windows sandbox (this may take a minute or more). You'll stay in your current mode until it's done."
-                .to_string(),
+            "Setting up agent sandbox. This can take a minute.".to_string(),
         );
         self.request_redraw();
     }

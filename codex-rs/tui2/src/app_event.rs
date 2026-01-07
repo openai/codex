@@ -24,7 +24,6 @@ pub(crate) enum WindowsSandboxEnableMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxFallbackReason {
-    DeclinedElevation,
     ElevationFailed,
 }
 

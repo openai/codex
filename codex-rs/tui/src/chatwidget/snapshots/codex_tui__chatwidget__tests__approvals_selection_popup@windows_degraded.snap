@@ -11,5 +11,5 @@ expression: popup
                           commands with network access. Exercise caution when
                           using.
 
-  To upgrade to the elevated sandbox, run /elevate-sandbox.
+  To upgrade to the elevated sandbox, run /setup-elevated-sandbox.
   Press enter to confirm or esc to go back

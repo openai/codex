@@ -1688,10 +1688,10 @@ impl App {
                                 self.chat_widget.add_info_message(
                                     match mode {
                                         WindowsSandboxEnableMode::Elevated => {
-                                            "Enabled elevated Windows sandbox.".to_string()
+                                            "Enabled elevated agent sandbox.".to_string()
                                         }
                                         WindowsSandboxEnableMode::Legacy => {
-                                            "Enabled degraded Windows sandbox.".to_string()
+                                            "Enabled non-elevated agent sandbox.".to_string()
                                         }
                                     },
                                     None,

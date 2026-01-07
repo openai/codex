@@ -1892,8 +1892,12 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
         "expected startup prompt to explain elevation: {popup}"
     );
     assert!(
-        popup.contains("Yes, I accept"),
-        "expected startup prompt to offer accepting elevation: {popup}"
+        popup.contains("Set up agent sandbox"),
+        "expected startup prompt to offer agent sandbox setup: {popup}"
+    );
+    assert!(
+        popup.contains("Stay in"),
+        "expected startup prompt to offer staying in current mode: {popup}"
     );
 
     set_windows_sandbox_enabled(true);

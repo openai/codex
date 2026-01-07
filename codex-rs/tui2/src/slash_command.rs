@@ -14,6 +14,7 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Approvals,
+    #[strum(serialize = "setup-elevated-sandbox")]
     ElevateSandbox,
     Skills,
     Review,
@@ -52,7 +53,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
-            SlashCommand::ElevateSandbox => "upgrade to the elevated Windows sandbox",
+            SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
