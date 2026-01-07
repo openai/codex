@@ -5,9 +5,11 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 
 use crate::config::Config;
+use crate::truncate::approx_bytes_for_tokens;
 use tracing::warn;
 
 const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
@@ -70,6 +72,19 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
     }
     if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
         model.auto_compact_token_limit = Some(auto_compact_token_limit);
+    }
+    if let Some(token_limit) = config.tool_output_token_limit {
+        model.truncation_policy = match model.truncation_policy.mode {
+            TruncationMode::Bytes => {
+                let byte_limit =
+                    i64::try_from(approx_bytes_for_tokens(token_limit)).unwrap_or(i64::MAX);
+                TruncationPolicyConfig::bytes(byte_limit)
+            }
+            TruncationMode::Tokens => {
+                let limit = i64::try_from(token_limit).unwrap_or(i64::MAX);
+                TruncationPolicyConfig::tokens(limit)
+            }
+        };
     }
     model
 }
