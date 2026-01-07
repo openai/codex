@@ -524,9 +524,15 @@ async fn run_ratatui_app(
         ..
     } = cli;
 
-    // Determine whether to use alternate screen based on CLI flag and config.
-    // Alternate screen provides a cleaner fullscreen experience but prevents
-    // scrollback in terminal multiplexers like Zellij that follow xterm spec.
+    // Run the main chat + transcript UI on the terminal's alternate screen so
+    // the entire viewport can be used without polluting normal scrollback. This
+    // mirrors the behavior of the legacy TUI but keeps inline mode available
+    // for smaller prompts like onboarding and model migration.
+    //
+    // However, alternate screen prevents scrollback in terminal multiplexers like
+    // Zellij that strictly follow the xterm spec (which disallows scrollback in
+    // alternate screen buffers). This auto-detects the terminal and disables
+    // alternate screen in Zellij while keeping it enabled elsewhere.
     let use_alt_screen = if no_alt_screen {
         // CLI flag explicitly disables alternate screen
         false

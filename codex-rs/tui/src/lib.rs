@@ -502,19 +502,7 @@ async fn run_ratatui_app(
         ..
     } = cli;
 
-    // Determine whether to use alternate screen based on CLI flag and config.
-    let use_alt_screen = if no_alt_screen {
-        false
-    } else {
-        match config.tui_alternate_screen {
-            AltScreenMode::Always => true,
-            AltScreenMode::Never => false,
-            AltScreenMode::Auto => {
-                let terminal_info = codex_core::terminal::terminal_info();
-                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
-            }
-        }
-    };
+    let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
 
     let app_result = App::run(
@@ -546,6 +534,37 @@ fn restore() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
+    }
+}
+
+/// Determine whether to use the terminal's alternate screen buffer.
+///
+/// The alternate screen buffer provides a cleaner fullscreen experience without polluting
+/// the terminal's scrollback history. However, it conflicts with terminal multiplexers like
+/// Zellij that strictly follow the xterm spec, which disallows scrollback in alternate screen
+/// buffers. Zellij intentionally disables scrollback in alternate screen mode (see
+/// https://github.com/zellij-org/zellij/pull/1032) and offers no configuration option to
+/// change this behavior.
+///
+/// This function implements a pragmatic workaround:
+/// - If `--no-alt-screen` is explicitly passed, always disable alternate screen
+/// - Otherwise, respect the `tui.alternate_screen` config setting:
+///   - `always`: Use alternate screen everywhere (original behavior)
+///   - `never`: Inline mode only, preserves scrollback
+///   - `auto` (default): Auto-detect the terminal multiplexer and disable alternate screen
+///     only in Zellij, enabling it everywhere else
+fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScreenMode) -> bool {
+    if no_alt_screen {
+        false
+    } else {
+        match tui_alternate_screen {
+            AltScreenMode::Always => true,
+            AltScreenMode::Never => false,
+            AltScreenMode::Auto => {
+                let terminal_info = codex_core::terminal::terminal_info();
+                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
+            }
+        }
     }
 }
 
