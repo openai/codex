@@ -2,7 +2,7 @@
 
 use tempfile::TempDir;
 
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -170,10 +170,7 @@ pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> 
         .collect()
 }
 
-pub async fn wait_for_event<F>(
-    codex: &CodexConversation,
-    predicate: F,
-) -> codex_core::protocol::EventMsg
+pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> codex_core::protocol::EventMsg
 where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
@@ -181,7 +178,7 @@ where
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
 }
 
-pub async fn wait_for_event_match<T, F>(codex: &CodexConversation, matcher: F) -> T
+pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
 where
     F: Fn(&codex_core::protocol::EventMsg) -> Option<T>,
 {
@@ -190,7 +187,7 @@ where
 }
 
 pub async fn wait_for_event_with_timeout<F>(
-    codex: &CodexConversation,
+    codex: &CodexThread,
     mut predicate: F,
     wait_time: tokio::time::Duration,
 ) -> codex_core::protocol::EventMsg

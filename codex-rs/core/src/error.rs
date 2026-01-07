@@ -8,7 +8,7 @@ use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -71,12 +71,12 @@ pub enum CodexErr {
     Stream(String, Option<Duration>),
 
     #[error(
-        "Codex ran out of room in the model's context window. Start a new conversation or clear earlier history before retrying."
+        "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
     )]
     ContextWindowExceeded,
 
-    #[error("no conversation with id: {0}")]
-    ConversationNotFound(ConversationId),
+    #[error("no thread with id: {0}")]
+    ThreadNotFound(ThreadId),
 
     #[error("session configured event was not the first event in the stream")]
     SessionConfiguredNotFirstEvent,
@@ -455,7 +455,7 @@ impl CodexErr {
             CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::InternalServerError
             | CodexErr::InternalAgentDied => CodexErrorInfo::InternalServerError,
-            CodexErr::UnsupportedOperation(_) | CodexErr::ConversationNotFound(_) => {
+            CodexErr::UnsupportedOperation(_) | CodexErr::ThreadNotFound(_) => {
                 CodexErrorInfo::BadRequest
             }
             CodexErr::Sandbox(_) => CodexErrorInfo::SandboxError,

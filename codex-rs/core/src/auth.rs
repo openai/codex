@@ -630,6 +630,165 @@ struct CachedAuth {
     auth: Option<CodexAuth>,
 }
 
+/// Central manager providing a single source of truth for auth.json derived
+/// authentication data. It loads once (or on preference change) and then
+/// hands out cloned `CodexAuth` values so the rest of the program has a
+/// consistent snapshot.
+///
+/// External modifications to `auth.json` will NOT be observed until
+/// `reload()` is called explicitly. This matches the design goal of avoiding
+/// different parts of the program seeing inconsistent auth data mid‑run.
+#[derive(Debug)]
+pub struct AuthManager {
+    codex_home: PathBuf,
+    inner: RwLock<CachedAuth>,
+    enable_codex_api_key_env: bool,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+}
+
+impl AuthManager {
+    /// Create a new manager loading the initial auth using the provided
+    /// preferred auth method. Errors loading auth are swallowed; `auth()` will
+    /// simply return `None` in that case so callers can treat it as an
+    /// unauthenticated state.
+    pub fn new(
+        codex_home: PathBuf,
+        enable_codex_api_key_env: bool,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+    ) -> Self {
+        let auth = load_auth(
+            &codex_home,
+            enable_codex_api_key_env,
+            auth_credentials_store_mode,
+        )
+        .ok()
+        .flatten();
+        Self {
+            codex_home,
+            inner: RwLock::new(CachedAuth { auth }),
+            enable_codex_api_key_env,
+            auth_credentials_store_mode,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[expect(clippy::expect_used)]
+    /// Create an AuthManager with a specific CodexAuth, for testing only.
+    pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
+        let cached = CachedAuth { auth: Some(auth) };
+        let temp_dir = tempfile::tempdir().expect("temp codex home");
+        let codex_home = temp_dir.path().to_path_buf();
+        TEST_AUTH_TEMP_DIRS
+            .lock()
+            .expect("lock test codex homes")
+            .push(temp_dir);
+        Arc::new(Self {
+            codex_home,
+            inner: RwLock::new(cached),
+            enable_codex_api_key_env: false,
+            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    /// Create an AuthManager with a specific CodexAuth and codex home, for testing only.
+    pub fn from_auth_for_testing_with_home(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
+        let cached = CachedAuth { auth: Some(auth) };
+        Arc::new(Self {
+            codex_home,
+            inner: RwLock::new(cached),
+            enable_codex_api_key_env: false,
+            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        })
+    }
+
+    /// Current cached auth (clone). May be `None` if not logged in or load failed.
+    pub fn auth(&self) -> Option<CodexAuth> {
+        self.inner.read().ok().and_then(|c| c.auth.clone())
+    }
+
+    pub fn codex_home(&self) -> &Path {
+        &self.codex_home
+    }
+
+    /// Force a reload of the auth information from auth.json. Returns
+    /// whether the auth value changed.
+    pub fn reload(&self) -> bool {
+        let new_auth = load_auth(
+            &self.codex_home,
+            self.enable_codex_api_key_env,
+            self.auth_credentials_store_mode,
+        )
+        .ok()
+        .flatten();
+        if let Ok(mut guard) = self.inner.write() {
+            let changed = !AuthManager::auths_equal(&guard.auth, &new_auth);
+            guard.auth = new_auth;
+            changed
+        } else {
+            false
+        }
+    }
+
+    fn auths_equal(a: &Option<CodexAuth>, b: &Option<CodexAuth>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    /// Convenience constructor returning an `Arc` wrapper.
+    pub fn shared(
+        codex_home: PathBuf,
+        enable_codex_api_key_env: bool,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+    ) -> Arc<Self> {
+        Arc::new(Self::new(
+            codex_home,
+            enable_codex_api_key_env,
+            auth_credentials_store_mode,
+        ))
+    }
+
+    /// Attempt to refresh the current auth token (if any). On success, reload
+    /// the auth state from disk so other components observe refreshed token.
+    /// If the token refresh fails in a permanent (non‑transient) way, logs out
+    /// to clear invalid auth state.
+    pub async fn refresh_token(&self) -> Result<Option<String>, RefreshTokenError> {
+        let auth = match self.auth() {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        match auth.refresh_token().await {
+            Ok(token) => {
+                // Reload to pick up persisted changes.
+                self.reload();
+                Ok(Some(token))
+            }
+            Err(e) => {
+                tracing::error!("Failed to refresh token: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Log out by deleting the on‑disk auth.json (if present). Returns Ok(true)
+    /// if a file was removed, Ok(false) if no auth file existed. On success,
+    /// reloads the in‑memory auth cache so callers immediately observe the
+    /// unauthenticated state.
+    pub fn logout(&self) -> std::io::Result<bool> {
+        let removed = super::auth::logout(&self.codex_home, self.auth_credentials_store_mode)?;
+        // Always reload to clear any cached auth (even if file absent).
+        self.reload();
+        Ok(removed)
+    }
+
+    pub fn get_auth_mode(&self) -> Option<AuthMode> {
+        self.auth().map(|a| a.mode)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1049,164 +1208,5 @@ mod tests {
             .expect("auth available");
 
         pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
-    }
-}
-
-/// Central manager providing a single source of truth for auth.json derived
-/// authentication data. It loads once (or on preference change) and then
-/// hands out cloned `CodexAuth` values so the rest of the program has a
-/// consistent snapshot.
-///
-/// External modifications to `auth.json` will NOT be observed until
-/// `reload()` is called explicitly. This matches the design goal of avoiding
-/// different parts of the program seeing inconsistent auth data mid‑run.
-#[derive(Debug)]
-pub struct AuthManager {
-    codex_home: PathBuf,
-    inner: RwLock<CachedAuth>,
-    enable_codex_api_key_env: bool,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-}
-
-impl AuthManager {
-    /// Create a new manager loading the initial auth using the provided
-    /// preferred auth method. Errors loading auth are swallowed; `auth()` will
-    /// simply return `None` in that case so callers can treat it as an
-    /// unauthenticated state.
-    pub fn new(
-        codex_home: PathBuf,
-        enable_codex_api_key_env: bool,
-        auth_credentials_store_mode: AuthCredentialsStoreMode,
-    ) -> Self {
-        let auth = load_auth(
-            &codex_home,
-            enable_codex_api_key_env,
-            auth_credentials_store_mode,
-        )
-        .ok()
-        .flatten();
-        Self {
-            codex_home,
-            inner: RwLock::new(CachedAuth { auth }),
-            enable_codex_api_key_env,
-            auth_credentials_store_mode,
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[expect(clippy::expect_used)]
-    /// Create an AuthManager with a specific CodexAuth, for testing only.
-    pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
-        let cached = CachedAuth { auth: Some(auth) };
-        let temp_dir = tempfile::tempdir().expect("temp codex home");
-        let codex_home = temp_dir.path().to_path_buf();
-        TEST_AUTH_TEMP_DIRS
-            .lock()
-            .expect("lock test codex homes")
-            .push(temp_dir);
-        Arc::new(Self {
-            codex_home,
-            inner: RwLock::new(cached),
-            enable_codex_api_key_env: false,
-            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        })
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    /// Create an AuthManager with a specific CodexAuth and codex home, for testing only.
-    pub fn from_auth_for_testing_with_home(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
-        let cached = CachedAuth { auth: Some(auth) };
-        Arc::new(Self {
-            codex_home,
-            inner: RwLock::new(cached),
-            enable_codex_api_key_env: false,
-            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        })
-    }
-
-    /// Current cached auth (clone). May be `None` if not logged in or load failed.
-    pub fn auth(&self) -> Option<CodexAuth> {
-        self.inner.read().ok().and_then(|c| c.auth.clone())
-    }
-
-    pub fn codex_home(&self) -> &Path {
-        &self.codex_home
-    }
-
-    /// Force a reload of the auth information from auth.json. Returns
-    /// whether the auth value changed.
-    pub fn reload(&self) -> bool {
-        let new_auth = load_auth(
-            &self.codex_home,
-            self.enable_codex_api_key_env,
-            self.auth_credentials_store_mode,
-        )
-        .ok()
-        .flatten();
-        if let Ok(mut guard) = self.inner.write() {
-            let changed = !AuthManager::auths_equal(&guard.auth, &new_auth);
-            guard.auth = new_auth;
-            changed
-        } else {
-            false
-        }
-    }
-
-    fn auths_equal(a: &Option<CodexAuth>, b: &Option<CodexAuth>) -> bool {
-        match (a, b) {
-            (None, None) => true,
-            (Some(a), Some(b)) => a == b,
-            _ => false,
-        }
-    }
-
-    /// Convenience constructor returning an `Arc` wrapper.
-    pub fn shared(
-        codex_home: PathBuf,
-        enable_codex_api_key_env: bool,
-        auth_credentials_store_mode: AuthCredentialsStoreMode,
-    ) -> Arc<Self> {
-        Arc::new(Self::new(
-            codex_home,
-            enable_codex_api_key_env,
-            auth_credentials_store_mode,
-        ))
-    }
-
-    /// Attempt to refresh the current auth token (if any). On success, reload
-    /// the auth state from disk so other components observe refreshed token.
-    /// If the token refresh fails in a permanent (non‑transient) way, logs out
-    /// to clear invalid auth state.
-    pub async fn refresh_token(&self) -> Result<Option<String>, RefreshTokenError> {
-        let auth = match self.auth() {
-            Some(a) => a,
-            None => return Ok(None),
-        };
-        match auth.refresh_token().await {
-            Ok(token) => {
-                // Reload to pick up persisted changes.
-                self.reload();
-                Ok(Some(token))
-            }
-            Err(e) => {
-                tracing::error!("Failed to refresh token: {}", e);
-                Err(e)
-            }
-        }
-    }
-
-    /// Log out by deleting the on‑disk auth.json (if present). Returns Ok(true)
-    /// if a file was removed, Ok(false) if no auth file existed. On success,
-    /// reloads the in‑memory auth cache so callers immediately observe the
-    /// unauthenticated state.
-    pub fn logout(&self) -> std::io::Result<bool> {
-        let removed = super::auth::logout(&self.codex_home, self.auth_credentials_store_mode)?;
-        // Always reload to clear any cached auth (even if file absent).
-        self.reload();
-        Ok(removed)
-    }
-
-    pub fn get_auth_mode(&self) -> Option<AuthMode> {
-        self.auth().map(|a| a.mode)
     }
 }

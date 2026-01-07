@@ -12,7 +12,7 @@ use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::otel_manager::OtelManager;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -65,7 +65,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     config.model = Some(model.clone());
     let config = Arc::new(config);
 
-    let conversation_id = ConversationId::new();
+    let conversation_id = ThreadId::new();
     let auth_mode = AuthMode::ChatGPT;
     let session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
@@ -159,7 +159,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     config.model = Some(model.clone());
     let config = Arc::new(config);
 
-    let conversation_id = ConversationId::new();
+    let conversation_id = ThreadId::new();
     let auth_mode = AuthMode::ChatGPT;
     let session_source = SessionSource::SubAgent(SubAgentSource::Other("my-task".to_string()));
     let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
@@ -251,7 +251,7 @@ async fn responses_respects_model_family_overrides_from_config() {
     let model = config.model.clone().expect("model configured");
     let config = Arc::new(config);
 
-    let conversation_id = ConversationId::new();
+    let conversation_id = ThreadId::new();
     let auth_mode =
         AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key")).get_auth_mode();
     let session_source =
