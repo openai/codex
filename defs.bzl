@@ -77,7 +77,7 @@ def codex_rust_crate(
     for binary, main in binaries.items():
         rust_binary(
             name = binary,
-            crate_name = binary,
+            crate_name = binary.replace("-", "_"),
             crate_root = main,
             deps = maybe_lib + deps,
             proc_macro_deps = proc_macro_deps,
@@ -85,10 +85,12 @@ def codex_rust_crate(
             srcs = native.glob(["src/**/*.rs"]),
         )
 
-    cargo_env = {
-        "CARGO_BIN_EXE_" + binary: "$(rootpath :%s)" % binary
-        for binary in binaries
-    }
+    cargo_env = {}
+    for binary in binaries:
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath :%s)" % binary
+        underscore = binary.replace("-", "_")
+        if underscore != binary:
+            cargo_env["CARGO_BIN_EXE_" + underscore] = "$(rootpath :%s)" % binary
 
     for test in native.glob(["tests/*.rs"], allow_empty = True):
         test_name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-")
