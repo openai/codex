@@ -60,10 +60,6 @@ pub enum Feature {
     // Stable.
     /// Create a ghost commit at each turn.
     GhostCommit,
-    /// Include the view_image tool.
-    ViewImageTool,
-    /// Send warnings to the model to correct it on the tool usage.
-    ModelWarnings,
     /// Enable the default shell tool.
     ShellTool,
 
@@ -87,14 +83,10 @@ pub enum Feature {
     RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
-    /// Allow model to call multiple tools in parallel (only for models supporting it).
-    ParallelToolCalls,
     /// Experimental shell snapshotting.
     ShellSnapshot,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
-    /// Enable discovery and injection of skills.
-    Skills,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
 }
@@ -231,7 +223,6 @@ impl Features {
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
-            tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
             ..Default::default()
         };
         base_legacy.apply(&mut features);
@@ -247,7 +238,6 @@ impl Features {
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
             tools_web_search: config_profile.tools_web_search,
-            tools_view_image: config_profile.tools_view_image,
         };
         profile_legacy.apply(&mut features);
         if let Some(profile_features) = config_profile.features.as_ref() {
@@ -304,26 +294,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ParallelToolCalls,
-        key: "parallel",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::ViewImageTool,
-        key: "view_image_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::ShellTool,
         key: "shell_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::ModelWarnings,
-        key: "warnings",
         stage: Stage::Stable,
         default_enabled: true,
     },
@@ -395,12 +367,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_models",
         stage: Stage::Experimental,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::Skills,
-        key: "skills",
-        stage: Stage::Experimental,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,

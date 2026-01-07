@@ -1883,7 +1883,7 @@ trust_level = "trusted"
         profiles.insert(
             "work".to_string(),
             ConfigProfile {
-                tools_view_image: Some(false),
+                tools_web_search: Some(false),
                 ..Default::default()
             },
         );
@@ -1899,7 +1899,7 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
-        assert!(!config.features.enabled(Feature::ViewImageTool));
+        assert!(!config.features.enabled(Feature::WebSearchRequest));
 
         Ok(())
     }
