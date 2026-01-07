@@ -34,11 +34,11 @@ macro_rules! model_info {
             // offline, core generally omits the effort field unless explicitly
             // configured by the user.
             default_reasoning_level: ReasoningEffort::Medium,
-            supported_reasoning_levels: Vec::new(),
+            supported_reasoning_levels: supported_reasoning_level_low_medium_high(),
             shell_type: ConfigShellToolType::Default,
             visibility: ModelVisibility::None,
             supported_in_api: true,
-            priority: 0,
+            priority: 99,
             upgrade: None,
             base_instructions: BASE_INSTRUCTIONS.to_string(),
             supports_reasoning_summaries: true,
@@ -48,7 +48,7 @@ macro_rules! model_info {
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
             context_window: CONTEXT_WINDOW_272K,
-            auto_compact_token_limit: None,
+            auto_compact_token_limit: Some(CONTEXT_WINDOW_272K * 90 / 100),
             effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
         };
