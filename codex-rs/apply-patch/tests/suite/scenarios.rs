@@ -1,14 +1,15 @@
-use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::fs;
+use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::tempdir;
+use pretty_assertions::assert_eq;
 
 #[test]
 fn test_apply_patch_scenarios() -> anyhow::Result<()> {
-    let scenarios_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scenarios");
+    let scenarios_dir = scenarios_dir()?;
     for scenario in fs::read_dir(scenarios_dir)? {
         let scenario = scenario?;
         let path = scenario.path();
@@ -54,6 +55,26 @@ fn run_apply_patch_scenario(dir: &Path) -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+fn scenarios_dir() -> anyhow::Result<PathBuf> {
+    let candidates = [
+        codex_utils_cargo_bin::buck_project_root()?.map(|root| {
+            root.join("codex-rs/apply-patch/tests/fixtures/scenarios")
+        }),
+        env::var_os("TEST_SRCDIR").map(|root| {
+            PathBuf::from(root).join("_main/codex-rs/apply-patch/tests/fixtures/scenarios")
+        }),
+        Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scenarios")),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(anyhow::anyhow!("failed to locate fixtures directory"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

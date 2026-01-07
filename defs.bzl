@@ -1,4 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
+load("@crates//:data.bzl", "DEP_DATA")
 load("@rules_platform//platform_data:defs.bzl", "platform_data")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
@@ -62,6 +63,17 @@ def codex_rust_crate(
         proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
     )
 
+    binaries = DEP_DATA.get(native.package_name())["binaries"]
+    
+    for binary, main in binaries.items():
+        rust_binary(
+            name = binary,
+            crate_name = binary,
+            deps = [name] + deps,
+            proc_macro_deps = proc_macro_deps,
+            srcs = native.glob(["src/**/*.rs"]),
+        )
+
     for test in native.glob(["tests/*.rs"], allow_empty = True):
         test_name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-")
         if not test_name.endswith("-test"):
@@ -71,8 +83,12 @@ def codex_rust_crate(
             name = test_name,
             crate_root = test,
             srcs = [test],
-            data = native.glob(["tests/**"], allow_empty = True) + test_data_extra,
+            data = native.glob(["tests/**"], allow_empty = True) + binaries.keys() + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = [name] + deps + dev_deps + integration_deps_extra,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            env = {
+                "CARGO_BIN_EXE_" + binary: "$(rootpath :%s)" % binary
+                for binary in binaries
+            },
         )
