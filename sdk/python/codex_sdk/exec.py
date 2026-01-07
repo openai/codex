@@ -5,6 +5,7 @@ import platform
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -79,22 +80,39 @@ class CodexExec:
         stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
         stderr_thread.start()
 
+        abort_event = threading.Event()
+        abort_thread: threading.Thread | None = None
+        if args.signal is not None:
+            def _watch_abort() -> None:
+                while not _is_aborted(args.signal):
+                    if process.poll() is not None:
+                        return
+                    time.sleep(0.05)
+                abort_event.set()
+                _terminate_process(process)
+
+            abort_thread = threading.Thread(target=_watch_abort, daemon=True)
+            abort_thread.start()
+
         try:
             for raw_line in process.stdout:
-                if _is_aborted(args.signal):
-                    _terminate_process(process)
+                if abort_event.is_set():
                     raise AbortError(_abort_reason(args.signal))
                 line = raw_line.rstrip("\n")
                 if line:
                     yield line
             returncode = process.wait()
             stderr_thread.join(timeout=1)
+            if abort_event.is_set():
+                raise AbortError(_abort_reason(args.signal))
             if returncode != 0:
                 stderr_text = "".join(stderr_chunks)
                 raise ThreadRunError(
                     f"Codex Exec exited with code {returncode}: {stderr_text}"
                 )
         finally:
+            if abort_thread is not None:
+                abort_thread.join(timeout=1)
             _terminate_process(process)
 
 
