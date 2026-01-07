@@ -4175,11 +4175,6 @@ impl ChatWidget {
 
     pub(crate) fn open_security_review_popup(&mut self) {
         let mut items: Vec<SelectionItem> = Vec::new();
-        let repo_path = self.config.cwd.clone();
-        let storage_root = crate::security_review_storage_root(&repo_path);
-        let latest_completed = completed_security_review_candidates(&storage_root)
-            .into_iter()
-            .next();
 
         items.push(SelectionItem {
             name: "Full security review".to_string(),
@@ -4198,37 +4193,6 @@ impl ChatWidget {
             dismiss_on_select: true,
             ..Default::default()
         });
-
-        if let Some(candidate) = latest_completed {
-            let display_path = display_path_for(&candidate.output_root, &repo_path);
-            let folder_name = candidate.folder_name.clone();
-            let age = candidate.age_label.clone();
-            let mode_label = candidate.metadata.mode.as_str();
-            let linear_issue = candidate.metadata.linear_issue.clone();
-            let output_root = candidate.output_root.clone();
-            let mode = candidate.metadata.mode;
-
-            items.push(SelectionItem {
-                name: "Rebuild last completed report".to_string(),
-                description: Some(format!(
-                    "Mode: {mode_label} • Folder: {folder_name} • Age: {age} • Path: {display_path}"
-                )),
-                actions: vec![Box::new(move |tx: &AppEventSender| {
-                    tx.send(AppEvent::StartSecurityReview {
-                        mode,
-                        include_paths: Vec::new(),
-                        scope_prompt: None,
-                        linear_issue: linear_issue.clone(),
-                        force_new: false,
-                        resume_from: Some(output_root.clone()),
-                        rebuild_completed_review: true,
-                    });
-                })],
-                dismiss_on_select: true,
-                search_value: Some(display_path),
-                ..Default::default()
-            });
-        }
 
         items.push(SelectionItem {
             name: "Quick bug sweep".to_string(),
