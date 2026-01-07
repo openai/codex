@@ -31,6 +31,7 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+mod terminal_history;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -309,9 +310,20 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
+fn update_terminal_history(exit_info: &AppExitInfo) {
+    let Some(conversation_id) = exit_info.conversation_id else {
+        return;
+    };
+    let resume_cmd = format!("codex resume {conversation_id}");
+    if let Err(err) = terminal_history::replace_last_codex_command(&resume_cmd) {
+        tracing::debug!("failed to update terminal history: {err}");
+    }
+}
+
 /// Handle the app exit and print the results. Optionally run the update action.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     let update_action = exit_info.update_action;
+    update_terminal_history(&exit_info);
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
