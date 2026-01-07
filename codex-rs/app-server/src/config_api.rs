@@ -3,12 +3,12 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigRequirements;
 use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::Requirements;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
@@ -70,8 +70,8 @@ impl ConfigApi {
     }
 }
 
-fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> Requirements {
-    Requirements {
+fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
+    ConfigRequirements {
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
                 .into_iter()

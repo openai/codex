@@ -167,9 +167,7 @@ impl ConfigService {
             .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
 
         let requirements = layers.requirements_toml().clone();
-        if requirements.allowed_approval_policies.is_none()
-            && requirements.allowed_sandbox_modes.is_none()
-        {
+        if requirements.is_empty() {
             Ok(None)
         } else {
             Ok(Some(requirements))
