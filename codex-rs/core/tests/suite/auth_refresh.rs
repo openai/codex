@@ -78,10 +78,13 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         "last_refresh should advance"
     );
 
-    let cached_auth = ctx.auth_manager.auth().context("auth should be cached")?;
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should be cached")?;
     let cached = cached_auth
         .get_token_data()
-        .await
         .context("token data should be cached")?;
     assert_eq!(cached, refreshed_tokens);
 
@@ -115,7 +118,11 @@ async fn refreshes_token_when_last_refresh_is_stale() -> Result<()> {
     };
     ctx.write_auth(&initial_auth)?;
 
-    let cached_auth = ctx.auth_manager.auth().context("auth should be cached")?;
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should be cached")?;
     let refreshed_tokens = TokenData {
         access_token: "new-access-token".to_string(),
         refresh_token: "new-refresh-token".to_string(),
@@ -123,7 +130,6 @@ async fn refreshes_token_when_last_refresh_is_stale() -> Result<()> {
     };
     let cached = cached_auth
         .get_token_data()
-        .await
         .context("token data should refresh")?;
     assert_eq!(cached, refreshed_tokens);
 
@@ -183,10 +189,10 @@ async fn refresh_token_returns_permanent_error_for_expired_refresh_token() -> Re
     let cached_auth = ctx
         .auth_manager
         .auth()
+        .await
         .context("auth should remain cached")?;
     let cached = cached_auth
         .get_token_data()
-        .await
         .context("token data should remain cached")?;
     assert_eq!(cached, initial_tokens);
 
@@ -233,10 +239,10 @@ async fn refresh_token_returns_transient_error_on_server_failure() -> Result<()>
     let cached_auth = ctx
         .auth_manager
         .auth()
+        .await
         .context("auth should remain cached")?;
     let cached = cached_auth
         .get_token_data()
-        .await
         .context("token data should remain cached")?;
     assert_eq!(cached, initial_tokens);
 

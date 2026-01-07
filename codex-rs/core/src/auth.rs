@@ -8,12 +8,10 @@ use serde::Serialize;
 use serial_test::serial;
 use std::env;
 use std::fmt::Debug;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -93,40 +91,6 @@ impl From<RefreshTokenError> for std::io::Error {
 }
 
 impl CodexAuth {
-    pub async fn refresh_token(&self) -> Result<String, RefreshTokenError> {
-        tracing::info!("Refreshing token");
-
-        let token_data = self.get_current_token_data().ok_or_else(|| {
-            RefreshTokenError::Transient(std::io::Error::other("Token data is not available."))
-        })?;
-        let token = token_data.refresh_token;
-
-        let refresh_response = try_refresh_token(token, &self.client).await?;
-
-        let updated = update_tokens(
-            &self.storage,
-            refresh_response.id_token,
-            refresh_response.access_token,
-            refresh_response.refresh_token,
-        )
-        .await
-        .map_err(RefreshTokenError::from)?;
-
-        if let Ok(mut auth_lock) = self.auth_dot_json.lock() {
-            *auth_lock = Some(updated.clone());
-        }
-
-        let access = match updated.tokens {
-            Some(t) => t.access_token,
-            None => {
-                return Err(RefreshTokenError::other_with_message(
-                    "Token data is not available after refresh.",
-                ));
-            }
-        };
-        Ok(access)
-    }
-
     /// Loads the available auth information from auth storage.
     pub fn from_auth_storage(
         codex_home: &Path,
@@ -135,62 +99,23 @@ impl CodexAuth {
         load_auth(codex_home, false, auth_credentials_store_mode)
     }
 
-    pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
+    pub fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
         let auth_dot_json: Option<AuthDotJson> = self.get_current_auth_json();
         match auth_dot_json {
             Some(AuthDotJson {
-                tokens: Some(mut tokens),
-                last_refresh: Some(last_refresh),
+                tokens: Some(tokens),
+                last_refresh: Some(_),
                 ..
-            }) => {
-                if last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL) {
-                    let refresh_result = tokio::time::timeout(
-                        Duration::from_secs(60),
-                        try_refresh_token(tokens.refresh_token.clone(), &self.client),
-                    )
-                    .await;
-                    let refresh_response = match refresh_result {
-                        Ok(Ok(response)) => response,
-                        Ok(Err(err)) => return Err(err.into()),
-                        Err(_) => {
-                            return Err(std::io::Error::new(
-                                ErrorKind::TimedOut,
-                                "timed out while refreshing OpenAI API key",
-                            ));
-                        }
-                    };
-
-                    let updated_auth_dot_json = update_tokens(
-                        &self.storage,
-                        refresh_response.id_token,
-                        refresh_response.access_token,
-                        refresh_response.refresh_token,
-                    )
-                    .await?;
-
-                    tokens = updated_auth_dot_json
-                        .tokens
-                        .clone()
-                        .ok_or(std::io::Error::other(
-                            "Token data is not available after refresh.",
-                        ))?;
-
-                    #[expect(clippy::unwrap_used)]
-                    let mut auth_lock = self.auth_dot_json.lock().unwrap();
-                    *auth_lock = Some(updated_auth_dot_json);
-                }
-
-                Ok(tokens)
-            }
+            }) => Ok(tokens),
             _ => Err(std::io::Error::other("Token data is not available.")),
         }
     }
 
-    pub async fn get_token(&self) -> Result<String, std::io::Error> {
+    pub fn get_token(&self) -> Result<String, std::io::Error> {
         match self.mode {
             AuthMode::ApiKey => Ok(self.api_key.clone().unwrap_or_default()),
             AuthMode::ChatGPT => {
-                let id_token = self.get_token_data().await?.access_token;
+                let id_token = self.get_token_data()?.access_token;
                 Ok(id_token)
             }
         }
@@ -338,7 +263,7 @@ pub fn load_auth_dot_json(
     storage.load()
 }
 
-pub async fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
+pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
     let Some(auth) = load_auth(
         &config.codex_home,
         true,
@@ -376,7 +301,7 @@ pub async fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> 
             return Ok(());
         }
 
-        let token_data = match auth.get_token_data().await {
+        let token_data = match auth.get_token_data() {
             Ok(data) => data,
             Err(err) => {
                 return logout_with_message(
@@ -689,9 +614,20 @@ impl AuthManager {
         })
     }
 
-    /// Current cached auth (clone). May be `None` if not logged in or load failed.
-    pub fn auth(&self) -> Option<CodexAuth> {
+    /// Current cached auth (clone) without attempting a refresh.
+    pub fn auth_cached(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
+    }
+
+    /// Current cached auth (clone). May be `None` if not logged in or load failed.
+    /// Refreshes cached ChatGPT tokens if they are stale before returning.
+    pub async fn auth(&self) -> Option<CodexAuth> {
+        let auth = self.auth_cached()?;
+        if let Err(err) = self.refresh_if_stale(&auth).await {
+            tracing::error!("Failed to refresh token: {}", err);
+            return Some(auth);
+        }
+        self.auth_cached()
     }
 
     /// Force a reload of the auth information from auth.json. Returns
@@ -736,24 +672,20 @@ impl AuthManager {
 
     /// Attempt to refresh the current auth token (if any). On success, reload
     /// the auth state from disk so other components observe refreshed token.
-    /// If the token refresh fails in a permanent (non‑transient) way, logs out
-    /// to clear invalid auth state.
+    /// If the token refresh fails, returns the error to the caller.
     pub async fn refresh_token(&self) -> Result<Option<String>, RefreshTokenError> {
-        let auth = match self.auth() {
-            Some(a) => a,
+        let auth = match self.auth_cached() {
+            Some(auth) => auth,
             None => return Ok(None),
         };
-        match auth.refresh_token().await {
-            Ok(token) => {
-                // Reload to pick up persisted changes.
-                self.reload();
-                Ok(Some(token))
-            }
-            Err(e) => {
-                tracing::error!("Failed to refresh token: {}", e);
-                Err(e)
-            }
-        }
+        tracing::info!("Refreshing token");
+        let token_data = auth.get_current_token_data().ok_or_else(|| {
+            RefreshTokenError::Transient(std::io::Error::other("Token data is not available."))
+        })?;
+        let access = self.refresh_tokens(&auth, token_data.refresh_token).await?;
+        // Reload to pick up persisted changes.
+        self.reload();
+        Ok(Some(access))
     }
 
     /// Log out by deleting the on‑disk auth.json (if present). Returns Ok(true)
@@ -768,7 +700,56 @@ impl AuthManager {
     }
 
     pub fn get_auth_mode(&self) -> Option<AuthMode> {
-        self.auth().map(|a| a.mode)
+        self.auth_cached().map(|a| a.mode)
+    }
+
+    async fn refresh_if_stale(&self, auth: &CodexAuth) -> Result<bool, RefreshTokenError> {
+        if auth.mode != AuthMode::ChatGPT {
+            return Ok(false);
+        }
+
+        let auth_dot_json = match auth.get_current_auth_json() {
+            Some(auth_dot_json) => auth_dot_json,
+            None => return Ok(false),
+        };
+        let tokens = match auth_dot_json.tokens {
+            Some(tokens) => tokens,
+            None => return Ok(false),
+        };
+        let last_refresh = match auth_dot_json.last_refresh {
+            Some(last_refresh) => last_refresh,
+            None => return Ok(false),
+        };
+        if last_refresh >= Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL) {
+            return Ok(false);
+        }
+        self.refresh_tokens(auth, tokens.refresh_token).await?;
+        self.reload();
+        Ok(true)
+    }
+
+    async fn refresh_tokens(
+        &self,
+        auth: &CodexAuth,
+        refresh_token: String,
+    ) -> Result<String, RefreshTokenError> {
+        let refresh_response = try_refresh_token(refresh_token, &auth.client).await?;
+
+        let updated = update_tokens(
+            &auth.storage,
+            refresh_response.id_token,
+            refresh_response.access_token,
+            refresh_response.refresh_token,
+        )
+        .await
+        .map_err(RefreshTokenError::from)?;
+
+        match updated.tokens {
+            Some(tokens) => Ok(tokens.access_token),
+            None => Err(RefreshTokenError::other_with_message(
+                "Token data is not available after refresh.",
+            )),
+        }
     }
 }
 
@@ -930,7 +911,7 @@ mod tests {
         assert_eq!(auth.mode, AuthMode::ApiKey);
         assert_eq!(auth.api_key, Some("sk-test-key".to_string()));
 
-        assert!(auth.get_token_data().await.is_err());
+        assert!(auth.get_token_data().is_err());
     }
 
     #[test]
@@ -1058,7 +1039,6 @@ mod tests {
         let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
 
         let err = super::enforce_login_restrictions(&config)
-            .await
             .expect_err("expected method mismatch to error");
         assert!(err.to_string().contains("ChatGPT login is required"));
         assert!(
@@ -1084,7 +1064,6 @@ mod tests {
         let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
         let err = super::enforce_login_restrictions(&config)
-            .await
             .expect_err("expected workspace mismatch to error");
         assert!(err.to_string().contains("workspace org_mine"));
         assert!(
@@ -1109,9 +1088,7 @@ mod tests {
 
         let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
-        super::enforce_login_restrictions(&config)
-            .await
-            .expect("matching workspace should succeed");
+        super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
         assert!(
             codex_home.path().join("auth.json").exists(),
             "auth.json should remain when restrictions pass"
@@ -1127,9 +1104,7 @@ mod tests {
 
         let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
-        super::enforce_login_restrictions(&config)
-            .await
-            .expect("matching workspace should succeed");
+        super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
         assert!(
             codex_home.path().join("auth.json").exists(),
             "auth.json should remain when restrictions pass"
@@ -1145,7 +1120,6 @@ mod tests {
         let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
 
         let err = super::enforce_login_restrictions(&config)
-            .await
             .expect_err("environment API key should not satisfy forced ChatGPT login");
         assert!(
             err.to_string()
