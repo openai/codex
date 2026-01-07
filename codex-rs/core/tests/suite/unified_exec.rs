@@ -1689,7 +1689,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
-                text: "close unified exec sessions on turn end".into(),
+                text: "close unified exec processes on turn end".into(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1710,7 +1710,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
     let begin_process_id = begin_event
         .process_id
         .clone()
-        .expect("expected process_id for long-running unified exec session");
+        .expect("expected process_id for long-running unified exec process");
 
     let pid = wait_for_pid_file(&pid_path).await?;
     assert!(
@@ -2560,7 +2560,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let prune_start = requests
         .iter()
         .find_map(|req| req.function_call_output_text(prune_call_id))
-        .expect("missing initial prune session output");
+        .expect("missing initial prune process output");
     let prune_start_output = parse_unified_exec_output(&prune_start)?;
     assert!(prune_start_output.process_id.is_some());
     assert!(prune_start_output.exit_code.is_none());
@@ -2573,7 +2573,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     assert!(keep_write_output.process_id.is_some());
     assert!(
         keep_write_output.output.contains("still alive"),
-        "expected cat session to echo input, got {:?}",
+        "expected cat process to echo input, got {:?}",
         keep_write_output.output
     );
 
@@ -2582,7 +2582,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         .find_map(|req| req.function_call_output_text(probe_call_id))
         .expect("missing probe output");
     assert!(
-        pruned_probe.contains("UnknownSessionId") || pruned_probe.contains("Unknown process id"),
+        pruned_probe.contains("UnknownProcessId") || pruned_probe.contains("Unknown process id"),
         "expected probe to fail after pruning, got {pruned_probe:?}"
     );
 
