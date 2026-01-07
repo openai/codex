@@ -5,7 +5,7 @@ use crate::harness::latest_metrics;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
 use codex_otel::metrics::Result;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[("service", "codex-cli")])?;
     let manager = OtelManager::new(
-        ConversationId::new(),
+        ThreadId::new(),
         "gpt-5.1",
         "gpt-5.1",
         Some("account-id".to_string()),
@@ -67,7 +67,7 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
 fn manager_allows_disabling_metadata_tags() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
     let manager = OtelManager::new(
-        ConversationId::new(),
+        ThreadId::new(),
         "gpt-4o",
         "gpt-4o",
         Some("account-id".to_string()),

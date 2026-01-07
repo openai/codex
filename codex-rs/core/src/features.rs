@@ -202,17 +202,15 @@ impl Features {
 
     pub fn emit_metrics(&self, otel: &OtelManager) {
         for feature in FEATURES {
-            if self.enabled(feature.id) != feature.default_enabled
-                && let Err(e) = otel.counter(
+            if self.enabled(feature.id) != feature.default_enabled {
+                otel.counter(
                     "codex.feature.state",
                     1,
                     &[
                         ("feature", feature.key),
                         ("value", &self.enabled(feature.id).to_string()),
                     ],
-                )
-            {
-                tracing::warn!("Error while emitting feature metrics {e:?}");
+                );
             }
         }
     }

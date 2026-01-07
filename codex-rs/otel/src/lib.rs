@@ -12,7 +12,7 @@ use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::traces::otel_provider::OtelProvider;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use serde::Serialize;
 use std::time::Duration;
 use strum_macros::Display;
@@ -27,7 +27,7 @@ pub enum ToolDecisionSource {
 
 #[derive(Debug, Clone)]
 pub struct OtelEventMetadata {
-    pub(crate) conversation_id: ConversationId,
+    pub(crate) conversation_id: ThreadId,
     pub(crate) auth_mode: Option<String>,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
@@ -88,7 +88,7 @@ impl OtelManager {
         })();
 
         if let Err(e) = res {
-            tracing::warn!("metrics counter failed: {e}");
+            tracing::warn!("metrics counter [{name}] failed: {e}");
         }
     }
 
@@ -103,7 +103,7 @@ impl OtelManager {
         })();
 
         if let Err(e) = res {
-            tracing::warn!("metrics histogram failed: {e}");
+            tracing::warn!("metrics histogram [{name}] failed: {e}");
         }
     }
 
@@ -118,7 +118,7 @@ impl OtelManager {
         })();
 
         if let Err(e) = res {
-            tracing::warn!("metrics duration failed: {e}");
+            tracing::warn!("metrics duration [{name}] failed: {e}");
         }
     }
 
