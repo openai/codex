@@ -2068,7 +2068,7 @@ mod tests {
                 },
                 CoreUserInput::Skill {
                     name: "skill-creator".to_string(),
-                    path: PathBuf::from("/repo/skills/skill-creator/SKILL.md"),
+                    path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
                 },
             ],
         });
@@ -2089,7 +2089,7 @@ mod tests {
                     },
                     UserInput::Skill {
                         name: "skill-creator".to_string(),
-                        path: PathBuf::from("/repo/skills/skill-creator/SKILL.md"),
+                        path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
                     },
                 ],
             }

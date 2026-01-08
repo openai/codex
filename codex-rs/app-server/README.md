@@ -200,13 +200,14 @@ You can optionally specify config overrides on the new turn. If specified, these
 
 ### Example: Start a turn (invoke a skill)
 
-Invoke a skill by sending a text input that begins with `$<skill-name>`.
+Invoke a skill explicitly by including `$<skill-name>` in the text input and adding a `skill` input item alongside it.
 
 ```json
 { "method": "turn/start", "id": 33, "params": {
     "threadId": "thr_123",
     "input": [
-        { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." }
+        { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." },
+        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
     ]
 } }
 { "id": 33, "result": { "turn": {
@@ -428,20 +429,11 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 ## Skills
 
-Skills can be invoked by including `$<skill-name>` in the text input; the model will look for the named skill and try to use it.
-
-Example:
-
-```
-$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
-```
-
-As an optimization, clients that detect `$<skill-name>` can include a `skill` input item in v2 requests.
-The backend can then inject the full skill instructions without relying on the model to resolve the skill name.
+Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` input item (recommended) so the backend injects full skill instructions instead of relying on the model to resolve the name.
 
 ```json
 {
-  "method": "thread/turn/start",
+  "method": "turn/start",
   "id": 101,
   "params": {
     "threadId": "thread-1",
@@ -451,6 +443,14 @@ The backend can then inject the full skill instructions without relying on the m
     ]
   }
 }
+```
+
+If you omit the `skill` item, the model will still parse the `$<skill-name>` marker and try to locate the skill, which can add latency.
+
+Example:
+
+```
+$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
 Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/or with `forceReload`).
