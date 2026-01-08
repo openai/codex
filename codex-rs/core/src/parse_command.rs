@@ -1524,8 +1524,6 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                     "--type-not",
                     "--type-add",
                     "--type-clear",
-                    "-f",
-                    "--file",
                     "-m",
                     "--max-count",
                     "-A",
