@@ -564,10 +564,10 @@ impl UnauthorizedRecovery {
     }
 
     pub fn has_next(&self) -> bool {
-        if !match self.manager.auth_cached() {
-            Some(auth) => auth.mode == AuthMode::ChatGPT,
-            _ => return false,
-        } {
+        if !self.manager
+            .auth_cached()
+            .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+        {
             return false;
         }
 
