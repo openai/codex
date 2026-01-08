@@ -2492,7 +2492,7 @@ mod tests {
     }
 
     #[test]
-    fn non_ascii_burst_treats_enter_as_newline() {
+    fn non_ascii_burst_handles_newline() {
         let test_cases = [
             // triggers on windows
             "天地玄黄 宇宙洪荒

@@ -2571,7 +2571,7 @@ mod tests {
 
     // test a variety of non-ascii char sequences to ensure we are handling them correctly
     #[test]
-    fn non_ascii_burst_treats_enter_as_newline() {
+    fn non_ascii_burst_handles_newline() {
         let test_cases = [
             // triggers on windows
             "天地玄黄 宇宙洪荒
@@ -2655,46 +2655,6 @@ mod tests {
 
         let _ = flush_after_paste_burst(&mut composer);
         assert_eq!(composer.textarea.text(), "hi\nthere");
-    }
-
-    // On windows, ensure we're handling pasting of unicode characters correctly
-    #[test]
-    fn non_ascii_appends_to_active_burst_buffer() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        // This string used to trigger early submission when pasted into the composer in powershell
-        // on Windows
-        let paste = r#"天地玄黄 宇宙洪荒
-日月盈昃 辰宿列张
-寒来暑往 秋收冬藏
-
-你好世界 编码测试
-汉字处理 UTF-8
-终端显示 正确无误
-
-风吹竹林 月照大江
-白云千载 青山依旧
-程序员 与 Unicode 同行"#;
-
-        for c in paste.chars() {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-        }
-
-        assert!(composer.textarea.text().is_empty());
-        let _ = flush_after_paste_burst(&mut composer);
-        assert_eq!(composer.textarea.text(), paste);
     }
 
     #[test]
