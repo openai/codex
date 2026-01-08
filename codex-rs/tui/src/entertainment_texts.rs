@@ -89,6 +89,8 @@ pub(crate) async fn generate_entertainment_texts(
         prompt_len = prompt.len(),
         "starting entertainment text generation thread"
     );
+    let mut config = config;
+    config.model = Some("gpt-4.1-nano".to_string());
     let new_thread = server.start_thread(config).await?;
     let schema = entertainment_output_schema();
     let input = vec![UserInput::Text { text: prompt }];
