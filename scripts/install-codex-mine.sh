@@ -3,7 +3,8 @@ set -eu
 
 slug="mine"
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-codex_rs_cli_dir="$repo_root/codex-rs/cli"
+codex_rs_dir="$repo_root/codex-rs"
+codex_rs_cli_dir="$codex_rs_dir/cli"
 
 install_root="${CODEX_MINE_ROOT:-$HOME/.local/codex-$slug}"
 bin_dir="${CODEX_MINE_BIN_DIR:-$HOME/.local/bin}"
@@ -25,7 +26,10 @@ fi
 mkdir -p "$bin_dir"
 
 printf '==> Installing Rust Codex CLI to %s\n' "$install_root" >&2
-cargo install --path "$codex_rs_cli_dir" --bin codex --root "$install_root" --force
+install_flags="${CODEX_MINE_CARGO_INSTALL_FLAGS:-}"
+cd "$codex_rs_dir"
+# shellcheck disable=SC2086
+cargo install --path "cli" --bin codex --root "$install_root" --force --locked $install_flags
 
 printf '==> Writing wrapper: %s\n' "$bin_dir/codex-$slug" >&2
 cat > "$bin_dir/codex-$slug" <<SH
