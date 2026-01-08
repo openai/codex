@@ -58,6 +58,12 @@ impl SessionTask for UserShellCommandTask {
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        let _ = session
+            .session
+            .services
+            .otel_manager
+            .counter("codex.task.user_shell", 1, &[]);
+
         let event = EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: turn_context.client.get_model_context_window(),
         });

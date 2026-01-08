@@ -306,6 +306,7 @@ pub struct OtelTlsConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum OtelExporterKind {
     None,
+    Statsig,
     OtlpHttp {
         endpoint: String,
         #[serde(default)]
@@ -346,6 +347,7 @@ pub struct OtelConfig {
     pub environment: String,
     pub exporter: OtelExporterKind,
     pub trace_exporter: OtelExporterKind,
+    pub metrics_exporter: OtelExporterKind,
 }
 
 impl Default for OtelConfig {
@@ -355,6 +357,7 @@ impl Default for OtelConfig {
             environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
             exporter: OtelExporterKind::None,
             trace_exporter: OtelExporterKind::None,
+            metrics_exporter: OtelExporterKind::Statsig,
         }
     }
 }

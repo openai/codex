@@ -1,4 +1,4 @@
-use crate::otel_provider::traceparent_context_from_env;
+use crate::traces::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ResponseEvent;
@@ -16,43 +16,19 @@ use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
 use reqwest::Error;
 use reqwest::Response;
-use serde::Serialize;
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::future::Future;
 use std::time::Duration;
 use std::time::Instant;
-use strum_macros::Display;
 use tokio::time::error::Elapsed;
 use tracing::Span;
 use tracing::trace_span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-#[derive(Debug, Clone, Serialize, Display)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolDecisionSource {
-    Config,
-    User,
-}
-
-#[derive(Debug, Clone)]
-pub struct OtelEventMetadata {
-    conversation_id: ThreadId,
-    auth_mode: Option<String>,
-    account_id: Option<String>,
-    account_email: Option<String>,
-    model: String,
-    slug: String,
-    log_user_prompts: bool,
-    app_version: &'static str,
-    terminal_type: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct OtelManager {
-    metadata: OtelEventMetadata,
-    session_span: Span,
-}
+pub use crate::OtelEventMetadata;
+pub use crate::OtelManager;
+pub use crate::ToolDecisionSource;
 
 impl OtelManager {
     #[allow(clippy::too_many_arguments)]
@@ -86,14 +62,9 @@ impl OtelManager {
                 terminal_type,
             },
             session_span,
+            metrics: crate::metrics::global(),
+            metrics_use_metadata_tags: true,
         }
-    }
-
-    pub fn with_model(&self, model: &str, slug: &str) -> Self {
-        let mut manager = self.clone();
-        manager.metadata.model = model.to_owned();
-        manager.metadata.slug = slug.to_owned();
-        manager
     }
 
     pub fn current_span(&self) -> &Span {
@@ -162,7 +133,7 @@ impl OtelManager {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Response, Error>>,
     {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let response = f().await;
         let duration = start.elapsed();
 

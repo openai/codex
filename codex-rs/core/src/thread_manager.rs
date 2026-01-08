@@ -132,6 +132,10 @@ impl ThreadManager {
         self.state.models_manager.list_models(config).await
     }
 
+    pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
+        self.state.threads.read().await.keys().copied().collect()
+    }
+
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         self.state.get_thread(thread_id).await
     }

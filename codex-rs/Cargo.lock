@@ -1355,6 +1355,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-debug-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-app-server-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [
@@ -1609,10 +1621,12 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
+ "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
  "strum_macros 0.27.2",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "tracing-opentelemetry",

@@ -19,7 +19,7 @@ use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_otel::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
@@ -58,7 +58,7 @@ use wiremock::matchers::query_param;
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[expect(clippy::unwrap_used)]
