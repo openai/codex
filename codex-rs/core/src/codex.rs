@@ -2909,8 +2909,8 @@ mod tests {
             }))
             .await;
 
-        let actual = session.state.lock().await.clone_history().for_prompt();
-        assert_eq!(expected, actual);
+        let history = session.state.lock().await.clone_history();
+        assert_eq!(expected, history.raw_items());
     }
 
     #[tokio::test]
@@ -2999,8 +2999,8 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        let actual = session.state.lock().await.clone_history().for_prompt();
-        assert_eq!(expected, actual);
+        let history = session.state.lock().await.clone_history();
+        assert_eq!(expected, history.raw_items());
     }
 
     #[tokio::test]
@@ -3056,8 +3056,8 @@ mod tests {
         expected.extend(initial_context);
         expected.extend(turn_1);
 
-        let actual = sess.clone_history().await.for_prompt();
-        assert_eq!(expected, actual);
+        let history = sess.clone_history().await;
+        assert_eq!(expected, history.raw_items());
     }
 
     #[tokio::test]
@@ -3082,8 +3082,8 @@ mod tests {
         let rollback_event = wait_for_thread_rolled_back(&rx).await;
         assert_eq!(rollback_event.num_turns, 99);
 
-        let actual = sess.clone_history().await.for_prompt();
-        assert_eq!(initial_context, actual);
+        let history = sess.clone_history().await;
+        assert_eq!(initial_context, history.raw_items());
     }
 
     #[tokio::test]
@@ -3103,8 +3103,8 @@ mod tests {
             Some(CodexErrorInfo::ThreadRollbackFailed)
         );
 
-        let actual = sess.clone_history().await.for_prompt();
-        assert_eq!(initial_context, actual);
+        let history = sess.clone_history().await;
+        assert_eq!(initial_context, history.raw_items());
     }
 
     #[tokio::test]
@@ -3124,8 +3124,8 @@ mod tests {
             Some(CodexErrorInfo::ThreadRollbackFailed)
         );
 
-        let actual = sess.clone_history().await.for_prompt();
-        assert_eq!(initial_context, actual);
+        let history = sess.clone_history().await;
+        assert_eq!(initial_context, history.raw_items());
     }
 
     #[tokio::test]
@@ -3627,7 +3627,7 @@ mod tests {
             .await;
 
         let history = session.clone_history().await;
-        let history_items = history.for_prompt();
+        let history_items = history.raw_items();
         let last = history_items.last().expect("warning recorded");
 
         match last {
@@ -3773,8 +3773,9 @@ mod tests {
             }
         }
 
-        let history = sess.clone_history().await.for_prompt();
-        let _ = history;
+        // TODO(jif) investiage what is this?
+        let history = sess.clone_history().await;
+        let _ = history.raw_items();
     }
 
     #[tokio::test]
