@@ -556,6 +556,14 @@ enum ReloadOutcome {
     Skipped,
 }
 
+// UnauthorizedRecovery is a state machine that handles an attempt to refresh the authentication when requests 
+// to API fail with 401 status code.
+// The client calls next() every time it encounters a 401 error, one time per retry.
+// For API key based authentication, we don't do anything and let the error bubble to the user.
+// For ChatGPT based authentication, we:
+// 1. Attempt to reload the auth data from disk. We only reload if the account id matches the one the current process is running as.
+// 2. Attempt to refresh the token using OAuth token refresh flow.
+// If after both steps the server still responds with 401 we let the error bubble to the user.
 pub struct UnauthorizedRecovery {
     manager: Arc<AuthManager>,
     step: UnauthorizedRecoveryStep,
@@ -707,7 +715,7 @@ impl AuthManager {
     pub fn reload(&self) -> bool {
         tracing::info!("Reloading auth");
         let new_auth = self.load_auth_from_storage();
-        self.store_auth(new_auth)
+        self.set_auth(new_auth)
     }
 
     fn reload_if_account_id_matches(&self, expected_account_id: Option<&str>) -> ReloadOutcome {
@@ -731,7 +739,7 @@ impl AuthManager {
         }
 
         tracing::info!("Reloading auth for account {expected_account_id}");
-        self.store_auth(new_auth);
+        self.set_auth(new_auth);
         ReloadOutcome::Reloaded
     }
 
@@ -742,6 +750,7 @@ impl AuthManager {
             _ => false,
         }
     }
+
     fn load_auth_from_storage(&self) -> Option<CodexAuth> {
         load_auth(
             &self.codex_home,
@@ -752,7 +761,7 @@ impl AuthManager {
         .flatten()
     }
 
-    fn store_auth(&self, new_auth: Option<CodexAuth>) -> bool {
+    fn set_auth(&self, new_auth: Option<CodexAuth>) -> bool {
         if let Ok(mut guard) = self.inner.write() {
             let changed = !AuthManager::auths_equal(&guard.auth, &new_auth);
             tracing::info!("Reloaded auth, changed: {changed}");
@@ -786,9 +795,8 @@ impl AuthManager {
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
 
-        let cached_auth = self.auth_cached();
 
-        let auth = match self.auth_cached().or(cached_auth) {
+        let auth = match self.auth_cached() {
             Some(auth) => auth,
             None => return Ok(()),
         };
