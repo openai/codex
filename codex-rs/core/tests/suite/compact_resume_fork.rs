@@ -24,9 +24,9 @@ use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::get_responses_request_bodies;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::wait_for_event;
@@ -148,7 +148,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     // 1. Arrange mocked SSE responses for the initial compact/resume/fork flow.
     let server = MockServer::start().await;
-    mount_initial_flow(&server).await;
+    let request_log = mount_initial_flow(&server).await;
     let expected_model = "gpt-5.1-codex";
     // 2. Start a new conversation and drive it through the compact/resume/fork steps.
     let (_home, config, manager, base) =
@@ -175,7 +175,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
-    let mut requests = gather_request_bodies(&server).await;
+    let mut requests = gather_request_bodies(&request_log);
     normalize_compact_prompts(&mut requests);
 
     // input after compact is a prefix of input after resume/fork
@@ -600,8 +600,8 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     // 1. Arrange mocked SSE responses for the initial flow plus the second compact.
     let server = MockServer::start().await;
-    mount_initial_flow(&server).await;
-    mount_second_compact_flow(&server).await;
+    let mut request_log = mount_initial_flow(&server).await;
+    request_log.extend(mount_second_compact_flow(&server).await);
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
     let (_home, config, manager, base) = start_test_conversation(&server, None).await;
@@ -637,7 +637,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
-    let mut requests = gather_request_bodies(&server).await;
+    let mut requests = gather_request_bodies(&request_log);
     normalize_compact_prompts(&mut requests);
     let input_after_compact = json!(requests[requests.len() - 2]["input"]);
     let input_after_resume = json!(requests[requests.len() - 1]["input"]);
@@ -771,15 +771,19 @@ fn normalize_line_endings(value: &mut Value) {
     }
 }
 
-async fn gather_request_bodies(server: &MockServer) -> Vec<Value> {
-    let mut bodies = get_responses_request_bodies(server).await;
+fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
+    let mut bodies = request_log
+        .iter()
+        .flat_map(ResponseMock::requests)
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
     for body in &mut bodies {
         normalize_line_endings(body);
     }
     bodies
 }
 
-async fn mount_initial_flow(server: &MockServer) {
+async fn mount_initial_flow(server: &MockServer) -> Vec<ResponseMock> {
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
         ev_completed("r1"),
@@ -803,13 +807,13 @@ async fn mount_initial_flow(server: &MockServer) {
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once_match(server, match_first, sse1).await;
+    let first = mount_sse_once_match(server, match_first, sse1).await;
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body_contains_text(body, SUMMARIZATION_PROMPT) || body.contains(&json_fragment(FIRST_REPLY))
     };
-    mount_sse_once_match(server, match_compact, sse2).await;
+    let compact = mount_sse_once_match(server, match_compact, sse2).await;
 
     let match_after_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -817,22 +821,24 @@ async fn mount_initial_flow(server: &MockServer) {
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once_match(server, match_after_compact, sse3).await;
+    let after_compact = mount_sse_once_match(server, match_after_compact, sse3).await;
 
     let match_after_resume = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"AFTER_RESUME\"")
     };
-    mount_sse_once_match(server, match_after_resume, sse4).await;
+    let after_resume = mount_sse_once_match(server, match_after_resume, sse4).await;
 
     let match_after_fork = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once_match(server, match_after_fork, sse5).await;
+    let after_fork = mount_sse_once_match(server, match_after_fork, sse5).await;
+
+    vec![first, compact, after_compact, after_resume, after_fork]
 }
 
-async fn mount_second_compact_flow(server: &MockServer) {
+async fn mount_second_compact_flow(server: &MockServer) -> Vec<ResponseMock> {
     let sse6 = sse(vec![
         ev_assistant_message("m4", SUMMARY_TEXT),
         ev_completed("r6"),
@@ -843,13 +849,15 @@ async fn mount_second_compact_flow(server: &MockServer) {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("AFTER_FORK")
     };
-    mount_sse_once_match(server, match_second_compact, sse6).await;
+    let second_compact = mount_sse_once_match(server, match_second_compact, sse6).await;
 
     let match_after_second_resume = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
     };
-    mount_sse_once_match(server, match_after_second_resume, sse7).await;
+    let after_second_resume = mount_sse_once_match(server, match_after_second_resume, sse7).await;
+
+    vec![second_compact, after_second_resume]
 }
 
 async fn start_test_conversation(

@@ -5,6 +5,7 @@ mod output_schema;
 mod rate_limits;
 mod review;
 mod thread_archive;
+mod thread_fork;
 mod thread_list;
 mod thread_loaded_list;
 mod thread_resume;
