@@ -14,7 +14,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
@@ -22,6 +22,7 @@ pub(crate) struct FooterProps {
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+    pub(crate) stashed_draft_preview: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,10 +91,18 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 props.context_window_used_tokens,
             );
             line.push_span(" · ".dim());
-            line.extend(vec![
-                key_hint::plain(KeyCode::Char('?')).into(),
-                " for shortcuts".dim(),
-            ]);
+            if let Some(preview) = props.stashed_draft_preview {
+                line.extend(vec![
+                    "STASHED:".cyan(),
+                    " ".into(),
+                    Span::from(format!("\"{preview}\"")).dim(),
+                ]);
+            } else {
+                line.extend(vec![
+                    key_hint::plain(KeyCode::Char('?')).into(),
+                    " for shortcuts".dim(),
+                ]);
+            }
             vec![line]
         }
         FooterMode::ShortcutOverlay => {
@@ -110,10 +119,21 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             shortcut_overlay_lines(state)
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::ContextOnly => vec![context_window_line(
-            props.context_window_percent,
-            props.context_window_used_tokens,
-        )],
+        FooterMode::ContextOnly => {
+            let mut line = context_window_line(
+                props.context_window_percent,
+                props.context_window_used_tokens,
+            );
+            if let Some(preview) = props.stashed_draft_preview {
+                line.push_span(" · ".dim());
+                line.extend(vec![
+                    "STASHED:".cyan(),
+                    " ".into(),
+                    Span::from(format!("\"{preview}\"")).dim(),
+                ]);
+            }
+            vec![line]
+        }
     }
 }
 
@@ -163,6 +183,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
     let mut external_editor = Line::from("");
+    let mut stash_draft = Line::from("");
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
@@ -175,6 +196,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::ExternalEditor => external_editor = text,
+                ShortcutId::StashDraft => stash_draft = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
@@ -188,9 +210,9 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         file_paths,
         paste_image,
         external_editor,
+        stash_draft,
         edit_previous,
         quit,
-        Line::from(""),
         show_transcript,
     ];
 
@@ -265,6 +287,7 @@ enum ShortcutId {
     FilePaths,
     PasteImage,
     ExternalEditor,
+    StashDraft,
     EditPrevious,
     Quit,
     ShowTranscript,
@@ -395,6 +418,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " to edit in external editor",
     },
     ShortcutDescriptor {
+        id: ShortcutId::StashDraft,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('s')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to stash prompt",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Esc),
@@ -431,7 +463,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        let height = footer_height(props).max(1);
+        let height = footer_height(props.clone()).max(1);
         let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
         terminal
             .draw(|f| {
@@ -453,6 +485,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -465,6 +498,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -477,6 +511,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -489,6 +524,7 @@ mod tests {
                 is_task_running: true,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -501,6 +537,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -513,6 +550,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -525,6 +563,7 @@ mod tests {
                 is_task_running: true,
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -537,6 +576,7 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                stashed_draft_preview: None,
             },
         );
     }

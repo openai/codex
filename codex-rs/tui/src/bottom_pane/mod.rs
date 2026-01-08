@@ -264,6 +264,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn restore_stashed_draft_if_possible(&mut self) {
+        if self.composer.restore_stashed_draft_if_possible() {
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         self.composer.clear_for_ctrl_c();
         self.request_redraw();

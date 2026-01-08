@@ -1,9 +1,10 @@
 ---
 source: tui/src/bottom_pane/footer.rs
+assertion_line: 474
 expression: terminal.backend()
 ---
 "  / for commands                             shift + enter for newline          "
 "  @ for file paths                           ctrl + v to paste images           "
-"  ctrl + g to edit in external editor        esc again to edit previous message "
-"  ctrl + c to exit                                                              "
+"  ctrl + g to edit in external editor        ctrl + s to stash prompt           "
+"  esc again to edit previous message         ctrl + c to exit                   "
 "  ctrl + t to view transcript                                                   "

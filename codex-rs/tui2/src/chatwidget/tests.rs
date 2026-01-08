@@ -1081,6 +1081,95 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
 }
 
 #[tokio::test]
+async fn ctrl_s_noops_when_composer_empty() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert!(chat.bottom_pane.composer_text().is_empty());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(chat.bottom_pane.composer_text().is_empty());
+
+    chat.on_task_started();
+    chat.on_task_complete(None);
+    assert!(chat.bottom_pane.composer_text().is_empty());
+}
+
+#[tokio::test]
+async fn ctrl_s_stashes_and_restores_after_next_submission_when_idle() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_composer_text("draft A".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(chat.bottom_pane.composer_text().is_empty());
+
+    chat.bottom_pane.set_composer_text("send now".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "draft A");
+}
+
+#[tokio::test]
+async fn ctrl_s_stashes_during_task_and_restores_after_task_complete() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.bottom_pane.set_composer_text("draft A".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(chat.bottom_pane.composer_text().is_empty());
+
+    chat.on_task_complete(None);
+    assert_eq!(chat.bottom_pane.composer_text(), "draft A");
+}
+
+#[tokio::test]
+async fn ctrl_s_does_not_stash_when_slash_popup_is_active() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.insert_str("/");
+    assert_eq!(chat.bottom_pane.composer_text(), "/");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert_eq!(chat.bottom_pane.composer_text(), "/");
+
+    chat.on_task_started();
+    chat.on_task_complete(None);
+    assert_eq!(chat.bottom_pane.composer_text(), "/");
+}
+
+#[tokio::test]
+async fn ctrl_s_restore_is_deferred_until_composer_is_empty() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.bottom_pane.set_composer_text("draft A".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(chat.bottom_pane.composer_text().is_empty());
+
+    chat.bottom_pane.set_composer_text("draft B".to_string());
+    chat.on_task_complete(None);
+    assert_eq!(chat.bottom_pane.composer_text(), "draft B");
+
+    chat.bottom_pane.set_composer_text(String::new());
+    chat.on_task_started();
+    chat.on_task_complete(None);
+    assert_eq!(chat.bottom_pane.composer_text(), "draft A");
+}
+
+#[tokio::test]
+async fn ctrl_s_overwrites_existing_stash() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_composer_text("draft A".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+    chat.bottom_pane.set_composer_text("draft B".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+    chat.bottom_pane.set_composer_text("send now".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "draft B");
+}
+
+#[tokio::test]
 async fn exec_history_cell_shows_working_then_completed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

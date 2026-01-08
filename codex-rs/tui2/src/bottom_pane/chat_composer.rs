@@ -57,6 +57,7 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
+use crate::text_formatting::truncate_text;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
@@ -85,6 +86,25 @@ struct AttachedImage {
     path: PathBuf,
 }
 
+#[derive(Debug)]
+struct StashedDraft {
+    text: String,
+    pending_pastes: Vec<(String, String)>,
+    attached_images: Vec<AttachedImage>,
+}
+
+impl StashedDraft {
+    fn preview(&self) -> String {
+        let first_line = self
+            .text
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or_default()
+            .trim();
+        truncate_text(first_line, 20)
+    }
+}
+
 enum PromptSelectionMode {
     Completion,
     Submit,
@@ -107,6 +127,7 @@ pub(crate) struct ChatComposer {
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
+    stashed_draft: Option<StashedDraft>,
     large_paste_counters: HashMap<usize, usize>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
@@ -162,6 +183,7 @@ impl ChatComposer {
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
+            stashed_draft: None,
             large_paste_counters: HashMap::new(),
             has_focus: has_input_focus,
             attached_images: Vec::new(),
@@ -312,6 +334,69 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    /// Replace the composer content with text, rebuilding attachment elements.
+    pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.pending_pastes.clear();
+
+        let mut placeholder_counts: HashMap<String, usize> = HashMap::new();
+        for placeholder in self.attached_images.iter().map(|img| &img.placeholder) {
+            if placeholder_counts.contains_key(placeholder) {
+                continue;
+            }
+            let count = text.match_indices(placeholder).count();
+            if count > 0 {
+                placeholder_counts.insert(placeholder.clone(), count);
+            }
+        }
+
+        let mut kept_images = Vec::new();
+        for img in self.attached_images.drain(..) {
+            if let Some(count) = placeholder_counts.get_mut(&img.placeholder)
+                && *count > 0
+            {
+                *count -= 1;
+                kept_images.push(img);
+            }
+        }
+        self.attached_images = kept_images;
+
+        self.textarea.set_text("");
+        let mut remaining: HashMap<&str, usize> = HashMap::new();
+        for img in &self.attached_images {
+            *remaining.entry(img.placeholder.as_str()).or_insert(0) += 1;
+        }
+
+        let mut occurrences: Vec<(usize, &str)> = Vec::new();
+        for placeholder in remaining.keys() {
+            for (pos, _) in text.match_indices(placeholder) {
+                occurrences.push((pos, *placeholder));
+            }
+        }
+        occurrences.sort_unstable_by_key(|(pos, _)| *pos);
+
+        let mut idx = 0usize;
+        for (pos, ph) in occurrences {
+            let Some(count) = remaining.get_mut(ph) else {
+                continue;
+            };
+            if *count == 0 {
+                continue;
+            }
+            if pos > idx {
+                self.textarea.insert_str(&text[idx..pos]);
+            }
+            self.textarea.insert_element(ph);
+            *count -= 1;
+            idx = pos + ph.len();
+        }
+        if idx < text.len() {
+            self.textarea.insert_str(&text[idx..]);
+        }
+
+        self.textarea.set_cursor(self.textarea.text().len());
+        self.sync_popups();
+    }
+
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
         if self.is_empty() {
             return None;
@@ -415,6 +500,41 @@ impl ChatComposer {
         self.sync_popups();
 
         result
+    }
+
+    fn stash_draft(&mut self) -> bool {
+        if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+            self.handle_paste(pasted);
+        }
+
+        if self.is_empty() {
+            return false;
+        }
+
+        self.stashed_draft = Some(StashedDraft {
+            text: self.textarea.text().to_string(),
+            pending_pastes: std::mem::take(&mut self.pending_pastes),
+            attached_images: std::mem::take(&mut self.attached_images),
+        });
+
+        self.set_text_content(String::new());
+        self.active_popup = ActivePopup::None;
+        true
+    }
+
+    pub(crate) fn restore_stashed_draft_if_possible(&mut self) -> bool {
+        if !self.is_empty() {
+            return false;
+        }
+
+        let Some(stashed) = self.stashed_draft.take() else {
+            return false;
+        };
+
+        self.attached_images = stashed.attached_images;
+        self.apply_external_edit(stashed.text);
+        self.pending_pastes = stashed.pending_pastes;
+        true
     }
 
     /// Return true if either the slash-command popup or the file-search popup is active.
@@ -1043,6 +1163,12 @@ impl ChatComposer {
         }
         match key_event {
             KeyEvent {
+                code: KeyCode::Char('s'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => (InputResult::None, self.stash_draft()),
+            KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
@@ -1537,6 +1663,7 @@ impl ChatComposer {
     }
 
     fn footer_props(&self) -> FooterProps {
+        let stashed_draft_preview = self.stashed_draft.as_ref().map(StashedDraft::preview);
         FooterProps {
             mode: self.footer_mode(),
             esc_backtrack_hint: self.esc_backtrack_hint,
@@ -1549,6 +1676,7 @@ impl ChatComposer {
             transcript_scroll_position: self.transcript_scroll_position,
             transcript_copy_selection_key: self.transcript_copy_selection_key,
             transcript_copy_feedback: self.transcript_copy_feedback,
+            stashed_draft_preview,
         }
     }
 
@@ -1871,7 +1999,7 @@ impl Renderable for ChatComposer {
                 let footer_props = self.footer_props();
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
-                    custom_height.unwrap_or_else(|| footer_height(footer_props));
+                    custom_height.unwrap_or_else(|| footer_height(footer_props.clone()));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([

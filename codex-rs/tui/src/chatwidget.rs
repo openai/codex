@@ -577,6 +577,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.bottom_pane.restore_stashed_draft_if_possible();
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -709,6 +710,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.bottom_pane.restore_stashed_draft_if_possible();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -1629,12 +1631,16 @@ impl ChatWidget {
             _ => {
                 match self.bottom_pane.handle_key_event(key_event) {
                     InputResult::Submitted(text) => {
+                        let was_running = self.bottom_pane.is_task_running();
                         // If a task is running, queue the user input to be sent after the turn completes.
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
                         self.queue_user_message(user_message);
+                        if !was_running {
+                            self.bottom_pane.restore_stashed_draft_if_possible();
+                        }
                     }
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);

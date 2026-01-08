@@ -15,7 +15,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
@@ -28,6 +28,7 @@ pub(crate) struct FooterProps {
     pub(crate) transcript_scroll_position: Option<(usize, usize)>,
     pub(crate) transcript_copy_selection_key: KeyBinding,
     pub(crate) transcript_copy_feedback: Option<TranscriptCopyFeedback>,
+    pub(crate) stashed_draft_preview: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,10 +112,18 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 props.context_window_used_tokens,
             );
             line.push_span(" · ".dim());
-            line.extend(vec![
-                key_hint::plain(KeyCode::Char('?')).into(),
-                " for shortcuts".dim(),
-            ]);
+            if let Some(preview) = props.stashed_draft_preview {
+                line.extend(vec![
+                    "STASHED:".cyan(),
+                    " ".into(),
+                    Span::from(format!("\"{preview}\"")).dim(),
+                ]);
+            } else {
+                line.extend(vec![
+                    key_hint::plain(KeyCode::Char('?')).into(),
+                    " for shortcuts".dim(),
+                ]);
+            }
             if props.transcript_scrolled {
                 line.push_span(" · ".dim());
                 line.push_span(key_hint::plain(KeyCode::PageUp));
@@ -152,10 +161,21 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             shortcut_overlay_lines(state)
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::ContextOnly => vec![context_window_line(
-            props.context_window_percent,
-            props.context_window_used_tokens,
-        )],
+        FooterMode::ContextOnly => {
+            let mut line = context_window_line(
+                props.context_window_percent,
+                props.context_window_used_tokens,
+            );
+            if let Some(preview) = props.stashed_draft_preview {
+                line.push_span(" · ".dim());
+                line.extend(vec![
+                    "STASHED:".cyan(),
+                    " ".into(),
+                    Span::from(format!("\"{preview}\"")).dim(),
+                ]);
+            }
+            vec![line]
+        }
     };
     apply_copy_feedback(&mut lines, props.transcript_copy_feedback);
     lines
@@ -206,6 +226,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut newline = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
+    let mut stash_draft = Line::from("");
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
@@ -217,6 +238,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
+                ShortcutId::StashDraft => stash_draft = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
@@ -229,9 +251,9 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         newline,
         file_paths,
         paste_image,
+        stash_draft,
         edit_previous,
         quit,
-        Line::from(""),
         show_transcript,
     ];
 
@@ -305,6 +327,7 @@ enum ShortcutId {
     InsertNewline,
     FilePaths,
     PasteImage,
+    StashDraft,
     EditPrevious,
     Quit,
     ShowTranscript,
@@ -426,6 +449,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " to paste images",
     },
     ShortcutDescriptor {
+        id: ShortcutId::StashDraft,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('s')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to stash prompt",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Esc),
@@ -462,7 +494,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        let height = footer_height(props).max(1);
+        let height = footer_height(props.clone()).max(1);
         let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
         terminal
             .draw(|f| {
@@ -489,6 +521,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -506,6 +539,7 @@ mod tests {
                 transcript_scroll_position: Some((3, 42)),
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -523,6 +557,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -540,6 +575,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -557,6 +593,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -574,6 +611,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -591,6 +629,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -608,6 +647,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -625,6 +665,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: None,
+                stashed_draft_preview: None,
             },
         );
 
@@ -642,6 +683,7 @@ mod tests {
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
                 transcript_copy_feedback: Some(TranscriptCopyFeedback::Copied),
+                stashed_draft_preview: None,
             },
         );
     }
