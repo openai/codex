@@ -77,6 +77,12 @@ impl TestCodexBuilder {
         })
     }
 
+    pub fn with_model_provider(self, model_provider: ModelProviderInfo) -> Self {
+        self.with_config(move |config| {
+            config.model_provider = model_provider;
+        })
+    }
+
     pub fn with_pre_build_hook<F>(mut self, hook: F) -> Self
     where
         F: FnOnce(&Path) + Send + 'static,
