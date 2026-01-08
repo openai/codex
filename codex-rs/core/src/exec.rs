@@ -410,6 +410,11 @@ pub(crate) fn is_likely_sandbox_denied(
     // 2: misuse of shell builtins
     // 126: permission denied
     // 127: command not found
+    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
+    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
+        return false;
+    }
+
     const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
         "operation not permitted",
         "permission denied",
@@ -435,11 +440,6 @@ pub(crate) fn is_likely_sandbox_denied(
 
     if has_sandbox_keyword {
         return true;
-    }
-
-    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
-    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
-        return false;
     }
 
     #[cfg(unix)]
@@ -821,6 +821,15 @@ mod tests {
     #[test]
     fn sandbox_detection_respects_quick_reject_exit_codes() {
         let output = make_exec_output(127, "", "command not found", "");
+        assert!(!is_likely_sandbox_denied(
+            SandboxType::LinuxSeccomp,
+            &output
+        ));
+    }
+
+    #[test]
+    fn sandbox_detection_ignores_keywords_for_quick_reject_exit_codes() {
+        let output = make_exec_output(126, "", "Permission denied", "");
         assert!(!is_likely_sandbox_denied(
             SandboxType::LinuxSeccomp,
             &output
