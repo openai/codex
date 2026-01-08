@@ -101,7 +101,7 @@ fn filters_non_api_messages() {
     let a = assistant_msg("hello");
     h.record_items([&u, &a], policy);
 
-    let items = h.contents();
+    let items = h.raw_items();
     assert_eq!(
         items,
         vec![
@@ -184,7 +184,7 @@ fn remove_first_item_removes_matching_output_for_function_call() {
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn remove_first_item_removes_matching_call_for_output() {
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn remove_first_item_handles_local_shell_pair() {
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn remove_first_item_handles_custom_tool_pair() {
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[test]
@@ -607,7 +607,7 @@ fn normalize_adds_missing_output_for_function_call() {
     h.normalize_history();
 
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::FunctionCall {
                 id: None,
@@ -641,7 +641,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
     h.normalize_history();
 
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::CustomToolCall {
                 id: None,
@@ -678,7 +678,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
     h.normalize_history();
 
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::LocalShellCall {
                 id: None,
@@ -717,7 +717,7 @@ fn normalize_removes_orphan_function_call_output() {
 
     h.normalize_history();
 
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[cfg(not(debug_assertions))]
@@ -731,7 +731,7 @@ fn normalize_removes_orphan_custom_tool_call_output() {
 
     h.normalize_history();
 
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[cfg(not(debug_assertions))]
@@ -780,7 +780,7 @@ fn normalize_mixed_inserts_and_removals() {
     h.normalize_history();
 
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::FunctionCall {
                 id: None,
@@ -840,7 +840,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
     let mut h = create_history_with_items(items);
     h.normalize_history();
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::FunctionCall {
                 id: None,

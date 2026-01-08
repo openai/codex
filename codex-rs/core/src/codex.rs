@@ -1262,7 +1262,7 @@ impl Session {
                 _ => {}
             }
         }
-        history.for_prompt()
+        history.raw_items().to_vec()
     }
 
     /// Append ResponseItems to the in-memory conversation history only.

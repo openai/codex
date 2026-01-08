@@ -65,7 +65,7 @@ impl SessionTask for UndoTask {
         }
 
         let history = sess.clone_history().await;
-        let mut items = history.for_prompt();
+        let mut items = history.raw_items().to_vec();
         let mut completed = UndoCompletedEvent {
             success: false,
             message: None,
