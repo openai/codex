@@ -155,7 +155,7 @@ impl ModelClient {
 
         let mut auth_recovery = auth_manager
             .as_ref()
-            .map(|manager| manager.unauthorized_recovery());
+            .map(super::auth::AuthManager::unauthorized_recovery);
         loop {
             let auth = match auth_manager.as_ref() {
                 Some(manager) => manager.auth().await,
@@ -248,7 +248,7 @@ impl ModelClient {
 
         let mut auth_recovery = auth_manager
             .as_ref()
-            .map(|manager| manager.unauthorized_recovery());
+            .map(super::auth::AuthManager::unauthorized_recovery);
         loop {
             let auth = match auth_manager.as_ref() {
                 Some(manager) => manager.auth().await,
@@ -498,7 +498,9 @@ async fn handle_unauthorized(
     status: StatusCode,
     auth_recovery: &mut Option<UnauthorizedRecovery>,
 ) -> Result<()> {
-    if let Some(recovery) = auth_recovery && recovery.has_next() {
+    if let Some(recovery) = auth_recovery
+        && recovery.has_next()
+    {
         return match recovery.next().await {
             Ok(_) => Ok(()),
             Err(RefreshTokenError::Permanent(failed)) => Err(CodexErr::RefreshTokenFailed(failed)),
@@ -506,7 +508,7 @@ async fn handle_unauthorized(
         };
     }
 
-    return Err(map_unauthorized_status(status));
+    Err(map_unauthorized_status(status))
 }
 
 fn map_unauthorized_status(status: StatusCode) -> CodexErr {

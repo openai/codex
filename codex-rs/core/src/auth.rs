@@ -565,7 +565,8 @@ impl UnauthorizedRecovery {
     }
 
     pub fn has_next(&self) -> bool {
-        if !self.manager
+        if !self
+            .manager
             .auth_cached()
             .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
         {
@@ -726,7 +727,7 @@ impl AuthManager {
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
-        UnauthorizedRecovery::new(Arc::clone(&self))
+        UnauthorizedRecovery::new(Arc::clone(self))
     }
 
     /// Attempt to refresh the current auth token (if any). On success, reload
