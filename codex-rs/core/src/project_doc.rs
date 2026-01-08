@@ -134,6 +134,12 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
 /// is zero, returns an empty list.
 pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBuf>> {
     let mut dir = config.cwd.clone();
+    if let Ok(metadata) = std::fs::metadata(&dir)
+        && metadata.is_file()
+        && let Some(parent) = dir.parent()
+    {
+        dir = parent.to_path_buf();
+    }
     if let Ok(canon) = normalize_path(&dir) {
         dir = canon;
     }
@@ -141,7 +147,7 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
     // Build chain from cwd upwards and detect git root.
     let mut chain: Vec<PathBuf> = vec![dir.clone()];
     let mut git_root: Option<PathBuf> = None;
-    let mut cursor = dir;
+    let mut cursor = dir.clone();
     while let Some(parent) = cursor.parent() {
         let git_marker = cursor.join(".git");
         let git_exists = match std::fs::metadata(&git_marker) {
@@ -174,7 +180,7 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
         }
         dirs
     } else {
-        vec![config.cwd.clone()]
+        vec![dir]
     };
 
     let mut found: Vec<PathBuf> = Vec::new();
@@ -234,6 +240,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::skills::load_skills;
+    use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -391,6 +398,27 @@ mod tests {
             get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS)).await, None).await;
 
         assert_eq!(res, Some(INSTRUCTIONS.to_string()));
+    }
+
+    #[tokio::test]
+    async fn uses_parent_dir_when_cwd_is_file_outside_git_repo() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "doc").unwrap();
+        let file_path = tmp.path().join("notes.txt");
+        fs::write(&file_path, "contents").unwrap();
+
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.cwd = file_path;
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("doc expected");
+        assert_eq!(res, "doc");
+
+        let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+        let expected_path = normalize_path(tmp.path().join("AGENTS.md"))
+            .unwrap_or_else(|_| tmp.path().join("AGENTS.md"));
+        assert_eq!(discovery, vec![expected_path]);
     }
 
     /// When both the repository root and the working directory contain
