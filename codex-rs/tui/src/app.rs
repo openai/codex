@@ -5,6 +5,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::diff_render::DiffSummary;
+use crate::entertainment_texts;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
@@ -61,6 +62,7 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+use tracing::info;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
@@ -734,6 +736,34 @@ impl App {
                     "D I F F".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::GenerateEntertainmentTexts { prompt } => {
+                info!(
+                    prompt_len = prompt.len(),
+                    "received request to generate entertainment texts"
+                );
+                let app_event_tx = self.app_event_tx.clone();
+                let server = Arc::clone(&self.server);
+                let config = self.config.clone();
+                tokio::spawn(async move {
+                    match entertainment_texts::generate_entertainment_texts(server, config, prompt)
+                        .await
+                    {
+                        Ok(texts) => {
+                            info!(
+                                texts_len = texts.len(),
+                                "entertainment text generation completed"
+                            );
+                            app_event_tx.send(AppEvent::EntertainmentTextsGenerated { texts });
+                        }
+                        Err(err) => {
+                            tracing::warn!("entertainment text generation failed: {err}");
+                        }
+                    }
+                });
+            }
+            AppEvent::EntertainmentTextsGenerated { texts } => {
+                self.chat_widget.update_entertainment_texts(texts);
             }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {

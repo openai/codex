@@ -100,6 +100,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
+use crate::entertainment_texts::EntertainmentTextManager;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
@@ -344,6 +345,7 @@ pub(crate) struct ChatWidget {
     reasoning_header_emitted: bool,
     // Current status header shown in the status indicator.
     current_status_header: String,
+    entertainment: EntertainmentTextManager,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
@@ -424,6 +426,10 @@ impl ChatWidget {
     /// updates the status indicator header and clears any existing details.
     fn set_status_header(&mut self, header: String) {
         self.set_status(header, None);
+    }
+
+    pub(crate) fn update_entertainment_texts(&mut self, texts: Vec<String>) {
+        self.bottom_pane.update_entertainment_texts(texts);
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
@@ -554,6 +560,7 @@ impl ChatWidget {
             let cell =
                 history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone());
             self.add_boxed_history(cell);
+            self.entertainment.request_generation(&self.app_event_tx);
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
@@ -881,6 +888,7 @@ impl ChatWidget {
     }
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
+        self.entertainment.request_generation(&self.app_event_tx);
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
             self.track_unified_exec_process_begin(&ev);
@@ -957,6 +965,7 @@ impl ChatWidget {
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
+        self.entertainment.request_generation(&self.app_event_tx);
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
             &self.config.cwd,
@@ -1032,6 +1041,7 @@ impl ChatWidget {
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
+        self.entertainment.request_generation(&self.app_event_tx);
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_begin(ev), |s| s.handle_mcp_begin_now(ev2));
     }
@@ -1042,6 +1052,7 @@ impl ChatWidget {
     }
 
     fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
+        self.entertainment.request_generation(&self.app_event_tx);
         self.flush_answer_stream_with_separator();
     }
 
@@ -1434,6 +1445,7 @@ impl ChatWidget {
         config.model = Some(model.clone());
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let entertainment_enabled = config.features.enabled(Feature::Entertainment);
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
         let mut widget = Self {
@@ -1448,7 +1460,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                entertainment_enabled: config.features.enabled(Feature::Entertainment),
+                entertainment_enabled,
                 skills: None,
             }),
             active_cell: None,
@@ -1479,6 +1491,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             reasoning_header_emitted: false,
             current_status_header: String::from("Working"),
+            entertainment: EntertainmentTextManager::new(entertainment_enabled),
             retry_status_header: None,
             thread_id: None,
             queued_user_messages: VecDeque::new(),
@@ -1521,6 +1534,7 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
+        let entertainment_enabled = config.features.enabled(Feature::Entertainment);
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
@@ -1536,7 +1550,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                entertainment_enabled: config.features.enabled(Feature::Entertainment),
+                entertainment_enabled,
                 skills: None,
             }),
             active_cell: None,
@@ -1567,6 +1581,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             reasoning_header_emitted: false,
             current_status_header: String::from("Working"),
+            entertainment: EntertainmentTextManager::new(entertainment_enabled),
             retry_status_header: None,
             thread_id: None,
             queued_user_messages: VecDeque::new(),
@@ -1939,6 +1954,7 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        self.entertainment.record_history_cell(cell.as_ref());
         if !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();

@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::entertainment_texts::EntertainmentTextManager;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -355,6 +356,7 @@ async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
+    let entertainment_enabled = cfg.features.enabled(Feature::Entertainment);
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
@@ -363,7 +365,7 @@ async fn make_chatwidget_manual(
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
-        entertainment_enabled: cfg.features.enabled(Feature::Entertainment),
+        entertainment_enabled,
         skills: None,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
@@ -397,6 +399,7 @@ async fn make_chatwidget_manual(
         full_reasoning_buffer: String::new(),
         reasoning_header_emitted: false,
         current_status_header: String::from("Working"),
+        entertainment: EntertainmentTextManager::new(entertainment_enabled),
         retry_status_header: None,
         thread_id: None,
         frame_requester: FrameRequester::test_dummy(),

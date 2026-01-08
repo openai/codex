@@ -46,6 +46,14 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
+    GenerateEntertainmentTexts {
+        prompt: String,
+    },
+
+    EntertainmentTextsGenerated {
+        texts: Vec<String>,
+    },
+
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
 

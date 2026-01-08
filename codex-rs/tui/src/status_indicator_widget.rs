@@ -93,6 +93,14 @@ impl StatusIndicatorWidget {
         self.shimmer.update_header(header);
     }
 
+    pub(crate) fn add_entertainment_arc(&mut self, arc: Vec<String>) {
+        self.shimmer.add_entertainment_arc(arc);
+    }
+
+    pub(crate) fn set_entertainment_arcs(&mut self, arcs: Vec<Vec<String>>) {
+        self.shimmer.set_entertainment_arcs(arcs);
+    }
+
     /// Update the details text shown below the header.
     pub(crate) fn update_details(&mut self, details: Option<String>) {
         self.details = details

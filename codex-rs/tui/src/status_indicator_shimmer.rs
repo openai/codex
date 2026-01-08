@@ -80,6 +80,46 @@ impl StatusShimmer {
         }
     }
 
+    pub(crate) fn add_entertainment_arc(&mut self, arc: Vec<String>) {
+        if !self.entertainment_enabled {
+            return;
+        }
+        let Some(state) = self.entertainment.as_ref() else {
+            return;
+        };
+        state.shimmer_text.borrow_mut().add_generated_arc(arc);
+        if state.use_shimmer_text.get() {
+            let next = state.shimmer_text.borrow_mut().reset_and_get_next();
+            self.set_shimmer_step(state, next);
+            let next_interval = state
+                .shimmer_text
+                .borrow_mut()
+                .next_interval(SHIMMER_TEXT_INTERVAL);
+            state.shimmer_interval.set(next_interval);
+            state.last_shimmer_update.set(Instant::now());
+        }
+    }
+
+    pub(crate) fn set_entertainment_arcs(&mut self, arcs: Vec<Vec<String>>) {
+        if !self.entertainment_enabled {
+            return;
+        }
+        let Some(state) = self.entertainment.as_ref() else {
+            return;
+        };
+        state.shimmer_text.borrow_mut().set_generated_arcs(arcs);
+        if state.use_shimmer_text.get() {
+            let next = state.shimmer_text.borrow_mut().reset_and_get_next();
+            self.set_shimmer_step(state, next);
+            let next_interval = state
+                .shimmer_text
+                .borrow_mut()
+                .next_interval(SHIMMER_TEXT_INTERVAL);
+            state.shimmer_interval.set(next_interval);
+            state.last_shimmer_update.set(Instant::now());
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn header_for_test(&self) -> String {
         if let Some(state) = self.entertainment.as_ref()

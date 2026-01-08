@@ -139,6 +139,8 @@ pub(crate) struct ShimmerStep {
 pub(crate) struct ShimmerText {
     definition_arc_index: usize,
     definition_item_index: usize,
+    default_definition_arcs: Vec<Vec<String>>,
+    generated_arcs: Vec<Vec<String>>,
     face_arc_index: usize,
     face_item_index: usize,
     rng: StdRng,
@@ -153,11 +155,14 @@ impl Default for ShimmerText {
 impl ShimmerText {
     pub(crate) fn new() -> Self {
         let mut rng = Self::seeded_rng();
-        let definition_arc_index = Self::pick_arc(&mut rng, None, DEFINITION_ARCS.len());
+        let default_definition_arcs = Self::default_definition_arcs();
+        let definition_arc_index = Self::pick_arc(&mut rng, None, default_definition_arcs.len());
         let face_arc_index = Self::pick_arc(&mut rng, None, FACE_SEQUENCES.len());
         Self {
             definition_arc_index,
             definition_item_index: 0,
+            default_definition_arcs,
+            generated_arcs: Vec::new(),
             face_arc_index,
             face_item_index: 0,
             rng,
@@ -165,13 +170,21 @@ impl ShimmerText {
     }
 
     pub(crate) fn get_next(&mut self) -> ShimmerStep {
-        let text_arc = DEFINITION_ARCS[self.definition_arc_index];
-        let face_arc = FACE_SEQUENCES[self.face_arc_index];
-        let text = text_arc[self.definition_item_index];
-        let face = face_arc[self.face_item_index];
+        let (text, text_arc_len) = {
+            let arcs = self.active_definition_arcs();
+            let text_arc = &arcs[self.definition_arc_index];
+            (
+                text_arc[self.definition_item_index].to_string(),
+                text_arc.len(),
+            )
+        };
+        let (face, face_arc_len) = {
+            let face_arc = FACE_SEQUENCES[self.face_arc_index];
+            (face_arc[self.face_item_index].to_string(), face_arc.len())
+        };
 
         self.face_item_index += 1;
-        if self.face_item_index >= face_arc.len() {
+        if self.face_item_index >= face_arc_len {
             self.face_item_index = 0;
             self.definition_item_index += 1;
             self.face_arc_index = Self::pick_arc(
@@ -179,28 +192,21 @@ impl ShimmerText {
                 Some(self.face_arc_index),
                 FACE_SEQUENCES.len(),
             );
-            if self.definition_item_index >= text_arc.len() {
+            if self.definition_item_index >= text_arc_len {
                 self.definition_item_index = 0;
-                self.definition_arc_index = Self::pick_arc(
-                    &mut self.rng,
-                    Some(self.definition_arc_index),
-                    DEFINITION_ARCS.len(),
-                );
+                let arcs_len = self.active_definition_arcs().len();
+                self.definition_arc_index =
+                    Self::pick_arc(&mut self.rng, Some(self.definition_arc_index), arcs_len);
             }
         }
 
-        ShimmerStep {
-            face: face.to_string(),
-            text: text.to_string(),
-        }
+        ShimmerStep { face, text }
     }
 
     pub(crate) fn reset_and_get_next(&mut self) -> ShimmerStep {
-        self.definition_arc_index = Self::pick_arc(
-            &mut self.rng,
-            Some(self.definition_arc_index),
-            DEFINITION_ARCS.len(),
-        );
+        let arcs_len = self.active_definition_arcs().len();
+        self.definition_arc_index =
+            Self::pick_arc(&mut self.rng, Some(self.definition_arc_index), arcs_len);
         self.face_arc_index = Self::pick_arc(
             &mut self.rng,
             Some(self.face_arc_index),
@@ -211,6 +217,19 @@ impl ShimmerText {
         self.get_next()
     }
 
+    pub(crate) fn add_generated_arc(&mut self, arc: Vec<String>) {
+        if arc.is_empty() {
+            return;
+        }
+        self.generated_arcs.push(arc);
+        self.reset_definition_sequence();
+    }
+
+    pub(crate) fn set_generated_arcs(&mut self, arcs: Vec<Vec<String>>) {
+        self.generated_arcs = arcs.into_iter().filter(|arc| !arc.is_empty()).collect();
+        self.reset_definition_sequence();
+    }
+
     pub(crate) fn is_default_label(&self, text: &str) -> bool {
         text == "Working"
     }
@@ -218,6 +237,20 @@ impl ShimmerText {
     pub(crate) fn next_interval(&mut self, base: Duration) -> Duration {
         let multiplier = self.rng.random_range(0.4..=1.0);
         Duration::from_secs_f64(base.as_secs_f64() * multiplier)
+    }
+
+    fn active_definition_arcs(&self) -> &[Vec<String>] {
+        if self.generated_arcs.is_empty() {
+            &self.default_definition_arcs
+        } else {
+            &self.generated_arcs
+        }
+    }
+
+    fn reset_definition_sequence(&mut self) {
+        let arcs_len = self.active_definition_arcs().len();
+        self.definition_arc_index = Self::pick_arc(&mut self.rng, None, arcs_len);
+        self.definition_item_index = 0;
     }
 
     fn pick_arc(rng: &mut StdRng, current: Option<usize>, count: usize) -> usize {
@@ -233,6 +266,13 @@ impl ShimmerText {
             }
         }
         rng.random_range(0..count)
+    }
+
+    fn default_definition_arcs() -> Vec<Vec<String>> {
+        DEFINITION_ARCS
+            .iter()
+            .map(|arc| arc.iter().map(|text| (*text).to_string()).collect())
+            .collect()
     }
 
     #[cfg(test)]

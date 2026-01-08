@@ -5,6 +5,8 @@
 //! relies on.
 
 use codex_ansi_escape::ansi_escape_line;
+use codex_tui::test_support::entertainment_header_from_arc;
+use pretty_assertions::assert_eq;
 
 #[test]
 fn ansi_escape_line_strips_escape_sequences() {
@@ -21,4 +23,17 @@ fn ansi_escape_line_strips_escape_sequences() {
         .collect();
 
     assert_eq!(combined, "RED");
+}
+
+#[test]
+fn entertainment_arc_replaces_default_header() {
+    let header = entertainment_header_from_arc(vec![
+        "Starting deploy",
+        "Feeling optimistic",
+        "Waiting for logs",
+        "Still waiting",
+        "Ok still waiting",
+    ]);
+
+    assert_eq!(header, "Starting deploy");
 }
