@@ -1,5 +1,6 @@
 #![expect(clippy::expect_used)]
 
+use codex_utils_cargo_bin::CargoBinError;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
@@ -233,6 +234,10 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
     let args = format_with_current_shell_non_login(command);
     shlex::try_join(args.iter().map(String::as_str))
         .expect("serialize current shell command without login")
+}
+
+pub fn stdio_server_bin() -> Result<String, CargoBinError> {
+    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
 }
 
 pub mod fs_wait {
