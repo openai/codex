@@ -58,6 +58,10 @@ impl From<SandboxMode> for SandboxModeRequirement {
 }
 
 impl ConfigRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.allowed_approval_policies.is_none() && self.allowed_sandbox_modes.is_none()
+    }
+
     /// For every field in `other` that is `Some`, if the corresponding field in
     /// `self` is `None`, copy the value from `other` into `self`.
     pub fn merge_unset_fields(&mut self, mut other: ConfigRequirementsToml) {

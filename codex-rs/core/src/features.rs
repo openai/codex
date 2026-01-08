@@ -89,6 +89,8 @@ pub enum Feature {
     Tui2,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
+    /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
+    EnableRequestCompression,
 }
 
 impl Feature {
@@ -371,6 +373,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::EnableRequestCompression,
+        key: "enable_request_compression",
         stage: Stage::Experimental,
         default_enabled: false,
     },

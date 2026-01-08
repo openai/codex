@@ -6,7 +6,7 @@ use crate::skills::model::SkillMetadata;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
-use dunce::canonicalize as normalize_path;
+use dunce::canonicalize as canonicalize_path;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -36,6 +36,9 @@ const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
+// Traversal depth from the skills root.
+const MAX_SCAN_DEPTH: usize = 6;
+const MAX_SKILLS_DIRS_PER_ROOT: usize = 2000;
 
 #[derive(Debug)]
 enum SkillParseError {
@@ -165,7 +168,7 @@ pub(crate) fn skill_roots_from_layer_stack(
 }
 
 fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
-    let Ok(root) = normalize_path(root) else {
+    let Ok(root) = canonicalize_path(root) else {
         return;
     };
 
@@ -173,8 +176,38 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
         return;
     }
 
-    let mut queue: VecDeque<PathBuf> = VecDeque::from([root]);
-    while let Some(dir) = queue.pop_front() {
+    fn enqueue_dir(
+        queue: &mut VecDeque<(PathBuf, usize)>,
+        visited_dirs: &mut HashSet<PathBuf>,
+        truncated_by_dir_limit: &mut bool,
+        path: PathBuf,
+        depth: usize,
+    ) {
+        if depth > MAX_SCAN_DEPTH {
+            return;
+        }
+        if visited_dirs.len() >= MAX_SKILLS_DIRS_PER_ROOT {
+            *truncated_by_dir_limit = true;
+            return;
+        }
+        if visited_dirs.insert(path.clone()) {
+            queue.push_back((path, depth));
+        }
+    }
+
+    // Follow symlinks for user, admin, and repo skills. System skills are written by Codex itself.
+    let follow_symlinks = matches!(
+        scope,
+        SkillScope::Repo | SkillScope::User | SkillScope::Admin
+    );
+
+    let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
+    visited_dirs.insert(root.clone());
+
+    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::from([(root.clone(), 0)]);
+    let mut truncated_by_dir_limit = false;
+
+    while let Some((dir, depth)) = queue.pop_front() {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(e) => {
@@ -199,11 +232,64 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
             };
 
             if file_type.is_symlink() {
+                if !follow_symlinks {
+                    continue;
+                }
+
+                // Follow the symlink to determine what it points to.
+                let metadata = match fs::metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(e) => {
+                        error!(
+                            "failed to stat skills entry {} (symlink): {e:#}",
+                            path.display()
+                        );
+                        continue;
+                    }
+                };
+
+                if metadata.is_dir() {
+                    let Ok(resolved_dir) = canonicalize_path(&path) else {
+                        continue;
+                    };
+                    enqueue_dir(
+                        &mut queue,
+                        &mut visited_dirs,
+                        &mut truncated_by_dir_limit,
+                        resolved_dir,
+                        depth + 1,
+                    );
+                    continue;
+                }
+
+                if metadata.is_file() && file_name == SKILLS_FILENAME {
+                    match parse_skill_file(&path, scope) {
+                        Ok(skill) => outcome.skills.push(skill),
+                        Err(err) => {
+                            if scope != SkillScope::System {
+                                outcome.errors.push(SkillError {
+                                    path,
+                                    message: err.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+
                 continue;
             }
 
             if file_type.is_dir() {
-                queue.push_back(path);
+                let Ok(resolved_dir) = canonicalize_path(&path) else {
+                    continue;
+                };
+                enqueue_dir(
+                    &mut queue,
+                    &mut visited_dirs,
+                    &mut truncated_by_dir_limit,
+                    resolved_dir,
+                    depth + 1,
+                );
                 continue;
             }
 
@@ -223,6 +309,14 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                 }
             }
         }
+    }
+
+    if truncated_by_dir_limit {
+        tracing::warn!(
+            "skills scan truncated after {} directories (root: {})",
+            MAX_SKILLS_DIRS_PER_ROOT,
+            root.display()
+        );
     }
 }
 
@@ -253,7 +347,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         )?;
     }
 
-    let resolved_path = normalize_path(path).unwrap_or_else(|_| path.to_path_buf());
+    let resolved_path = canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf());
 
     Ok(SkillMetadata {
         name,
@@ -316,6 +410,7 @@ mod tests {
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
+    use crate::config_loader::ConfigRequirementsToml;
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -350,7 +445,7 @@ mod tests {
     }
 
     fn normalized(path: &Path) -> PathBuf {
-        normalize_path(path).unwrap_or_else(|_| path.to_path_buf())
+        canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf())
     }
 
     #[test]
@@ -377,7 +472,11 @@ mod tests {
                 TomlValue::Table(toml::map::Map::new()),
             ),
         ];
-        let stack = ConfigLayerStack::new(layers, ConfigRequirements::default())?;
+        let stack = ConfigLayerStack::new(
+            layers,
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )?;
 
         let got = skill_roots_from_layer_stack(&stack)
             .into_iter()
@@ -427,6 +526,243 @@ mod tests {
         let path = skill_dir.join(SKILLS_FILENAME);
         fs::write(&path, content).unwrap();
         path
+    }
+
+    #[cfg(unix)]
+    fn symlink_dir(target: &Path, link: &Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn symlink_file(target: &Path, link: &Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn loads_skills_via_symlinked_subdir_for_user_scope() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let shared = tempfile::tempdir().expect("tempdir");
+
+        let shared_skill_path = write_skill_at(shared.path(), "demo", "linked-skill", "from link");
+
+        fs::create_dir_all(codex_home.path().join("skills")).unwrap();
+        symlink_dir(shared.path(), &codex_home.path().join("skills/shared"));
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "linked-skill".to_string(),
+                description: "from link".to_string(),
+                short_description: None,
+                path: normalized(&shared_skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn loads_skills_via_symlinked_skill_file_for_user_scope() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let shared = tempfile::tempdir().expect("tempdir");
+
+        let shared_skill_path =
+            write_skill_at(shared.path(), "demo", "linked-file-skill", "from link");
+
+        let skill_dir = codex_home.path().join("skills/demo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        symlink_file(&shared_skill_path, &skill_dir.join(SKILLS_FILENAME));
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "linked-file-skill".to_string(),
+                description: "from link".to_string(),
+                short_description: None,
+                path: normalized(&shared_skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn does_not_loop_on_symlink_cycle_for_user_scope() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+
+        // Create a cycle:
+        //   $CODEX_HOME/skills/cycle/loop -> $CODEX_HOME/skills/cycle
+        let cycle_dir = codex_home.path().join("skills/cycle");
+        fs::create_dir_all(&cycle_dir).unwrap();
+        symlink_dir(&cycle_dir, &cycle_dir.join("loop"));
+
+        let skill_path = write_skill_at(&cycle_dir, "demo", "cycle-skill", "still loads");
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "cycle-skill".to_string(),
+                description: "still loads".to_string(),
+                short_description: None,
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn loads_skills_via_symlinked_subdir_for_admin_scope() {
+        let admin_root = tempfile::tempdir().expect("tempdir");
+        let shared = tempfile::tempdir().expect("tempdir");
+
+        let shared_skill_path =
+            write_skill_at(shared.path(), "demo", "admin-linked-skill", "from link");
+        fs::create_dir_all(admin_root.path()).unwrap();
+        symlink_dir(shared.path(), &admin_root.path().join("shared"));
+
+        let outcome = load_skills_from_roots([SkillRoot {
+            path: admin_root.path().to_path_buf(),
+            scope: SkillScope::Admin,
+        }]);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "admin-linked-skill".to_string(),
+                description: "from link".to_string(),
+                short_description: None,
+                path: normalized(&shared_skill_path),
+                scope: SkillScope::Admin,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+        mark_as_git_repo(repo_dir.path());
+        let shared = tempfile::tempdir().expect("tempdir");
+
+        let linked_skill_path =
+            write_skill_at(shared.path(), "demo", "repo-linked-skill", "from link");
+        let repo_skills_root = repo_dir
+            .path()
+            .join(REPO_ROOT_CONFIG_DIR_NAME)
+            .join(SKILLS_DIR_NAME);
+        fs::create_dir_all(&repo_skills_root).unwrap();
+        symlink_dir(shared.path(), &repo_skills_root.join("shared"));
+
+        let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "repo-linked-skill".to_string(),
+                description: "from link".to_string(),
+                short_description: None,
+                path: normalized(&linked_skill_path),
+                scope: SkillScope::Repo,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn system_scope_ignores_symlinked_subdir() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let shared = tempfile::tempdir().expect("tempdir");
+
+        write_skill_at(shared.path(), "demo", "system-linked-skill", "from link");
+
+        let system_root = codex_home.path().join("skills/.system");
+        fs::create_dir_all(&system_root).unwrap();
+        symlink_dir(shared.path(), &system_root.join("shared"));
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn respects_max_scan_depth_for_user_scope() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+
+        let within_depth_path = write_skill(
+            &codex_home,
+            "d0/d1/d2/d3/d4/d5",
+            "within-depth-skill",
+            "loads",
+        );
+        let _too_deep_path = write_skill(
+            &codex_home,
+            "d0/d1/d2/d3/d4/d5/d6",
+            "too-deep-skill",
+            "should not load",
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "within-depth-skill".to_string(),
+                description: "loads".to_string(),
+                short_description: None,
+                path: normalized(&within_depth_path),
+                scope: SkillScope::User,
+            }]
+        );
     }
 
     #[tokio::test]
@@ -1029,7 +1365,7 @@ mod tests {
             outcome.errors
         );
         let expected_path =
-            normalize_path(&nested_skill_path).unwrap_or_else(|_| nested_skill_path.clone());
+            canonicalize_path(&nested_skill_path).unwrap_or_else(|_| nested_skill_path.clone());
         assert_eq!(
             vec![SkillMetadata {
                 name: "dupe-skill".to_string(),

@@ -11,6 +11,7 @@ path = "lib.rs"
 anyhow = { workspace = true }
 codex-core = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+path-absolutize = { workspace = true }
 rmcp = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

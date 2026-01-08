@@ -104,6 +104,13 @@ impl CodexRequestBuilder {
         self.map(|builder| builder.json(value))
     }
 
+    pub fn body<B>(self, body: B) -> Self
+    where
+        B: Into<reqwest::Body>,
+    {
+        self.map(|builder| builder.body(body))
+    }
+
     pub async fn send(self) -> Result<Response, reqwest::Error> {
         let headers = trace_headers();
 
