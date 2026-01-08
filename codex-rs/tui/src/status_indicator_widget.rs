@@ -67,10 +67,11 @@ impl StatusIndicatorWidget {
         app_event_tx: AppEventSender,
         frame_requester: FrameRequester,
         animations_enabled: bool,
+        entertainment_enabled: bool,
     ) -> Self {
         let now = Instant::now();
         Self {
-            shimmer: StatusShimmer::new(now),
+            shimmer: StatusShimmer::new(now, entertainment_enabled),
             details: None,
             show_interrupt_hint: true,
             elapsed_running: Duration::ZERO,
@@ -280,7 +281,8 @@ mod tests {
     fn renders_with_working_header() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let w =
+            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true, false);
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
@@ -294,7 +296,8 @@ mod tests {
     fn renders_truncated() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let w =
+            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true, false);
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
@@ -308,7 +311,8 @@ mod tests {
     fn renders_wrapped_details_panama_two_lines() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false);
+        let mut w =
+            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false, false);
         w.update_details(Some("A man a plan a canal panama".to_string()));
         w.set_interrupt_hint_visible(false);
 
@@ -330,7 +334,7 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut widget =
-            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true, false);
 
         let baseline = Instant::now();
         widget.last_resume_at = baseline;
@@ -351,7 +355,8 @@ mod tests {
     fn details_overflow_adds_ellipsis() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let mut w =
+            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true, false);
         w.update_details(Some("abcd abcd abcd abcd".to_string()));
 
         let lines = w.wrapped_details_lines(6);

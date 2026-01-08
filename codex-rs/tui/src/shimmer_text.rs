@@ -216,7 +216,7 @@ impl ShimmerText {
     }
 
     pub(crate) fn next_interval(&mut self, base: Duration) -> Duration {
-        let multiplier = self.rng.random_range(0.5..=1.25);
+        let multiplier = self.rng.random_range(0.4..=1.0);
         Duration::from_secs_f64(base.as_secs_f64() * multiplier)
     }
 

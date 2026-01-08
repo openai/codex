@@ -78,6 +78,7 @@ pub(crate) struct BottomPane {
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
+    entertainment_enabled: bool,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
@@ -97,6 +98,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
     pub(crate) animations_enabled: bool,
+    pub(crate) entertainment_enabled: bool,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
@@ -110,6 +112,7 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
             animations_enabled,
+            entertainment_enabled,
             skills,
         } = params;
         let mut composer = ChatComposer::new(
@@ -134,6 +137,7 @@ impl BottomPane {
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
             animations_enabled,
+            entertainment_enabled,
             context_window_percent: None,
             context_window_used_tokens: None,
         }
@@ -353,6 +357,7 @@ impl BottomPane {
                         self.app_event_tx.clone(),
                         self.frame_requester.clone(),
                         self.animations_enabled,
+                        self.entertainment_enabled,
                     ));
                 }
                 if let Some(status) = self.status.as_mut() {
@@ -379,6 +384,7 @@ impl BottomPane {
                 self.app_event_tx.clone(),
                 self.frame_requester.clone(),
                 self.animations_enabled,
+                self.entertainment_enabled,
             ));
             self.request_redraw();
         }
@@ -636,6 +642,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            entertainment_enabled: false,
             skills: Some(Vec::new()),
         });
         pane.push_approval_request(exec_request(), &features);
@@ -659,6 +666,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            entertainment_enabled: false,
             skills: Some(Vec::new()),
         });
 
@@ -693,6 +701,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            entertainment_enabled: false,
             skills: Some(Vec::new()),
         });
 
@@ -760,6 +769,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            entertainment_enabled: false,
             skills: Some(Vec::new()),
         });
 
@@ -787,6 +797,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            entertainment_enabled: false,
             skills: Some(Vec::new()),
         });
 
@@ -818,6 +829,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            entertainment_enabled: false,
             skills: Some(Vec::new()),
         });
 
@@ -846,6 +858,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            entertainment_enabled: false,
             skills: Some(Vec::new()),
         });
 

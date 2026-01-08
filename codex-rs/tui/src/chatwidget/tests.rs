@@ -363,6 +363,7 @@ async fn make_chatwidget_manual(
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
+        entertainment_enabled: cfg.features.enabled(Feature::Entertainment),
         skills: None,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));

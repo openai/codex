@@ -17,8 +17,6 @@ path = "src/lib.rs"
 vt100-tests = []
 # Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
-# Enable entertainment-only shimmer behavior in the status indicator.
-entertainment = []
 
 [lints]
 workspace = true
