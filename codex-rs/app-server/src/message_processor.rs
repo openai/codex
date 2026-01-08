@@ -18,7 +18,7 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::USER_AGENT_SUFFIX;
@@ -51,13 +51,14 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let conversation_manager = Arc::new(ConversationManager::new(
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::VSCode,
         ));
         let codex_message_processor = CodexMessageProcessor::new(
             auth_manager,
-            conversation_manager,
+            thread_manager,
             outgoing.clone(),
             codex_linux_sandbox_exe,
             Arc::clone(&config),
@@ -157,6 +158,12 @@ impl MessageProcessor {
             ClientRequest::ConfigBatchWrite { request_id, params } => {
                 self.handle_config_batch_write(request_id, params).await;
             }
+            ClientRequest::ConfigRequirementsRead {
+                request_id,
+                params: _,
+            } => {
+                self.handle_config_requirements_read(request_id).await;
+            }
             other => {
                 self.codex_message_processor.process_request(other).await;
             }
@@ -205,6 +212,13 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         match self.config_api.batch_write(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_config_requirements_read(&self, request_id: RequestId) {
+        match self.config_api.config_requirements_read().await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }

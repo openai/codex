@@ -122,11 +122,11 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-core = { path = ".", features = ["deterministic_process_ids"] }
+codex-core = { path = ".", default-features = false, features = ["deterministic_process_ids"] }
+codex-otel = { workspace = true, features = ["disable-default-metrics-exporter"] }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
-escargot = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 maplit = { workspace = true }
 predicates = { workspace = true }
@@ -137,6 +137,7 @@ tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
+zstd = { workspace = true }
 
 [package.metadata.cargo-shear]
 ignored = ["openssl-sys"]

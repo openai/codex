@@ -11,6 +11,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
@@ -48,7 +49,7 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -85,6 +86,15 @@ async fn test_config() -> Config {
         .expect("config")
 }
 
+fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
+    ConstraintError::InvalidValue {
+        field_name: "<unknown>",
+        candidate: candidate.into(),
+        allowed: allowed.into(),
+        requirement_source: RequirementSource::Unknown,
+    }
+}
+
 fn snapshot(percent: f64) -> RateLimitSnapshot {
     RateLimitSnapshot {
         primary: Some(RateLimitWindow {
@@ -102,7 +112,7 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
-    let conversation_id = ConversationId::new();
+    let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
@@ -314,7 +324,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
     let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
-    let conversation_manager = Arc::new(ConversationManager::with_models_provider(
+    let thread_manager = Arc::new(ThreadManager::with_models_provider(
         CodexAuth::from_api_key("test"),
         cfg.model_provider.clone(),
     ));
@@ -327,12 +337,12 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
         auth_manager,
-        models_manager: conversation_manager.get_models_manager(),
+        models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: resolved_model,
     };
-    let mut w = ChatWidget::new(init, conversation_manager);
+    let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -366,6 +376,7 @@ async fn make_chatwidget_manual(
         skills: None,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let codex_home = cfg.codex_home.clone();
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -374,7 +385,7 @@ async fn make_chatwidget_manual(
         config: cfg,
         model: resolved_model.clone(),
         auth_manager: auth_manager.clone(),
-        models_manager: Arc::new(ModelsManager::new(auth_manager)),
+        models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
         session_header: SessionHeader::new(resolved_model),
         initial_user_message: None,
         token_info: None,
@@ -388,14 +399,14 @@ async fn make_chatwidget_manual(
         suppressed_exec_calls: HashSet::new(),
         last_unified_wait: None,
         task_complete_pending: false,
-        unified_exec_sessions: Vec::new(),
+        unified_exec_processes: Vec::new(),
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
         retry_status_header: None,
-        conversation_id: None,
+        thread_id: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
@@ -415,7 +426,10 @@ async fn make_chatwidget_manual(
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.models_manager = Arc::new(ModelsManager::new(chat.auth_manager.clone()));
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+    ));
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
@@ -2299,7 +2313,7 @@ async fn approvals_popup_shows_disabled_presets() {
     chat.config.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
-            _ => Err(ConstraintError::invalid_value(
+            _ => Err(invalid_value(
                 candidate.to_string(),
                 "this message should be printed in the description",
             )),
@@ -2335,10 +2349,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     chat.config.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
-            _ => Err(ConstraintError::invalid_value(
-                candidate.to_string(),
-                "[on-request]",
-            )),
+            _ => Err(invalid_value(candidate.to_string(), "[on-request]")),
         })
         .expect("construct constrained approval policy");
     chat.open_approvals_popup();
@@ -2659,12 +2670,12 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_sessions() {
+async fn interrupt_clears_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
     begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
-    assert_eq!(chat.unified_exec_sessions.len(), 2);
+    assert_eq!(chat.unified_exec_processes.len(), 2);
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -2673,7 +2684,7 @@ async fn interrupt_clears_unified_exec_sessions() {
         }),
     });
 
-    assert!(chat.unified_exec_sessions.is_empty());
+    assert!(chat.unified_exec_processes.is_empty());
 
     let _ = drain_insert_history(&mut rx);
 }

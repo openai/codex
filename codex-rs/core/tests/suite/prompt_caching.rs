@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_core::features::Feature;
+use codex_core::models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
@@ -44,7 +46,7 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
@@ -75,7 +77,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let TestCodex {
         codex,
         config,
-        conversation_manager,
+        thread_manager,
         ..
     } = test_codex()
         .with_config(|config| {
@@ -84,9 +86,9 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let base_instructions = conversation_manager
+    let base_instructions = thread_manager
         .get_models_manager()
-        .construct_model_family(
+        .construct_model_info(
             config
                 .model
                 .as_deref()
@@ -94,8 +96,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             &config,
         )
         .await
-        .base_instructions
-        .clone();
+        .base_instructions;
 
     codex
         .submit(Op::UserInput {
@@ -131,11 +132,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
         base_instructions
     } else {
-        [
-            base_instructions.clone(),
-            include_str!("../../../apply-patch/apply_patch_tool_instructions.md").to_string(),
-        ]
-        .join("\n")
+        [base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS.to_string()].join("\n")
     };
 
     assert_eq!(
@@ -193,11 +190,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let expected_instructions = [
-        include_str!("../../prompt.md"),
-        include_str!("../../../apply-patch/apply_patch_tool_instructions.md"),
-    ]
-    .join("\n");
+    let expected_instructions = [BASE_INSTRUCTIONS, APPLY_PATCH_TOOL_INSTRUCTIONS].join("\n");
 
     let body0 = req1.single_request().body_json();
     let instructions0 = body0["instructions"]

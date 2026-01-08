@@ -11,7 +11,7 @@ use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
@@ -74,7 +74,7 @@ pub(crate) fn new_status_output(
     auth_manager: &AuthManager,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
-    session_id: &Option<ConversationId>,
+    session_id: &Option<ThreadId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -103,7 +103,7 @@ impl StatusHistoryCell {
         auth_manager: &AuthManager,
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
-        session_id: &Option<ConversationId>,
+        session_id: &Option<ThreadId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
         plan_type: Option<PlanType>,
         now: DateTime<Local>,

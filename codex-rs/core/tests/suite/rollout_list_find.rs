@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::find_conversation_path_by_id_str;
+use codex_core::find_thread_path_by_id_str;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -44,7 +44,7 @@ async fn find_locates_rollout_file_by_id() {
     let id = Uuid::new_v4();
     let expected = write_minimal_rollout_with_id(home.path(), id);
 
-    let found = find_conversation_path_by_id_str(home.path(), &id.to_string())
+    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
         .await
         .unwrap();
 
@@ -60,7 +60,7 @@ async fn find_handles_gitignore_covering_codex_home_directory() {
     let id = Uuid::new_v4();
     let expected = write_minimal_rollout_with_id(&codex_home, id);
 
-    let found = find_conversation_path_by_id_str(&codex_home, &id.to_string())
+    let found = find_thread_path_by_id_str(&codex_home, &id.to_string())
         .await
         .unwrap();
 
@@ -74,7 +74,7 @@ async fn find_ignores_granular_gitignore_rules() {
     let expected = write_minimal_rollout_with_id(home.path(), id);
     std::fs::write(home.path().join("sessions/.gitignore"), "*.jsonl\n").unwrap();
 
-    let found = find_conversation_path_by_id_str(home.path(), &id.to_string())
+    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
         .await
         .unwrap();
 

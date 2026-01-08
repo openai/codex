@@ -11,6 +11,8 @@
 - [Initialization](#initialization)
 - [API Overview](#api-overview)
 - [Events](#events)
+- [Approvals](#approvals)
+- [Skills](#skills)
 - [Auth endpoints](#auth-endpoints)
 
 ## Protocol
@@ -86,6 +88,7 @@ Example (from OpenAI's official VSCode extension):
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
+- `configRequirements/read` — fetch the loaded requirements allow-lists from `requirements.toml` and/or MDM (or `null` if none are configured).
 
 ### Example: Start or resume a thread
 
@@ -190,6 +193,26 @@ You can optionally specify config overrides on the new turn. If specified, these
 } }
 { "id": 30, "result": { "turn": {
     "id": "turn_456",
+    "status": "inProgress",
+    "items": [],
+    "error": null
+} } }
+```
+
+### Example: Start a turn (invoke a skill)
+
+Invoke a skill explicitly by including `$<skill-name>` in the text input and adding a `skill` input item alongside it.
+
+```json
+{ "method": "turn/start", "id": 33, "params": {
+    "threadId": "thr_123",
+    "input": [
+        { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." },
+        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
+    ]
+} }
+{ "id": 33, "result": { "turn": {
+    "id": "turn_457",
     "status": "inProgress",
     "items": [],
     "error": null
@@ -404,6 +427,46 @@ Order of messages:
 4. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
+
+## Skills
+
+Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` input item (recommended) so the backend injects full skill instructions instead of relying on the model to resolve the name.
+
+```json
+{
+  "method": "turn/start",
+  "id": 101,
+  "params": {
+    "threadId": "thread-1",
+    "input": [
+      { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI." },
+      { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
+    ]
+  }
+}
+```
+
+If you omit the `skill` item, the model will still parse the `$<skill-name>` marker and try to locate the skill, which can add latency.
+
+Example:
+
+```
+$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
+```
+
+Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/or with `forceReload`).
+
+```json
+{ "method": "skills/list", "id": 25, "params": {
+    "cwd": "/Users/me/project",
+    "forceReload": false
+} }
+{ "id": 25, "result": {
+    "skills": [
+        { "name": "skill-creator", "description": "Create or update a Codex skill" }
+    ]
+} }
+```
 
 ## Auth endpoints
 
