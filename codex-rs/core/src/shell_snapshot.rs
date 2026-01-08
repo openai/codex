@@ -252,11 +252,11 @@ $envVars | ForEach-Object {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use libc;
     use pretty_assertions::assert_eq;
     #[cfg(target_os = "linux")]
     use std::os::unix::fs::PermissionsExt;
-    #[cfg(target_os = "linux")]
-    use std::process::Command as StdCommand;
 
     use tempfile::tempdir;
 
@@ -319,7 +319,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
-        use std::process::Stdio;
         use tokio::time::Duration as TokioDuration;
         use tokio::time::Instant;
         use tokio::time::sleep;
@@ -361,13 +360,17 @@ mod tests {
 
         let deadline = Instant::now() + TokioDuration::from_secs(1);
         loop {
-            let kill_status = StdCommand::new("kill")
-                .arg("-0")
-                .arg(pid.to_string())
-                .stderr(Stdio::null())
-                .stdout(Stdio::null())
-                .status()?;
-            if !kill_status.success() {
+            let alive = unsafe { libc::kill(pid, 0) };
+            if alive != 0 {
+                let err = std::io::Error::last_os_error();
+                let raw = err.raw_os_error();
+                if raw == Some(libc::ESRCH) {
+                    break;
+                }
+                if raw != Some(libc::EPERM) {
+                    return Err(err.into());
+                }
+            } else {
                 break;
             }
             if Instant::now() >= deadline {
