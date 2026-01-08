@@ -13,11 +13,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
-        &[("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)],
-    )
-    .await?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
 
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
