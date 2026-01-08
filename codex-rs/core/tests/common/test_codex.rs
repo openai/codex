@@ -27,7 +27,6 @@ use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
 use crate::wait_for_event;
 use wiremock::Match;
-use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
