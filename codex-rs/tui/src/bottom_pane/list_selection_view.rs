@@ -13,6 +13,7 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
@@ -20,7 +21,6 @@ use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
-use super::selection_popup_common::wrap_styled_line;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -652,6 +652,38 @@ mod tests {
     fn renders_blank_line_between_subtitle_and_items() {
         let view = make_selection_view(Some("Switch between Codex approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
+    }
+
+    #[test]
+    fn snapshot_footer_note_wraps() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![SelectionItem {
+            name: "Read Only".to_string(),
+            description: Some("Codex can read files".to_string()),
+            is_current: true,
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        let footer_note = Line::from(vec![
+            "Note: ".dim(),
+            "Use /setup-elevated-sandbox".cyan(),
+            " to allow network access.".dim(),
+        ]);
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Select Approval Mode".to_string()),
+                footer_note: Some(footer_note),
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+        assert_snapshot!(
+            "list_selection_footer_note_wraps",
+            render_lines_with_width(&view, 40)
+        );
     }
 
     #[test]
