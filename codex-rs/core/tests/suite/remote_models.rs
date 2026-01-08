@@ -409,7 +409,6 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        request_max_retries: Some(0),
         ..built_in_model_providers()["openai"].clone()
     };
     let manager = ModelsManager::with_provider(
