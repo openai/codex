@@ -2991,6 +2991,9 @@ mod tests {
             InputResult::Command(cmd) => {
                 assert_eq!(cmd.command(), "init");
             }
+            InputResult::CommandWithArgs(_, _) => {
+                panic!("expected command dispatch without args for '/init'")
+            }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
@@ -3064,6 +3067,9 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
             InputResult::Command(cmd) => assert_eq!(cmd.command(), "diff"),
+            InputResult::CommandWithArgs(_, _) => {
+                panic!("expected command dispatch without args for '/diff'")
+            }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
@@ -3096,6 +3102,9 @@ mod tests {
         match result {
             InputResult::Command(cmd) => {
                 assert_eq!(cmd.command(), "mention");
+            }
+            InputResult::CommandWithArgs(_, _) => {
+                panic!("expected command dispatch without args for '/mention'")
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
