@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
+use crate::exec_env::insert_session_env;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -209,6 +210,8 @@ impl ShellHandler {
         call_id: String,
         freeform: bool,
     ) -> Result<ToolOutput, FunctionCallError> {
+        let mut exec_params = exec_params;
+
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
@@ -239,6 +242,13 @@ impl ShellHandler {
         {
             return Ok(output);
         }
+
+        insert_session_env(
+            &mut exec_params.env,
+            session.conversation_id(),
+            &turn.sub_id,
+            &exec_params.cwd,
+        );
 
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(

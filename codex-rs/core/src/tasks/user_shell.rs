@@ -16,6 +16,7 @@ use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_env;
 use crate::exec_env::create_env;
+use crate::exec_env::insert_session_env;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
@@ -99,10 +100,18 @@ impl SessionTask for UserShellCommandTask {
             )
             .await;
 
+        let mut env = create_env(&turn_context.shell_environment_policy);
+        insert_session_env(
+            &mut env,
+            session.conversation_id(),
+            &turn_context.sub_id,
+            &cwd,
+        );
+
         let exec_env = ExecEnv {
             command: command.clone(),
             cwd: cwd.clone(),
-            env: create_env(&turn_context.shell_environment_policy),
+            env,
             // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
             // should use that instead of an "arbitrarily large" timeout here.
             expiration: USER_SHELL_TIMEOUT_MS.into(),

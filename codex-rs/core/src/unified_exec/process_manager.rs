@@ -14,6 +14,7 @@ use crate::bash::extract_bash_command;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec_env::create_env;
+use crate::exec_env::insert_session_env;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
@@ -497,7 +498,14 @@ impl UnifiedExecProcessManager {
         justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
+        let mut env = create_env(&context.turn.shell_environment_policy);
+        insert_session_env(
+            &mut env,
+            context.session.conversation_id(),
+            &context.turn.sub_id,
+            &cwd,
+        );
+        let env = apply_unified_exec_env(env);
         let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);

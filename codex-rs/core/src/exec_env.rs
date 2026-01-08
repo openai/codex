@@ -1,8 +1,14 @@
 use crate::config::types::EnvironmentVariablePattern;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyInherit;
+use codex_protocol::ConversationId;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
+
+pub const CODEX_CONVERSATION_ID_ENV_VAR: &str = "CODEX_CONVERSATION_ID";
+pub const CODEX_TURN_ID_ENV_VAR: &str = "CODEX_TURN_ID";
+pub const CODEX_CWD_ENV_VAR: &str = "CODEX_CWD";
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
@@ -13,6 +19,20 @@ use std::collections::HashSet;
 /// for [`ShellEnvironmentPolicy`].
 pub fn create_env(policy: &ShellEnvironmentPolicy) -> HashMap<String, String> {
     populate_env(std::env::vars(), policy)
+}
+
+pub fn insert_session_env(
+    env: &mut HashMap<String, String>,
+    conversation_id: ConversationId,
+    turn_id: &str,
+    cwd: &Path,
+) {
+    env.insert(
+        CODEX_CONVERSATION_ID_ENV_VAR.to_string(),
+        conversation_id.to_string(),
+    );
+    env.insert(CODEX_TURN_ID_ENV_VAR.to_string(), turn_id.to_string());
+    env.insert(CODEX_CWD_ENV_VAR.to_string(), cwd.display().to_string());
 }
 
 fn populate_env<I>(vars: I, policy: &ShellEnvironmentPolicy) -> HashMap<String, String>
@@ -73,6 +93,8 @@ mod tests {
     use super::*;
     use crate::config::types::ShellEnvironmentPolicyInherit;
     use maplit::hashmap;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
 
     fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -216,5 +238,23 @@ mod tests {
             "ONLY_VAR".to_string() => "yes".to_string(),
         };
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn insert_session_env_sets_conversation_and_turn_ids() {
+        let conversation_id = ConversationId::default();
+        let mut env = HashMap::new();
+        let turn_id = "turn-123".to_string();
+        let cwd = PathBuf::from("/tmp/codex");
+
+        insert_session_env(&mut env, conversation_id, &turn_id, &cwd);
+
+        let conversation_value = conversation_id.to_string();
+        assert_eq!(
+            env.get(CODEX_CONVERSATION_ID_ENV_VAR),
+            Some(&conversation_value)
+        );
+        assert_eq!(env.get(CODEX_TURN_ID_ENV_VAR), Some(&turn_id));
+        assert_eq!(env.get(CODEX_CWD_ENV_VAR), Some(&"/tmp/codex".to_string()));
     }
 }

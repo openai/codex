@@ -763,6 +763,10 @@ impl Session {
         self.tx_event.clone()
     }
 
+    pub(crate) fn conversation_id(&self) -> ThreadId {
+        self.conversation_id
+    }
+
     /// Ensure all rollout writes are durably flushed.
     pub(crate) async fn flush_rollout(&self) {
         let recorder = {
