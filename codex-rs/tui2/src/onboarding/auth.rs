@@ -647,11 +647,6 @@ impl AuthModeWidget {
         self.request_frame.schedule_frame();
     }
 
-    /// Headless environments use device-code auth, falling back to the login server if needed.
-    fn start_headless_chatgpt_login(&mut self, opts: ServerOptions) {
-        headless_chatgpt_login::start_headless_chatgpt_login(self, opts);
-    }
-
     fn start_chatgpt_login(&mut self) {
         // If we're already authenticated with ChatGPT, don't start a new login –
         // just proceed to the success message flow.
@@ -670,7 +665,7 @@ impl AuthModeWidget {
         );
 
         if is_headless_environment() {
-            self.start_headless_chatgpt_login(opts);
+            headless_chatgpt_login::start_headless_chatgpt_login(self, opts);
             return;
         }
 
