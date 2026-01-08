@@ -3773,7 +3773,7 @@ mod tests {
             }
         }
 
-        // TODO(jif) investiage what is this?
+        // TODO(jif) investigate what is this?
         let history = sess.clone_history().await;
         let _ = history.raw_items();
     }
