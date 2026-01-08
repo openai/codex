@@ -2,7 +2,6 @@ use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
 use codex_core::protocol::SandboxPolicy;
 use codex_utils_cargo_bin::find_resource;
-use path_absolutize::Absolutize;
 use rmcp::ClientHandler;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleClient;
@@ -38,14 +37,8 @@ where
     let execve_wrapper = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")?;
 
     // `bash` is a test resource rather than a binary target, so we must use
-    // `find_resource!` to locate it instead of `cargo_bin`.
-    //
-    // Note we also have to normalize (but not canonicalize!) the path for
-    // _Bazel_ because the original value ends with
-    // `codex-rs/exec-server/tests/common/../suite/bash`, but the `tests/common`
-    // folder will not exist at runtime under Bazel. As such, we have to
-    // normalize it before passing it to `dotslash fetch`.
-    let bash = find_resource!("../suite/bash")?.absolutize()?.to_path_buf();
+    // `find_resource!` to locate it instead of `cargo_bin()`.
+    let bash = find_resource!("../suite/bash")?;
 
     // Need to ensure the artifact associated with the bash DotSlash file is
     // available before it is run in a read-only sandbox.

@@ -1881,6 +1881,7 @@ name = "codex-utils-cargo-bin"
 version = "0.0.0"
 dependencies = [
  "assert_cmd",
+ "path-absolutize",
  "thiserror 2.0.17",
 ]
 
@@ -2845,7 +2846,6 @@ dependencies = [
  "anyhow",
  "codex-core",
  "codex-utils-cargo-bin",
- "path-absolutize",
  "rmcp",
  "serde_json",
  "tokio",
