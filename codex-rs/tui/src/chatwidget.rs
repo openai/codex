@@ -3423,13 +3423,15 @@ impl ChatWidget {
         lines.push(line![
             "Elevation failed. You can also use a non-elevated sandbox, which protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected."
         ]);
-        lines.push(line!["Learn more: https://developers.openai.com/codex/windows"]);
+        lines.push(line![
+            "Learn more: https://developers.openai.com/codex/windows"
+        ]);
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
 
         let elevated_preset = preset.clone();
-        let legacy_preset = preset.clone();
+        let legacy_preset = preset;
         let items = vec![
             SelectionItem {
                 name: "Try elevated agent sandbox setup again".to_string(),
@@ -3505,9 +3507,7 @@ impl ChatWidget {
         );
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
-        self.set_status_header(
-            "Setting up agent sandbox. This can take a minute.".to_string(),
-        );
+        self.set_status_header("Setting up agent sandbox. This can take a minute.".to_string());
         self.request_redraw();
     }
 
