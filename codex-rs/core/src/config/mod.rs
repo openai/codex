@@ -9,6 +9,7 @@ use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ScrollInputMode;
+use crate::config::types::ShellConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
@@ -130,6 +131,8 @@ pub struct Config {
     pub forced_auto_mode_downgraded_on_windows: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
+    /// Shell execution defaults applied when tools do not specify overrides.
+    pub shell: ShellConfig,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -694,6 +697,9 @@ pub struct ConfigToml {
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
+    /// Default shell configuration applied when tools do not override it.
+    #[serde(default)]
+    pub shell: ShellConfig,
 
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
@@ -1227,6 +1233,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let shell = cfg.shell;
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1340,6 +1347,7 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
+            shell,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1914,6 +1922,43 @@ trust_level = "trusted"
         )?;
 
         assert_eq!(config.feedback_enabled, true);
+
+        Ok(())
+    }
+
+    #[test]
+    fn shell_defaults_to_login_shell() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml::default();
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(config.shell.default_login);
+
+        Ok(())
+    }
+
+    #[test]
+    fn shell_respects_configured_default_login() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            shell: ShellConfig {
+                default_login: false,
+            },
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.shell.default_login);
 
         Ok(())
     }
@@ -3225,6 +3270,7 @@ model_verbosity = "high"
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
+                shell: ShellConfig::default(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -3310,6 +3356,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            shell: ShellConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3410,6 +3457,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            shell: ShellConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3496,6 +3544,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            shell: ShellConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

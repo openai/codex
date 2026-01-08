@@ -31,8 +31,8 @@ struct ExecCommandArgs {
     workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
-    #[serde(default = "default_login")]
-    login: bool,
+    #[serde(default)]
+    login: Option<bool>,
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -63,10 +63,6 @@ fn default_write_stdin_yield_time_ms() -> u64 {
     250
 }
 
-fn default_login() -> bool {
-    true
-}
-
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     fn kind(&self) -> ToolKind {
@@ -89,7 +85,11 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params, invocation.session.user_shell());
+        let command = get_command(
+            &params,
+            invocation.session.user_shell(),
+            invocation.turn.shell.default_login,
+        );
         !is_known_safe_command(&command)
     }
 
@@ -120,8 +120,7 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
                 let process_id = manager.allocate_process_id().await;
-                let command = get_command(&args, session.user_shell());
-
+                let command = get_command(&args, session.user_shell(), turn.shell.default_login);
                 let ExecCommandArgs {
                     workdir,
                     yield_time_ms,
@@ -225,16 +224,32 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
-    let model_shell = args.shell.as_ref().map(|shell_str| {
+fn resolve_login_choice(
+    requested_login: Option<bool>,
+    default_login: bool,
+    has_snapshot: bool,
+) -> bool {
+    requested_login.unwrap_or(if has_snapshot { false } else { default_login })
+}
+
+fn get_command(
+    args: &ExecCommandArgs,
+    session_shell: Arc<Shell>,
+    default_login: bool,
+) -> Vec<String> {
+    if let Some(shell_str) = &args.shell {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = None;
-        shell
-    });
+        let use_login_shell = resolve_login_choice(args.login, default_login, false);
+        return shell.derive_exec_args(&args.cmd, use_login_shell);
+    }
 
-    let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
-
-    shell.derive_exec_args(&args.cmd, args.login)
+    let use_login_shell = resolve_login_choice(
+        args.login,
+        default_login,
+        session_shell.shell_snapshot.is_some(),
+    );
+    session_shell.derive_exec_args(&args.cmd, use_login_shell)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -280,7 +295,7 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), true);
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -295,7 +310,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), true);
 
         assert_eq!(command.last(), Some(&"echo hello".to_string()));
         if command
@@ -315,7 +330,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), true);
 
         assert_eq!(command[2], "echo hello");
         Ok(())
@@ -329,7 +344,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), true);
 
         assert_eq!(command[2], "echo hello");
         Ok(())

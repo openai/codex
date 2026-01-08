@@ -555,6 +555,24 @@ impl Notice {
     pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ShellConfig {
+    #[serde(default = "default_login_shell")]
+    pub default_login: bool,
+}
+
+const fn default_login_shell() -> bool {
+    true
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            default_login: true,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
