@@ -17,6 +17,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -87,11 +88,7 @@ impl ToolHandler for ApplyPatchHandler {
 
         let patch_input = match payload {
             ToolPayload::Function { arguments } => {
-                let args: ApplyPatchToolArgs = serde_json::from_str(&arguments).map_err(|e| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse function arguments: {e:?}"
-                    ))
-                })?;
+                let args: ApplyPatchToolArgs = parse_arguments(&arguments)?;
                 args.input
             }
             ToolPayload::Custom { input } => input,

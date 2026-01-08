@@ -23,11 +23,33 @@ fn read_http_request(
     stream: &mut TcpStream,
 ) -> std::io::Result<(String, HashMap<String, String>, Vec<u8>)> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+
+    let mut read_next = |buf: &mut [u8]| -> std::io::Result<usize> {
+        loop {
+            match stream.read(buf) {
+                Ok(n) => return Ok(n),
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::WouldBlock
+                        || err.kind() == std::io::ErrorKind::Interrupted =>
+                {
+                    if Instant::now() >= deadline {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "timed out waiting for request data",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    };
 
     let mut buf = Vec::new();
     let mut scratch = [0u8; 8192];
     let header_end = loop {
-        let n = stream.read(&mut scratch)?;
+        let n = read_next(&mut scratch)?;
         if n == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
@@ -79,7 +101,7 @@ fn read_http_request(
         .and_then(|v| v.parse::<usize>().ok())
     {
         while body_bytes.len() < len {
-            let n = stream.read(&mut scratch)?;
+            let n = read_next(&mut scratch)?;
             if n == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,

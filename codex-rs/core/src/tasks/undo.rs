@@ -64,8 +64,8 @@ impl SessionTask for UndoTask {
             return None;
         }
 
-        let mut history = sess.clone_history().await;
-        let mut items = history.get_history();
+        let history = sess.clone_history().await;
+        let mut items = history.raw_items().to_vec();
         let mut completed = UndoCompletedEvent {
             success: false,
             message: None,

@@ -23,7 +23,8 @@ use codex_core::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
-use core_test_support::responses::get_responses_requests;
+use core_test_support::responses::ResponseMock;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -32,11 +33,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
-use wiremock::Mock;
 use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 /// Verify that submitting `Op::Review` spawns a child task and emits
 /// EnteredReviewMode -> ExitedReviewMode(None) -> TaskComplete
@@ -75,7 +72,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         ]"#;
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
-    let server = start_responses_server_with_sse(&sse_raw, 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -196,7 +193,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -256,7 +253,7 @@ async fn review_filters_agent_message_related_events() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -337,7 +334,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         ]"#;
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
-    let server = start_responses_server_with_sse(&sse_raw, 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -391,7 +388,7 @@ async fn review_uses_custom_review_model_from_config() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
@@ -426,11 +423,9 @@ async fn review_uses_custom_review_model_from_config() {
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request body model equals the configured review model
-    let requests = get_responses_requests(&server).await;
-    let request = requests
-        .first()
-        .expect("expected POST request to /responses");
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let request = request_log.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
     server.verify().await;
@@ -449,7 +444,7 @@ async fn review_input_isolated_from_parent_history() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
 
     // Seed a parent session history via resume file with both user + assistant items.
     let codex_home = TempDir::new().unwrap();
@@ -547,11 +542,9 @@ async fn review_input_isolated_from_parent_history() {
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request `input` contains the environment context followed by the user review prompt.
-    let requests = get_responses_requests(&server).await;
-    let request = requests
-        .first()
-        .expect("expected POST request to /responses");
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let request = request_log.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let body = request.body_json();
     let input = body["input"].as_array().expect("input array");
     assert!(
         input.len() >= 2,
@@ -630,7 +623,7 @@ async fn review_history_surfaces_in_parent_session() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 2).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 2).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -674,9 +667,12 @@ async fn review_history_surfaces_in_parent_session() {
     // Inspect the second request (parent turn) input contents.
     // Parent turns include session initial messages (user_instructions, environment_context).
     // Critically, no messages from the review thread should appear.
-    let requests = get_responses_requests(&server).await;
+    let requests = request_log.requests();
     assert_eq!(requests.len(), 2);
-    let body = requests[1].body_json::<serde_json::Value>().unwrap();
+    for request in &requests {
+        assert_eq!(request.path(), "/v1/responses");
+    }
+    let body = requests[1].body_json();
     let input = body["input"].as_array().expect("input array");
 
     // Must include the followup as the last item for this turn
@@ -717,7 +713,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     skip_if_no_network!();
 
     let sse_raw = r#"[{"type":"response.completed", "response": {"id": "__ID__"}}]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
 
     let initial_cwd = TempDir::new().unwrap();
 
@@ -792,9 +788,12 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
+    let requests = request_log.requests();
     assert_eq!(requests.len(), 1);
-    let body = requests[0].body_json::<serde_json::Value>().unwrap();
+    for request in &requests {
+        assert_eq!(request.path(), "/v1/responses");
+    }
+    let body = requests[0].body_json();
     let input = body["input"].as_array().expect("input array");
 
     let saw_merge_base_sha = input
@@ -810,20 +809,15 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
 }
 
 /// Start a mock Responses API server and mount the given SSE stream body.
-async fn start_responses_server_with_sse(sse_raw: &str, expected_requests: usize) -> MockServer {
+async fn start_responses_server_with_sse(
+    sse_raw: &str,
+    expected_requests: usize,
+) -> (MockServer, ResponseMock) {
     let server = MockServer::start().await;
     let sse = load_sse_fixture_with_id_from_str(sse_raw, &Uuid::new_v4().to_string());
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(sse.clone(), "text/event-stream"),
-        )
-        .expect(expected_requests as u64)
-        .mount(&server)
-        .await;
-    server
+    let responses = vec![sse; expected_requests];
+    let request_log = mount_sse_sequence(&server, responses).await;
+    (server, request_log)
 }
 
 /// Create a conversation configured to talk to the provided mock server.

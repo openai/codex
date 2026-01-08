@@ -16,6 +16,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -104,12 +105,7 @@ impl ToolHandler for ShellHandler {
 
         match payload {
             ToolPayload::Function { arguments } => {
-                let params: ShellToolCallParams =
-                    serde_json::from_str(&arguments).map_err(|e| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse function arguments: {e:?}"
-                        ))
-                    })?;
+                let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let exec_params = Self::to_exec_params(params, turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
@@ -182,9 +178,7 @@ impl ToolHandler for ShellCommandHandler {
             )));
         };
 
-        let params: ShellCommandToolCallParams = serde_json::from_str(&arguments).map_err(|e| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
-        })?;
+        let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(
             tool_name.as_str(),

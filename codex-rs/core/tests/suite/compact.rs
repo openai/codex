@@ -31,7 +31,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
-use core_test_support::responses::get_responses_requests;
 use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -330,7 +329,7 @@ async fn manual_compact_uses_custom_prompt() {
 
     let server = start_mock_server().await;
     let sse_stream = sse(vec![ev_completed("r1")]);
-    mount_sse_once(&server, sse_stream).await;
+    let response_mock = mount_sse_once(&server, sse_stream).await;
 
     let custom_prompt = "Use this compact prompt instead";
 
@@ -358,11 +357,7 @@ async fn manual_compact_uses_custom_prompt() {
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
-    let body = requests
-        .iter()
-        .find_map(|req| req.body_json::<serde_json::Value>().ok())
-        .expect("summary request body");
+    let body = response_mock.single_request().body_json();
 
     let input = body
         .get("input")
@@ -571,7 +566,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         model_compact_response_3_sse,
         model_final_response_sse,
     ];
-    mount_sse_sequence(&server, bodies).await;
+    let request_log = mount_sse_sequence(&server, bodies).await;
 
     // Start the conversation with the user message
     codex
@@ -586,11 +581,8 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // collect the requests payloads from the model
-    let requests_payloads = get_responses_requests(&server).await;
-
-    let body = requests_payloads[0]
-        .body_json::<serde_json::Value>()
-        .unwrap();
+    let requests_payloads = request_log.requests();
+    let body = requests_payloads[0].body_json();
     let input = body.get("input").and_then(|v| v.as_array()).unwrap();
 
     fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -631,9 +623,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         prefixed_third_summary.as_str(),
     ];
     for (i, expected_summary) in compaction_indices.into_iter().zip(expected_summaries) {
-        let body = requests_payloads.clone()[i]
-            .body_json::<serde_json::Value>()
-            .unwrap();
+        let body = requests_payloads.clone()[i].body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let input = normalize_inputs(input);
         assert_eq!(input.len(), 3);
@@ -996,7 +986,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]);
 
     for (i, request) in requests_payloads.iter().enumerate() {
-        let body = request.body_json::<serde_json::Value>().unwrap();
+        let body = request.body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let expected_input = expected_requests_inputs[i].as_array().unwrap();
         assert_eq!(normalize_inputs(input), normalize_inputs(expected_input));
@@ -1034,33 +1024,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     ]);
     let prefixed_auto_summary = AUTO_SUMMARY_TEXT;
 
-    let first_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(FIRST_AUTO_MSG)
-            && !body.contains(SECOND_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, first_matcher, sse1).await;
-
-    let second_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SECOND_AUTO_MSG)
-            && body.contains(FIRST_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, second_matcher, sse2).await;
-
-    let third_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, third_matcher, sse3).await;
-
-    let fourth_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, fourth_matcher, sse4).await;
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
     let model_provider = non_openai_model_provider(&server);
 
@@ -1111,53 +1075,49 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
+    let requests = request_log.requests();
+    let request_bodies: Vec<String> = requests
+        .iter()
+        .map(|request| request.body_json().to_string())
+        .collect();
     assert_eq!(
-        requests.len(),
+        request_bodies.len(),
         4,
         "expected user turns, a compaction request, and the follow-up turn; got {}",
-        requests.len()
+        request_bodies.len()
     );
-    let is_auto_compact = |req: &wiremock::Request| {
-        body_contains_text(
-            std::str::from_utf8(&req.body).unwrap_or(""),
-            SUMMARIZATION_PROMPT,
-        )
-    };
-    let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
+    let auto_compact_count = request_bodies
+        .iter()
+        .filter(|body| body_contains_text(body, SUMMARIZATION_PROMPT))
+        .count();
     assert_eq!(
         auto_compact_count, 1,
         "expected exactly one auto compact request"
     );
-    let auto_compact_index = requests
+    let auto_compact_index = request_bodies
         .iter()
         .enumerate()
-        .find_map(|(idx, req)| is_auto_compact(req).then_some(idx))
+        .find_map(|(idx, body)| body_contains_text(body, SUMMARIZATION_PROMPT).then_some(idx))
         .expect("auto compact request missing");
     assert_eq!(
         auto_compact_index, 2,
         "auto compact should add a third request"
     );
 
-    let follow_up_index = requests
+    let follow_up_index = request_bodies
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(idx, req)| {
-            let body = std::str::from_utf8(&req.body).unwrap_or("");
+        .find_map(|(idx, body)| {
             (body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT))
                 .then_some(idx)
         })
         .expect("follow-up request missing");
     assert_eq!(follow_up_index, 3, "follow-up request should be last");
 
-    let body_first = requests[0].body_json::<serde_json::Value>().unwrap();
-    let body_auto = requests[auto_compact_index]
-        .body_json::<serde_json::Value>()
-        .unwrap();
-    let body_follow_up = requests[follow_up_index]
-        .body_json::<serde_json::Value>()
-        .unwrap();
+    let body_first = requests[0].body_json();
+    let body_auto = requests[auto_compact_index].body_json();
+    let body_follow_up = requests[follow_up_index].body_json();
     let instructions = body_auto
         .get("instructions")
         .and_then(|v| v.as_str())
@@ -1848,7 +1808,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     let follow_up_user = "FOLLOW_UP_AUTO_COMPACT";
     let final_user = "FINAL_AUTO_COMPACT";
 
-    mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4, sse5, sse6]).await;
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4, sse5, sse6]).await;
 
     let model_provider = non_openai_model_provider(&server);
 
@@ -1897,10 +1857,10 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "auto compact should not emit task lifecycle events"
     );
 
-    let requests = get_responses_requests(&server).await;
-    let request_bodies: Vec<String> = requests
+    let request_bodies: Vec<String> = request_log
+        .requests()
         .into_iter()
-        .map(|request| String::from_utf8(request.body).unwrap_or_default())
+        .map(|request| request.body_json().to_string())
         .collect();
     assert_eq!(
         request_bodies.len(),

@@ -2105,21 +2105,22 @@ impl ChatWidget {
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
-        let Some(auth) = self.auth_manager.auth() else {
-            return;
-        };
-        if auth.mode != AuthMode::ChatGPT {
+        if self.auth_manager.auth_cached().map(|auth| auth.mode) != Some(AuthMode::ChatGPT) {
             return;
         }
 
         let base_url = self.config.chatgpt_base_url.clone();
         let app_event_tx = self.app_event_tx.clone();
+        let auth_manager = Arc::clone(&self.auth_manager);
 
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
 
             loop {
-                if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
+                if let Some(auth) = auth_manager.auth().await
+                    && auth.mode == AuthMode::ChatGPT
+                    && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
+                {
                     app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
                 }
                 interval.tick().await;
@@ -3502,7 +3503,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
-    match BackendClient::from_auth(base_url, &auth).await {
+    match BackendClient::from_auth(base_url, &auth) {
         Ok(client) => match client.get_rate_limits().await {
             Ok(snapshot) => Some(snapshot),
             Err(err) => {

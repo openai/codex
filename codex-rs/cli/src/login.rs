@@ -155,7 +155,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 
     match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(Some(auth)) => match auth.mode {
-            AuthMode::ApiKey => match auth.get_token().await {
+            AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
                     eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
                     std::process::exit(0);
