@@ -201,13 +201,14 @@ You can optionally specify config overrides on the new turn. If specified, these
 
 ### Example: Start a turn (invoke a skill)
 
-Invoke a skill by sending a text input that begins with `$<skill-name>`.
+Invoke a skill explicitly by including `$<skill-name>` in the text input and adding a `skill` input item alongside it.
 
 ```json
 { "method": "turn/start", "id": 33, "params": {
     "threadId": "thr_123",
     "input": [
-        { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." }
+        { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." },
+        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
     ]
 } }
 { "id": 33, "result": { "turn": {
@@ -429,7 +430,23 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 ## Skills
 
-Skills are invoked by sending a text input that starts with `$<skill-name>`. The rest of the text is passed to the skill as its input.
+Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` input item (recommended) so the backend injects full skill instructions instead of relying on the model to resolve the name.
+
+```json
+{
+  "method": "turn/start",
+  "id": 101,
+  "params": {
+    "threadId": "thread-1",
+    "input": [
+      { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI." },
+      { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
+    ]
+  }
+}
+```
+
+If you omit the `skill` item, the model will still parse the `$<skill-name>` marker and try to locate the skill, which can add latency.
 
 Example:
 
