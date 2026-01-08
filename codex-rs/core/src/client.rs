@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
+use crate::auth::UnauthorizedRecovery;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
@@ -17,7 +18,6 @@ use codex_api::TransportError;
 use codex_api::common::Reasoning;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
-use codex_app_server_protocol::AuthMode;
 use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -153,7 +153,9 @@ impl ModelClient {
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
-        let mut refreshed = false;
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(|manager| manager.unauthorized_recovery());
         loop {
             let auth = match auth_manager.as_ref() {
                 Some(manager) => manager.auth().await,
@@ -182,7 +184,7 @@ impl ModelClient {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await?;
+                    handle_unauthorized(status, &mut auth_recovery).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -244,7 +246,9 @@ impl ModelClient {
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
-        let mut refreshed = false;
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(|manager| manager.unauthorized_recovery());
         loop {
             let auth = match auth_manager.as_ref() {
                 Some(manager) => manager.auth().await,
@@ -281,7 +285,7 @@ impl ModelClient {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await?;
+                    handle_unauthorized(status, &mut auth_recovery).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -492,29 +496,17 @@ where
 /// the mapped `CodexErr` is returned to the caller.
 async fn handle_unauthorized(
     status: StatusCode,
-    refreshed: &mut bool,
-    auth_manager: &Option<Arc<AuthManager>>,
-    auth: &Option<crate::auth::CodexAuth>,
+    auth_recovery: &mut Option<UnauthorizedRecovery>,
 ) -> Result<()> {
-    if *refreshed {
-        return Err(map_unauthorized_status(status));
-    }
-
-    if let Some(manager) = auth_manager.as_ref()
-        && let Some(auth) = auth.as_ref()
-        && auth.mode == AuthMode::ChatGPT
-    {
-        match manager.refresh_token().await {
-            Ok(_) => {
-                *refreshed = true;
-                Ok(())
-            }
+    if let Some(recovery) = auth_recovery {
+        return match recovery.next().await {
+            Ok(_) => Ok(()),
             Err(RefreshTokenError::Permanent(failed)) => Err(CodexErr::RefreshTokenFailed(failed)),
             Err(RefreshTokenError::Transient(other)) => Err(CodexErr::Io(other)),
-        }
-    } else {
-        Err(map_unauthorized_status(status))
+        };
     }
+
+    return Err(map_unauthorized_status(status));
 }
 
 fn map_unauthorized_status(status: StatusCode) -> CodexErr {

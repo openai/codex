@@ -75,10 +75,6 @@ impl RefreshTokenError {
             Self::Transient(_) => None,
         }
     }
-
-    fn other_with_message(message: impl Into<String>) -> Self {
-        Self::Transient(std::io::Error::other(message.into()))
-    }
 }
 
 impl From<RefreshTokenError> for std::io::Error {
@@ -548,6 +544,62 @@ struct CachedAuth {
     auth: Option<CodexAuth>,
 }
 
+enum UnauthorizedRecoveryStep {
+    Reload,
+    RefreshToken,
+    Done,
+}
+
+pub struct UnauthorizedRecovery {
+    manager: Arc<AuthManager>,
+    step: UnauthorizedRecoveryStep,
+}
+
+impl UnauthorizedRecovery {
+    fn new(manager: Arc<AuthManager>) -> Self {
+        Self {
+            manager,
+            step: UnauthorizedRecoveryStep::Reload,
+        }
+    }
+
+    pub fn has_next(&self) -> bool {
+        if !match self.manager.auth_cached() {
+            Some(auth) => auth.mode == AuthMode::ChatGPT,
+            _ => return false,
+        } {
+            return false;
+        }
+
+        match self.step {
+            UnauthorizedRecoveryStep::Done => false,
+            _ => true,
+        }
+    }
+
+    pub async fn next(&mut self) -> Result<(), RefreshTokenError> {
+        if !self.has_next() {
+            return Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                "No more recovery steps available.",
+            )));
+        }
+
+        match self.step {
+            UnauthorizedRecoveryStep::Reload => {
+                self.manager.reload();
+                self.step = UnauthorizedRecoveryStep::RefreshToken;
+            }
+            UnauthorizedRecoveryStep::RefreshToken => {
+                self.manager.refresh_token().await?;
+                self.step = UnauthorizedRecoveryStep::Done;
+            }
+            UnauthorizedRecoveryStep::Done => {}
+        }
+        Ok(())
+    }
+}
+
 /// Central manager providing a single source of truth for auth.json derived
 /// authentication data. It loads once (or on preference change) and then
 /// hands out cloned `CodexAuth` values so the rest of the program has a
@@ -670,22 +722,28 @@ impl AuthManager {
         ))
     }
 
+    pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
+        UnauthorizedRecovery::new(Arc::clone(&self))
+    }
+
     /// Attempt to refresh the current auth token (if any). On success, reload
     /// the auth state from disk so other components observe refreshed token.
     /// If the token refresh fails, returns the error to the caller.
-    pub async fn refresh_token(&self) -> Result<Option<String>, RefreshTokenError> {
-        let auth = match self.auth_cached() {
+    pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        let cached_auth = self.auth_cached();
+
+        let auth = match self.auth_cached().or(cached_auth) {
             Some(auth) => auth,
-            None => return Ok(None),
+            None => return Ok(()),
         };
         tracing::info!("Refreshing token");
         let token_data = auth.get_current_token_data().ok_or_else(|| {
             RefreshTokenError::Transient(std::io::Error::other("Token data is not available."))
         })?;
-        let access = self.refresh_tokens(&auth, token_data.refresh_token).await?;
+        self.refresh_tokens(&auth, token_data.refresh_token).await?;
         // Reload to pick up persisted changes.
         self.reload();
-        Ok(Some(access))
+        Ok(())
     }
 
     /// Log out by deleting the on‑disk auth.json (if present). Returns Ok(true)
@@ -732,10 +790,10 @@ impl AuthManager {
         &self,
         auth: &CodexAuth,
         refresh_token: String,
-    ) -> Result<String, RefreshTokenError> {
+    ) -> Result<(), RefreshTokenError> {
         let refresh_response = try_refresh_token(refresh_token, &auth.client).await?;
 
-        let updated = update_tokens(
+        update_tokens(
             &auth.storage,
             refresh_response.id_token,
             refresh_response.access_token,
@@ -744,12 +802,7 @@ impl AuthManager {
         .await
         .map_err(RefreshTokenError::from)?;
 
-        match updated.tokens {
-            Some(tokens) => Ok(tokens.access_token),
-            None => Err(RefreshTokenError::other_with_message(
-                "Token data is not available after refresh.",
-            )),
-        }
+        Ok(())
     }
 }
 
