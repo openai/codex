@@ -653,7 +653,13 @@ function main(): void {
   if (typeof markdownit !== "function") {
     throw new Error("markdown-it is not loaded");
   }
-  const md = markdownit({ html: false, linkify: true, breaks: true });
+  const md = markdownit({ html: false, linkify: true, breaks: true }) as any;
+  // Avoid auto-linkifying bare domains / emails (e.g. "README.md" where ".md" is a ccTLD),
+  // and rely on our own linkification for URLs and file paths instead.
+  if (!md?.linkify?.set) {
+    throw new Error("markdown-it linkify is unavailable");
+  }
+  md.linkify.set({ fuzzyLink: false, fuzzyEmail: false });
   const defaultLinkOpen =
     md.renderer.rules["link_open"] ||
     ((tokens: any, idx: number, options: any, _env: any, self: any) =>
@@ -1398,8 +1404,9 @@ function main(): void {
     if (root.dataset.fileLinks === "1") return;
     root.dataset.fileLinks = "1";
 
-    // NOTE: For plain text nodes, we intentionally keep file detection conservative
-    // (require at least one "/") to avoid accidental linkification (e.g. emails).
+    // NOTE: For plain text nodes, keep detection conservative to avoid accidental
+    // linkification (e.g. emails). This code runs over all text nodes and will
+    // wrap matches in an element (but only opens on Ctrl/Cmd+Click).
     // For <code> tokens, we allow basename-style paths like "README.md:10" and
     // ".env.local:23" because they are explicitly formatted by the author.
     // Allow Unicode letters/numbers in path segments so e.g. "docs/日本語/仕様.md:10"
@@ -1413,8 +1420,9 @@ function main(): void {
     //   tool output like "確認事項 ver1.1_記入済み.docx" can be linkified.
     //
     // We also allow "・" (Japanese middle dot), which commonly appears in names.
-    const pathSegmentNoAsciiSpace = String.raw`[\p{L}\p{N}\p{M}_@.\-・　]+`;
-    const pathSegmentWithAsciiSpace = String.raw`[\p{L}\p{N}\p{M}_@.\-・　 ]+`;
+    const pathSegmentNoAsciiSpace = String.raw`[\p{L}\p{N}\p{M}_@.+\-・　]+`;
+    const pathSegmentNoAsciiSpaceNoAt = String.raw`[\p{L}\p{N}\p{M}_.+\-・　]+`;
+    const pathSegmentWithAsciiSpace = String.raw`[\p{L}\p{N}\p{M}_@.+\-・　 ]+`;
     const fileTokenRe = new RegExp(
       String.raw`(?:\.?\/)?${pathSegmentNoAsciiSpace}(?:\/${pathSegmentNoAsciiSpace})+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?`,
       "gu",
@@ -1423,8 +1431,14 @@ function main(): void {
       String.raw`@?(?:\.?\/)?${pathSegmentNoAsciiSpace}(?:\/${pathSegmentNoAsciiSpace})+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?`,
       "gu",
     );
+    const textFileTokenWithAtRe = new RegExp(
+      // Allow basename-style tokens in plain text, but disallow "@" inside segments
+      // to reduce false positives like emails.
+      String.raw`@?(?:\.?\/)?${pathSegmentNoAsciiSpaceNoAt}(?:\/${pathSegmentNoAsciiSpaceNoAt})*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?`,
+      "gu",
+    );
     const codeBlockFileTokenWithAtRe = new RegExp(
-      String.raw`@?(?:\.?\/)?${pathSegmentWithAsciiSpace}(?:\/${pathSegmentWithAsciiSpace})+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?`,
+      String.raw`@?(?:\.?\/)?${pathSegmentWithAsciiSpace}(?:\/${pathSegmentWithAsciiSpace})*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?`,
       "gu",
     );
 
@@ -1482,15 +1496,15 @@ function main(): void {
     for (const node of textNodes) {
       const rawText = node.nodeValue || "";
       const parentEl = node.parentElement;
-      const inCodeBlock = parentEl
-        ? Boolean(parentEl.closest("pre > code, pre code"))
-        : false;
+      const inCodeBlock = parentEl ? Boolean(parentEl.closest("pre")) : false;
 
       const appendTextWithFileLinks = (
         frag: DocumentFragment,
         text: string,
       ): boolean => {
-        const fileRe = inCodeBlock ? codeBlockFileTokenWithAtRe : fileTokenWithAtRe;
+        const fileRe = inCodeBlock
+          ? codeBlockFileTokenWithAtRe
+          : textFileTokenWithAtRe;
         fileRe.lastIndex = 0;
         let m: RegExpExecArray | null = null;
         let lastIdx = 0;
@@ -2721,6 +2735,8 @@ function main(): void {
               : block.title || "Command";
         const det = ensureDetails(id, "tool command", false, summaryText, id);
         setStatusIcon(det, block.status);
+        if (block.cwd) det.dataset.cwd = block.cwd;
+        else delete (det.dataset as any).cwd;
 
         const sum = det.querySelector(":scope > summary");
         const sumTxt = sum
@@ -3829,9 +3845,12 @@ function main(): void {
       : null;
     if (fileLink) {
       const file = fileLink.getAttribute("data-open-file") || "";
+      const cwd = (fileLink.closest("[data-cwd]") as HTMLElement | null)?.getAttribute(
+        "data-cwd",
+      );
       if (file && (me.ctrlKey || me.metaKey)) {
         e.preventDefault();
-        vscode.postMessage({ type: "openFile", path: file });
+        vscode.postMessage({ type: "openFile", path: file, cwd: cwd || null });
         return;
       }
     }
@@ -3857,13 +3876,14 @@ function main(): void {
     // looks like it has a URI scheme (e.g. "README.md:10" would otherwise be
     // misclassified as scheme="readme.md").
     const explicitFileRefRe = new RegExp(
-      String.raw`^(?:\.{0,2}\/)?[\p{L}\p{N}\p{M}_@.-]+(?:\/[\p{L}\p{N}\p{M}_@.-]+)*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?$`,
+      String.raw`^(?:\.{0,2}\/)?[\p{L}\p{N}\p{M}_@.+-]+(?:\/[\p{L}\p{N}\p{M}_@.+-]+)*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?$`,
       "u",
     );
     if (explicitFileRefRe.test(decoded)) {
       const normalized = decoded.replace(/^\/+/, "");
+      const cwd = (a.closest("[data-cwd]") as HTMLElement | null)?.getAttribute("data-cwd");
       e.preventDefault();
-      vscode.postMessage({ type: "openFile", path: normalized });
+      vscode.postMessage({ type: "openFile", path: normalized, cwd: cwd || null });
       return;
     }
 
@@ -3873,8 +3893,9 @@ function main(): void {
       if (scheme === "file") {
         const without = decoded.replace(/^file:(\/\/)?/, "");
         const normalized = without.replace(/^\/+/, "");
+        const cwd = (a.closest("[data-cwd]") as HTMLElement | null)?.getAttribute("data-cwd");
         e.preventDefault();
-        vscode.postMessage({ type: "openFile", path: normalized });
+        vscode.postMessage({ type: "openFile", path: normalized, cwd: cwd || null });
         return;
       }
       // Unknown/unsupported schemes are delegated to VS Code's openExternal.
@@ -3885,8 +3906,9 @@ function main(): void {
 
     // Treat "/path" as workspace-root relative (GitHub-style links).
     const normalized = decoded.replace(/^\/+/, "");
+    const cwd = (a.closest("[data-cwd]") as HTMLElement | null)?.getAttribute("data-cwd");
     e.preventDefault();
-    vscode.postMessage({ type: "openFile", path: normalized });
+    vscode.postMessage({ type: "openFile", path: normalized, cwd: cwd || null });
   });
 
   // Handshake

@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
@@ -572,6 +573,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (type === "openFile") {
       const rawPath = anyMsg["path"];
       if (typeof rawPath !== "string" || !rawPath) return;
+      const rawCwd = anyMsg["cwd"];
+      const cwdHint = typeof rawCwd === "string" && rawCwd ? rawCwd : null;
 
       const st = this.getState();
       const active = st.activeSession;
@@ -598,7 +601,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         column = Number(lcMatch[3] || "") || 1;
       }
 
-      let uri: vscode.Uri;
+      let uri: vscode.Uri | null = null;
       if (path.isAbsolute(filePath)) {
         uri = vscode.Uri.file(filePath);
       } else {
@@ -610,17 +613,126 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         const folderUri = vscode.Uri.parse(active.workspaceFolderUri);
         const rootFsPath = folderUri.fsPath;
-        const resolved = path.resolve(rootFsPath, filePath);
-        const prefix = rootFsPath.endsWith(path.sep)
-          ? rootFsPath
-          : rootFsPath + path.sep;
-        if (!(resolved === rootFsPath || resolved.startsWith(prefix))) {
-          void vscode.window.showErrorMessage(
-            `Cannot open paths outside the workspace: ${filePath}`,
-          );
-          return;
+        const hasPathSep =
+          filePath.includes("/") ||
+          filePath.includes("\\") ||
+          filePath.startsWith("./") ||
+          filePath.startsWith("../");
+
+        if (hasPathSep) {
+          const resolved = path.resolve(rootFsPath, filePath);
+          const prefix = rootFsPath.endsWith(path.sep)
+            ? rootFsPath
+            : rootFsPath + path.sep;
+          if (!(resolved === rootFsPath || resolved.startsWith(prefix))) {
+            void vscode.window.showErrorMessage(
+              `Cannot open paths outside the workspace: ${filePath}`,
+            );
+            return;
+          }
+          uri = vscode.Uri.file(resolved);
+        } else {
+          const folder = vscode.workspace.getWorkspaceFolder(folderUri);
+          if (!folder) {
+            void vscode.window.showErrorMessage(
+              `Cannot open file (workspace folder not found): ${filePath}`,
+            );
+            return;
+          }
+
+          const resolveCwdFsPath = (): string | null => {
+            if (!cwdHint) return null;
+            const maybe = path.isAbsolute(cwdHint)
+              ? cwdHint
+              : path.resolve(rootFsPath, cwdHint);
+            const prefix = rootFsPath.endsWith(path.sep)
+              ? rootFsPath
+              : rootFsPath + path.sep;
+            if (!(maybe === rootFsPath || maybe.startsWith(prefix))) {
+              void vscode.window.showErrorMessage(
+                `Cannot use cwd outside the workspace: ${cwdHint}`,
+              );
+              return null;
+            }
+            return maybe;
+          };
+
+          const escapeGlob = (s: string): string =>
+            s.replace(/([*?[\]{}()!\\])/g, "\\$1");
+
+          const escapeGlobPath = (p: string): string => {
+            const parts = p.split(path.sep).filter(Boolean);
+            return parts.map(escapeGlob).join("/");
+          };
+
+          const cwdFsPath = resolveCwdFsPath();
+
+          // Prefer opening a direct file first to avoid expensive and noisy searches.
+          // If a cwd hint exists (e.g. from a tool output block), check cwd first.
+          const directBase = cwdFsPath ?? rootFsPath;
+          const directFsPath = path.resolve(directBase, filePath);
+          try {
+            const st = await fs.stat(directFsPath);
+            if (st.isFile()) uri = vscode.Uri.file(directFsPath);
+          } catch (err) {
+            const code = (err as any)?.code;
+            if (code !== "ENOENT" && code !== "ENOTDIR") {
+              void vscode.window.showErrorMessage(
+                `Failed to stat file: ${filePath} (${String(err)})`,
+              );
+              return;
+            }
+          }
+
+          if (!uri) {
+            const searchPrefix = cwdFsPath
+              ? escapeGlobPath(path.relative(rootFsPath, cwdFsPath))
+              : "";
+            const globPrefix = searchPrefix ? `${searchPrefix}/` : "";
+
+            const pattern = new vscode.RelativePattern(
+              folder,
+              `${globPrefix}**/${escapeGlob(filePath)}`,
+            );
+            const maxCandidates = 200;
+            const matches = await vscode.workspace.findFiles(
+              pattern,
+              undefined,
+              maxCandidates + 1,
+            );
+            if (matches.length === 0) {
+              void vscode.window.showErrorMessage(
+                `No matching file in workspace: ${filePath}`,
+              );
+              return;
+            }
+            if (matches.length > maxCandidates) {
+              void vscode.window.showErrorMessage(
+                `Too many matches for ${filePath}. Please include a directory (e.g. repo/... ).`,
+              );
+              return;
+            }
+            if (matches.length === 1) {
+              uri = matches[0]!;
+            } else {
+              const items = matches
+                .map((u) => {
+                  const rel = path.relative(rootFsPath, u.fsPath);
+                  return rel || u.fsPath;
+                })
+                .sort((a, b) => a.localeCompare(b));
+
+              const picked = await vscode.window.showQuickPick(items, {
+                title: `Open file: ${filePath}`,
+                placeHolder: `Multiple matches for ${filePath}`,
+                matchOnDescription: false,
+                matchOnDetail: false,
+              });
+              if (!picked) return;
+              uri = vscode.Uri.file(path.resolve(rootFsPath, picked));
+            }
+          }
         }
-        uri = vscode.Uri.file(resolved);
       }
 
       const options: Record<string, unknown> = {
@@ -634,6 +746,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         options["selection"] = new vscode.Range(pos, pos);
       }
       // Delegate error handling to VS Code (no custom "No matching result" dialog).
+      if (!uri) {
+        void vscode.window.showErrorMessage(`Cannot open file: ${filePath}`);
+        return;
+      }
       await vscode.commands.executeCommand("vscode.open", uri, options);
       return;
     }
