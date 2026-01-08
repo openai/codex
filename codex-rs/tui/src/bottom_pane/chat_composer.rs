@@ -2728,18 +2728,27 @@ mod tests {
             false,
         );
 
-        // Force an active burst so the non-ASCII char takes the fast-path
-        // (try_append_char_if_active) into the burst buffer.
-        composer
-            .paste_burst
-            .begin_with_retro_grabbed(String::new(), Instant::now());
+        // This string used to trigger early submission when pasted into the composer in powershell
+        // on Windows
+        let paste = r#"天地玄黄 宇宙洪荒
+日月盈昃 辰宿列张
+寒来暑往 秋收冬藏
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
+你好世界 编码测试
+汉字处理 UTF-8
+终端显示 正确无误
+
+风吹竹林 月照大江
+白云千载 青山依旧
+程序员 与 Unicode 同行"#;
+
+        for c in paste.chars() {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
 
         assert!(composer.textarea.text().is_empty());
         let _ = flush_after_paste_burst(&mut composer);
-        assert_eq!(composer.textarea.text(), "1あ");
+        assert_eq!(composer.textarea.text(), paste);
     }
 
     #[test]
