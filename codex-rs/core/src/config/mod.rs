@@ -11,6 +11,7 @@ use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ScrollInputMode;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
+use crate::config::types::StopHookVisibility;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::ConfigLayerStack;
@@ -30,6 +31,8 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::stop_hooks::StopHooksConfig;
+use crate::stop_hooks::StopHooksToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -174,6 +177,9 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
+    /// Stop hook configuration used when the model attempts to end a turn.
+    pub stop_hooks: StopHooksConfig,
+
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -183,6 +189,9 @@ pub struct Config {
 
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
+
+    /// Controls how Stop hook activity is displayed in the TUI.
+    pub tui_stop_hook_visibility: StopHookVisibility,
 
     /// Override the events-per-wheel-tick factor for TUI2 scroll normalization.
     ///
@@ -700,6 +709,10 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Stop hook configuration for blocking or re-prompting on completion.
+    #[serde(default)]
+    pub stop_hooks: Option<StopHooksToml>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -1219,6 +1232,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let stop_hooks = StopHooksConfig::from_toml(cfg.stop_hooks.clone());
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1333,6 +1347,7 @@ impl Config {
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
+            stop_hooks,
             user_instructions,
             base_instructions,
             developer_instructions,
@@ -1410,6 +1425,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_stop_hook_visibility: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.stop_hook_visibility)
+                .unwrap_or_default(),
             tui_scroll_events_per_tick: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_tick),
             tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
             tui_scroll_trackpad_lines: cfg.tui.as_ref().and_then(|t| t.scroll_trackpad_lines),
@@ -1610,6 +1630,7 @@ persistence = "none"
                 notifications: Notifications::Enabled(true),
                 animations: true,
                 show_tooltips: true,
+                stop_hook_visibility: StopHookVisibility::Status,
                 scroll_events_per_tick: None,
                 scroll_wheel_lines: None,
                 scroll_trackpad_lines: None,
@@ -3185,6 +3206,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
+                stop_hooks: StopHooksConfig::default(),
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
@@ -3225,6 +3247,7 @@ model_verbosity = "high"
                 animations: true,
                 show_tooltips: true,
                 analytics: true,
+                tui_stop_hook_visibility: StopHookVisibility::Status,
                 tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
                 tui_scroll_trackpad_lines: None,
@@ -3269,6 +3292,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            stop_hooks: StopHooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3309,6 +3333,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics: true,
+            tui_stop_hook_visibility: StopHookVisibility::Status,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3368,6 +3393,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            stop_hooks: StopHooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3408,6 +3434,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics: false,
+            tui_stop_hook_visibility: StopHookVisibility::Status,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3453,6 +3480,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            stop_hooks: StopHooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3493,6 +3521,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics: true,
+            tui_stop_hook_visibility: StopHookVisibility::Status,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,

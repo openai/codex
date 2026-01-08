@@ -397,6 +397,22 @@ impl Default for ScrollInputMode {
     }
 }
 
+/// Controls how Stop hook activity is surfaced in the TUI.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StopHookVisibility {
+    Off,
+    Status,
+    Summary,
+    Verbose,
+}
+
+impl Default for StopHookVisibility {
+    fn default() -> Self {
+        Self::Status
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
@@ -414,6 +430,11 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
+
+    /// Control how Stop hook activity is displayed in the TUI.
+    /// Defaults to `status`.
+    #[serde(default)]
+    pub stop_hook_visibility: StopHookVisibility,
 
     /// Override the *wheel* event density used to normalize TUI2 scrolling.
     ///

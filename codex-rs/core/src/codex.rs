@@ -22,6 +22,7 @@ use crate::features::Features;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::stop_hooks;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -115,6 +116,7 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
+use crate::protocol::StopHookEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
@@ -382,6 +384,7 @@ pub(crate) struct TurnContext {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
+    pub(crate) stop_hooks: stop_hooks::StopHooksConfig,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
@@ -540,6 +543,7 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
+            stop_hooks: per_turn_config.stop_hooks.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
@@ -2255,6 +2259,7 @@ async fn spawn_review_thread(
         sub_id: sub_id.to_string(),
         client,
         tools_config,
+        stop_hooks: parent_turn_context.stop_hooks.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
         user_instructions: None,
@@ -2307,6 +2312,20 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
             message: err.message.clone(),
         })
         .collect()
+}
+
+struct StopHookEventEmitter<'a> {
+    session: &'a Session,
+    turn_context: &'a TurnContext,
+}
+
+#[async_trait::async_trait]
+impl stop_hooks::StopHookEventSink for StopHookEventEmitter<'_> {
+    async fn emit(&self, event: StopHookEvent) {
+        self.session
+            .send_event(self.turn_context, EventMsg::StopHookEvent(event))
+            .await;
+    }
 }
 
 /// Takes a user message as input and runs a loop where, at each turn, the model
@@ -2429,6 +2448,57 @@ pub(crate) async fn run_task(
 
                 if !needs_follow_up {
                     last_agent_message = turn_last_agent_message;
+                    let rollout_path = {
+                        let guard = sess.services.rollout.lock().await;
+                        guard.as_ref().map(|rec| rec.rollout_path.clone())
+                    };
+                    let hook_ctx = stop_hooks::StopHookContext {
+                        cwd: turn_context.cwd.clone(),
+                        conversation_id: sess.conversation_id.to_string(),
+                        turn_id: turn_context.sub_id.clone(),
+                        rollout_path,
+                        input_messages: turn_input_messages.clone(),
+                        last_agent_message: last_agent_message.clone(),
+                        stop_hooks: turn_context.stop_hooks.clone(),
+                    };
+                    let hook_reporter = StopHookEventEmitter {
+                        session: sess.as_ref(),
+                        turn_context: turn_context.as_ref(),
+                    };
+                    match stop_hooks::evaluate_stop_hooks(hook_ctx, Some(&hook_reporter)).await {
+                        Ok(stop_hooks::StopHookDecision::Block {
+                            reason,
+                            system_message,
+                        }) => {
+                            if let Some(system_message) = system_message
+                                && !system_message.trim().is_empty()
+                            {
+                                sess.record_conversation_items(
+                                    &turn_context,
+                                    &[ResponseItem::Message {
+                                        id: None,
+                                        role: "system".to_string(),
+                                        content: vec![ContentItem::InputText {
+                                            text: system_message,
+                                        }],
+                                    }],
+                                )
+                                .await;
+                            }
+                            let _ = sess
+                                .inject_input(vec![UserInput::Text { text: reason }])
+                                .await;
+                            if token_limit_reached {
+                                run_auto_compact(&sess, &turn_context).await;
+                            }
+                            continue;
+                        }
+                        Ok(stop_hooks::StopHookDecision::Allow) => {}
+                        Err(err) => {
+                            warn!("Stop hook evaluation failed: {err}");
+                        }
+                    }
+
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             thread_id: sess.conversation_id.to_string(),

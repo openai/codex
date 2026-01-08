@@ -10,6 +10,7 @@ use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
+use codex_core::config::types::StopHookVisibility;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
@@ -48,6 +49,10 @@ use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillsListEntry;
+use codex_core::protocol::StopHookEvent;
+use codex_core::protocol::StopHookEventDecision;
+use codex_core::protocol::StopHookEventStage;
+use codex_core::protocol::StopHookEventStatus;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TerminalInteractionEvent;
@@ -345,6 +350,8 @@ pub(crate) struct ChatWidget {
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
+    // Previous status header to restore after stop hook updates finish.
+    stop_hook_previous_status_header: Option<String>,
     thread_id: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -428,6 +435,21 @@ impl ChatWidget {
     fn restore_retry_status_header_if_present(&mut self) {
         if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
+        }
+    }
+
+    fn set_stop_hook_status(&mut self, details: Option<String>) {
+        if self.stop_hook_previous_status_header.is_none() {
+            self.stop_hook_previous_status_header = Some(self.current_status_header.clone());
+        }
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.set_status(String::from("Stop hooks"), details);
+    }
+
+    fn restore_stop_hook_status(&mut self) {
+        if let Some(previous) = self.stop_hook_previous_status_header.take() {
+            self.set_status_header(previous);
         }
     }
 
@@ -562,6 +584,7 @@ impl ChatWidget {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
         self.retry_status_header = None;
+        self.stop_hook_previous_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
@@ -1070,6 +1093,113 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    fn on_stop_hook_event(&mut self, event: StopHookEvent) {
+        let visibility = self.config.tui_stop_hook_visibility;
+        if matches!(visibility, StopHookVisibility::Off) {
+            return;
+        }
+
+        let show_status = matches!(
+            visibility,
+            StopHookVisibility::Status | StopHookVisibility::Summary | StopHookVisibility::Verbose
+        );
+        let show_summary = matches!(
+            visibility,
+            StopHookVisibility::Summary | StopHookVisibility::Verbose
+        );
+        let show_verbose = matches!(visibility, StopHookVisibility::Verbose);
+
+        let index_label = stop_hook_index_label(&event);
+        let status_label = stop_hook_status_label(event.decision, event.status);
+
+        match event.stage {
+            StopHookEventStage::Started => {
+                if show_status {
+                    let details = event
+                        .total
+                        .map(|total| format!("{total} hook{}", if total == 1 { "" } else { "s" }));
+                    self.set_stop_hook_status(details);
+                }
+            }
+            StopHookEventStage::HookStarted => {
+                if show_status {
+                    let mut parts = Vec::new();
+                    if let Some(label) = &index_label {
+                        parts.push(label.clone());
+                    }
+                    if let Some(display) = event.hook_display.as_ref() {
+                        parts.push(display.clone());
+                    }
+                    let details = (!parts.is_empty()).then(|| parts.join(" · "));
+                    self.set_stop_hook_status(details);
+                }
+                if show_verbose {
+                    let message = stop_hook_verbose_message("started", index_label.as_deref());
+                    let hint = event.hook_display;
+                    self.add_to_history(history_cell::new_info_event(message, hint));
+                }
+            }
+            StopHookEventStage::HookFinished => {
+                if show_status {
+                    let mut parts = Vec::new();
+                    if let Some(label) = &index_label {
+                        parts.push(label.clone());
+                    }
+                    if let Some(label) = status_label {
+                        parts.push(label.to_string());
+                    }
+                    let details = (!parts.is_empty()).then(|| parts.join(" · "));
+                    self.set_stop_hook_status(details);
+                }
+                if show_verbose {
+                    let message = stop_hook_verbose_message("finished", index_label.as_deref());
+                    let mut hint_parts = Vec::new();
+                    if let Some(label) = status_label {
+                        hint_parts.push(label.to_string());
+                    }
+                    if let Some(duration_ms) = event.duration_ms {
+                        hint_parts.push(format!("{duration_ms}ms"));
+                    }
+                    if let Some(display) = event.hook_display.as_ref() {
+                        hint_parts.push(display.clone());
+                    }
+                    if let Some(error) = event.error.as_ref() {
+                        hint_parts.push(error.clone());
+                    }
+                    let hint = (!hint_parts.is_empty()).then(|| hint_parts.join(" · "));
+                    self.add_to_history(history_cell::new_info_event(message, hint));
+                }
+            }
+            StopHookEventStage::Completed => {
+                if show_summary {
+                    let mut hint_parts = Vec::new();
+                    if let Some(reason) = event
+                        .reason
+                        .as_deref()
+                        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
+                    {
+                        hint_parts.push(format!("reason: {}", reason.trim()));
+                    }
+                    if let Some(total) = event.total {
+                        hint_parts
+                            .push(format!("{total} hook{}", if total == 1 { "" } else { "s" }));
+                    }
+                    let hint = (!hint_parts.is_empty()).then(|| hint_parts.join(" · "));
+                    let message = match event.decision {
+                        Some(StopHookEventDecision::Block) => "Stop hooks blocked".to_string(),
+                        Some(StopHookEventDecision::Allow) | None => {
+                            "Stop hooks allowed".to_string()
+                        }
+                    };
+                    self.add_to_history(history_cell::new_info_event(message, hint));
+                }
+                if show_status {
+                    self.restore_stop_hook_status();
+                }
+            }
+        }
+    }
+
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
@@ -1464,6 +1594,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            stop_hook_previous_status_header: None,
             thread_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
@@ -1550,6 +1681,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            stop_hook_previous_status_header: None,
             thread_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
@@ -2125,6 +2257,7 @@ impl ChatWidget {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
+            EventMsg::StopHookEvent(event) => self.on_stop_hook_event(event),
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
             EventMsg::StreamError(StreamErrorEvent {
@@ -3616,6 +3749,40 @@ impl ChatWidget {
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
         );
         RenderableItem::Owned(Box::new(flex))
+    }
+}
+
+fn stop_hook_index_label(event: &StopHookEvent) -> Option<String> {
+    match (event.index, event.total) {
+        (Some(index), Some(total)) => Some(format!("{index}/{total}")),
+        (Some(index), None) => Some(format!("{index}")),
+        _ => None,
+    }
+}
+
+fn stop_hook_status_label(
+    decision: Option<StopHookEventDecision>,
+    status: Option<StopHookEventStatus>,
+) -> Option<&'static str> {
+    match decision {
+        Some(StopHookEventDecision::Block) => Some("blocked"),
+        Some(StopHookEventDecision::Allow) => Some("approved"),
+        None => match status {
+            Some(StopHookEventStatus::Ok) => Some("ok"),
+            Some(StopHookEventStatus::Timeout) => Some("timed out"),
+            Some(StopHookEventStatus::ExitFailure) => Some("failed"),
+            Some(StopHookEventStatus::NoOutput) => Some("no output"),
+            Some(StopHookEventStatus::InvalidOutput) => Some("invalid output"),
+            Some(StopHookEventStatus::Error) => Some("error"),
+            None => None,
+        },
+    }
+}
+
+fn stop_hook_verbose_message(stage: &str, index_label: Option<&str>) -> String {
+    match index_label {
+        Some(label) => format!("Stop hook {label} {stage}"),
+        None => format!("Stop hook {stage}"),
     }
 }
 

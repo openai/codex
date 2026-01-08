@@ -626,6 +626,9 @@ pub enum EventMsg {
 
     BackgroundEvent(BackgroundEventEvent),
 
+    /// Stop hook activity updates.
+    StopHookEvent(StopHookEvent),
+
     UndoStarted(UndoStartedEvent),
 
     UndoCompleted(UndoCompletedEvent),
@@ -1607,6 +1610,56 @@ pub struct TerminalInteractionEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum StopHookEventStage {
+    Started,
+    HookStarted,
+    HookFinished,
+    Completed,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum StopHookEventStatus {
+    Ok,
+    Timeout,
+    ExitFailure,
+    NoOutput,
+    InvalidOutput,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum StopHookEventDecision {
+    Allow,
+    Block,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct StopHookEvent {
+    pub stage: StopHookEventStage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<StopHookEventStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<StopHookEventDecision>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
