@@ -1299,9 +1299,8 @@ impl ChatComposer {
         {
             let has_ctrl_or_alt = has_ctrl_or_alt(modifiers);
             if !has_ctrl_or_alt {
-                // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
-                // misclassified by paste heuristics. Flush any active burst buffer and insert
-                // non-ASCII characters directly.
+                // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts, so avoid
+                // holding the first char while still allowing burst detection for paste input.
                 if !ch.is_ascii() {
                     return self.handle_non_ascii_char(input);
                 }
@@ -1323,7 +1322,6 @@ impl ChatComposer {
                             if !grab.grabbed.is_empty() {
                                 self.textarea.replace_range(grab.start_byte..safe_cur, "");
                             }
-                            self.paste_burst.begin_with_retro_grabbed(grab.grabbed, now);
                             self.paste_burst.append_char_to_buffer(ch, now);
                             return (InputResult::None, true);
                         }
@@ -2250,8 +2248,7 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
         assert_eq!(result, InputResult::None);
         assert!(needs_redraw, "typing should still mark the view dirty");
-        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
-        let _ = composer.flush_paste_burst_if_due();
+        let _ = flush_after_paste_burst(&mut composer);
         assert_eq!(composer.textarea.text(), "h?");
         assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
         assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
@@ -2558,11 +2555,11 @@ mod tests {
             false,
         );
 
-        // Simulate pasting "你好你\nhi" - non-ASCII chars first, then Enter, then ASCII.
+        // Simulate pasting "你　好\nhi" with an ideographic space to trigger pastey heuristics.
         // We require enough fast chars to enter burst buffering before suppressing Enter.
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('　'), KeyModifiers::NONE));
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('好'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE));
 
         // The Enter should be treated as a newline, not a submit
         let (result, _) =
@@ -2584,6 +2581,40 @@ mod tests {
             text.contains('\n'),
             "Text should contain newline: got '{text}'"
         );
+    }
+
+    #[test]
+    fn burst_paste_fast_non_ascii_prefix_inserts_placeholder_on_flush() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let prefix = "你好".repeat(12);
+        let suffix = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 7);
+        let paste = format!("{prefix}{suffix}");
+        for ch in paste.chars() {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        let flushed = flush_after_paste_burst(&mut composer);
+        assert!(flushed, "expected flush after stopping fast input");
+
+        let char_count = paste.chars().count();
+        let expected_placeholder = format!("[Pasted Content {char_count} chars]");
+        assert_eq!(composer.textarea.text(), expected_placeholder);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
+        assert_eq!(composer.pending_pastes[0].1, paste);
     }
 
     #[test]
