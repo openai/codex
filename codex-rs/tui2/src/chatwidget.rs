@@ -106,6 +106,7 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
@@ -997,7 +998,7 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
-        self.request_exit();
+        self.request_immediate_exit();
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
@@ -1729,7 +1730,7 @@ impl ChatWidget {
                 };
             }
             SlashCommand::Quit | SlashCommand::Exit => {
-                self.request_exit();
+                self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_core::auth::logout(
@@ -1738,7 +1739,7 @@ impl ChatWidget {
                 ) {
                     tracing::error!("failed to logout: {e}");
                 }
-                self.request_exit();
+                self.request_quit_without_confirmation();
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
@@ -2175,8 +2176,29 @@ impl ChatWidget {
         self.needs_final_message_separator = false;
     }
 
-    fn request_exit(&self) {
-        self.app_event_tx.send(AppEvent::ExitRequest);
+    /// Exit the UI immediately without waiting for shutdown.
+    ///
+    /// Prefer [`Self::request_quit_with_confirmation`] or
+    /// [`Self::request_quit_without_confirmation`] for user-initiated exits;
+    /// this is mainly a fallback for shutdown completion or emergency exits.
+    fn request_immediate_exit(&self) {
+        self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+    }
+
+    /// Request a shutdown-first quit that shows the confirmation prompt.
+    fn request_quit_with_confirmation(&self) {
+        self.app_event_tx
+            .send(AppEvent::Exit(ExitMode::ShutdownFirst { confirm: true }));
+    }
+
+    /// Request a shutdown-first quit that skips the confirmation prompt.
+    ///
+    /// Use this for explicit quit commands (`/quit`, `/exit`, `/logout`) when
+    /// we want shutdown+exit without prompting. Slash commands are less likely
+    /// to be accidental, so the intent to quit is clear.
+    fn request_quit_without_confirmation(&self) {
+        self.app_event_tx
+            .send(AppEvent::Exit(ExitMode::ShutdownFirst { confirm: false }));
     }
 
     fn request_redraw(&mut self) {
@@ -2942,6 +2964,73 @@ impl ChatWidget {
         None
     }
 
+    /// Show the shutdown-first quit confirmation prompt.
+    ///
+    /// This uses a selection view with explicit shutdown actions and an option
+    /// to persist the "don't ask again" notice.
+    pub(crate) fn open_exit_confirmation_prompt(&mut self) {
+        if !self.bottom_pane.can_launch_external_editor() {
+            return;
+        }
+
+        let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
+        header_children.push(Box::new(Line::from("Quit Codex?").bold()));
+        let info_line = Line::from(vec![
+            "You pressed ".into(),
+            "Ctrl+C".bold(),
+            " or ".into(),
+            "Ctrl+D".bold(),
+            ". Quitting will shut down the current session and exit Codex.".into(),
+        ]);
+        header_children.push(Box::new(
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
+        ));
+        let header = ColumnRenderable::with(header_children);
+
+        let quit_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
+            // Shutdown-first quit.
+            tx.send(AppEvent::CodexOp(Op::Shutdown));
+        })];
+
+        let quit_and_remember_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
+            // Persist the notice and then shut down.
+            tx.send(AppEvent::UpdateExitConfirmationPromptHidden(true));
+            tx.send(AppEvent::PersistExitConfirmationPromptHidden);
+            tx.send(AppEvent::CodexOp(Op::Shutdown));
+        })];
+
+        let items = vec![
+            SelectionItem {
+                name: "Yes, quit Codex".to_string(),
+                description: Some("Shut down the current session and exit.".to_string()),
+                actions: quit_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Yes, and don't ask again".to_string(),
+                description: Some("Quit now and skip this prompt next time.".to_string()),
+                actions: quit_and_remember_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "No, stay in Codex".to_string(),
+                description: Some("Return to the current session.".to_string()),
+                actions: Vec::new(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
         let approval = preset.approval;
         let sandbox = preset.sandbox;
@@ -3441,6 +3530,19 @@ impl ChatWidget {
         }
     }
 
+    /// Update the in-memory hide flag for the exit confirmation prompt.
+    pub(crate) fn set_exit_confirmation_prompt_hidden(&mut self, hidden: bool) {
+        self.config.notices.hide_exit_confirmation_prompt = Some(hidden);
+    }
+
+    /// Return whether the exit confirmation prompt should be suppressed.
+    pub(crate) fn exit_confirmation_prompt_hidden(&self) -> bool {
+        self.config
+            .notices
+            .hide_exit_confirmation_prompt
+            .unwrap_or(false)
+    }
+
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn world_writable_warning_hidden(&self) -> bool {
         self.config
@@ -3494,13 +3596,18 @@ impl ChatWidget {
             return;
         }
 
-        if self.bottom_pane.is_task_running() {
+        if self.is_cancellable_work_active() {
             self.bottom_pane.show_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             return;
         }
 
-        self.submit_op(Op::Shutdown);
+        self.request_quit_with_confirmation();
+    }
+
+    // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
+    fn is_cancellable_work_active(&self) -> bool {
+        self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {

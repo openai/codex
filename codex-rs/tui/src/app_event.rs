@@ -41,8 +41,13 @@ pub(crate) enum AppEvent {
     /// Open the fork picker inside the running TUI session.
     OpenForkPicker,
 
-    /// Request to exit the application gracefully.
-    ExitRequest,
+    /// Request to exit the application.
+    ///
+    /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the
+    /// UI exits only after `ShutdownComplete`. `Immediate` is a last-resort
+    /// escape hatch that skips shutdown and may drop in-flight work (e.g.,
+    /// background tasks, rollout flush, or child process cleanup).
+    Exit(ExitMode),
 
     /// Request to exit the application due to a fatal error.
     FatalExitRequest(String),
@@ -213,6 +218,17 @@ pub(crate) enum AppEvent {
 
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitMode {
+    /// Shutdown core and exit after completion.
+    ShutdownFirst,
+    /// Exit the UI loop immediately without waiting for shutdown.
+    ///
+    /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
+    /// cleanup that normally runs before `ShutdownComplete` can be missed.
+    Immediate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

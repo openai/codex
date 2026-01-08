@@ -27,7 +27,8 @@ As of HEAD:
 The main decision point for `Ctrl+C` is `ChatWidget::on_ctrl_c` in
 `codex-rs/tui/src/chatwidget.rs:3309`, with consumption/handling in `BottomPane::on_ctrl_c` in
 `codex-rs/tui/src/bottom_pane/mod.rs:218`. Exiting is coordinated via `ShutdownComplete`
-(`codex-rs/tui/src/chatwidget.rs:1051`) and `AppEvent::ExitRequest` (`codex-rs/tui/src/app.rs:718`).
+(`codex-rs/tui/src/chatwidget.rs:1051`) and `AppEvent::Exit(ExitMode::Immediate)`
+(`codex-rs/tui/src/app.rs:718`).
 
 ## Timeline of behavior changes
 

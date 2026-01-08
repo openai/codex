@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -1059,14 +1060,24 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
 #[tokio::test]
 async fn ctrl_c_shutdown_ignores_caps_lock() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
 
-    match op_rx.try_recv() {
-        Ok(Op::Shutdown) => {}
-        other => panic!("expected Op::Shutdown, got {other:?}"),
-    }
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Exit(ExitMode::ShutdownFirst { confirm: true }))
+    );
+}
+
+#[tokio::test]
+async fn ctrl_d_with_modal_open_does_not_quit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_approvals_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -1291,7 +1302,10 @@ async fn slash_quit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Quit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Exit(ExitMode::ShutdownFirst { confirm: false }))
+    );
 }
 
 #[tokio::test]
@@ -1300,7 +1314,10 @@ async fn slash_exit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Exit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Exit(ExitMode::ShutdownFirst { confirm: false }))
+    );
 }
 
 #[tokio::test]
@@ -1752,6 +1769,16 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     }
 
     lines.join("\n")
+}
+
+#[tokio::test]
+async fn exit_confirmation_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_exit_confirmation_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("exit_confirmation_popup", popup);
 }
 
 #[tokio::test]

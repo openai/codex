@@ -32,8 +32,8 @@ active work whenever possible.
 
 Codex distinguishes between:
 
-- **Exit**: end the UI event loop and terminate the process (e.g., `AppEvent::ExitRequest`
-  returning `Ok(false)`).
+- **Exit**: end the UI event loop and terminate the process (e.g.,
+  `AppEvent::Exit(ExitMode::Immediate)` returning `Ok(false)`).
 - **Shutdown**: request a graceful agent/core shutdown (e.g., `Op::Shutdown`), often waiting for
   `ShutdownComplete` before exiting so background work can flush cleanly.
 - **Interrupt**: cancel a running operation (e.g., `Op::Interrupt`), used for streaming turns,
@@ -63,8 +63,8 @@ In this design:
   The completion signal is `ShutdownComplete` (event name varies per crate, but the contract is the
   same: “core has finished shutting down”).
 
-Today, the TUIs mix “exit immediately” and “shutdown first” depending on how the user tries to
-leave.
+Historically, the TUIs mixed “exit immediately” and “shutdown first” depending on how the user
+tries to leave.
 
 ### Examples of core/UI state (what users see)
 
@@ -91,8 +91,8 @@ it is idle).
 | ------------------------------ | ------------------------------------------------------------- |
 | `Ctrl+C` while work is running | Interrupt (`Op::Interrupt`)                                   |
 | `Ctrl+C` while idle            | Shutdown (`Op::Shutdown`), exit on `ShutdownComplete`         |
-| `Ctrl+D` with empty composer   | Exit immediately (`ExitRequest`, bypasses `Op::Shutdown`)      |
-| `/quit`, `/exit`, `/logout`    | Exit immediately (`ExitRequest`, bypasses `Op::Shutdown`)      |
+| `Ctrl+D` with empty composer   | Quit (shutdown+exit, confirmation prompt)                      |
+| `/quit`, `/exit`, `/logout`    | Quit (shutdown+exit, no prompt)                                |
 | `/new` (NewSession)            | Shutdown current conversation, then stay running              |
 
 Notes:
@@ -135,16 +135,19 @@ These examples describe what happens today and why it matters for the confirmati
 - **Modal open**: `Ctrl+C` is first offered to the active modal/view to dismiss/abort. It should
   not trigger shutdown/exit unless the modal declines to handle it.
 
-### Why `/quit`, `/exit`, `/logout`, and `Ctrl+D` don’t call shutdown today
+### Why `/quit`, `/exit`, `/logout`, and `Ctrl+D` used to bypass shutdown
 
-Today these are implemented as explicit “leave the UI now” actions:
+Historically, these were explicit “leave the UI now” actions:
 
-- `/quit`, `/exit`, and `/logout` dispatch `AppEvent::ExitRequest` directly.
-- `Ctrl+D` exits only when the composer is empty (a guard added to reduce accidental exits), but it
-  still exits via `ExitRequest` rather than `Op::Shutdown`.
+- `/quit`, `/exit`, and `/logout` dispatched `AppEvent::Exit(ExitMode::Immediate)` directly.
+- `Ctrl+D` exited only when the composer was empty (a guard added to reduce accidental exits), but
+  it still exited via immediate exit rather than `Op::Shutdown`.
 
-This split does not have a principled/rational basis documented anywhere, and it may simply be an
-accidental divergence in how different quit triggers were implemented over time.
+This split did not have a principled/rational basis documented anywhere, and it may simply have
+been an accidental divergence in how different quit triggers were implemented over time.
+
+The updated design removes this distinction and routes all quit triggers through shutdown-first
+(`AppEvent::Exit(ExitMode::ShutdownFirst { confirm: ... })`).
 
 Either way, bypassing `Op::Shutdown` is the riskier option: it relies on runtime teardown and
 dropping to clean up in-flight work, which can leave behind “leftovers” (e.g., unified exec child
@@ -230,31 +233,39 @@ assumes a single default: quitting Codex should request `Op::Shutdown` and exit 
 An “exit immediately” path can remain as a fallback (e.g., if shutdown hangs), but it should not
 be the normal route for user-initiated quit gestures or commands.
 
-### Add an app-level event that means “quit with confirmation”
+### Approach update: unify exit events
 
-Keep `AppEvent::ExitRequest` meaning “exit immediately”.
-
-Add:
+Instead of introducing a new `QuitRequest` alongside a separate immediate-exit event, use a
+single exit event with an explicit mode:
 
 ```rust
-AppEvent::QuitRequest { confirm: bool }
+AppEvent::Exit(ExitMode::ShutdownFirst { confirm: bool })
+AppEvent::Exit(ExitMode::Immediate)
 ```
+
+This keeps all exit paths flowing through the same event handler, which makes logging and policy
+decisions consistent and keeps exit tracking in one place.
+
+### App-level handling (prompt vs shutdown)
 
 Handling lives in the app layer (`App`), because:
 
-- `App` is already the coordinator for exit (`ExitRequest`) and for reacting to `ShutdownComplete`.
+- `App` is already the coordinator for exit (`Exit(ExitMode::Immediate)`) and for reacting to
+  `ShutdownComplete`.
 - `App` owns the current configuration and is the right place to gate “prompt vs no prompt”.
 
 Pseudo-flow:
 
 1. A key handler decides “this key press would quit” and sends
-   `QuitRequest { confirm: true }`.
+   `Exit(ShutdownFirst { confirm: true })`.
 2. `App` checks `config.notices.hide_exit_confirmation_prompt.unwrap_or(false)`:
    - if `true`, initiate shutdown+exit immediately (no prompt).
    - if `false`, ask `ChatWidget` to open the confirmation prompt.
-
-Slash commands like `/quit`, `/exit`, and `/logout` can dispatch `QuitRequest { confirm: false }`
-to preserve the “no prompt” behavior while still taking the shutdown+exit path.
+3. Slash commands like `/quit`, `/exit`, and `/logout` send
+   `Exit(ShutdownFirst { confirm: false })` to skip the prompt while still taking the
+   shutdown+exit path.
+4. When `ShutdownComplete` arrives, `ChatWidget` calls `request_exit()`, which sends
+   `Exit(Immediate)` so the UI loop terminates.
 
 ### Action handling details (shutdown+exit)
 
@@ -548,7 +559,7 @@ Keep snapshot names aligned between crates, e.g.:
 Add targeted tests that encode the correctness boundaries:
 
 - `ctrl_c_during_review_cancels_review_not_exit`
-  - Assert: no `ExitRequest`/exit event emitted; interrupt/cancel path is taken.
+  - Assert: no `Exit(ExitMode::Immediate)` event emitted; interrupt/cancel path is taken.
 - `ctrl_c_when_task_running_interrupts_not_exit`
 - `ctrl_d_does_not_exit_when_modal_open`
 - `ctrl_d_does_not_exit_when_composer_non_empty`
