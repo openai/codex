@@ -1,12 +1,12 @@
 *** Begin Patch
 *** Update File: success.py
 @@ class BaseClass:
-@@     def method():
+@@     def method(self):
 -        # to_remove
 +        # to_add
 *** Update File: failure.py
 @@ class Foo:
-@@     def missing():
+@@     def missing(self):
 -        # to_remove
 +        # to_add
 *** End Patch

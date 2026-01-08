@@ -1,0 +1,6 @@
+foo
+bar
+one
+bar
+bar
+two

@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Update File: skip.py
+@@ class Foo:
+@@     def foo(self):
+-        # to_remove
++        # to_add
+*** End Patch

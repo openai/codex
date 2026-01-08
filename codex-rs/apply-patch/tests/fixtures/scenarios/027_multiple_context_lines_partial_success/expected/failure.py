@@ -1,4 +1,4 @@
 class Foo:
-    def foo():
+    def foo(self):
         # to_remove
         pass
