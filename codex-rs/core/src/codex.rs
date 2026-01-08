@@ -645,6 +645,18 @@ impl Session {
             session_configuration.session_source.clone(),
         );
         config.features.emit_metrics(&otel_manager);
+        otel_manager.counter(
+            "codex.session.started",
+            1,
+            &[(
+                "is_git",
+                if get_git_repo_root(&session_configuration.cwd).is_some() {
+                    "true"
+                } else {
+                    "false"
+                },
+            )],
+        );
 
         otel_manager.conversation_starts(
             config.model_provider.name.as_str(),
@@ -1757,6 +1769,7 @@ mod handlers {
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
 
+    use crate::context_manager::is_user_turn_boundary;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -2111,6 +2124,18 @@ mod handlers {
             .terminate_all_processes()
             .await;
         info!("Shutting down Codex instance");
+        let turn_count = sess
+            .clone_history()
+            .await
+            .get_history()
+            .iter()
+            .filter(|item| is_user_turn_boundary(item))
+            .count();
+        sess.services.otel_manager.counter(
+            "conversation.turn.count",
+            i64::try_from(turn_count).unwrap_or(0),
+            &[],
+        );
 
         // Gracefully flush and shutdown rollout recorder on session end so tests
         // that inspect the rollout file do not race with the background writer.
@@ -2834,6 +2859,7 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
+use crate::git_info::get_git_repo_root;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context_with_rx;
 
