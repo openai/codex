@@ -31,19 +31,19 @@ This section list all the metrics exported by Codex when locally installed.
 
 Each metric includes the required fields plus the global context above. Every metrics are prefixed by `codex.`.
 
-| Metric                    | Type      | Fields                                | Description                                                                     |
-|---------------------------|-----------|---------------------------------------|---------------------------------------------------------------------------------|
-| `features.state`          | counter   | `key`, `value`                        | Feature values that differ from defaults (emit one row per non-default).        |
-| `session.started`         | counter   | `is_git`                              | New session created.                                                            |
-| `task.compact`            | counter   | `type`                                | Number of compaction per type (`remote` or `local`)                             |
-| `task.user_shell`         | counter   |                                       | Number of user shell actions (`!` in the TUI for example)                       |
-| `task.review`             | counter   |                                       | Number of reviews triggered                                                     |
-| `task.undo`               | counter   |                                       | Number of undo made                                                             |
+| Metric            | Type    | Fields         | Description                                                              |
+| ----------------- | ------- | -------------- | ------------------------------------------------------------------------ |
+| `features.state`  | counter | `key`, `value` | Feature values that differ from defaults (emit one row per non-default). |
+| `session.started` | counter | `is_git`       | New session created.                                                     |
+| `task.compact`    | counter | `type`         | Number of compaction per type (`remote` or `local`)                      |
+| `task.user_shell` | counter |                | Number of user shell actions (`!` in the TUI for example)                |
+| `task.review`     | counter |                | Number of reviews triggered                                              |
+| `task.undo`       | counter |                | Number of undo made                                                      |
 
 ### Metrics to be added
 
 | Metric                    | Type      | Fields                                | Description                                               |
-|---------------------------|-----------|---------------------------------------|-----------------------------------------------------------|
+| ------------------------- | --------- | ------------------------------------- | --------------------------------------------------------- |
 | `approval.requested`      | counter   | `tool`, `approved`                    | Tool approval request result (`approved`: `yes` or `no`). |
 | `conversation.turn.count` | counter   |                                       | User/assistant turns per session.                         |
 | `mcp.call`                | counter   | `status`                              | MCP tool invocation result (`ok` or error string).        |
