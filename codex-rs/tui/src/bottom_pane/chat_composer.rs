@@ -2548,6 +2548,28 @@ mod tests {
     }
 
     #[test]
+    fn non_ascii_char_inserts_immediately_without_burst_state() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
+
+        assert_eq!(composer.textarea.text(), "あ");
+        assert!(!composer.is_in_paste_burst());
+    }
+
+    #[test]
     fn enter_submits_after_single_non_ascii_char() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -2649,6 +2671,75 @@ mod tests {
         assert_eq!(composer.pending_pastes.len(), 1);
         assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
         assert_eq!(composer.pending_pastes[0].1, paste);
+    }
+
+    #[test]
+    fn ascii_burst_treats_enter_as_newline() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Force an active burst so this test doesn't depend on tight timing.
+        composer
+            .paste_burst
+            .begin_with_retro_grabbed(String::new(), Instant::now());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(result, InputResult::None),
+            "Enter during a burst should insert newline, not submit"
+        );
+
+        for ch in ['t', 'h', 'e', 'r', 'e'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        let _ = flush_after_paste_burst(&mut composer);
+        assert_eq!(composer.textarea.text(), "hi\nthere");
+    }
+
+    #[test]
+    fn non_ascii_appends_to_active_burst_buffer() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Force an active burst so the non-ASCII char takes the fast-path
+        // (try_append_char_if_active) into the burst buffer.
+        composer
+            .paste_burst
+            .begin_with_retro_grabbed(String::new(), Instant::now());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
+
+        assert!(composer.textarea.text().is_empty());
+        let _ = flush_after_paste_burst(&mut composer);
+        assert_eq!(composer.textarea.text(), "1あ");
     }
 
     #[test]
@@ -4131,6 +4222,33 @@ mod tests {
 
         let expected = "First: one two\nSecond: one two".to_string();
         assert_eq!(InputResult::Submitted(expected), result);
+    }
+
+    #[test]
+    fn pending_first_ascii_char_flushes_as_typed() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert!(composer.is_in_paste_burst());
+        assert!(composer.textarea.text().is_empty());
+
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let flushed = composer.flush_paste_burst_if_due();
+        assert!(flushed, "expected pending first char to flush");
+        assert_eq!(composer.textarea.text(), "h");
+        assert!(!composer.is_in_paste_burst());
     }
 
     #[test]
