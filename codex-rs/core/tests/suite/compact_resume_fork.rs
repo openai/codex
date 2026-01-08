@@ -774,7 +774,7 @@ fn normalize_line_endings(value: &mut Value) {
 fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
     let mut bodies = request_log
         .iter()
-        .flat_map(|mock| mock.requests())
+        .flat_map(ResponseMock::requests)
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
     for body in &mut bodies {

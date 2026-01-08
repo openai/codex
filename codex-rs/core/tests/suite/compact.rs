@@ -18,6 +18,7 @@ use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::skip_if_no_network;
@@ -1105,7 +1106,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     let requests: Vec<_> = request_log
         .iter()
-        .flat_map(|mock| mock.requests())
+        .flat_map(ResponseMock::requests)
         .collect();
     let request_bodies: Vec<String> = requests
         .iter()
