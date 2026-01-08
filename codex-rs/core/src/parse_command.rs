@@ -103,6 +103,13 @@ mod tests {
                 path: Some("src".to_string()),
             }],
         );
+        assert_parsed(
+            &shlex_split_safe("git ls-files --exclude target src"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "git ls-files --exclude target src".to_string(),
+                path: Some("src".to_string()),
+            }],
+        );
     }
 
     #[test]
@@ -629,6 +636,29 @@ mod tests {
             vec![ParsedCommand::ListFiles {
                 cmd: shlex_join(&shlex_split_safe(inner)),
                 path: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn supports_python3_walks_files() {
+        let inner = r#"python3 -c "import glob; print(glob.glob('*.rs'))""#;
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::ListFiles {
+                cmd: shlex_join(&shlex_split_safe(inner)),
+                path: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn python_without_file_walk_is_unknown() {
+        let inner = r#"python -c "print('hello')""#;
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Unknown {
+                cmd: shlex_join(&shlex_split_safe(inner)),
             }],
         );
     }
