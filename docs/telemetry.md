@@ -29,20 +29,25 @@ This section list all the metrics exported by Codex when locally installed.
 
 ## Metrics catalog
 
-Each metric includes the required fields plus the global context above.
+Each metric includes the required fields plus the global context above. Every metrics are prefixed by `codex.`.
 
-| Metric                    | Type      | Fields                                | Description                                                                     |
-| ------------------------- | --------- | ------------------------------------- | ------------------------------------------------------------------------------- |
-| `approval.requested`      | counter   | `tool`, `approved`                    | Tool approval request result (`approved`: `yes` or `no`).                       |
-| `auth.completed`          | counter   | `status`                              | Authentication completed (only for ChatGPT authentication).                     |
-| `conversation.compact`    | counter   | `status`, `number`                    | Compaction event including the status and the compaction number in the session. |
-| `conversation.turn.count` | counter   | `role`                                | User/assistant turns per session.                                               |
-| `feature.duration_ms`     | histogram | `feature`, `status`                   | End-to-end feature latency.                                                     |
-| `feature.used`            | counter   | `feature`                             | Feature usage through `/` (e.g., `/undo`, `/review`, ...).                      |
-| `features.state`          | counter   | `key`, `value`                        | Feature values that differ from defaults (emit one row per non-default).        |
-| `mcp.call`                | counter   | `status`                              | MCP tool invocation result (`ok` or error string).                              |
-| `model.call.duration_ms`  | histogram | `provider`, `status`, `attempt`       | Model API request duration.                                                     |
-| `session.started`         | counter   | `is_git`                              | New session created.                                                            |
-| `tool.call`               | counter   | `tool`, `status`                      | Tool invocation result (`ok` or error string).                                  |
-| `tool.call.duration_ms`   | histogram | `tool`, `status`                      | Tool execution time.                                                            |
-| `user.feedback.submitted` | counter   | `category`, `include_logs`, `success` | Feedback submission via `/feedback`.                                            |
+| Metric            | Type    | Fields         | Description                                                              |
+| ----------------- | ------- | -------------- | ------------------------------------------------------------------------ |
+| `features.state`  | counter | `key`, `value` | Feature values that differ from defaults (emit one row per non-default). |
+| `session.started` | counter | `is_git`       | New session created.                                                     |
+| `task.compact`    | counter | `type`         | Number of compaction per type (`remote` or `local`)                      |
+| `task.user_shell` | counter |                | Number of user shell actions (`!` in the TUI for example)                |
+| `task.review`     | counter |                | Number of reviews triggered                                              |
+| `task.undo`       | counter |                | Number of undo made                                                      |
+
+### Metrics to be added
+
+| Metric                    | Type      | Fields                                | Description                                               |
+| ------------------------- | --------- | ------------------------------------- | --------------------------------------------------------- |
+| `approval.requested`      | counter   | `tool`, `approved`                    | Tool approval request result (`approved`: `yes` or `no`). |
+| `conversation.turn.count` | counter   |                                       | User/assistant turns per session.                         |
+| `mcp.call`                | counter   | `status`                              | MCP tool invocation result (`ok` or error string).        |
+| `model.call.duration_ms`  | histogram | `provider`, `status`, `attempt`       | Model API request duration.                               |
+| `tool.call`               | counter   | `tool`, `status`                      | Tool invocation result (`ok` or error string).            |
+| `tool.call.duration_ms`   | histogram | `tool`, `status`                      | Tool execution time.                                      |
+| `user.feedback.submitted` | counter   | `category`, `include_logs`, `success` | Feedback submission via `/feedback`.                      |

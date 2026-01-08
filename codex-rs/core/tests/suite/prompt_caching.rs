@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_core::features::Feature;
+use codex_core::models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
@@ -130,11 +132,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
         base_instructions
     } else {
-        [
-            base_instructions,
-            include_str!("../../../apply-patch/apply_patch_tool_instructions.md").to_string(),
-        ]
-        .join("\n")
+        [base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS.to_string()].join("\n")
     };
 
     assert_eq!(
@@ -192,11 +190,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let expected_instructions = [
-        include_str!("../../prompt.md"),
-        include_str!("../../../apply-patch/apply_patch_tool_instructions.md"),
-    ]
-    .join("\n");
+    let expected_instructions = [BASE_INSTRUCTIONS, APPLY_PATCH_TOOL_INSTRUCTIONS].join("\n");
 
     let body0 = req1.single_request().body_json();
     let instructions0 = body0["instructions"]

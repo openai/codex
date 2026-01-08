@@ -121,6 +121,10 @@ client_request_definitions! {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
     },
+    ThreadLoadedList => "thread/loaded/list" {
+        params: v2::ThreadLoadedListParams,
+        response: v2::ThreadLoadedListResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,

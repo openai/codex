@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::truncate::approx_bytes_for_tokens;
 use tracing::warn;
 
-const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
+pub const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
 const BASE_INSTRUCTIONS_WITH_APPLY_PATCH: &str =
     include_str!("../../prompt_with_apply_patch_instructions.md");
 

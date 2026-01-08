@@ -135,7 +135,6 @@ dunce = "1.0.4"
 encoding_rs = "0.8.35"
 env-flags = "0.1.1"
 env_logger = "0.11.5"
-escargot = "0.5"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 http = "1.3.1"
