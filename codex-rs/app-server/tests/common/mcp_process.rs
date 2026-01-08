@@ -611,6 +611,10 @@ impl McpProcess {
         Ok(notification)
     }
 
+    pub fn clear_message_buffer(&mut self) {
+        self.pending_messages.clear();
+    }
+
     async fn read_stream_until_message<F>(&mut self, predicate: F) -> anyhow::Result<JSONRPCMessage>
     where
         F: Fn(&JSONRPCMessage) -> bool,

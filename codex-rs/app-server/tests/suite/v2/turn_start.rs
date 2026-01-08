@@ -554,6 +554,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
     )
     .await??;
+    mcp.clear_message_buffer();
 
     // second turn with workspace-write and second_cwd, ensure exec begins in second_cwd
     let second_turn = mcp

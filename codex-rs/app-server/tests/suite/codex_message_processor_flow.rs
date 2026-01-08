@@ -430,6 +430,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
     )
     .await??;
+    mcp.clear_message_buffer();
 
     let second_turn_id = mcp
         .send_send_user_turn_request(SendUserTurnParams {
