@@ -1,7 +1,6 @@
 use chrono::Utc;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
-use codex_api::provider::RetryConfig as ApiRetryConfig;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -103,14 +102,7 @@ impl ModelsManager {
             return Ok(());
         }
         let auth = self.auth_manager.auth().await;
-        let mut api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
-        api_provider.retry = ApiRetryConfig {
-            max_attempts: 0,
-            base_delay: Duration::from_millis(200),
-            retry_429: false,
-            retry_5xx: false,
-            retry_transport: false,
-        };
+        let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
