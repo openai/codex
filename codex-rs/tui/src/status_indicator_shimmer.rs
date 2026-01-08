@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::shimmer_text::ShimmerText;
+use crate::entertainment::ShimmerText;
 
 const SHIMMER_TEXT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -162,7 +162,11 @@ impl StatusShimmer {
         }
     }
 
-    fn set_shimmer_step(&self, state: &EntertainmentState, step: crate::shimmer_text::ShimmerStep) {
+    fn set_shimmer_step(
+        &self,
+        state: &EntertainmentState,
+        step: crate::entertainment::ShimmerStep,
+    ) {
         *state.shimmer_face_cache.borrow_mut() = step.face;
         *state.shimmer_text_cache.borrow_mut() = step.text;
     }

@@ -100,7 +100,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
-use crate::entertainment_texts::EntertainmentTextManager;
+use crate::entertainment::EntertainmentController;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
@@ -345,7 +345,7 @@ pub(crate) struct ChatWidget {
     reasoning_header_emitted: bool,
     // Current status header shown in the status indicator.
     current_status_header: String,
-    entertainment: EntertainmentTextManager,
+    entertainment: EntertainmentController,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
@@ -1491,7 +1491,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             reasoning_header_emitted: false,
             current_status_header: String::from("Working"),
-            entertainment: EntertainmentTextManager::new(entertainment_enabled),
+            entertainment: EntertainmentController::new(entertainment_enabled),
             retry_status_header: None,
             thread_id: None,
             queued_user_messages: VecDeque::new(),
@@ -1581,7 +1581,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             reasoning_header_emitted: false,
             current_status_header: String::from("Working"),
-            entertainment: EntertainmentTextManager::new(entertainment_enabled),
+            entertainment: EntertainmentController::new(entertainment_enabled),
             retry_status_header: None,
             thread_id: None,
             queued_user_messages: VecDeque::new(),

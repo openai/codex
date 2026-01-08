@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
+use crate::entertainment::EntertainmentArcStore;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
@@ -79,7 +80,7 @@ pub(crate) struct BottomPane {
     esc_backtrack_hint: bool,
     animations_enabled: bool,
     entertainment_enabled: bool,
-    entertainment_arcs: Vec<Vec<String>>,
+    entertainment_arcs: EntertainmentArcStore,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
@@ -139,7 +140,7 @@ impl BottomPane {
             esc_backtrack_hint: false,
             animations_enabled,
             entertainment_enabled,
-            entertainment_arcs: Vec::new(),
+            entertainment_arcs: EntertainmentArcStore::new(entertainment_enabled),
             context_window_percent: None,
             context_window_used_tokens: None,
         }
@@ -395,12 +396,8 @@ impl BottomPane {
     }
 
     pub(crate) fn update_entertainment_texts(&mut self, texts: Vec<String>) {
-        if texts.is_empty() {
-            return;
-        }
-        self.entertainment_arcs.push(texts.clone());
-        if let Some(status) = self.status.as_mut() {
-            status.add_entertainment_arc(texts);
+        self.entertainment_arcs.push(texts, self.status.as_mut());
+        if self.status.is_some() {
             self.request_redraw();
         }
     }
@@ -413,11 +410,8 @@ impl BottomPane {
     }
 
     fn apply_entertainment_arcs(&mut self) {
-        if self.entertainment_arcs.is_empty() {
-            return;
-        }
         if let Some(status) = self.status.as_mut() {
-            status.set_entertainment_arcs(self.entertainment_arcs.clone());
+            self.entertainment_arcs.apply_to(status);
         }
     }
 

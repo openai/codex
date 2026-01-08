@@ -1,7 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::entertainment_texts::EntertainmentTextManager;
+use crate::entertainment::EntertainmentController;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -399,7 +399,7 @@ async fn make_chatwidget_manual(
         full_reasoning_buffer: String::new(),
         reasoning_header_emitted: false,
         current_status_header: String::from("Working"),
-        entertainment: EntertainmentTextManager::new(entertainment_enabled),
+        entertainment: EntertainmentController::new(entertainment_enabled),
         retry_status_header: None,
         thread_id: None,
         frame_requester: FrameRequester::test_dummy(),

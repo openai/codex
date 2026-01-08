@@ -5,7 +5,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::diff_render::DiffSummary;
-use crate::entertainment_texts;
+use crate::entertainment;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
@@ -746,8 +746,7 @@ impl App {
                 let server = Arc::clone(&self.server);
                 let config = self.config.clone();
                 tokio::spawn(async move {
-                    match entertainment_texts::generate_entertainment_texts(server, config, prompt)
-                        .await
+                    match entertainment::generate_entertainment_texts(server, config, prompt).await
                     {
                         Ok(texts) => {
                             info!(
