@@ -135,7 +135,10 @@ impl MetricsClient {
             ])
             .build();
 
-        let temporality = Temporality::default();
+        let temporality = match &config.exporter {
+            MetricsExporter::Otlp(OtelExporter::Statsig) => Temporality::Delta,
+            _ => Temporality::default(),
+        };
         let (meter_provider, meter) = match config.exporter {
             MetricsExporter::InMemory(exporter) => {
                 build_provider(resource, exporter, config.export_interval)
