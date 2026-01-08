@@ -399,7 +399,8 @@ async fn make_chatwidget_manual(
         thread_id: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
-        queued_user_messages: VecDeque::new(),
+        queued_items: VecDeque::new(),
+        queued_fence_present: false,
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
@@ -987,7 +988,7 @@ async fn empty_enter_during_task_does_not_queue() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     // Ensure nothing was queued.
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.queued_items.is_empty());
 }
 
 #[tokio::test]
@@ -998,10 +999,14 @@ async fn alt_up_edits_most_recent_queued_message() {
     chat.bottom_pane.set_task_running(true);
 
     // Seed two queued messages.
-    chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
-    chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+    chat.queued_items
+        .push_back(QueuedItem::User(UserMessage::from(
+            "first queued".to_string(),
+        )));
+    chat.queued_items
+        .push_back(QueuedItem::User(UserMessage::from(
+            "second queued".to_string(),
+        )));
     chat.refresh_queued_user_messages();
 
     // Press Alt+Up to edit the most recent (last) queued message.
@@ -1013,9 +1018,12 @@ async fn alt_up_edits_most_recent_queued_message() {
         "second queued".to_string()
     );
     // And the queue should now contain only the remaining (older) item.
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.queued_items.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        match chat.queued_items.front().unwrap() {
+            QueuedItem::User(msg) => msg.text.as_str(),
+            _ => panic!("expected user message"),
+        },
         "first queued"
     );
 }
@@ -1043,9 +1051,12 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
         chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     }
 
-    assert_eq!(chat.queued_user_messages.len(), 3);
-    for message in chat.queued_user_messages.iter() {
-        assert_eq!(message.text, "repeat me");
+    assert_eq!(chat.queued_items.len(), 3);
+    for message in chat.queued_items.iter() {
+        match message {
+            QueuedItem::User(msg) => assert_eq!(msg.text, "repeat me"),
+            _ => panic!("expected user message"),
+        }
     }
 }
 
@@ -1064,9 +1075,12 @@ async fn streaming_final_answer_keeps_task_running_state() {
         .set_composer_text("queued submission".to_string());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.queued_items.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        match chat.queued_items.front().unwrap() {
+            QueuedItem::User(msg) => msg.text.as_str(),
+            _ => panic!("expected user message"),
+        },
         "queued submission"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -2286,11 +2300,11 @@ async fn disabled_slash_command_while_task_running_snapshot() {
     // Dispatch a command that is unavailable while a task runs (e.g., /model)
     chat.dispatch_command(SlashCommand::Model);
 
-    // Drain history and snapshot the rendered error line(s)
+    // Drain history and snapshot the rendered info line(s)
     let cells = drain_insert_history(&mut rx);
     assert!(
         !cells.is_empty(),
-        "expected an error message history cell to be emitted",
+        "expected an info message history cell to be emitted",
     );
     let blob = lines_to_single_string(cells.last().unwrap());
     assert_snapshot!(blob);
@@ -2597,10 +2611,14 @@ async fn interrupt_restores_queued_messages_into_composer() {
     chat.bottom_pane.set_task_running(true);
 
     // Queue two user messages while the task is running.
-    chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
-    chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+    chat.queued_items
+        .push_back(QueuedItem::User(UserMessage::from(
+            "first queued".to_string(),
+        )));
+    chat.queued_items
+        .push_back(QueuedItem::User(UserMessage::from(
+            "second queued".to_string(),
+        )));
     chat.refresh_queued_user_messages();
 
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
@@ -2618,7 +2636,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     );
 
     // Queue should be cleared and no new user input should have been auto-submitted.
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.queued_items.is_empty());
     assert!(
         op_rx.try_recv().is_err(),
         "unexpected outbound op after interrupt"
@@ -2636,10 +2654,14 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     chat.bottom_pane
         .set_composer_text("current draft".to_string());
 
-    chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
-    chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+    chat.queued_items
+        .push_back(QueuedItem::User(UserMessage::from(
+            "first queued".to_string(),
+        )));
+    chat.queued_items
+        .push_back(QueuedItem::User(UserMessage::from(
+            "second queued".to_string(),
+        )));
     chat.refresh_queued_user_messages();
 
     chat.handle_codex_event(Event {
@@ -2653,7 +2675,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
         chat.bottom_pane.composer_text(),
         "first queued\nsecond queued\ncurrent draft"
     );
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.queued_items.is_empty());
     assert!(
         op_rx.try_recv().is_err(),
         "unexpected outbound op after interrupt"

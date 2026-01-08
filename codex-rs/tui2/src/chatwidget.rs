@@ -318,8 +318,10 @@ pub(crate) struct ChatWidget {
     // When resuming an existing session (selected via resume picker), avoid an
     // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
     suppress_session_configured_redraw: bool,
-    // User messages queued while a turn is in progress
-    queued_user_messages: VecDeque<UserMessage>,
+    // Items queued while a turn is in progress
+    queued_items: VecDeque<QueuedItem>,
+    // True when a session-resetting command (/new, /resume, /logout) is queued.
+    queued_fence_present: bool,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
@@ -339,6 +341,38 @@ pub(crate) struct ChatWidget {
 struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
+}
+
+enum QueuedItem {
+    User(UserMessage),
+    Command {
+        command: SlashCommand,
+        args: Option<String>,
+    },
+}
+
+impl QueuedItem {
+    fn display_label(&self) -> String {
+        match self {
+            QueuedItem::User(UserMessage { text, .. }) => text.clone(),
+            QueuedItem::Command { command, args } => match args {
+                Some(args) if !args.trim().is_empty() => {
+                    format!("/{} {}", command.command(), args.trim())
+                }
+                _ => format!("/{}", command.command()),
+            },
+        }
+    }
+
+    fn is_fence(&self) -> bool {
+        matches!(
+            self,
+            QueuedItem::Command {
+                command: SlashCommand::New | SlashCommand::Resume | SlashCommand::Logout,
+                ..
+            }
+        )
+    }
 }
 
 impl From<String> for UserMessage {
@@ -774,13 +808,16 @@ impl ChatWidget {
         }
 
         // If any messages were queued during the task, restore them into the composer.
-        if !self.queued_user_messages.is_empty() {
-            let queued_text = self
-                .queued_user_messages
-                .iter()
-                .map(|m| m.text.clone())
-                .collect::<Vec<_>>()
-                .join("\n");
+        let queued_text = self
+            .queued_items
+            .iter()
+            .filter_map(|item| match item {
+                QueuedItem::User(msg) => Some(msg.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !queued_text.is_empty() {
             let existing_text = self.bottom_pane.composer_text();
             let combined = if existing_text.is_empty() {
                 queued_text
@@ -791,7 +828,8 @@ impl ChatWidget {
             };
             self.bottom_pane.set_composer_text(combined);
             // Clear the queue and update the status indicator list.
-            self.queued_user_messages.clear();
+            self.queued_items
+                .retain(|item| !matches!(item, QueuedItem::User(_)));
             self.refresh_queued_user_messages();
         }
 
@@ -1326,7 +1364,8 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             conversation_id: None,
-            queued_user_messages: VecDeque::new(),
+            queued_items: VecDeque::new(),
+            queued_fence_present: false,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -1410,7 +1449,8 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             conversation_id: None,
-            queued_user_messages: VecDeque::new(),
+            queued_items: VecDeque::new(),
+            queued_fence_present: false,
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -1476,9 +1516,9 @@ impl ChatWidget {
                 modifiers: KeyModifiers::ALT,
                 kind: KeyEventKind::Press,
                 ..
-            } if !self.queued_user_messages.is_empty() => {
-                // Prefer the most recently queued item.
-                if let Some(user_message) = self.queued_user_messages.pop_back() {
+            } if self.has_queued_user_message() => {
+                // Prefer the most recently queued user message.
+                if let Some(user_message) = self.pop_last_queued_user_message() {
                     self.bottom_pane.set_composer_text(user_message.text);
                     self.refresh_queued_user_messages();
                     self.request_redraw();
@@ -1523,12 +1563,7 @@ impl ChatWidget {
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
-            let message = format!(
-                "'/{}' is disabled while a task is in progress.",
-                cmd.command()
-            );
-            self.add_to_history(history_cell::new_error_event(message));
-            self.request_redraw();
+            self.queue_command(cmd, None);
             return;
         }
         match cmd {
@@ -1667,12 +1702,7 @@ impl ChatWidget {
 
     fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
-            let message = format!(
-                "'/{}' is disabled while a task is in progress.",
-                cmd.command()
-            );
-            self.add_to_history(history_cell::new_error_event(message));
-            self.request_redraw();
+            self.queue_command(cmd, Some(args));
             return;
         }
 
@@ -1736,11 +1766,90 @@ impl ChatWidget {
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
         if self.bottom_pane.is_task_running() {
-            self.queued_user_messages.push_back(user_message);
+            if self.queued_fence_present {
+                self.add_error_message(
+                    "Ignored queued input because a session reset (/new, /resume, or /logout) is already queued."
+                        .to_string(),
+                );
+                self.request_redraw();
+                return;
+            }
+            self.queued_items.push_back(QueuedItem::User(user_message));
+            self.add_info_message(
+                "Queued message; will send after the current task finishes.".to_string(),
+                None,
+            );
             self.refresh_queued_user_messages();
         } else {
             self.submit_user_message(user_message);
         }
+    }
+
+    fn queue_command(&mut self, command: SlashCommand, args: Option<String>) {
+        let is_fence = matches!(
+            command,
+            SlashCommand::New | SlashCommand::Resume | SlashCommand::Logout
+        );
+        if self.queued_fence_present {
+            if !is_fence {
+                self.add_info_message(
+                    format!(
+                        "Ignored '/{}' because a session reset (/new, /resume, or /logout) is already queued.",
+                        command.command()
+                    ),
+                    None,
+                );
+                self.request_redraw();
+                return;
+            }
+            self.add_info_message(
+                format!(
+                    "Ignored '/{}' because a session reset is already queued.",
+                    command.command()
+                ),
+                None,
+            );
+            self.request_redraw();
+            return;
+        }
+        if is_fence {
+            self.queued_fence_present = true;
+        }
+        self.queued_items
+            .push_back(QueuedItem::Command { command, args });
+        let suffix = if is_fence {
+            " Items queued after it will be dropped."
+        } else {
+            ""
+        };
+        self.add_info_message(
+            format!(
+                "Queued '/{}'; will run after the current task.{}",
+                command.command(),
+                suffix
+            ),
+            None,
+        );
+        self.refresh_queued_user_messages();
+    }
+
+    fn has_queued_user_message(&self) -> bool {
+        self.queued_items
+            .iter()
+            .any(|item| matches!(item, QueuedItem::User(_)))
+    }
+
+    fn pop_last_queued_user_message(&mut self) -> Option<UserMessage> {
+        let len = self.queued_items.len();
+        for offset in 0..len {
+            let idx = len.saturating_sub(1 + offset);
+            if matches!(self.queued_items.get(idx), Some(QueuedItem::User(_))) {
+                if let Some(QueuedItem::User(msg)) = self.queued_items.remove(idx) {
+                    return Some(msg);
+                }
+            }
+        }
+        None
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
@@ -2053,8 +2162,32 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() {
             return;
         }
-        if let Some(user_message) = self.queued_user_messages.pop_front() {
-            self.submit_user_message(user_message);
+        if let Some(item) = self.queued_items.pop_front() {
+            let is_fence = item.is_fence();
+            match item {
+                QueuedItem::User(user_message) => self.submit_user_message(user_message),
+                QueuedItem::Command { command, args } => {
+                    if let Some(args) = args {
+                        self.dispatch_command_with_args(command, args);
+                    } else {
+                        self.dispatch_command(command);
+                    }
+                    if is_fence {
+                        let remaining = self.queued_items.len();
+                        if remaining > 0 {
+                            self.add_info_message(
+                                format!(
+                                    "Dropped {remaining} queued item(s) after '/{}' because the session is resetting.",
+                                    command.command()
+                                ),
+                                None,
+                            );
+                        }
+                        self.queued_items.clear();
+                        self.queued_fence_present = false;
+                    }
+                }
+            }
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_queued_user_messages();
@@ -2063,9 +2196,9 @@ impl ChatWidget {
     /// Rebuild and update the queued user messages from the current queue.
     fn refresh_queued_user_messages(&mut self) {
         let messages: Vec<String> = self
-            .queued_user_messages
+            .queued_items
             .iter()
-            .map(|m| m.text.clone())
+            .map(QueuedItem::display_label)
             .collect();
         self.bottom_pane.set_queued_user_messages(messages);
     }

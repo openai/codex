@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 2306
 expression: blob
 ---
-■ '/model' is disabled while a task is in progress.
+• Queued '/model'; will run after the current task.
