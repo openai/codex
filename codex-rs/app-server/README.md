@@ -73,6 +73,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
+- `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
@@ -146,6 +147,17 @@ Example:
 ```
 
 When `nextCursor` is `null`, you’ve reached the final page.
+
+### Example: List loaded threads
+
+`thread/loaded/list` returns thread ids currently loaded in memory. This is useful when you want to check which sessions are active without scanning rollouts on disk.
+
+```json
+{ "method": "thread/loaded/list", "id": 21 }
+{ "id": 21, "result": {
+    "data": ["thr_123", "thr_456"]
+} }
+```
 
 ### Example: Archive a thread
 

@@ -89,6 +89,7 @@ use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -375,6 +376,12 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
+            }
+            ClientRequest::ThreadLoadedList {
+                request_id,
+                params: _,
+            } => {
+                self.thread_loaded_list(request_id).await;
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
@@ -1588,6 +1595,18 @@ impl CodexMessageProcessor {
 
         let data = summaries.into_iter().map(summary_to_thread).collect();
         let response = ThreadListResponse { data, next_cursor };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_loaded_list(&self, request_id: RequestId) {
+        let data = self
+            .thread_manager
+            .list_thread_ids()
+            .await
+            .into_iter()
+            .map(ToString::to_string)
+            .collect();
+        let response = ThreadLoadedListResponse { data };
         self.outgoing.send_response(request_id, response).await;
     }
 

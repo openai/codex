@@ -335,6 +335,11 @@ impl McpProcess {
         self.send_request("thread/list", params).await
     }
 
+    /// Send a `thread/loaded/list` JSON-RPC request.
+    pub async fn send_thread_loaded_list_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("thread/loaded/list", None).await
+    }
+
     /// Send a `model/list` JSON-RPC request.
     pub async fn send_list_models_request(
         &mut self,
