@@ -276,7 +276,6 @@ impl ThreadManagerState {
         let thread = Arc::new(CodexThread::new(
             codex,
             session_configured.rollout_path.clone(),
-            session_configured.clone(),
         ));
         self.threads.write().await.insert(thread_id, thread.clone());
 
