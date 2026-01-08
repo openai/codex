@@ -64,6 +64,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+#[cfg(target_os = "windows")]
 use serial_test::serial;
 use std::collections::HashSet;
 use std::path::PathBuf;
