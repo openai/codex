@@ -573,10 +573,7 @@ impl UnauthorizedRecovery {
             return false;
         }
 
-        match self.step {
-            UnauthorizedRecoveryStep::Done => false,
-            _ => true,
-        }
+        self.step != UnauthorizedRecoveryStep::Done
     }
 
     pub async fn next(&mut self) -> Result<(), RefreshTokenError> {
