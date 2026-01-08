@@ -2352,12 +2352,11 @@ impl ChatWidget {
         }
     }
 
-    // If idle and there are queued inputs, submit exactly one to start the next turn.
     fn maybe_send_next_queued_input(&mut self) {
-        if self.bottom_pane.is_task_running() {
-            return;
-        }
-        if let Some(item) = self.queued_items.pop_front() {
+        while !self.bottom_pane.is_task_running() {
+            let Some(item) = self.queued_items.pop_front() else {
+                break;
+            };
             let is_fence = item.is_fence();
             match item {
                 QueuedItem::User(user_message) => self.submit_user_message(user_message),
@@ -2384,7 +2383,7 @@ impl ChatWidget {
                 }
             }
         }
-        // Update the list to reflect the remaining queued messages (if any).
+
         self.refresh_queued_user_messages();
     }
 
