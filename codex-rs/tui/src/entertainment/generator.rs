@@ -25,6 +25,7 @@ pub(crate) async fn generate_entertainment_texts(
     );
     let mut config = config;
     config.model = Some("gpt-5-nano".to_string());
+    config.model_reasoning_effort = None;   
     let new_thread = server.start_thread(config).await?;
     let schema = entertainment_output_schema();
     let input = vec![UserInput::Text { text: prompt }];

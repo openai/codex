@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::entertainment::ShimmerText;
 
 const SHIMMER_TEXT_INTERVAL: Duration = Duration::from_secs(1);
+const SHIMMER_FACE_INTERVAL: Duration = Duration::from_secs(2);
 
 pub(crate) struct RenderHeader {
     pub(crate) face: Option<String>,
@@ -32,7 +33,7 @@ impl StatusShimmer {
         if entertainment_enabled {
             let mut shimmer_text = ShimmerText::new();
             let shimmer_step = shimmer_text.get_next();
-            let shimmer_interval = shimmer_text.next_interval(SHIMMER_TEXT_INTERVAL);
+            let shimmer_interval = shimmer_text.next_interval(SHIMMER_FACE_INTERVAL);
             let entertainment = EntertainmentState {
                 use_shimmer_text: Cell::new(true),
                 shimmer_text: RefCell::new(shimmer_text),
@@ -73,7 +74,7 @@ impl StatusShimmer {
                 let next_interval = state
                     .shimmer_text
                     .borrow_mut()
-                    .next_interval(SHIMMER_TEXT_INTERVAL);
+                    .next_interval(SHIMMER_FACE_INTERVAL);
                 state.shimmer_interval.set(next_interval);
             }
             state.last_shimmer_update.set(Instant::now());
@@ -94,7 +95,7 @@ impl StatusShimmer {
             let next_interval = state
                 .shimmer_text
                 .borrow_mut()
-                .next_interval(SHIMMER_TEXT_INTERVAL);
+                .next_interval(SHIMMER_FACE_INTERVAL);
             state.shimmer_interval.set(next_interval);
             state.last_shimmer_update.set(Instant::now());
         }
@@ -114,7 +115,7 @@ impl StatusShimmer {
             let next_interval = state
                 .shimmer_text
                 .borrow_mut()
-                .next_interval(SHIMMER_TEXT_INTERVAL);
+                .next_interval(SHIMMER_FACE_INTERVAL);
             state.shimmer_interval.set(next_interval);
             state.last_shimmer_update.set(Instant::now());
         }
@@ -152,7 +153,7 @@ impl StatusShimmer {
             let next_interval = state
                 .shimmer_text
                 .borrow_mut()
-                .next_interval(SHIMMER_TEXT_INTERVAL);
+                .next_interval(SHIMMER_FACE_INTERVAL);
             state.shimmer_interval.set(next_interval);
         }
 
