@@ -83,6 +83,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 pub enum InputResult {
     Submitted(String),
     Command(SlashCommand),
+    CommandWithArgs(SlashCommand, String),
     None,
 }
 
@@ -1251,6 +1252,18 @@ impl ChatComposer {
                     }
                 }
 
+                if !input_starts_with_space
+                    && let Some((name, rest)) = parse_slash_name(&text)
+                    && !rest.is_empty()
+                    && !name.contains('/')
+                    && let Some((_n, cmd)) = built_in_slash_commands()
+                        .into_iter()
+                        .find(|(command_name, _)| *command_name == name)
+                    && cmd == SlashCommand::Review
+                {
+                    return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
+                }
+
                 let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
                     Ok(expanded) => expanded,
                     Err(err) => {
@@ -1661,6 +1674,15 @@ impl ChatComposer {
 
     fn sync_popups(&mut self) {
         let file_token = Self::current_at_token(&self.textarea);
+        let browsing_history = self
+            .history
+            .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
+        // When browsing input history (shell-style Up/Down recall), skip all popup
+        // synchronization so nothing steals focus from continued history navigation.
+        if browsing_history {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
         let skill_token = self.current_skill_token();
 
         let allow_command_popup = file_token.is_none() && skill_token.is_none();

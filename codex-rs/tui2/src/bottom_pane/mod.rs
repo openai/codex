@@ -276,16 +276,6 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_composer_input_enabled(
-        &mut self,
-        enabled: bool,
-        placeholder: Option<String>,
-    ) {
-        self.composer.set_input_enabled(enabled, placeholder);
-        self.request_redraw();
-    }
-
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
