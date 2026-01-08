@@ -498,7 +498,7 @@ async fn handle_unauthorized(
     status: StatusCode,
     auth_recovery: &mut Option<UnauthorizedRecovery>,
 ) -> Result<()> {
-    if let Some(recovery) = auth_recovery {
+    if let Some(recovery) = auth_recovery && recovery.has_next() {
         return match recovery.next().await {
             Ok(_) => Ok(()),
             Err(RefreshTokenError::Permanent(failed)) => Err(CodexErr::RefreshTokenFailed(failed)),
