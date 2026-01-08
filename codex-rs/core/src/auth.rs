@@ -446,6 +446,7 @@ async fn try_refresh_token(
         Ok(refresh_response)
     } else {
         let body = response.text().await.unwrap_or_default();
+        tracing::error!("Failed to refresh token: {status}: {body}");
         if status == StatusCode::UNAUTHORIZED {
             let failed = classify_refresh_token_failure(&body);
             Err(RefreshTokenError::Permanent(failed))
@@ -685,6 +686,7 @@ impl AuthManager {
     /// Force a reload of the auth information from auth.json. Returns
     /// whether the auth value changed.
     pub fn reload(&self) -> bool {
+        tracing::info!("Reloading auth");
         let new_auth = load_auth(
             &self.codex_home,
             self.enable_codex_api_key_env,
@@ -694,6 +696,7 @@ impl AuthManager {
         .flatten();
         if let Ok(mut guard) = self.inner.write() {
             let changed = !AuthManager::auths_equal(&guard.auth, &new_auth);
+            tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;
             changed
         } else {
@@ -730,13 +733,14 @@ impl AuthManager {
     /// the auth state from disk so other components observe refreshed token.
     /// If the token refresh fails, returns the error to the caller.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        tracing::info!("Refreshing token");
+
         let cached_auth = self.auth_cached();
 
         let auth = match self.auth_cached().or(cached_auth) {
             Some(auth) => auth,
             None => return Ok(()),
         };
-        tracing::info!("Refreshing token");
         let token_data = auth.get_current_token_data().ok_or_else(|| {
             RefreshTokenError::Transient(std::io::Error::other("Token data is not available."))
         })?;
