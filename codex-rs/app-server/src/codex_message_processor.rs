@@ -3678,6 +3678,16 @@ impl CodexMessageProcessor {
     }
 
     async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
+        if !self.config.feedback_enabled {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "sending feedback is disabled by configuration".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         let FeedbackUploadParams {
             classification,
             reason,
