@@ -6,6 +6,7 @@ mod rate_limits;
 mod review;
 mod thread_archive;
 mod thread_list;
+mod thread_loaded_list;
 mod thread_resume;
 mod thread_rollback;
 mod thread_start;

@@ -10,7 +10,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[allow(clippy::expect_used)]

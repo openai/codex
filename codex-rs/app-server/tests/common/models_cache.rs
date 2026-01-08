@@ -40,7 +40,6 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
     }
 }
 
-// todo(aibrahim): fix the priorities to be the opposite here.
 /// Write a models_cache.json file to the codex home directory.
 /// This prevents ModelsManager from making network requests to refresh models.
 /// The cache will be treated as fresh (within TTL) and used instead of fetching from the network.
@@ -51,14 +50,14 @@ pub fn write_models_cache(codex_home: &Path) -> std::io::Result<()> {
         .iter()
         .filter(|preset| preset.show_in_picker)
         .collect();
-    // Convert presets to ModelInfo, assigning priorities (higher = earlier in list)
-    // Priority is used for sorting, so first model gets highest priority
+    // Convert presets to ModelInfo, assigning priorities (lower = earlier in list).
+    // Priority is used for sorting, so the first model gets the lowest priority.
     let models: Vec<ModelInfo> = presets
         .iter()
         .enumerate()
         .map(|(idx, preset)| {
-            // Higher priority = earlier in list, so reverse the index
-            let priority = (presets.len() - idx) as i32;
+            // Lower priority = earlier in list.
+            let priority = idx as i32;
             preset_to_info(preset, priority)
         })
         .collect();
