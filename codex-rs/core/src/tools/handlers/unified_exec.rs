@@ -229,7 +229,7 @@ fn resolve_login_choice(
     default_login: bool,
     has_snapshot: bool,
 ) -> bool {
-    requested_login.unwrap_or(if has_snapshot { false } else { default_login })
+    requested_login.unwrap_or(if has_snapshot { true } else { default_login })
 }
 
 fn get_command(
@@ -285,7 +285,9 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 mod tests {
     use super::*;
     use crate::shell::default_user_shell;
+    use crate::shell_snapshot::ShellSnapshot;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
     #[test]
     fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
@@ -348,5 +350,25 @@ mod tests {
 
         assert_eq!(command[2], "echo hello");
         Ok(())
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_get_command_prefers_login_for_snapshot_defaults() {
+        let json = r#"{"cmd": "echo hello"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let snapshot_path = temp_dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "").expect("write snapshot");
+
+        let mut shell = default_user_shell();
+        shell.shell_snapshot = Some(Arc::new(ShellSnapshot {
+            path: snapshot_path,
+        }));
+
+        let command = get_command(&args, Arc::new(shell), false);
+        assert_eq!(command[1], "-lc");
     }
 }
