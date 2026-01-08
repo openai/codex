@@ -160,7 +160,7 @@ pub fn build_reqwest_client() -> reqwest::Client {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
-    headers.insert("originator", originator().header_value.clone());
+    headers.insert("originator", originator().header_value);
     let ua = get_codex_user_agent();
 
     let mut builder = reqwest::Client::builder()
