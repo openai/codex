@@ -249,6 +249,40 @@ mod tests {
     }
 
     #[test]
+    fn leaves_tags_in_user_message() {
+        let test_cases = vec![
+            "stuff <user_instructions>test_text</user_instructions>",
+            "stuff <environment_context>test_text</environment_context>",
+            "stuff # AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+            "stuff <skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            "stuff <user_shell_command>echo 42</user_shell_command>",
+            "stuff <user_ide_context>echo 42</user_ide_context>",
+        ];
+
+        for test_case in test_cases {
+            let item = ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: test_case.to_string(),
+                }],
+            };
+            let turn_item = parse_turn_item(&item);
+            match turn_item {
+                Some(TurnItem::UserMessage(user)) => {
+                    assert_eq!(
+                        user.content,
+                        vec![UserInput::Text {
+                            text: test_case.to_string(),
+                        }]
+                    );
+                }
+                other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn trims_user_ide_context_item_from_user_message() {
         let message = ResponseItem::Message {
             id: Some("user-1".to_string()),
@@ -273,6 +307,76 @@ mod tests {
                 text: "Hello world".to_string(),
             }],
         );
+    }
+
+    #[test]
+    fn parses_user_message_with_only_images() {
+        let img1 = "https://example.com/one.png".to_string();
+        let img2 = "https://example.com/two.jpg".to_string();
+        let message = ResponseItem::Message {
+            id: Some("user-2".to_string()),
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputImage {
+                    image_url: img1.clone(),
+                },
+                ContentItem::InputImage {
+                    image_url: img2.clone(),
+                },
+            ],
+        };
+
+        let turn_item = parse_turn_item(&message).expect("expected user message turn item");
+
+        let expected_content = vec![
+            UserInput::Image { image_url: img1 },
+            UserInput::Image { image_url: img2 },
+        ];
+        assert_eq_user_message_content(turn_item, &expected_content);
+    }
+
+    #[test]
+    fn ignores_output_text_in_user_message() {
+        let message = ResponseItem::Message {
+            id: Some("user-3".to_string()),
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::OutputText {
+                    text: "server echo".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "Hello world".to_string(),
+                },
+            ],
+        };
+
+        let turn_item = parse_turn_item(&message).expect("expected user message turn item");
+
+        assert_eq_user_message_content(
+            turn_item,
+            &[UserInput::Text {
+                text: "Hello world".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn drops_user_message_when_shell_command_present() {
+        let message = ResponseItem::Message {
+            id: Some("user-4".to_string()),
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "https://example.com/one.png".to_string(),
+                },
+            ],
+        };
+
+        let turn_item = parse_turn_item(&message);
+        assert!(turn_item.is_none(), "expected none, got {turn_item:?}");
     }
 
     #[test]
