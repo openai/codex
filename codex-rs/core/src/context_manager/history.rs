@@ -249,15 +249,6 @@ impl ContextManager {
         normalize::remove_orphan_outputs(&mut self.items);
     }
 
-    /// Returns a clone of the contents in the transcript.
-    fn contents(&self) -> Vec<ResponseItem> {
-        self.items.clone()
-    }
-
-    fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
-        items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
-    }
-
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         let policy_with_serialization_budget = policy.mul(1.2);
         match item {

@@ -160,7 +160,7 @@ fn get_history_for_prompt_drops_ghost_commits() {
     let items = vec![ResponseItem::GhostSnapshot {
         ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
     }];
-    let mut history = create_history_with_items(items);
+    let history = create_history_with_items(items);
     let filtered = history.for_prompt();
     assert_eq!(filtered, vec![]);
 }
@@ -402,7 +402,7 @@ fn normalization_retains_local_shell_outputs() {
         },
     ];
 
-    let mut history = create_history_with_items(items.clone());
+    let history = create_history_with_items(items.clone());
     let normalized = history.for_prompt();
     assert_eq!(normalized, items);
 }

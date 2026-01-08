@@ -3626,7 +3626,7 @@ mod tests {
             .record_model_warning("too many unified exec processes", &turn_context)
             .await;
 
-        let mut history = session.clone_history().await;
+        let history = session.clone_history().await;
         let history_items = history.for_prompt();
         let last = history_items.last().expect("warning recorded");
 
@@ -3863,7 +3863,7 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
-        let snapshot1 = live_history.for_prompt();
+        let snapshot1 = live_history.clone().for_prompt();
         let user_messages1 = collect_user_messages(&snapshot1);
         let rebuilt1 = compact::build_compacted_history(
             session.build_initial_context(turn_context),
@@ -3897,7 +3897,7 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
-        let snapshot2 = live_history.for_prompt();
+        let snapshot2 = live_history.clone().for_prompt();
         let user_messages2 = collect_user_messages(&snapshot2);
         let rebuilt2 = compact::build_compacted_history(
             session.build_initial_context(turn_context),
