@@ -94,6 +94,50 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
+async fn returns_fresh_tokens_as_is() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server)?;
+    let initial_last_refresh = Utc::now() - Duration::days(1);
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let initial_auth = AuthDotJson {
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(initial_last_refresh),
+    };
+    ctx.write_auth(&initial_auth)?;
+
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should be cached")?;
+    let cached = cached_auth
+        .get_token_data()
+        .context("token data should remain cached")?;
+    assert_eq!(cached, initial_tokens);
+
+    let stored = ctx.load_auth()?;
+    assert_eq!(stored, initial_auth);
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(requests.is_empty(), "expected no refresh token requests");
+
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
 async fn refreshes_token_when_last_refresh_is_stale() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
