@@ -1053,7 +1053,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     };
     let fourth_mock = mount_sse_once_match(&server, fourth_matcher, sse4).await;
 
-    let request_log = vec![first_mock, second_mock, third_mock, fourth_mock];
+    let request_log = [first_mock, second_mock, third_mock, fourth_mock];
 
     let model_provider = non_openai_model_provider(&server);
 
