@@ -128,13 +128,20 @@ impl MessageProcessor {
                             SetOriginatorError::InvalidHeaderValue => {
                                 let error = JSONRPCErrorError {
                                     code: INVALID_REQUEST_ERROR_CODE,
-                                    message: format!("Invalid clientInfo.name: {name}"),
+                                    message: format!(
+                                        "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                                    ),
                                     data: None,
                                 };
                                 self.outgoing.send_error(request_id, error).await;
                                 return;
                             }
-                            SetOriginatorError::AlreadyInitialized => {}
+                            SetOriginatorError::AlreadyInitialized => {
+                                // No-op. This is expected to happen if the originator is already set via env var.
+                                // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+                                // this will be an unexpected state and we can return a JSON-RPC error indicating
+                                // internal server error.
+                            }
                         }
                     }
                     let user_agent_suffix = format!("{name}; {version}");

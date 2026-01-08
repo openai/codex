@@ -60,6 +60,9 @@ fn get_originator_value(provided: Option<String>) -> Originator {
 }
 
 pub fn set_default_originator(value: String) -> Result<(), SetOriginatorError> {
+    if HeaderValue::from_str(&value).is_err() {
+        return Err(SetOriginatorError::InvalidHeaderValue);
+    }
     let originator = get_originator_value(Some(value));
     let Ok(mut guard) = ORIGINATOR.write() else {
         return Err(SetOriginatorError::AlreadyInitialized);

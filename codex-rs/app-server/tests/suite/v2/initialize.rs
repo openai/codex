@@ -93,7 +93,10 @@ async fn initialize_rejects_invalid_client_name() -> Result<()> {
     };
 
     assert_eq!(error.error.code, -32600);
-    assert_eq!(error.error.message, "Invalid clientInfo.name: bad\rname");
+    assert_eq!(
+        error.error.message,
+        "Invalid clientInfo.name: 'bad\rname'. Must be a valid HTTP header value."
+    );
     assert_eq!(error.error.data, None);
     Ok(())
 }
