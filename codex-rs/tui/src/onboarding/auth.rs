@@ -322,65 +322,6 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
-    fn render_device_code_login(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        state: &ContinueWithDeviceCodeState,
-    ) {
-        let banner = if state.device_code.is_some() {
-            "Finish signing in via your browser"
-        } else {
-            "Preparing device code login"
-        };
-
-        let mut spans = vec!["  ".into()];
-        if self.animations_enabled {
-            // Schedule a follow-up frame to keep the shimmer animation going.
-            self.request_frame
-                .schedule_frame_in(std::time::Duration::from_millis(100));
-            spans.extend(shimmer_spans(banner));
-        } else {
-            spans.push(banner.into());
-        }
-
-        let mut lines = vec![spans.into(), "".into()];
-
-        if let Some(device_code) = &state.device_code {
-            lines.push("  1. Open this link in your browser and sign in".into());
-            lines.push("".into());
-            lines.push(Line::from(vec![
-                "  ".into(),
-                device_code.verification_url.as_str().cyan().underlined(),
-            ]));
-            lines.push("".into());
-            lines.push(
-                "  2. Enter this one-time code after you are signed in (expires in 15 minutes)"
-                    .into(),
-            );
-            lines.push("".into());
-            lines.push(Line::from(vec![
-                "  ".into(),
-                device_code.user_code.as_str().cyan().bold(),
-            ]));
-            lines.push("".into());
-            lines.push(
-                "  Device codes are a common phishing target. Never share this code."
-                    .dim()
-                    .into(),
-            );
-            lines.push("".into());
-        } else {
-            lines.push("  Requesting a one-time code...".dim().into());
-            lines.push("".into());
-        }
-
-        lines.push("  Press Esc to cancel".dim().into());
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .render(area, buf);
-    }
-
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
             "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
@@ -736,7 +677,7 @@ impl WidgetRef for AuthModeWidget {
                 self.render_continue_in_browser(area, buf);
             }
             SignInState::ChatGptDeviceCode(state) => {
-                self.render_device_code_login(area, buf, state);
+                headless_chatgpt_login::render_device_code_login(self, area, buf, state);
             }
             SignInState::ChatGptSuccessMessage => {
                 self.render_chatgpt_success_message(area, buf);

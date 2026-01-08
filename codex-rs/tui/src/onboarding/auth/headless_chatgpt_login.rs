@@ -3,10 +3,18 @@ use codex_login::ServerOptions;
 use codex_login::complete_device_code_login;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::prelude::Widget;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::sync::Notify;
 
+use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 
 use super::AuthModeWidget;
@@ -118,6 +126,65 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
             }
         }
     });
+}
+
+pub(super) fn render_device_code_login(
+    widget: &AuthModeWidget,
+    area: Rect,
+    buf: &mut Buffer,
+    state: &ContinueWithDeviceCodeState,
+) {
+    let banner = if state.device_code.is_some() {
+        "Finish signing in via your browser"
+    } else {
+        "Preparing device code login"
+    };
+
+    let mut spans = vec!["  ".into()];
+    if widget.animations_enabled {
+        // Schedule a follow-up frame to keep the shimmer animation going.
+        widget
+            .request_frame
+            .schedule_frame_in(std::time::Duration::from_millis(100));
+        spans.extend(shimmer_spans(banner));
+    } else {
+        spans.push(banner.into());
+    }
+
+    let mut lines = vec![spans.into(), "".into()];
+
+    if let Some(device_code) = &state.device_code {
+        lines.push("  1. Open this link in your browser and sign in".into());
+        lines.push("".into());
+        lines.push(Line::from(vec![
+            "  ".into(),
+            device_code.verification_url.as_str().cyan().underlined(),
+        ]));
+        lines.push("".into());
+        lines.push(
+            "  2. Enter this one-time code after you are signed in (expires in 15 minutes)".into(),
+        );
+        lines.push("".into());
+        lines.push(Line::from(vec![
+            "  ".into(),
+            device_code.user_code.as_str().cyan().bold(),
+        ]));
+        lines.push("".into());
+        lines.push(
+            "  Device codes are a common phishing target. Never share this code."
+                .dim()
+                .into(),
+        );
+        lines.push("".into());
+    } else {
+        lines.push("  Requesting a one-time code...".dim().into());
+        lines.push("".into());
+    }
+
+    lines.push("  Press Esc to cancel".dim().into());
+    Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .render(area, buf);
 }
 
 fn device_code_attempt_matches(state: &SignInState, cancel: &Arc<Notify>) -> bool {
