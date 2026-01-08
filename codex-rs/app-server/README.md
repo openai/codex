@@ -73,6 +73,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
+- `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
@@ -147,6 +148,17 @@ Example:
 
 When `nextCursor` is `null`, you’ve reached the final page.
 
+### Example: List loaded threads
+
+`thread/loaded/list` returns thread ids currently loaded in memory. This is useful when you want to check which sessions are active without scanning rollouts on disk.
+
+```json
+{ "method": "thread/loaded/list", "id": 21 }
+{ "id": 21, "result": {
+    "data": ["thr_123", "thr_456"]
+} }
+```
+
 ### Example: Archive a thread
 
 Use `thread/archive` to move the persisted rollout (stored as a JSONL file on disk) into the archived sessions directory.
@@ -201,13 +213,14 @@ You can optionally specify config overrides on the new turn. If specified, these
 
 ### Example: Start a turn (invoke a skill)
 
-Invoke a skill by sending a text input that begins with `$<skill-name>`.
+Invoke a skill explicitly by including `$<skill-name>` in the text input and adding a `skill` input item alongside it.
 
 ```json
 { "method": "turn/start", "id": 33, "params": {
     "threadId": "thr_123",
     "input": [
-        { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." }
+        { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." },
+        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
     ]
 } }
 { "id": 33, "result": { "turn": {
@@ -429,7 +442,23 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 ## Skills
 
-Skills are invoked by sending a text input that starts with `$<skill-name>`. The rest of the text is passed to the skill as its input.
+Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` input item (recommended) so the backend injects full skill instructions instead of relying on the model to resolve the name.
+
+```json
+{
+  "method": "turn/start",
+  "id": 101,
+  "params": {
+    "threadId": "thread-1",
+    "input": [
+      { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI." },
+      { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
+    ]
+  }
+}
+```
+
+If you omit the `skill` item, the model will still parse the `$<skill-name>` marker and try to locate the skill, which can add latency.
 
 Example:
 

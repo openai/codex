@@ -89,6 +89,8 @@ use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -375,6 +377,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
+            }
+            ClientRequest::ThreadLoadedList { request_id, params } => {
+                self.thread_loaded_list(request_id, params).await;
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
@@ -1588,6 +1593,61 @@ impl CodexMessageProcessor {
 
         let data = summaries.into_iter().map(summary_to_thread).collect();
         let response = ThreadListResponse { data, next_cursor };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_loaded_list(&self, request_id: RequestId, params: ThreadLoadedListParams) {
+        let ThreadLoadedListParams { cursor, limit } = params;
+        let mut data = self
+            .thread_manager
+            .list_thread_ids()
+            .await
+            .into_iter()
+            .map(|thread_id| thread_id.to_string())
+            .collect::<Vec<_>>();
+
+        if data.is_empty() {
+            let response = ThreadLoadedListResponse {
+                data,
+                next_cursor: None,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
+        data.sort();
+        let total = data.len();
+        let start = match cursor {
+            Some(cursor) => {
+                let cursor = match ThreadId::from_string(&cursor) {
+                    Ok(id) => id.to_string(),
+                    Err(_) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("invalid cursor: {cursor}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                };
+                match data.binary_search(&cursor) {
+                    Ok(idx) => idx + 1,
+                    Err(idx) => idx,
+                }
+            }
+            None => 0,
+        };
+
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let end = start.saturating_add(effective_limit).min(total);
+        let page = data[start..end].to_vec();
+        let next_cursor = page.last().filter(|_| end < total).cloned();
+
+        let response = ThreadLoadedListResponse {
+            data: page,
+            next_cursor,
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 

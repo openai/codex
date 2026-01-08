@@ -1444,6 +1444,7 @@ impl Config {
                     environment,
                     exporter,
                     trace_exporter,
+                    metrics_exporter: OtelExporterKind::Statsig,
                 }
             },
         };

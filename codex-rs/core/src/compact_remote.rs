@@ -40,9 +40,18 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
-    let mut history = sess.clone_history().await;
+    let history = sess.clone_history().await;
+
+    // Required to keep `/undo` available after compaction
+    let ghost_snapshots: Vec<ResponseItem> = history
+        .raw_items()
+        .iter()
+        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .cloned()
+        .collect();
+
     let prompt = Prompt {
-        input: history.get_history_for_prompt(),
+        input: history.for_prompt(),
         tools: vec![],
         parallel_tool_calls: false,
         base_instructions_override: turn_context.base_instructions.clone(),
@@ -53,13 +62,6 @@ async fn run_remote_compact_task_inner_impl(
         .client
         .compact_conversation_history(&prompt)
         .await?;
-    // Required to keep `/undo` available after compaction
-    let ghost_snapshots: Vec<ResponseItem> = history
-        .get_history()
-        .iter()
-        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);

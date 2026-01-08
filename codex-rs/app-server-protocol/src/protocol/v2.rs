@@ -1139,6 +1139,27 @@ pub struct ThreadListResponse {
     pub next_cursor: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadLoadedListParams {
+    /// Opaque pagination cursor returned by a previous call.
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to no limit.
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadLoadedListResponse {
+    /// Thread ids for sessions currently loaded in memory.
+    pub data: Vec<String>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// if None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1476,6 +1497,7 @@ pub enum UserInput {
     Text { text: String },
     Image { url: String },
     LocalImage { path: PathBuf },
+    Skill { name: String, path: PathBuf },
 }
 
 impl UserInput {
@@ -1484,6 +1506,7 @@ impl UserInput {
             UserInput::Text { text } => CoreUserInput::Text { text },
             UserInput::Image { url } => CoreUserInput::Image { image_url: url },
             UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
+            UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
         }
     }
 }
@@ -1494,6 +1517,7 @@ impl From<CoreUserInput> for UserInput {
             CoreUserInput::Text { text } => UserInput::Text { text },
             CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
+            CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
             _ => unreachable!("unsupported user input variant"),
         }
     }
@@ -2079,6 +2103,10 @@ mod tests {
                 CoreUserInput::LocalImage {
                     path: PathBuf::from("local/image.png"),
                 },
+                CoreUserInput::Skill {
+                    name: "skill-creator".to_string(),
+                    path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
+                },
             ],
         });
 
@@ -2095,6 +2123,10 @@ mod tests {
                     },
                     UserInput::LocalImage {
                         path: PathBuf::from("local/image.png"),
+                    },
+                    UserInput::Skill {
+                        name: "skill-creator".to_string(),
+                        path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
                     },
                 ],
             }
