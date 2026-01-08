@@ -47,9 +47,11 @@ use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::features::FEATURES;
+use crate::flags::CODEX_RS_RESPONSES_WS;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::responses_ws::ResponsesWsManager;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
@@ -60,6 +62,7 @@ pub struct ModelClient {
     model_info: ModelInfo,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
+    responses_ws: Option<Arc<ResponsesWsManager>>,
     conversation_id: ThreadId,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
@@ -74,6 +77,7 @@ impl ModelClient {
         model_info: ModelInfo,
         otel_manager: OtelManager,
         provider: ModelProviderInfo,
+        responses_ws: Option<Arc<ResponsesWsManager>>,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         conversation_id: ThreadId,
@@ -85,6 +89,7 @@ impl ModelClient {
             model_info,
             otel_manager,
             provider,
+            responses_ws,
             conversation_id,
             effort,
             summary,
@@ -115,7 +120,12 @@ impl ModelClient {
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         match self.provider.wire_api {
-            WireApi::Responses => self.stream_responses_api(prompt).await,
+            WireApi::Responses => {
+                if *CODEX_RS_RESPONSES_WS && let Some(manager) = self.responses_ws.as_ref() {
+                    return self.stream_responses_ws(prompt, manager).await;
+                }
+                self.stream_responses_api(prompt).await
+            }
             WireApi::Chat => {
                 let api_stream = self.stream_chat_completions(prompt).await?;
 
@@ -279,6 +289,108 @@ impl ModelClient {
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
+            }
+        }
+    }
+
+    async fn stream_responses_ws(
+        &self,
+        prompt: &Prompt,
+        manager: &Arc<ResponsesWsManager>,
+    ) -> Result<ResponseStream> {
+        if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
+            warn!(path, "Streaming from fixture");
+            let stream = codex_api::stream_from_fixture(path, self.provider.stream_idle_timeout())
+                .map_err(map_api_error)?;
+            return Ok(map_response_stream(stream, self.otel_manager.clone()));
+        }
+
+        let auth_manager = self.auth_manager.clone();
+        let model_info = self.get_model_info();
+        let instructions = prompt.get_full_instructions(&model_info).into_owned();
+        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
+
+        let default_reasoning_effort = model_info.default_reasoning_level;
+        let reasoning = if model_info.supports_reasoning_summaries {
+            Some(Reasoning {
+                effort: self.effort.or(default_reasoning_effort),
+                summary: if self.summary == ReasoningSummaryConfig::None {
+                    None
+                } else {
+                    Some(self.summary)
+                },
+            })
+        } else {
+            None
+        };
+
+        let include: Vec<String> = if reasoning.is_some() {
+            vec!["reasoning.encrypted_content".to_string()]
+        } else {
+            vec![]
+        };
+
+        let verbosity = if model_info.support_verbosity {
+            self.config.model_verbosity.or(model_info.default_verbosity)
+        } else {
+            if self.config.model_verbosity.is_some() {
+                warn!(
+                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                    model_info.slug
+                );
+            }
+            None
+        };
+
+        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+        let api_prompt = build_api_prompt(prompt, instructions.clone(), tools_json);
+        let conversation_id = self.conversation_id.to_string();
+        let session_source = self.session_source.clone();
+
+        let mut refreshed = false;
+        loop {
+            let auth = auth_manager.as_ref().and_then(|m| m.auth());
+            let api_provider = self
+                .provider
+                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+            let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
+
+            let options = ApiResponsesOptions {
+                reasoning: reasoning.clone(),
+                include: include.clone(),
+                prompt_cache_key: Some(conversation_id.clone()),
+                text: text.clone(),
+                store_override: None,
+                conversation_id: Some(conversation_id.clone()),
+                session_source: Some(session_source.clone()),
+                extra_headers: beta_feature_headers(&self.config),
+            };
+
+            let stream_result = manager
+                .stream_prompt(
+                    api_provider,
+                    api_auth,
+                    &self.get_model(),
+                    &api_prompt,
+                    options,
+                )
+                .await;
+
+            match stream_result {
+                Ok(stream) => {
+                    return Ok(map_response_stream(stream, self.otel_manager.clone()));
+                }
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UNAUTHORIZED =>
+                {
+                    manager.reset().await;
+                    handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await?;
+                    continue;
+                }
+                Err(err) => {
+                    manager.reset().await;
+                    return Err(map_api_error(err));
+                }
             }
         }
     }

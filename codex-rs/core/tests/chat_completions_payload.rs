@@ -94,6 +94,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         model_info,
         otel_manager,
         provider,
+        None,
         effort,
         summary,
         conversation_id,

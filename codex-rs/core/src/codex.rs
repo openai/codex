@@ -19,9 +19,11 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::flags::CODEX_RS_RESPONSES_WS;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::responses_ws::ResponsesWsManager;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -506,6 +508,7 @@ impl Session {
         auth_manager: Option<Arc<AuthManager>>,
         otel_manager: &OtelManager,
         provider: ModelProviderInfo,
+        responses_ws: Option<Arc<ResponsesWsManager>>,
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_info: ModelInfo,
@@ -524,6 +527,7 @@ impl Session {
             model_info.clone(),
             otel_manager,
             provider,
+            responses_ws,
             session_configuration.model_reasoning_effort,
             session_configuration.model_reasoning_summary,
             conversation_id,
@@ -676,6 +680,11 @@ impl Session {
                     .map(Arc::new);
         }
         let state = SessionState::new(session_configuration.clone());
+        let responses_ws = if *CODEX_RS_RESPONSES_WS {
+            Some(Arc::new(ResponsesWsManager::new()))
+        } else {
+            None
+        };
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -692,6 +701,7 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            responses_ws,
         };
 
         let sess = Arc::new(Session {
@@ -952,6 +962,7 @@ impl Session {
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
             session_configuration.provider.clone(),
+            self.services.responses_ws.clone(),
             &session_configuration,
             per_turn_config,
             model_info,
@@ -2243,6 +2254,7 @@ async fn spawn_review_thread(
         model_info.clone(),
         otel_manager,
         provider,
+        None,
         per_turn_config.model_reasoning_effort,
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
@@ -3532,12 +3544,14 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            responses_ws: None,
         };
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
             &otel_manager,
             session_configuration.provider.clone(),
+            None,
             &session_configuration,
             per_turn_config,
             model_info,
@@ -3626,12 +3640,14 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            responses_ws: None,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
             &otel_manager,
             session_configuration.provider.clone(),
+            None,
             &session_configuration,
             per_turn_config,
             model_info,

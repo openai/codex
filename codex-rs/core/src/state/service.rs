@@ -6,6 +6,7 @@ use crate::agent::AgentControl;
 use crate::exec_policy::ExecPolicyManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
+use crate::responses_ws::ResponsesWsManager;
 use crate::skills::SkillsManager;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -30,4 +31,5 @@ pub(crate) struct SessionServices {
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) agent_control: AgentControl,
+    pub(crate) responses_ws: Option<Arc<ResponsesWsManager>>,
 }
