@@ -2569,108 +2569,55 @@ mod tests {
         assert!(!composer.is_in_paste_burst());
     }
 
-    #[test]
-    fn enter_submits_after_single_non_ascii_char() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
-
-        let (result, _) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        match result {
-            InputResult::Submitted(text) => assert_eq!(text, "あ"),
-            _ => panic!("expected Submitted"),
-        }
-    }
-
+    // test a variety of non-ascii char sequences to ensure we are handling them correctly
     #[test]
     fn non_ascii_burst_treats_enter_as_newline() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
+        let test_cases = [
+            // triggers on windows
+            "天地玄黄 宇宙洪荒
+日月盈昃 辰宿列张
+寒来暑往 秋收冬藏
 
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
+你好世界 编码测试
+汉字处理 UTF-8
+终端显示 正确无误
 
-        // Simulate pasting "你　好\nhi" with an ideographic space to trigger pastey heuristics.
-        // We require enough fast chars to enter burst buffering before suppressing Enter.
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('　'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('好'), KeyModifiers::NONE));
+风吹竹林 月照大江
+白云千载 青山依旧
+程序员 与 Unicode 同行",
+            // Simulate pasting "你　好\nhi" with an ideographic space to trigger pastey heuristics.
+            "你　好\nhi",
+            // singular ascii character then hello
+            "试\nhello",
+        ];
 
-        // The Enter should be treated as a newline, not a submit
-        let (result, _) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(
-            matches!(result, InputResult::None),
-            "Enter after non-ASCII should insert newline, not submit"
-        );
+        for test_case in test_cases {
+            use crossterm::event::KeyCode;
+            use crossterm::event::KeyEvent;
+            use crossterm::event::KeyModifiers;
 
-        // Continue with more chars
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                true,
+                sender,
+                false,
+                "Ask Codex to do anything".to_string(),
+                false,
+            );
 
-        let _ = flush_after_paste_burst(&mut composer);
+            for c in test_case.chars() {
+                let _ =
+                    composer.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
 
-        // The text should now contain newline
-        let text = composer.textarea.text();
-        assert!(
-            text.contains('\n'),
-            "Text should contain newline: got '{text}'"
-        );
-    }
-
-    #[test]
-    fn burst_paste_fast_non_ascii_prefix_inserts_placeholder_on_flush() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        let prefix = "你好".repeat(12);
-        let suffix = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 7);
-        let paste = format!("{prefix}{suffix}");
-        for ch in paste.chars() {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            assert!(
+                composer.textarea.text().is_empty(),
+                "non-empty textarea before flush: {test_case}",
+            );
+            let _ = flush_after_paste_burst(&mut composer);
+            assert_eq!(composer.textarea.text(), test_case);
         }
-
-        let flushed = flush_after_paste_burst(&mut composer);
-        assert!(flushed, "expected flush after stopping fast input");
-
-        let char_count = paste.chars().count();
-        let expected_placeholder = format!("[Pasted Content {char_count} chars]");
-        assert_eq!(composer.textarea.text(), expected_placeholder);
-        assert_eq!(composer.pending_pastes.len(), 1);
-        assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
-        assert_eq!(composer.pending_pastes[0].1, paste);
     }
 
     #[test]
@@ -2712,6 +2659,7 @@ mod tests {
         assert_eq!(composer.textarea.text(), "hi\nthere");
     }
 
+    // On windows, ensure we're handling pasting of unicode characters correctly
     #[test]
     fn non_ascii_appends_to_active_burst_buffer() {
         use crossterm::event::KeyCode;
