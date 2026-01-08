@@ -23,6 +23,7 @@ use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
@@ -1164,6 +1165,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         arguments: "{}".into(),
         call_id: "function-call-id".into(),
     });
+    prompt.input.push(ResponseItem::FunctionCallOutput {
+        call_id: "function-call-id".into(),
+        output: FunctionCallOutputPayload {
+            content: "ok".into(),
+            ..Default::default()
+        },
+    });
     prompt.input.push(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
         call_id: Some("local-shell-call-id".into()),
@@ -1183,6 +1191,10 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         name: "custom_tool".into(),
         input: "{}".into(),
     });
+    prompt.input.push(ResponseItem::CustomToolCallOutput {
+        call_id: "custom-tool-call-id".into(),
+        output: "ok".into(),
+    });
 
     let mut stream = client
         .stream(&prompt)
@@ -1201,13 +1213,21 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     assert_eq!(body["store"], serde_json::Value::Bool(true));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    assert_eq!(body["input"].as_array().map(Vec::len), Some(6));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(8));
     assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
     assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
     assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
     assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
-    assert_eq!(body["input"][4]["id"].as_str(), Some("local-shell-id"));
-    assert_eq!(body["input"][5]["id"].as_str(), Some("custom-tool-id"));
+    assert_eq!(
+        body["input"][4]["call_id"].as_str(),
+        Some("function-call-id")
+    );
+    assert_eq!(body["input"][5]["id"].as_str(), Some("local-shell-id"));
+    assert_eq!(body["input"][6]["id"].as_str(), Some("custom-tool-id"));
+    assert_eq!(
+        body["input"][7]["call_id"].as_str(),
+        Some("custom-tool-call-id")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
