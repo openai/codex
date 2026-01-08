@@ -646,7 +646,7 @@ mod tests {
             ParsedCommand::Search {
                 cmd: shlex_join(&shlex_split_safe("rg --files -g '!target'")),
                 query: None,
-                path: Some("!target".to_string()),
+                path: None,
             },
             ParsedCommand::Search {
                 cmd: shlex_join(&shlex_split_safe("rg -n '^\\[workspace\\]' -n Cargo.toml")),
@@ -787,6 +787,20 @@ mod tests {
             &shlex_split_safe("rg --colors=never -n foo src"),
             vec![ParsedCommand::Search {
                 cmd: "rg '--colors=never' -n foo src".to_string(),
+                query: Some("foo".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+    }
+
+    #[test]
+    fn rg_skips_glob_flag_values() {
+        let args = vec_str(&["rg", "-g", "*.rs", "foo", "src"]);
+        let cmd = shlex_join(&args);
+        assert_parsed(
+            &args,
+            vec![ParsedCommand::Search {
+                cmd,
                 query: Some("foo".to_string()),
                 path: Some("src".to_string()),
             }],
@@ -1498,8 +1512,35 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
         Some((head, tail)) if head == "rg" => {
             let args_no_connector = trim_at_connector(tail);
             let has_files_flag = args_no_connector.iter().any(|a| a == "--files");
-            let non_flags: Vec<&String> = args_no_connector
-                .iter()
+            let candidates = skip_flag_values(
+                &args_no_connector,
+                &[
+                    "-g",
+                    "--glob",
+                    "--iglob",
+                    "-t",
+                    "--type",
+                    "-T",
+                    "--type-not",
+                    "--type-add",
+                    "--type-clear",
+                    "-f",
+                    "--file",
+                    "-m",
+                    "--max-count",
+                    "-A",
+                    "--after-context",
+                    "-B",
+                    "--before-context",
+                    "-C",
+                    "--context",
+                    "--max-columns",
+                    "--max-depth",
+                    "--max-filesize",
+                ],
+            );
+            let non_flags: Vec<&String> = candidates
+                .into_iter()
                 .filter(|p| !p.starts_with('-'))
                 .collect();
             let (query, path) = if has_files_flag {
