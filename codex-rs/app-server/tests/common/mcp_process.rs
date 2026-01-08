@@ -611,10 +611,16 @@ impl McpProcess {
         Ok(notification)
     }
 
+    /// Clears any buffered messages so future reads only consider new stream items.
+    ///
+    /// We call this when e.g. we want to validate against the next turn and no longer care about
+    /// messages buffered from the prior turn.
     pub fn clear_message_buffer(&mut self) {
         self.pending_messages.clear();
     }
 
+    /// Reads the stream until a message matches `predicate`, buffering any non-matching messages
+    /// for later reads.
     async fn read_stream_until_message<F>(&mut self, predicate: F) -> anyhow::Result<JSONRPCMessage>
     where
         F: Fn(&JSONRPCMessage) -> bool,
