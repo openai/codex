@@ -70,6 +70,43 @@ fn cargo_bin_env_keys(name: &str) -> Vec<String> {
     keys
 }
 
+/// Macro that derives the path to a test resource at runtime, the value of
+/// which depends on whether Cargo or Bazel is being used to build and run a
+/// test. Note the return value may be a relative or absolute path.
+/// (Incidentally, this is a macro rather than a function because it reads
+/// compile-time environment variables that need to be captured at the call
+/// site.)
+///
+/// This is expected to be used exclusively in test code because Codex CLI is a
+/// standalone binary with no packaged resources.
+#[macro_export]
+macro_rules! find_resource {
+    ($resource:expr) => {{
+        // When this code is built and run with Bazel:
+        // - we inject `BAZEL_PACKAGE` as a compile-time environment variable
+        //   that points to native.package_name()
+        // - at runtime, Bazel will set `RUNFILES_DIR` to the runfiles directory
+        //
+        // Therefore, the compile-time value of `BAZEL_PACKAGE` will always be
+        // included in the compiled binary (even if it is built with Cargo), but
+        // we only check it at runtime if `RUNFILES_DIR` is set.
+        let resource = std::path::Path::new(&$resource);
+        let manifest_dir = match std::env::var("RUNFILES_DIR") {
+            Ok(bazel_runtime_files) => match option_env!("BAZEL_PACKAGE") {
+                Some(bazel_package) => Ok(std::path::PathBuf::from(bazel_runtime_files)
+                    .join("_main")
+                    .join(bazel_package)),
+                None => Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "BAZEL_PACKAGE not set in Bazel build",
+                )),
+            },
+            Err(_) => Ok(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
+        };
+        manifest_dir.map(|dir| dir.join(resource))
+    }};
+}
+
 fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinError> {
     let abs = absolutize_from_buck_or_cwd(PathBuf::from(value))?;
 
