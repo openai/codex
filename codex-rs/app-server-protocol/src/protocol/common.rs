@@ -122,7 +122,7 @@ client_request_definitions! {
         response: v2::ThreadListResponse,
     },
     ThreadLoadedList => "thread/loaded/list" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: v2::ThreadLoadedListParams,
         response: v2::ThreadLoadedListResponse,
     },
     SkillsList => "skills/list" {

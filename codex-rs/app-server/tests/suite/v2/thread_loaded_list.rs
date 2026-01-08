@@ -4,6 +4,7 @@ use app_test_support::create_mock_chat_completions_server;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -23,28 +24,77 @@ async fn thread_loaded_list_returns_loaded_thread_ids() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    let thread_id = start_thread(&mut mcp).await?;
 
-    let list_id = mcp.send_thread_loaded_list_request().await?;
+    let list_id = mcp
+        .send_thread_loaded_list_request(ThreadLoadedListParams::default())
+        .await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
     )
     .await??;
-    let ThreadLoadedListResponse { mut data } = to_response::<ThreadLoadedListResponse>(resp)?;
+    let ThreadLoadedListResponse {
+        mut data,
+        next_cursor,
+    } = to_response::<ThreadLoadedListResponse>(resp)?;
     data.sort();
-    assert_eq!(data, vec![thread.id]);
+    assert_eq!(data, vec![thread_id]);
+    assert_eq!(next_cursor, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_loaded_list_paginates() -> Result<()> {
+    let server = create_mock_chat_completions_server(vec![]).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let first = start_thread(&mut mcp).await?;
+    let second = start_thread(&mut mcp).await?;
+
+    let mut expected = [first, second];
+    expected.sort();
+
+    let list_id = mcp
+        .send_thread_loaded_list_request(ThreadLoadedListParams {
+            cursor: None,
+            limit: Some(1),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let ThreadLoadedListResponse {
+        data: first_page,
+        next_cursor,
+    } = to_response::<ThreadLoadedListResponse>(resp)?;
+    assert_eq!(first_page, vec![expected[0].clone()]);
+    assert_eq!(next_cursor, Some(expected[0].clone()));
+
+    let list_id = mcp
+        .send_thread_loaded_list_request(ThreadLoadedListParams {
+            cursor: next_cursor,
+            limit: Some(1),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let ThreadLoadedListResponse {
+        data: second_page,
+        next_cursor,
+    } = to_response::<ThreadLoadedListResponse>(resp)?;
+    assert_eq!(second_page, vec![expected[1].clone()]);
+    assert_eq!(next_cursor, None);
 
     Ok(())
 }
@@ -70,4 +120,20 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.1".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    Ok(thread.id)
 }
