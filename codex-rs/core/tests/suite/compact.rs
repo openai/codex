@@ -18,7 +18,6 @@ use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
-use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::skip_if_no_network;
@@ -1025,35 +1024,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     ]);
     let prefixed_auto_summary = AUTO_SUMMARY_TEXT;
 
-    let first_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(FIRST_AUTO_MSG)
-            && !body.contains(SECOND_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    let first_mock = mount_sse_once_match(&server, first_matcher, sse1).await;
-
-    let second_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SECOND_AUTO_MSG)
-            && body.contains(FIRST_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    let second_mock = mount_sse_once_match(&server, second_matcher, sse2).await;
-
-    let third_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    let third_mock = mount_sse_once_match(&server, third_matcher, sse3).await;
-
-    let fourth_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    let fourth_mock = mount_sse_once_match(&server, fourth_matcher, sse4).await;
-
-    let request_log = [first_mock, second_mock, third_mock, fourth_mock];
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
     let model_provider = non_openai_model_provider(&server);
 
@@ -1104,10 +1075,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests: Vec<_> = request_log
-        .iter()
-        .flat_map(ResponseMock::requests)
-        .collect();
+    let requests = request_log.requests();
     let request_bodies: Vec<String> = requests
         .iter()
         .map(|request| request.body_json().to_string())
