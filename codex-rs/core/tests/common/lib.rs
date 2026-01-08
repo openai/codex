@@ -1,6 +1,7 @@
 #![expect(clippy::expect_used)]
 
-use codex_utils_cargo_bin::{find_resource, CargoBinError};
+use codex_utils_cargo_bin::CargoBinError;
+use codex_utils_cargo_bin::find_resource;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
