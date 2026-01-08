@@ -31,6 +31,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
+use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::NewConversationParams;
@@ -332,6 +333,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("model/list", params).await
+    }
+
+    /// Send a `mcpServerStatus/list` JSON-RPC request.
+    pub async fn send_list_mcp_server_status_request(
+        &mut self,
+        params: ListMcpServerStatusParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("mcpServerStatus/list", params).await
     }
 
     /// Send a `resumeConversation` JSON-RPC request.

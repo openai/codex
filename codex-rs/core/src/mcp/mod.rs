@@ -1,7 +1,5 @@
 pub mod auth;
 use std::collections::HashMap;
-use std::env;
-use std::path::PathBuf;
 
 use async_channel::unbounded;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -42,7 +40,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     let sandbox_state = SandboxState {
         sandbox_policy: SandboxPolicy::ReadOnly,
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-        sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        sandbox_cwd: config.cwd.clone(),
     };
 
     mcp_connection_manager

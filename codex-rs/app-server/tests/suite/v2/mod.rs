@@ -1,5 +1,6 @@
 mod account;
 mod config_rpc;
+mod mcp_server_status;
 mod model_list;
 mod rate_limits;
 mod review;

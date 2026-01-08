@@ -870,6 +870,12 @@ pub struct ListMcpServerStatusParams {
     pub cursor: Option<String>,
     /// Optional page size; defaults to a server-defined value.
     pub limit: Option<u32>,
+    /// Optional working directory used to resolve configuration layers (e.g. `./.codex/config.toml`).
+    ///
+    /// When omitted, the app-server process's current working directory is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -305,7 +305,19 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        Config::load_with_cli_overrides(self.cli_overrides.clone())
+        self.load_latest_config_for_cwd(None).await
+    }
+
+    async fn load_latest_config_for_cwd(
+        &self,
+        cwd: Option<PathBuf>,
+    ) -> Result<Config, JSONRPCErrorError> {
+        let overrides = ConfigOverrides {
+            cwd,
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            ..Default::default()
+        };
+        Config::load_with_cli_overrides_and_harness_overrides(self.cli_overrides.clone(), overrides)
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -2722,7 +2734,8 @@ impl CodexMessageProcessor {
         params: ListMcpServerStatusParams,
     ) {
         let outgoing = Arc::clone(&self.outgoing);
-        let config = match self.load_latest_config().await {
+        let config_cwd = params.cwd.clone().map(PathBuf::from);
+        let config = match self.load_latest_config_for_cwd(config_cwd).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
