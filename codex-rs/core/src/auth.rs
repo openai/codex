@@ -556,7 +556,7 @@ enum ReloadOutcome {
     Skipped,
 }
 
-// UnauthorizedRecovery is a state machine that handles an attempt to refresh the authentication when requests 
+// UnauthorizedRecovery is a state machine that handles an attempt to refresh the authentication when requests
 // to API fail with 401 status code.
 // The client calls next() every time it encounters a 401 error, one time per retry.
 // For API key based authentication, we don't do anything and let the error bubble to the user.
@@ -794,7 +794,6 @@ impl AuthManager {
     /// If the token refresh fails, returns the error to the caller.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
-
 
         let auth = match self.auth_cached() {
             Some(auth) => auth,
