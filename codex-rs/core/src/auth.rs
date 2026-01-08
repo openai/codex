@@ -551,16 +551,27 @@ enum UnauthorizedRecoveryStep {
     Done,
 }
 
+enum ReloadOutcome {
+    Reloaded,
+    Skipped,
+}
+
 pub struct UnauthorizedRecovery {
     manager: Arc<AuthManager>,
     step: UnauthorizedRecoveryStep,
+    expected_account_id: Option<String>,
 }
 
 impl UnauthorizedRecovery {
     fn new(manager: Arc<AuthManager>) -> Self {
+        let expected_account_id = manager
+            .auth_cached()
+            .as_ref()
+            .and_then(CodexAuth::get_account_id);
         Self {
             manager,
             step: UnauthorizedRecoveryStep::Reload,
+            expected_account_id,
         }
     }
 
@@ -586,8 +597,18 @@ impl UnauthorizedRecovery {
 
         match self.step {
             UnauthorizedRecoveryStep::Reload => {
-                self.manager.reload();
-                self.step = UnauthorizedRecoveryStep::RefreshToken;
+                match self
+                    .manager
+                    .reload_if_account_id_matches(self.expected_account_id.as_deref())
+                {
+                    ReloadOutcome::Reloaded => {
+                        self.step = UnauthorizedRecoveryStep::RefreshToken;
+                    }
+                    ReloadOutcome::Skipped => {
+                        self.manager.refresh_token().await?;
+                        self.step = UnauthorizedRecoveryStep::Done;
+                    }
+                }
             }
             UnauthorizedRecoveryStep::RefreshToken => {
                 self.manager.refresh_token().await?;
@@ -685,21 +706,33 @@ impl AuthManager {
     /// whether the auth value changed.
     pub fn reload(&self) -> bool {
         tracing::info!("Reloading auth");
-        let new_auth = load_auth(
-            &self.codex_home,
-            self.enable_codex_api_key_env,
-            self.auth_credentials_store_mode,
-        )
-        .ok()
-        .flatten();
-        if let Ok(mut guard) = self.inner.write() {
-            let changed = !AuthManager::auths_equal(&guard.auth, &new_auth);
-            tracing::info!("Reloaded auth, changed: {changed}");
-            guard.auth = new_auth;
-            changed
-        } else {
-            false
+        let new_auth = self.load_auth_from_storage();
+        self.store_auth(new_auth)
+    }
+
+    fn reload_if_account_id_matches(&self, expected_account_id: Option<&str>) -> ReloadOutcome {
+        let expected_account_id = match expected_account_id {
+            Some(account_id) => account_id,
+            None => {
+                tracing::info!("Skipping auth reload because no account id is available.");
+                return ReloadOutcome::Skipped;
+            }
+        };
+
+        let new_auth = self.load_auth_from_storage();
+        let new_account_id = new_auth.as_ref().and_then(CodexAuth::get_account_id);
+
+        if new_account_id.as_deref() != Some(expected_account_id) {
+            let found_account_id = new_account_id.as_deref().unwrap_or("unknown");
+            tracing::info!(
+                "Skipping auth reload due to account id mismatch (expected: {expected_account_id}, found: {found_account_id})"
+            );
+            return ReloadOutcome::Skipped;
         }
+
+        tracing::info!("Reloading auth for account {expected_account_id}");
+        self.store_auth(new_auth);
+        ReloadOutcome::Reloaded
     }
 
     fn auths_equal(a: &Option<CodexAuth>, b: &Option<CodexAuth>) -> bool {
@@ -707,6 +740,26 @@ impl AuthManager {
             (None, None) => true,
             (Some(a), Some(b)) => a == b,
             _ => false,
+        }
+    }
+    fn load_auth_from_storage(&self) -> Option<CodexAuth> {
+        load_auth(
+            &self.codex_home,
+            self.enable_codex_api_key_env,
+            self.auth_credentials_store_mode,
+        )
+        .ok()
+        .flatten()
+    }
+
+    fn store_auth(&self, new_auth: Option<CodexAuth>) -> bool {
+        if let Ok(mut guard) = self.inner.write() {
+            let changed = !AuthManager::auths_equal(&guard.auth, &new_auth);
+            tracing::info!("Reloaded auth, changed: {changed}");
+            guard.auth = new_auth;
+            changed
+        } else {
+            false
         }
     }
 
