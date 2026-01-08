@@ -133,13 +133,7 @@ impl ThreadManager {
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        self.state
-            .threads
-            .read()
-            .await
-            .iter()
-            .map(|(id, _)| id.clone())
-            .collect()
+        self.state.threads.read().await.keys().copied().collect()
     }
 
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
