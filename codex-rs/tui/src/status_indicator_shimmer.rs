@@ -5,7 +5,6 @@ use std::time::Instant;
 
 use crate::entertainment::ShimmerText;
 
-const SHIMMER_TEXT_INTERVAL: Duration = Duration::from_secs(1);
 const SHIMMER_FACE_INTERVAL: Duration = Duration::from_secs(2);
 
 pub(crate) struct RenderHeader {

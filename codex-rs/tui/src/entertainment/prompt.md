@@ -4,15 +4,13 @@ Generate one status arc: an ordered list of 5-7 short lines that will be display
 
 Each line must:
 
-- Be under 10 words
-- Read like a status message, not a poem
+- Be under 5 words
 - Use dry developer humor
-- Blend technical language with human emotion
-- Be suitable for a spinner, progress bar, or log panel
+- Blend very little technical language with human emotion
 
-The arc must have emotional progression:
+The arc can have mix of emotional progression:
 
-1. Start with confidence or optimism
+1. confidence or optimism
 2. Shift into uncertainty or effort
 3. Dip into self-aware humor or mild dread
 4. End with calm, hope, or ironic acceptance
@@ -26,11 +24,7 @@ Context for this arc:
 Return only JSON with this shape:
 
 {
-  "texts": [
-    "Starting deploy",
-    "Feeling optimistic",
-    "Waiting for logs"
-  ]
+  "texts": ["No more looping.", "No more coping.", "Promise.", "Pinky swear.", "Cross my heart.", "If it loops, I'll cry.", "If it works, I'll fly.", "Ok, focus."]
 }
 
 Examples
