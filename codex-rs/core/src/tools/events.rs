@@ -100,7 +100,6 @@ pub(crate) enum ToolEmitter {
         command: Vec<String>,
         cwd: PathBuf,
         source: ExecCommandSource,
-        interaction_input: Option<String>,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
     },
@@ -141,7 +140,6 @@ impl ToolEmitter {
             command: command.to_vec(),
             cwd,
             source,
-            interaction_input: None, // TODO(jif) drop this field in the protocol.
             parsed_cmd,
             process_id,
         }
@@ -231,7 +229,6 @@ impl ToolEmitter {
                     command,
                     cwd,
                     source,
-                    interaction_input,
                     parsed_cmd,
                     process_id,
                 },
@@ -244,7 +241,7 @@ impl ToolEmitter {
                         cwd.as_path(),
                         parsed_cmd,
                         *source,
-                        interaction_input.as_deref(),
+                        None,
                         process_id.as_deref(),
                     ),
                     stage,
