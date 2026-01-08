@@ -126,7 +126,6 @@ codex-core = { path = ".", features = ["deterministic_process_ids"] }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
-escargot = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 maplit = { workspace = true }
 predicates = { workspace = true }
