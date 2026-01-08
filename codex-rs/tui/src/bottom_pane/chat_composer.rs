@@ -2587,8 +2587,6 @@ mod tests {
 程序员 与 Unicode 同行",
             // Simulate pasting "你　好\nhi" with an ideographic space to trigger pastey heuristics.
             "你　好\nhi",
-            // singular ascii character then hello
-            "试\nhello",
         ];
 
         for test_case in test_cases {

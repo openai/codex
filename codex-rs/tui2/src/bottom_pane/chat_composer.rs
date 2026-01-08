@@ -2493,46 +2493,50 @@ mod tests {
 
     #[test]
     fn non_ascii_burst_treats_enter_as_newline() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
+        let test_cases = [
+            // triggers on windows
+            "天地玄黄 宇宙洪荒
+日月盈昃 辰宿列张
+寒来暑往 秋收冬藏
 
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
+你好世界 编码测试
+汉字处理 UTF-8
+终端显示 正确无误
 
-        // Simulate pasting "你　好\nhi" with an ideographic space to trigger pastey heuristics.
-        // We require enough fast chars to enter burst buffering before suppressing Enter.
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('　'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('好'), KeyModifiers::NONE));
+风吹竹林 月照大江
+白云千载 青山依旧
+程序员 与 Unicode 同行",
+            // Simulate pasting "你　好\nhi" with an ideographic space to trigger pastey heuristics.
+            "你　好\nhi",
+        ];
 
-        // The Enter should be treated as a newline, not a submit
-        let (result, _) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(
-            matches!(result, InputResult::None),
-            "Enter after non-ASCII should insert newline, not submit"
-        );
+        for test_case in test_cases {
+            use crossterm::event::KeyCode;
+            use crossterm::event::KeyEvent;
+            use crossterm::event::KeyModifiers;
 
-        // Continue with more chars
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                true,
+                sender,
+                false,
+                "Ask Codex to do anything".to_string(),
+                false,
+            );
 
-        let _ = flush_after_paste_burst(&mut composer);
+            for c in test_case.chars() {
+                let _ =
+                    composer.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
 
-        // The text should now contain newline
-        let text = composer.textarea.text();
-        assert!(
-            text.contains('\n'),
-            "Text should contain newline: got '{text}'"
-        );
+            assert!(
+                composer.textarea.text().is_empty(),
+                "non-empty textarea before flush: {test_case}",
+            );
+            let _ = flush_after_paste_burst(&mut composer);
+            assert_eq!(composer.textarea.text(), test_case);
+        }
     }
 
     #[test]
