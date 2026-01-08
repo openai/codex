@@ -6,6 +6,7 @@ use crate::provider::Provider;
 use crate::telemetry::SseTelemetry;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
+use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
 use codex_client::StreamResponse;
 use http::HeaderMap;
@@ -52,6 +53,7 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
         path: &str,
         body: Value,
         extra_headers: HeaderMap,
+        compression: RequestCompression,
         spawner: fn(StreamResponse, Duration, Option<Arc<dyn SseTelemetry>>) -> ResponseStream,
     ) -> Result<ResponseStream, ApiError> {
         let builder = || {
@@ -62,6 +64,7 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
                 http::HeaderValue::from_static("text/event-stream"),
             );
             req.body = Some(body.clone());
+            req.compression = compression;
             add_auth_headers(&self.auth, req)
         };
 

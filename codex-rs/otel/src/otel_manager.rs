@@ -3,7 +3,7 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -37,7 +37,7 @@ pub enum ToolDecisionSource {
 
 #[derive(Debug, Clone)]
 pub struct OtelEventMetadata {
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     auth_mode: Option<String>,
     account_id: Option<String>,
     account_email: Option<String>,
@@ -57,7 +57,7 @@ pub struct OtelManager {
 impl OtelManager {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        conversation_id: ConversationId,
+        conversation_id: ThreadId,
         model: &str,
         slug: &str,
         account_id: Option<String>,
@@ -70,7 +70,7 @@ impl OtelManager {
         let session_span = trace_span!("new_session", conversation_id = %conversation_id, session_source = %session_source);
 
         if let Some(context) = traceparent_context_from_env() {
-            session_span.set_parent(context);
+            let _ = session_span.set_parent(context);
         }
 
         Self {
@@ -511,6 +511,7 @@ impl OtelManager {
                 "reasoning_summary_part_added".into()
             }
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
+            ResponseEvent::ModelsEtag(_) => "models_etag".into(),
         }
     }
 

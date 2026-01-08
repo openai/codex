@@ -1,10 +1,10 @@
 use codex_core::CodexAuth;
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::ContentItem;
-use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::REVIEW_PROMPT;
 use codex_core::ResponseItem;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
@@ -665,6 +665,7 @@ async fn review_history_surfaces_in_parent_session() {
             items: vec![UserInput::Text {
                 text: followup.clone(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -709,6 +710,105 @@ async fn review_history_surfaces_in_parent_session() {
     server.verify().await;
 }
 
+/// `/review` should use the session's current cwd (including runtime overrides)
+/// when resolving base-branch review prompts (merge-base computation).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
+    skip_if_no_network!();
+
+    let sse_raw = r#"[{"type":"response.completed", "response": {"id": "__ID__"}}]"#;
+    let server = start_responses_server_with_sse(sse_raw, 1).await;
+
+    let initial_cwd = TempDir::new().unwrap();
+
+    let repo_dir = TempDir::new().unwrap();
+    let repo_path = repo_dir.path();
+
+    fn run_git(repo_path: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args(args)
+            .output()
+            .expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: stdout={:?} stderr={:?}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    run_git(repo_path, &["init", "-b", "main"]);
+    run_git(repo_path, &["config", "user.email", "test@example.com"]);
+    run_git(repo_path, &["config", "user.name", "Test User"]);
+    std::fs::write(repo_path.join("file.txt"), "hello\n").unwrap();
+    run_git(repo_path, &["add", "."]);
+    run_git(repo_path, &["commit", "-m", "initial"]);
+
+    let head_sha = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse HEAD");
+    assert!(head_sha.status.success());
+    let head_sha = String::from_utf8(head_sha.stdout)
+        .expect("utf8 sha")
+        .trim()
+        .to_string();
+
+    let codex_home = TempDir::new().unwrap();
+    let codex = new_conversation_for_server(&server, &codex_home, |config| {
+        config.cwd = initial_cwd.path().to_path_buf();
+    })
+    .await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: Some(repo_path.to_path_buf()),
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::BaseBranch {
+                    branch: "main".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = get_responses_requests(&server).await;
+    assert_eq!(requests.len(), 1);
+    let body = requests[0].body_json::<serde_json::Value>().unwrap();
+    let input = body["input"].as_array().expect("input array");
+
+    let saw_merge_base_sha = input
+        .iter()
+        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .any(|text| text.contains(&head_sha));
+    assert!(
+        saw_merge_base_sha,
+        "expected review prompt to include merge-base sha {head_sha}"
+    );
+
+    server.verify().await;
+}
+
 /// Start a mock Responses API server and mount the given SSE stream body.
 async fn start_responses_server_with_sse(sse_raw: &str, expected_requests: usize) -> MockServer {
     let server = MockServer::start().await;
@@ -732,7 +832,7 @@ async fn new_conversation_for_server<F>(
     server: &MockServer,
     codex_home: &TempDir,
     mutator: F,
-) -> Arc<CodexConversation>
+) -> Arc<CodexThread>
 where
     F: FnOnce(&mut Config),
 {
@@ -743,15 +843,15 @@ where
     let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
     );
-    conversation_manager
-        .new_conversation(config)
+    thread_manager
+        .start_thread(config)
         .await
         .expect("create conversation")
-        .conversation
+        .thread
 }
 
 /// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
@@ -761,7 +861,7 @@ async fn resume_conversation_for_server<F>(
     codex_home: &TempDir,
     resume_path: std::path::PathBuf,
     mutator: F,
-) -> Arc<CodexConversation>
+) -> Arc<CodexThread>
 where
     F: FnOnce(&mut Config),
 {
@@ -772,15 +872,15 @@ where
     let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
     );
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    conversation_manager
-        .resume_conversation_from_rollout(config, resume_path, auth_manager)
+    thread_manager
+        .resume_thread_from_rollout(config, resume_path, auth_manager)
         .await
         .expect("resume conversation")
-        .conversation
+        .thread
 }

@@ -4,6 +4,7 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::config_loader::merge_toml_values;
@@ -106,16 +107,7 @@ pub struct ConfigService {
 }
 
 impl ConfigService {
-    pub fn new(codex_home: PathBuf, cli_overrides: Vec<(String, TomlValue)>) -> Self {
-        Self {
-            codex_home,
-            cli_overrides,
-            loader_overrides: LoaderOverrides::default(),
-        }
-    }
-
-    #[cfg(test)]
-    fn with_overrides(
+    pub fn new(
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
@@ -124,6 +116,14 @@ impl ConfigService {
             codex_home,
             cli_overrides,
             loader_overrides,
+        }
+    }
+
+    pub fn new_with_defaults(codex_home: PathBuf) -> Self {
+        Self {
+            codex_home,
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
         }
     }
 
@@ -156,6 +156,22 @@ impl ConfigService {
                     .collect()
             }),
         })
+    }
+
+    pub async fn read_requirements(
+        &self,
+    ) -> Result<Option<ConfigRequirementsToml>, ConfigServiceError> {
+        let layers = self
+            .load_thread_agnostic_config()
+            .await
+            .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
+
+        let requirements = layers.requirements_toml().clone();
+        if requirements.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(requirements))
+        }
     }
 
     pub async fn write_value(
@@ -707,7 +723,7 @@ unified_exec = true
 "#;
         std::fs::write(tmp.path().join(CONFIG_TOML_FILE), original)?;
 
-        let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -748,13 +764,14 @@ remote_compaction = true
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
         let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -828,13 +845,14 @@ remote_compaction = true
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
         let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -879,7 +897,7 @@ remote_compaction = true
         let user_path = tmp.path().join(CONFIG_TOML_FILE);
         std::fs::write(&user_path, "model = \"user\"").unwrap();
 
-        let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         let error = service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -902,7 +920,7 @@ remote_compaction = true
         let tmp = tempdir().expect("tempdir");
         std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
 
-        let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         service
             .write_value(ConfigValueWriteParams {
                 file_path: None,
@@ -930,13 +948,14 @@ remote_compaction = true
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -977,13 +996,14 @@ remote_compaction = true
             TomlValue::String("session".to_string()),
         )];
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             cli_overrides,
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -1022,13 +1042,14 @@ remote_compaction = true
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
         let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
         );
 
@@ -1080,7 +1101,7 @@ alpha = "a"
 
         std::fs::write(&path, base)?;
 
-        let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(path.display().to_string()),

@@ -9,9 +9,11 @@ use crate::provider::Provider;
 use crate::provider::WireApi;
 use crate::requests::ResponsesRequest;
 use crate::requests::ResponsesRequestBuilder;
+use crate::requests::responses::Compression;
 use crate::sse::spawn_response_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::HttpTransport;
+use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
@@ -33,6 +35,7 @@ pub struct ResponsesOptions {
     pub conversation_id: Option<String>,
     pub session_source: Option<SessionSource>,
     pub extra_headers: HeaderMap,
+    pub compression: Compression,
 }
 
 impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
@@ -56,7 +59,8 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         &self,
         request: ResponsesRequest,
     ) -> Result<ResponseStream, ApiError> {
-        self.stream(request.body, request.headers).await
+        self.stream(request.body, request.headers, request.compression)
+            .await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -75,6 +79,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             conversation_id,
             session_source,
             extra_headers,
+            compression,
         } = options;
 
         let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
@@ -88,6 +93,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .session_source(session_source)
             .store_override(store_override)
             .extra_headers(extra_headers)
+            .compression(compression)
             .build(self.streaming.provider())?;
 
         self.stream_request(request).await
@@ -104,9 +110,21 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         &self,
         body: Value,
         extra_headers: HeaderMap,
+        compression: Compression,
     ) -> Result<ResponseStream, ApiError> {
+        let compression = match compression {
+            Compression::None => RequestCompression::None,
+            Compression::Zstd => RequestCompression::Zstd,
+        };
+
         self.streaming
-            .stream(self.path(), body, extra_headers, spawn_response_stream)
+            .stream(
+                self.path(),
+                body,
+                extra_headers,
+                compression,
+                spawn_response_stream,
+            )
             .await
     }
 }

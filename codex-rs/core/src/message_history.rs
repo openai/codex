@@ -13,6 +13,8 @@
 //! trailing `\n`) and write it with a **single `write(2)` system call** while
 //! the file descriptor is opened with the `O_APPEND` flag. POSIX guarantees
 //! that writes up to `PIPE_BUF` bytes are atomic in that case.
+//! Note: `conversation_id` stores the thread id; the field name is preserved for
+//! backwards compatibility with existing history files.
 
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -36,7 +38,7 @@ use tokio::io::AsyncReadExt;
 use crate::config::Config;
 use crate::config::types::HistoryPersistence;
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
@@ -69,7 +71,7 @@ fn history_filepath(config: &Config) -> PathBuf {
 /// which entails a small amount of blocking I/O internally.
 pub(crate) async fn append_entry(
     text: &str,
-    conversation_id: &ConversationId,
+    conversation_id: &ThreadId,
     config: &Config,
 ) -> Result<()> {
     match config.history.persistence {
@@ -402,7 +404,7 @@ fn history_log_id(_metadata: &std::fs::Metadata) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
-    use codex_protocol::ConversationId;
+    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use std::fs::File;
     use std::io::Write;
@@ -497,7 +499,7 @@ mod tests {
             .await
             .expect("load config");
 
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
 
         let entry_one = "a".repeat(200);
         let entry_two = "b".repeat(200);
@@ -544,7 +546,7 @@ mod tests {
             .await
             .expect("load config");
 
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
 
         let short_entry = "a".repeat(200);
         let long_entry = "b".repeat(400);
