@@ -1604,7 +1604,7 @@ impl CodexMessageProcessor {
             .list_thread_ids()
             .await
             .into_iter()
-            .map(ToString::to_string)
+            .map(|thread_id| thread_id.to_string())
             .collect();
         let response = ThreadLoadedListResponse { data };
         self.outgoing.send_response(request_id, response).await;
