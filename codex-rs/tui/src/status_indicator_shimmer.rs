@@ -56,7 +56,7 @@ impl StatusShimmer {
     }
 
     pub(crate) fn update_header(&mut self, header: String) {
-        self.header = header.clone();
+        self.header = header;
         if !self.entertainment_enabled {
             return;
         }
@@ -64,7 +64,7 @@ impl StatusShimmer {
             return;
         };
         let was_shimmer = state.use_shimmer_text.get();
-        let use_shimmer = state.shimmer_text.borrow().is_default_label(&header);
+        let use_shimmer = state.shimmer_text.borrow().is_default_label(&self.header);
         state.use_shimmer_text.set(use_shimmer);
         if use_shimmer {
             if !was_shimmer {
