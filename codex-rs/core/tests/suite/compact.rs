@@ -623,9 +623,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         prefixed_third_summary.as_str(),
     ];
     for (i, expected_summary) in compaction_indices.into_iter().zip(expected_summaries) {
-        let body = requests_payloads.clone()[i]
-            .body_json::<serde_json::Value>()
-            .unwrap();
+        let body = requests_payloads.clone()[i].body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let input = normalize_inputs(input);
         assert_eq!(input.len(), 3);
@@ -988,7 +986,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]);
 
     for (i, request) in requests_payloads.iter().enumerate() {
-        let body = request.body_json::<serde_json::Value>().unwrap();
+        let body = request.body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let expected_input = expected_requests_inputs[i].as_array().unwrap();
         assert_eq!(normalize_inputs(input), normalize_inputs(expected_input));

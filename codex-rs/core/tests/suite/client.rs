@@ -1834,8 +1834,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     ]);
 
     let r3_input_array = requests[2]
-        .body_json::<serde_json::Value>()
-        .unwrap()
+        .body_json()
         .get("input")
         .and_then(|v| v.as_array())
         .cloned()
