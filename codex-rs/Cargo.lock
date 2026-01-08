@@ -1356,6 +1356,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-debug-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-app-server-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [
