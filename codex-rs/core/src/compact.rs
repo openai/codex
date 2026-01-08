@@ -95,9 +95,11 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let turn_input = history.get_history_for_prompt();
+        // Clone is required because of the loop
+        let turn_input = history.clone().for_prompt();
+        let turn_input_len = turn_input.len();
         let prompt = Prompt {
-            input: turn_input.clone(),
+            input: turn_input,
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
@@ -119,7 +121,7 @@ async fn run_compact_task_inner(
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input.len() > 1 {
+                if turn_input_len > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
                     error!(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
@@ -155,15 +157,15 @@ async fn run_compact_task_inner(
         }
     }
 
-    let history_snapshot = sess.clone_history().await.get_history();
-    let summary_suffix =
-        get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
+    let history_snapshot = sess.clone_history().await;
+    let history_items = history_snapshot.raw_items();
+    let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let user_messages = collect_user_messages(&history_snapshot);
+    let user_messages = collect_user_messages(history_items);
 
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
-    let ghost_snapshots: Vec<ResponseItem> = history_snapshot
+    let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
         .cloned()

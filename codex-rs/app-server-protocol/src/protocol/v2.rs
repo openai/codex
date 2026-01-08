@@ -1139,6 +1139,27 @@ pub struct ThreadListResponse {
     pub next_cursor: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadLoadedListParams {
+    /// Opaque pagination cursor returned by a previous call.
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to no limit.
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadLoadedListResponse {
+    /// Thread ids for sessions currently loaded in memory.
+    pub data: Vec<String>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// if None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
