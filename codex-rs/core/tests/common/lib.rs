@@ -1,5 +1,6 @@
 #![expect(clippy::expect_used)]
 
+use codex_utils_cargo_bin::find_resource;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
@@ -150,7 +151,16 @@ pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
 /// single JSON template be reused by multiple tests that each need a unique
 /// `response_id`.
 pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> String {
-    let raw = std::fs::read_to_string(path).expect("read fixture template");
+    let p = path.as_ref();
+    let full_path = match find_resource!(p) {
+        Ok(p) => p,
+        Err(err) => panic!(
+            "failed to find fixture template at {:?}: {err}",
+            path.as_ref()
+        ),
+    };
+
+    let raw = std::fs::read_to_string(full_path).expect("read fixture template");
     let replaced = raw.replace("__ID__", id);
     let events: Vec<serde_json::Value> =
         serde_json::from_str(&replaced).expect("parse JSON fixture");

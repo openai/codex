@@ -83,10 +83,6 @@ async fn start_review_conversation(
 ) -> Option<async_channel::Receiver<Event>> {
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
-    // Run with only reviewer rubric — drop outer user_instructions
-    sub_agent_config.user_instructions = None;
-    // Avoid loading project docs; reviewer only needs findings
-    sub_agent_config.project_doc_max_bytes = 0;
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
     sub_agent_config

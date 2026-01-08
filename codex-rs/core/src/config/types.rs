@@ -338,11 +338,6 @@ pub struct OtelConfigToml {
 
     /// Optional trace exporter
     pub trace_exporter: Option<OtelExporterKind>,
-
-    /// Optional metrics exporter
-    ///
-    /// Defaults to `statsig` outside of tests.
-    pub metrics_exporter: Option<OtelExporterKind>,
 }
 
 /// Effective OTEL settings after defaults are applied.
