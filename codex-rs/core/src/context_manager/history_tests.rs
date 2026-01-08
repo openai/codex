@@ -161,7 +161,7 @@ fn get_history_for_prompt_drops_ghost_commits() {
         ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
     }];
     let mut history = create_history_with_items(items);
-    let filtered = history.get_history_for_prompt();
+    let filtered = history.for_prompt();
     assert_eq!(filtered, vec![]);
 }
 
@@ -250,7 +250,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
     let mut history = create_history_with_items(items);
     history.drop_last_n_user_turns(1);
     assert_eq!(
-        history.get_history(),
+        history.for_prompt(),
         vec![
             assistant_msg("session prefix item"),
             user_msg("u1"),
@@ -267,7 +267,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
     ]);
     history.drop_last_n_user_turns(99);
     assert_eq!(
-        history.get_history(),
+        history.for_prompt(),
         vec![assistant_msg("session prefix item")]
     );
 }
@@ -307,7 +307,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         assistant_msg("turn 1 assistant"),
     ];
 
-    assert_eq!(history.get_history(), expected_prefix_and_first_turn);
+    assert_eq!(history.for_prompt(), expected_prefix_and_first_turn);
 
     let expected_prefix_only = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
@@ -337,7 +337,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         assistant_msg("turn 2 assistant"),
     ]);
     history.drop_last_n_user_turns(2);
-    assert_eq!(history.get_history(), expected_prefix_only);
+    assert_eq!(history.for_prompt(), expected_prefix_only);
 
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
@@ -355,7 +355,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         assistant_msg("turn 2 assistant"),
     ]);
     history.drop_last_n_user_turns(3);
-    assert_eq!(history.get_history(), expected_prefix_only);
+    assert_eq!(history.for_prompt(), expected_prefix_only);
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn normalization_retains_local_shell_outputs() {
     ];
 
     let mut history = create_history_with_items(items.clone());
-    let normalized = history.get_history();
+    let normalized = history.for_prompt();
     assert_eq!(normalized, items);
 }
 

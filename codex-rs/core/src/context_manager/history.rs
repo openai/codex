@@ -67,17 +67,18 @@ impl ContextManager {
         }
     }
 
-    pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
+    /// Returns the history prepared for sending to the model. This applies a proper
+    /// normalization and drop un-suited items.
+    pub(crate) fn for_prompt(mut self) -> Vec<ResponseItem> {
         self.normalize_history();
-        self.contents()
+        self.items
+            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+        self.items
     }
 
-    // Returns the history prepared for sending to the model.
-    // With extra response items filtered out and GhostCommits removed.
-    pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
-        let mut history = self.get_history();
-        Self::remove_ghost_snapshots(&mut history);
-        history
+    /// Returns raw items in the history.
+    pub(crate) fn raw_items(&self) -> &[ResponseItem] {
+        &self.items
     }
 
     // Estimate token usage using byte-based heuristics from the truncation helpers.
@@ -168,9 +169,7 @@ impl ContextManager {
             return;
         }
 
-        // Keep behavior consistent with call sites that previously operated on `get_history()`:
-        // normalize first (call/output invariants), then truncate based on the normalized view.
-        let snapshot = self.get_history();
+        let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
         let Some(&first_user_idx) = user_positions.first() else {
             self.replace(snapshot);
