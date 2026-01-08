@@ -18,6 +18,8 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -39,7 +41,7 @@ use crate::state::State;
 
 pub struct AppServerClient {
     child: Child,
-    stdin: Arc<Mutex<ChildStdin>>,
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
     stdout: Option<BufReader<ChildStdout>>,
     next_request_id: AtomicI64,
     state: Arc<Mutex<State>>,
@@ -78,7 +80,7 @@ impl AppServerClient {
 
         Ok(Self {
             child,
-            stdin: Arc::new(Mutex::new(stdin)),
+            stdin: Arc::new(Mutex::new(Some(stdin))),
             stdout: Some(BufReader::new(stdout)),
             next_request_id: AtomicI64::new(1),
             state: Arc::new(Mutex::new(State::default())),
@@ -141,7 +143,7 @@ impl AppServerClient {
 
     pub fn request_thread_start(&self, params: ThreadStartParams) -> Result<RequestId> {
         let request_id = self.next_request_id();
-        self.track_pending(request_id.clone(), PendingRequest::ThreadStart);
+        self.track_pending(request_id.clone(), PendingRequest::Start);
         let request = ClientRequest::ThreadStart {
             request_id: request_id.clone(),
             params,
@@ -152,7 +154,7 @@ impl AppServerClient {
 
     pub fn request_thread_resume(&self, params: ThreadResumeParams) -> Result<RequestId> {
         let request_id = self.next_request_id();
-        self.track_pending(request_id.clone(), PendingRequest::ThreadResume);
+        self.track_pending(request_id.clone(), PendingRequest::Resume);
         let request = ClientRequest::ThreadResume {
             request_id: request_id.clone(),
             params,
@@ -163,7 +165,7 @@ impl AppServerClient {
 
     pub fn request_thread_list(&self, cursor: Option<String>) -> Result<RequestId> {
         let request_id = self.next_request_id();
-        self.track_pending(request_id.clone(), PendingRequest::ThreadList);
+        self.track_pending(request_id.clone(), PendingRequest::List);
         let request = ClientRequest::ThreadList {
             request_id: request_id.clone(),
             params: ThreadListParams {
@@ -229,7 +231,9 @@ impl AppServerClient {
     }
 
     pub fn shutdown(&mut self) {
-        drop(self.stdin.lock().ok());
+        if let Ok(mut stdin) = self.stdin.lock() {
+            let _ = stdin.take();
+        }
         let _ = self.child.wait();
     }
 
@@ -239,10 +243,10 @@ impl AppServerClient {
     }
 
     fn remember_thread_locked(&self, state: &mut State) {
-        if let Some(thread_id) = state.thread_id.as_ref() {
-            if !state.known_threads.iter().any(|id| id == thread_id) {
-                state.known_threads.push(thread_id.clone());
-            }
+        if let Some(thread_id) = state.thread_id.as_ref()
+            && !state.known_threads.iter().any(|id| id == thread_id)
+        {
+            state.known_threads.push(thread_id.clone());
         }
     }
 
@@ -256,6 +260,9 @@ impl AppServerClient {
         let mut line = json;
         line.push('\n');
         let mut stdin = self.stdin.lock().expect("stdin lock poisoned");
+        let Some(stdin) = stdin.as_mut() else {
+            anyhow::bail!("stdin already closed");
+        };
         stdin.write_all(line.as_bytes()).context("write message")?;
         stdin.flush().context("flush message")?;
         Ok(())
@@ -301,7 +308,10 @@ impl AppServerClient {
     }
 }
 
-fn handle_server_request(request: JSONRPCRequest, stdin: &Arc<Mutex<ChildStdin>>) -> Result<()> {
+fn handle_server_request(
+    request: JSONRPCRequest,
+    stdin: &Arc<Mutex<Option<ChildStdin>>>,
+) -> Result<()> {
     let Ok(server_request) = codex_app_server_protocol::ServerRequest::try_from(request) else {
         return Ok(());
     };
@@ -312,7 +322,7 @@ fn handle_server_request(request: JSONRPCRequest, stdin: &Arc<Mutex<ChildStdin>>
             ..
         } => {
             let response = codex_app_server_protocol::CommandExecutionRequestApprovalResponse {
-                decision: codex_app_server_protocol::ApprovalDecision::Decline,
+                decision: CommandExecutionApprovalDecision::Decline,
             };
             send_jsonrpc_response(stdin, request_id, response)
         }
@@ -320,7 +330,7 @@ fn handle_server_request(request: JSONRPCRequest, stdin: &Arc<Mutex<ChildStdin>>
             request_id, ..
         } => {
             let response = codex_app_server_protocol::FileChangeRequestApprovalResponse {
-                decision: codex_app_server_protocol::ApprovalDecision::Decline,
+                decision: FileChangeApprovalDecision::Decline,
             };
             send_jsonrpc_response(stdin, request_id, response)
         }
@@ -329,7 +339,7 @@ fn handle_server_request(request: JSONRPCRequest, stdin: &Arc<Mutex<ChildStdin>>
 }
 
 fn send_jsonrpc_response<T: Serialize>(
-    stdin: &Arc<Mutex<ChildStdin>>,
+    stdin: &Arc<Mutex<Option<ChildStdin>>>,
     request_id: RequestId,
     response: T,
 ) -> Result<()> {
@@ -341,11 +351,14 @@ fn send_jsonrpc_response<T: Serialize>(
     send_with_stdin(stdin, &message)
 }
 
-fn send_with_stdin<T: Serialize>(stdin: &Arc<Mutex<ChildStdin>>, value: &T) -> Result<()> {
+fn send_with_stdin<T: Serialize>(stdin: &Arc<Mutex<Option<ChildStdin>>>, value: &T) -> Result<()> {
     let json = serde_json::to_string(value).context("serialize message")?;
     let mut line = json;
     line.push('\n');
     let mut stdin = stdin.lock().expect("stdin lock poisoned");
+    let Some(stdin) = stdin.as_mut() else {
+        anyhow::bail!("stdin already closed");
+    };
     stdin.write_all(line.as_bytes()).context("write message")?;
     stdin.flush().context("flush message")?;
     Ok(())

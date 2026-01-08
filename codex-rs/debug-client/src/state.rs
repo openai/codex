@@ -11,9 +11,9 @@ pub struct State {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingRequest {
-    ThreadStart,
-    ThreadResume,
-    ThreadList,
+    Start,
+    Resume,
+    List,
 }
 
 #[derive(Debug, Clone)]

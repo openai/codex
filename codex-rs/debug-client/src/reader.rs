@@ -8,8 +8,9 @@ use std::thread;
 use std::thread::JoinHandle;
 
 use anyhow::Context;
-use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -32,7 +33,7 @@ use crate::state::State;
 
 pub fn start_reader(
     mut stdout: BufReader<ChildStdout>,
-    stdin: Arc<Mutex<std::process::ChildStdin>>,
+    stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     state: Arc<Mutex<State>>,
     events: Sender<ReaderEvent>,
     output: Output,
@@ -40,10 +41,15 @@ pub fn start_reader(
     filtered_output: bool,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let decision = if auto_approve {
-            ApprovalDecision::Accept
+        let command_decision = if auto_approve {
+            CommandExecutionApprovalDecision::Accept
         } else {
-            ApprovalDecision::Decline
+            CommandExecutionApprovalDecision::Decline
+        };
+        let file_decision = if auto_approve {
+            FileChangeApprovalDecision::Accept
+        } else {
+            FileChangeApprovalDecision::Decline
         };
 
         let mut buffer = String::new();
@@ -70,7 +76,13 @@ pub fn start_reader(
 
             match message {
                 JSONRPCMessage::Request(request) => {
-                    if let Err(err) = handle_server_request(request, &decision, &stdin, &output) {
+                    if let Err(err) = handle_server_request(
+                        request,
+                        &command_decision,
+                        &file_decision,
+                        &stdin,
+                        &output,
+                    ) {
                         let _ =
                             output.client_line(&format!("failed to handle server request: {err}"));
                     }
@@ -96,8 +108,9 @@ pub fn start_reader(
 
 fn handle_server_request(
     request: JSONRPCRequest,
-    decision: &ApprovalDecision,
-    stdin: &Arc<Mutex<std::process::ChildStdin>>,
+    command_decision: &CommandExecutionApprovalDecision,
+    file_decision: &FileChangeApprovalDecision,
+    stdin: &Arc<Mutex<Option<std::process::ChildStdin>>>,
     output: &Output,
 ) -> anyhow::Result<()> {
     let server_request = match ServerRequest::try_from(request.clone()) {
@@ -108,19 +121,19 @@ fn handle_server_request(
     match server_request {
         ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
             let response = CommandExecutionRequestApprovalResponse {
-                decision: decision.clone(),
+                decision: command_decision.clone(),
             };
             output.client_line(&format!(
-                "auto-response for command approval {request_id:?}: {decision:?} ({params:?})"
+                "auto-response for command approval {request_id:?}: {command_decision:?} ({params:?})"
             ))?;
             send_response(stdin, request_id, response)
         }
         ServerRequest::FileChangeRequestApproval { request_id, params } => {
             let response = FileChangeRequestApprovalResponse {
-                decision: decision.clone(),
+                decision: file_decision.clone(),
             };
             output.client_line(&format!(
-                "auto-response for file change approval {request_id:?}: {decision:?} ({params:?})"
+                "auto-response for file change approval {request_id:?}: {file_decision:?} ({params:?})"
             ))?;
             send_response(stdin, request_id, response)
         }
@@ -143,7 +156,7 @@ fn handle_response(
     };
 
     match pending {
-        PendingRequest::ThreadStart => {
+        PendingRequest::Start => {
             let parsed = serde_json::from_value::<ThreadStartResponse>(response.result)
                 .context("decode thread/start response")?;
             let thread_id = parsed.thread.id;
@@ -156,7 +169,7 @@ fn handle_response(
             }
             events.send(ReaderEvent::ThreadReady { thread_id }).ok();
         }
-        PendingRequest::ThreadResume => {
+        PendingRequest::Resume => {
             let parsed = serde_json::from_value::<ThreadResumeResponse>(response.result)
                 .context("decode thread/resume response")?;
             let thread_id = parsed.thread.id;
@@ -169,7 +182,7 @@ fn handle_response(
             }
             events.send(ReaderEvent::ThreadReady { thread_id }).ok();
         }
-        PendingRequest::ThreadList => {
+        PendingRequest::List => {
             let parsed = serde_json::from_value::<ThreadListResponse>(response.result)
                 .context("decode thread/list response")?;
             let thread_ids: Vec<String> = parsed.data.into_iter().map(|thread| thread.id).collect();
@@ -296,7 +309,7 @@ fn write_multiline(
 }
 
 fn send_response<T: Serialize>(
-    stdin: &Arc<Mutex<std::process::ChildStdin>>,
+    stdin: &Arc<Mutex<Option<std::process::ChildStdin>>>,
     request_id: codex_app_server_protocol::RequestId,
     response: T,
 ) -> anyhow::Result<()> {
@@ -310,6 +323,9 @@ fn send_response<T: Serialize>(
     line.push('\n');
 
     let mut stdin = stdin.lock().expect("stdin lock poisoned");
+    let Some(stdin) = stdin.as_mut() else {
+        anyhow::bail!("stdin already closed");
+    };
     stdin.write_all(line.as_bytes()).context("write response")?;
     stdin.flush().context("flush response")?;
     Ok(())
