@@ -494,6 +494,12 @@ server_request_definitions! {
         response: v2::FileChangeRequestApprovalResponse,
     },
 
+    /// Sent when the agent needs structured input from the user (interactive questions).
+    AskUserQuestion => "user/askQuestion" {
+        params: v2::AskUserQuestionParams,
+        response: v2::AskUserQuestionResponse,
+    },
+
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).

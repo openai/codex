@@ -185,6 +185,38 @@ pub(crate) enum AppEvent {
         category: FeedbackCategory,
     },
 
+    /// AskUserQuestion: option picked (single- or multi-select).
+    AskUserQuestionPick {
+        call_id: String,
+        question_id: String,
+        value: String,
+    },
+
+    /// AskUserQuestion: request freeform input for an "Other…" choice.
+    AskUserQuestionOther {
+        call_id: String,
+        question_id: String,
+        prompt: String,
+    },
+
+    /// AskUserQuestion: text submitted (text questions or "Other…").
+    AskUserQuestionText {
+        call_id: String,
+        question_id: String,
+        text: String,
+    },
+
+    /// AskUserQuestion: finish a multi-select question.
+    AskUserQuestionDone {
+        call_id: String,
+        question_id: String,
+    },
+
+    /// AskUserQuestion: cancel the entire flow.
+    AskUserQuestionCancel {
+        call_id: String,
+    },
+
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
 }

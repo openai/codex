@@ -803,6 +803,40 @@ impl App {
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
             }
+            AppEvent::AskUserQuestionPick {
+                call_id,
+                question_id,
+                value,
+            } => {
+                self.chat_widget
+                    .on_ask_user_question_pick(call_id, question_id, value);
+            }
+            AppEvent::AskUserQuestionOther {
+                call_id,
+                question_id,
+                prompt,
+            } => {
+                self.chat_widget
+                    .on_ask_user_question_other(call_id, question_id, prompt);
+            }
+            AppEvent::AskUserQuestionText {
+                call_id,
+                question_id,
+                text,
+            } => {
+                self.chat_widget
+                    .on_ask_user_question_text(call_id, question_id, text);
+            }
+            AppEvent::AskUserQuestionDone {
+                call_id,
+                question_id,
+            } => {
+                self.chat_widget
+                    .on_ask_user_question_done(call_id, question_id);
+            }
+            AppEvent::AskUserQuestionCancel { call_id } => {
+                self.chat_widget.on_ask_user_question_cancel(call_id);
+            }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
                     self.launch_external_editor(tui).await;

@@ -32,6 +32,8 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ConversationId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::ask_user_question::AskUserQuestionRequest;
+use codex_protocol::ask_user_question::AskUserQuestionResponse;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -1159,6 +1161,42 @@ impl Session {
         rx_approve
     }
 
+    pub async fn request_ask_user_question(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        request: AskUserQuestionRequest,
+    ) -> AskUserQuestionResponse {
+        let (tx, rx) = oneshot::channel();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_ask_user_question(call_id.clone(), tx)
+                }
+                None => None,
+            }
+        };
+
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending ask_user_question for call_id: {call_id}");
+        }
+
+        let event =
+            EventMsg::AskUserQuestionRequest(crate::protocol::AskUserQuestionRequestEvent {
+                call_id: call_id.clone(),
+                turn_id: turn_context.sub_id.clone(),
+                request,
+            });
+        self.send_event(turn_context, event).await;
+
+        rx.await.unwrap_or_else(|_| AskUserQuestionResponse {
+            cancelled: true,
+            answers: HashMap::new(),
+        })
+    }
+
     pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -1176,6 +1214,32 @@ impl Session {
             }
             None => {
                 warn!("No pending approval found for sub_id: {sub_id}");
+            }
+        }
+    }
+
+    pub async fn resolve_ask_user_question(
+        &self,
+        call_id: &str,
+        response: AskUserQuestionResponse,
+    ) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_ask_user_question(call_id)
+                }
+                None => None,
+            }
+        };
+
+        match entry {
+            Some(tx) => {
+                tx.send(response).ok();
+            }
+            None => {
+                warn!("ask_user_question response ignored; no pending request for {call_id}");
             }
         }
     }
@@ -1690,6 +1754,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             } => {
                 handlers::resolve_elicitation(&sess, server_name, request_id, decision).await;
             }
+            Op::ResolveAskUserQuestion { call_id, response } => {
+                handlers::resolve_ask_user_question(&sess, call_id, response).await;
+            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -1720,6 +1787,7 @@ mod handlers {
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
+    use codex_protocol::ask_user_question::AskUserQuestionResponse;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
@@ -1860,6 +1928,15 @@ mod handlers {
                 "failed to resolve elicitation request in session"
             );
         }
+    }
+
+    pub async fn resolve_ask_user_question(
+        sess: &Arc<Session>,
+        call_id: String,
+        response: AskUserQuestionResponse,
+    ) {
+        sess.resolve_ask_user_question(call_id.as_str(), response)
+            .await;
     }
 
     /// Propagate a user's exec approval decision to the session.

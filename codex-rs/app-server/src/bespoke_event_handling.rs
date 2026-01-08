@@ -8,6 +8,8 @@ use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::AskUserQuestionParams;
+use codex_app_server_protocol::AskUserQuestionResponse as V2AskUserQuestionResponse;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
@@ -69,6 +71,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ConversationId;
+use codex_protocol::ask_user_question::AskUserQuestionResponse as CoreAskUserQuestionResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use std::collections::HashMap;
@@ -278,6 +281,38 @@ pub(crate) async fn apply_bespoke_event_handling(event: Event, ctx: &BespokeEven
                         outgoing,
                     )
                     .await;
+                });
+            }
+        },
+        EventMsg::AskUserQuestionRequest(ev) => match api_version {
+            ApiVersion::V1 => {
+                let response = CoreAskUserQuestionResponse {
+                    cancelled: true,
+                    answers: HashMap::new(),
+                };
+                if let Err(err) = conversation
+                    .submit(Op::ResolveAskUserQuestion {
+                        call_id: ev.call_id,
+                        response,
+                    })
+                    .await
+                {
+                    error!("failed to submit ResolveAskUserQuestion: {err}");
+                }
+            }
+            ApiVersion::V2 => {
+                let params = AskUserQuestionParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: ev.turn_id,
+                    call_id: ev.call_id.clone(),
+                    request: ev.request,
+                };
+                let call_id = params.call_id.clone();
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::AskUserQuestion(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_ask_user_question_response(call_id, rx, conversation).await;
                 });
             }
         },
@@ -1059,6 +1094,47 @@ async fn on_exec_approval_response(
         .await
     {
         error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+async fn on_ask_user_question_response(
+    call_id: String,
+    receiver: oneshot::Receiver<JsonValue>,
+    conversation: Arc<CodexConversation>,
+) {
+    let response = receiver.await;
+    let response = match response {
+        Ok(value) => {
+            serde_json::from_value::<V2AskUserQuestionResponse>(value).unwrap_or_else(|err| {
+                error!("failed to deserialize AskUserQuestionResponse: {err}");
+                V2AskUserQuestionResponse {
+                    cancelled: true,
+                    answers: HashMap::new(),
+                }
+            })
+        }
+        Err(err) => {
+            error!("request failed: {err:?}");
+            V2AskUserQuestionResponse {
+                cancelled: true,
+                answers: HashMap::new(),
+            }
+        }
+    };
+
+    let core_response = CoreAskUserQuestionResponse {
+        cancelled: response.cancelled,
+        answers: response.answers,
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::ResolveAskUserQuestion {
+            call_id,
+            response: core_response,
+        })
+        .await
+    {
+        error!("failed to submit ResolveAskUserQuestion: {err}");
     }
 }
 
