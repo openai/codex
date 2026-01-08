@@ -45,12 +45,17 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
 /// The boundary index is 0-based from the start of `items` (so `n_from_start = 0` returns
 /// a prefix that excludes the first user message and everything after it).
 ///
+/// If `n_from_start` is `usize::MAX`, this returns the full rollout (no truncation).
 /// If fewer than or equal to `n_from_start` user messages exist, this returns an empty
 /// vector (out of range).
 pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
     items: &[RolloutItem],
     n_from_start: usize,
 ) -> Vec<RolloutItem> {
+    if n_from_start == usize::MAX {
+        return items.to_vec();
+    }
+
     let user_positions = user_message_positions_in_rollout(items);
 
     // If fewer than or equal to n user messages exist, treat as empty (out of range).
@@ -137,6 +142,22 @@ mod tests {
 
         let truncated2 = truncate_rollout_before_nth_user_message_from_start(&rollout, 2);
         assert_matches!(truncated2.as_slice(), []);
+    }
+
+    #[test]
+    fn truncation_max_keeps_full_rollout() {
+        let rollout = vec![
+            RolloutItem::ResponseItem(user_msg("u1")),
+            RolloutItem::ResponseItem(assistant_msg("a1")),
+            RolloutItem::ResponseItem(user_msg("u2")),
+        ];
+
+        let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout, usize::MAX);
+
+        assert_eq!(
+            serde_json::to_value(&truncated).unwrap(),
+            serde_json::to_value(&rollout).unwrap()
+        );
     }
 
     #[test]

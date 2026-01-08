@@ -128,6 +128,7 @@ use codex_core::config::ConfigService;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::default_client::get_codex_user_agent;
+use codex_core::error::CodexErr;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
@@ -1836,7 +1837,19 @@ impl CodexMessageProcessor {
                 base_instructions,
                 developer_instructions,
             );
-            match derive_config_from_params(&self.cli_overrides, cli_overrides, overrides).await {
+
+            // Persist windows sandbox feature.
+            let mut cli_overrides = cli_overrides.unwrap_or_default();
+            if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+                cli_overrides.insert(
+                    "features.experimental_windows_sandbox".to_string(),
+                    serde_json::json!(true),
+                );
+            }
+
+            match derive_config_from_params(&self.cli_overrides, Some(cli_overrides), overrides)
+                .await
+            {
                 Ok(config) => config,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -1852,21 +1865,8 @@ impl CodexMessageProcessor {
             self.config.as_ref().clone()
         };
 
-        let conversation_history = if let Some(path) = path {
-            match RolloutRecorder::get_rollout_history(&path).await {
-                Ok(initial_history) => {
-                    let items = initial_history.get_rollout_items();
-                    InitialHistory::Forked(items)
-                }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to load rollout `{}`: {err}", path.display()),
-                    )
-                    .await;
-                    return;
-                }
-            }
+        let rollout_path = if let Some(path) = path {
+            path
         } else {
             let existing_thread_id = match ThreadId::from_string(&thread_id) {
                 Ok(id) => id,
@@ -1881,7 +1881,7 @@ impl CodexMessageProcessor {
                 }
             };
 
-            let path = match find_thread_path_by_id_str(
+            match find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &existing_thread_id.to_string(),
             )
@@ -1904,102 +1904,96 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
-            };
-
-            match RolloutRecorder::get_rollout_history(&path).await {
-                Ok(initial_history) => {
-                    let items = initial_history.get_rollout_items();
-                    InitialHistory::Forked(items)
-                }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to load rollout `{}`: {err}", path.display()),
-                    )
-                    .await;
-                    return;
-                }
             }
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
 
-        match self
+        let NewThread {
+            thread_id,
+            session_configured,
+            ..
+        } = match self
             .thread_manager
-            .resume_thread_with_history(config, conversation_history, self.auth_manager.clone())
+            .fork_thread(usize::MAX, config, rollout_path.clone())
             .await
         {
-            Ok(NewThread {
-                thread_id,
-                session_configured,
-                ..
-            }) => {
-                let SessionConfiguredEvent {
-                    rollout_path,
-                    initial_messages,
-                    ..
-                } = session_configured;
-                // Auto-attach a conversation listener when forking a thread.
-                if let Err(err) = self
-                    .attach_conversation_listener(thread_id, false, ApiVersion::V2)
-                    .await
-                {
-                    tracing::warn!(
-                        "failed to attach listener for thread {}: {}",
-                        thread_id,
-                        err.message
-                    );
-                }
-
-                let mut thread = match read_summary_from_rollout(
-                    rollout_path.as_path(),
-                    fallback_model_provider.as_str(),
-                )
-                .await
-                {
-                    Ok(summary) => summary_to_thread(summary),
-                    Err(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!(
-                                "failed to load rollout `{}` for thread {thread_id}: {err}",
-                                rollout_path.display()
-                            ),
-                        )
-                        .await;
-                        return;
-                    }
-                };
-                thread.turns = initial_messages
-                    .as_deref()
-                    .map_or_else(Vec::new, build_turns_from_event_msgs);
-
-                let response = ThreadForkResponse {
-                    thread: thread.clone(),
-                    model: session_configured.model,
-                    model_provider: session_configured.model_provider_id,
-                    cwd: session_configured.cwd,
-                    approval_policy: session_configured.approval_policy.into(),
-                    sandbox: session_configured.sandbox_policy.into(),
-                    reasoning_effort: session_configured.reasoning_effort,
-                };
-
-                self.outgoing.send_response(request_id, response).await;
-
-                let notif = ThreadStartedNotification { thread };
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadStarted(notif))
-                    .await;
-            }
+            Ok(thread) => thread,
             Err(err) => {
+                let (code, message) = match err {
+                    CodexErr::Io(_) | CodexErr::Json(_) => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                    ),
+                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
+                    _ => (INTERNAL_ERROR_CODE, format!("error forking thread: {err}")),
+                };
                 let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error forking thread: {err}"),
+                    code,
+                    message,
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
+                return;
             }
+        };
+
+        let SessionConfiguredEvent {
+            rollout_path,
+            initial_messages,
+            ..
+        } = session_configured;
+        // Auto-attach a conversation listener when forking a thread.
+        if let Err(err) = self
+            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
+            .await
+        {
+            tracing::warn!(
+                "failed to attach listener for thread {}: {}",
+                thread_id,
+                err.message
+            );
         }
+
+        let mut thread = match read_summary_from_rollout(
+            rollout_path.as_path(),
+            fallback_model_provider.as_str(),
+        )
+        .await
+        {
+            Ok(summary) => summary_to_thread(summary),
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return;
+            }
+        };
+        thread.turns = initial_messages
+            .as_deref()
+            .map_or_else(Vec::new, build_turns_from_event_msgs);
+
+        let response = ThreadForkResponse {
+            thread: thread.clone(),
+            model: session_configured.model,
+            model_provider: session_configured.model_provider_id,
+            cwd: session_configured.cwd,
+            approval_policy: session_configured.approval_policy.into(),
+            sandbox: session_configured.sandbox_policy.into(),
+            reasoning_effort: session_configured.reasoning_effort,
+        };
+
+        self.outgoing.send_response(request_id, response).await;
+
+        let notif = ThreadStartedNotification { thread };
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadStarted(notif))
+            .await;
     }
 
     async fn get_thread_summary(
@@ -2693,40 +2687,13 @@ impl CodexMessageProcessor {
             }
         };
 
-        let conversation_history = if let Some(path) = path {
-            match RolloutRecorder::get_rollout_history(&path).await {
-                Ok(initial_history) => InitialHistory::Forked(initial_history.get_rollout_items()),
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to load rollout `{}`: {err}", path.display()),
-                    )
-                    .await;
-                    return;
-                }
-            }
+        let rollout_path = if let Some(path) = path {
+            path
         } else if let Some(conversation_id) = conversation_id {
             match find_thread_path_by_id_str(&self.config.codex_home, &conversation_id.to_string())
                 .await
             {
-                Ok(Some(found_path)) => {
-                    match RolloutRecorder::get_rollout_history(&found_path).await {
-                        Ok(initial_history) => {
-                            InitialHistory::Forked(initial_history.get_rollout_items())
-                        }
-                        Err(err) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!(
-                                    "failed to load rollout `{}` for conversation {conversation_id}: {err}",
-                                    found_path.display()
-                                ),
-                            )
-                            .await;
-                            return;
-                        }
-                    }
-                }
+                Ok(Some(found_path)) => found_path,
                 Ok(None) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -2753,51 +2720,63 @@ impl CodexMessageProcessor {
             return;
         };
 
-        match self
+        let NewThread {
+            thread_id,
+            session_configured,
+            ..
+        } = match self
             .thread_manager
-            .resume_thread_with_history(config, conversation_history, self.auth_manager.clone())
+            .fork_thread(usize::MAX, config, rollout_path.clone())
             .await
         {
-            Ok(NewThread {
-                thread_id,
-                session_configured,
-                ..
-            }) => {
-                self.outgoing
-                    .send_server_notification(ServerNotification::SessionConfigured(
-                        SessionConfiguredNotification {
-                            session_id: session_configured.session_id,
-                            model: session_configured.model.clone(),
-                            reasoning_effort: session_configured.reasoning_effort,
-                            history_log_id: session_configured.history_log_id,
-                            history_entry_count: session_configured.history_entry_count,
-                            initial_messages: session_configured.initial_messages.clone(),
-                            rollout_path: session_configured.rollout_path.clone(),
-                        },
-                    ))
-                    .await;
-                let initial_messages = session_configured
-                    .initial_messages
-                    .map(|msgs| msgs.into_iter().collect());
-
-                // Reply with conversation id + model and initial messages (when present)
-                let response = ForkConversationResponse {
-                    conversation_id: thread_id,
-                    model: session_configured.model.clone(),
-                    initial_messages,
-                    rollout_path: session_configured.rollout_path.clone(),
-                };
-                self.outgoing.send_response(request_id, response).await;
-            }
+            Ok(thread) => thread,
             Err(err) => {
+                let (code, message) = match err {
+                    CodexErr::Io(_) | CodexErr::Json(_) => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                    ),
+                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
+                    _ => (
+                        INTERNAL_ERROR_CODE,
+                        format!("error forking conversation: {err}"),
+                    ),
+                };
                 let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error forking conversation: {err}"),
+                    code,
+                    message,
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
+                return;
             }
-        }
+        };
+
+        self.outgoing
+            .send_server_notification(ServerNotification::SessionConfigured(
+                SessionConfiguredNotification {
+                    session_id: session_configured.session_id,
+                    model: session_configured.model.clone(),
+                    reasoning_effort: session_configured.reasoning_effort,
+                    history_log_id: session_configured.history_log_id,
+                    history_entry_count: session_configured.history_entry_count,
+                    initial_messages: session_configured.initial_messages.clone(),
+                    rollout_path: session_configured.rollout_path.clone(),
+                },
+            ))
+            .await;
+        let initial_messages = session_configured
+            .initial_messages
+            .map(|msgs| msgs.into_iter().collect());
+
+        // Reply with conversation id + model and initial messages (when present)
+        let response = ForkConversationResponse {
+            conversation_id: thread_id,
+            model: session_configured.model.clone(),
+            initial_messages,
+            rollout_path: session_configured.rollout_path.clone(),
+        };
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn send_invalid_request_error(&self, request_id: RequestId, message: String) {
