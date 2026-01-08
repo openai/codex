@@ -12,5 +12,7 @@ expression: popup
                                    and run commands with network access.
                                    Exercise caution when using.
 
-  To upgrade to the elevated sandbox, run /setup-elevated-sandbox.
+  The non-elevated sandbox protects your files and prevents network access under
+  most circumstances. However, it carries greater risk if prompt injected. To
+  upgrade to the elevated sandbox, run /setup-elevated-sandbox.
   Press enter to confirm or esc to go back
