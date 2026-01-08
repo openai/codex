@@ -317,7 +317,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -392,7 +392,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -560,7 +560,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
             ev_completed("resp-3"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -632,7 +632,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -705,7 +705,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -831,7 +831,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
             ev_completed("resp-3"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -964,7 +964,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             ev_completed("resp-5"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1121,7 +1121,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
             ev_completed("resp-3"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1613,7 +1613,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
             ev_completed("resp-4"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1687,7 +1687,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    let _request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
