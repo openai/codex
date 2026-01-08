@@ -343,6 +343,7 @@ pub(crate) struct ChatWidget {
 struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
+    directory_paths: Vec<PathBuf>,
 }
 
 impl From<String> for UserMessage {
@@ -350,6 +351,7 @@ impl From<String> for UserMessage {
         Self {
             text,
             image_paths: Vec::new(),
+            directory_paths: Vec::new(),
         }
     }
 }
@@ -359,15 +361,24 @@ impl From<&str> for UserMessage {
         Self {
             text: text.to_string(),
             image_paths: Vec::new(),
+            directory_paths: Vec::new(),
         }
     }
 }
 
-fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
-    if text.is_empty() && image_paths.is_empty() {
+fn create_initial_user_message(
+    text: String,
+    image_paths: Vec<PathBuf>,
+    directory_paths: Vec<PathBuf>,
+) -> Option<UserMessage> {
+    if text.is_empty() && image_paths.is_empty() && directory_paths.is_empty() {
         None
     } else {
-        Some(UserMessage { text, image_paths })
+        Some(UserMessage {
+            text,
+            image_paths,
+            directory_paths,
+        })
     }
 }
 
@@ -1311,6 +1322,7 @@ impl ChatWidget {
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
+                Vec::new(), // No initial directories
             ),
             token_info: None,
             rate_limit_snapshot: None,
@@ -1395,6 +1407,7 @@ impl ChatWidget {
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
+                Vec::new(), // No initial directories
             ),
             token_info: None,
             rate_limit_snapshot: None,
@@ -1495,6 +1508,7 @@ impl ChatWidget {
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
+                            directory_paths: self.bottom_pane.take_recent_submission_directories(),
                         };
                         self.queue_user_message(user_message);
                     }
@@ -1787,8 +1801,12 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
-        if text.is_empty() && image_paths.is_empty() {
+        let UserMessage {
+            text,
+            image_paths,
+            directory_paths,
+        } = user_message;
+        if text.is_empty() && image_paths.is_empty() && directory_paths.is_empty() {
             return;
         }
 
@@ -1818,6 +1836,10 @@ impl ChatWidget {
 
         for path in image_paths {
             items.push(UserInput::LocalImage { path });
+        }
+
+        for path in directory_paths {
+            items.push(UserInput::LocalDirectory { path });
         }
 
         if let Some(skills) = self.bottom_pane.skills() {

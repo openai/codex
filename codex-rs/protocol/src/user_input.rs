@@ -27,4 +27,10 @@ pub enum UserInput {
         name: String,
         path: std::path::PathBuf,
     },
+
+    /// Local directory path provided by the user. This will be converted to
+    /// a text listing during request serialization.
+    LocalDirectory {
+        path: std::path::PathBuf,
+    },
 }

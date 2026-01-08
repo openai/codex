@@ -203,6 +203,43 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
     }
 }
 
+/// Format a directory listing as a tree with visual characters.
+/// Limited to immediate children (depth 1), truncated at `limit` items.
+fn format_directory_tree(path: &std::path::Path, limit: usize) -> std::io::Result<String> {
+    let mut entries: Vec<_> = std::fs::read_dir(path)?.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    let total = entries.len();
+    let truncated = total > limit;
+    let display_count = if truncated { limit - 1 } else { total };
+
+    // Use the full path (not just filename) so the agent knows the exact location.
+    let dir_name = path.to_string_lossy().into_owned();
+    let mut result = format!("{}/\n", dir_name);
+
+    for (i, entry) in entries.iter().take(display_count).enumerate() {
+        let is_last = !truncated && i == display_count - 1;
+        let prefix = if is_last { "\u{2514}\u{2500}" } else { "\u{251C}\u{2500}" };
+        let suffix = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            "/"
+        } else {
+            ""
+        };
+        result.push_str(&format!(
+            "{} {}{}\n",
+            prefix,
+            entry.file_name().to_string_lossy(),
+            suffix
+        ));
+    }
+
+    if truncated {
+        result.push_str(&format!("...\n\u{2514}\u{2500} ({} more items)\n", total - display_count));
+    }
+
+    Ok(result)
+}
+
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
@@ -331,6 +368,18 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         }
                     },
                     UserInput::Skill { .. } => None, // Skill bodies are injected later in core
+                    UserInput::LocalDirectory { path } => {
+                        match format_directory_tree(&path, 50) {
+                            Ok(listing) => Some(ContentItem::InputText { text: listing }),
+                            Err(err) => Some(ContentItem::InputText {
+                                text: format!(
+                                    "Codex could not read the directory at `{}`: {}",
+                                    path.display(),
+                                    err
+                                ),
+                            }),
+                        }
+                    }
                 })
                 .collect::<Vec<ContentItem>>(),
         }
@@ -865,6 +914,93 @@ mod tests {
             other => panic!("expected message response but got {other:?}"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn local_directory_formats_tree() -> Result<()> {
+        let dir = tempdir()?;
+        std::fs::write(dir.path().join("file1.txt"), b"content")?;
+        std::fs::write(dir.path().join("file2.rs"), b"fn main() {}")?;
+        std::fs::create_dir(dir.path().join("subdir"))?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalDirectory {
+            path: dir.path().to_path_buf(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        assert!(text.contains("file1.txt"), "should contain file1.txt: {text}");
+                        assert!(text.contains("file2.rs"), "should contain file2.rs: {text}");
+                        assert!(text.contains("subdir/"), "should contain subdir/: {text}");
+                        assert!(
+                            text.contains("\u{251C}\u{2500}") || text.contains("\u{2514}\u{2500}"),
+                            "should contain tree chars: {text}"
+                        );
+                    }
+                    other => panic!("expected text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message but got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn local_directory_truncates_large_dirs() -> Result<()> {
+        let dir = tempdir()?;
+        for i in 0..55 {
+            std::fs::write(dir.path().join(format!("file{:03}.txt", i)), b"x")?;
+        }
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalDirectory {
+            path: dir.path().to_path_buf(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        assert!(text.contains("more items"), "should show truncation: {text}");
+                        assert!(
+                            !text.contains("file054.txt"),
+                            "should not show last items: {text}"
+                        );
+                    }
+                    other => panic!("expected text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message but got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn local_directory_read_error_adds_placeholder() -> Result<()> {
+        let missing = std::path::PathBuf::from("/nonexistent/path/to/dir");
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalDirectory {
+            path: missing.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        assert!(text.contains("could not read"), "error text: {text}");
+                        assert!(
+                            text.contains(&missing.display().to_string()),
+                            "should contain path: {text}"
+                        );
+                    }
+                    other => panic!("expected text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message but got {other:?}"),
+        }
         Ok(())
     }
 }

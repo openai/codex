@@ -93,6 +93,12 @@ struct AttachedImage {
     path: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct AttachedDirectory {
+    placeholder: String,
+    path: PathBuf,
+}
+
 enum PromptSelectionMode {
     Completion,
     Submit,
@@ -118,6 +124,7 @@ pub(crate) struct ChatComposer {
     large_paste_counters: HashMap<usize, usize>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
+    attached_directories: Vec<AttachedDirectory>,
     placeholder_text: String,
     is_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
@@ -176,6 +183,7 @@ impl ChatComposer {
             large_paste_counters: HashMap::new(),
             has_focus: has_input_focus,
             attached_images: Vec::new(),
+            attached_directories: Vec::new(),
             placeholder_text,
             is_task_running: false,
             input_enabled: true,
@@ -320,6 +328,7 @@ impl ChatComposer {
         self.textarea.set_text("");
         self.pending_pastes.clear();
         self.attached_images.clear();
+        self.attached_directories.clear();
         self.textarea.set_text(&text);
         self.textarea.set_cursor(0);
         self.sync_popups();
@@ -358,6 +367,24 @@ impl ChatComposer {
     pub fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         let images = std::mem::take(&mut self.attached_images);
         images.into_iter().map(|img| img.path).collect()
+    }
+
+    /// Attach a directory to the message. The directory contents will be
+    /// listed when the message is submitted.
+    pub fn attach_directory(&mut self, path: PathBuf, item_count: usize) {
+        let dir_label = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "dir".to_string());
+        let placeholder = format!("[{dir_label}/ {item_count} items]");
+        self.textarea.insert_element(&placeholder);
+        self.attached_directories
+            .push(AttachedDirectory { placeholder, path });
+    }
+
+    pub fn take_recent_submission_directories(&mut self) -> Vec<PathBuf> {
+        let dirs = std::mem::take(&mut self.attached_directories);
+        dirs.into_iter().map(|d| d.path).collect()
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
@@ -777,8 +804,43 @@ impl ChatComposer {
                         // Fallback to plain path insertion if metadata read fails.
                         self.insert_selected_path(&sel_path);
                     }
+                } else if sel_path.ends_with('/') {
+                    // Directory: attach it so contents will be listed on submit.
+                    // Strip trailing '/' to get the actual path.
+                    let dir_path_str = &sel_path[..sel_path.len() - 1];
+                    let dir_path = PathBuf::from(dir_path_str);
+
+                    // Count items for placeholder display.
+                    let item_count = std::fs::read_dir(&dir_path)
+                        .map(|entries| entries.count())
+                        .unwrap_or(0);
+
+                    // Remove the current @token (same logic as image attachment).
+                    let cursor_offset = self.textarea.cursor();
+                    let text = self.textarea.text();
+                    let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                    let before_cursor = &text[..safe_cursor];
+                    let after_cursor = &text[safe_cursor..];
+
+                    let start_idx = before_cursor
+                        .char_indices()
+                        .rfind(|(_, c)| c.is_whitespace())
+                        .map(|(idx, c)| idx + c.len_utf8())
+                        .unwrap_or(0);
+                    let end_rel_idx = after_cursor
+                        .char_indices()
+                        .find(|(_, c)| c.is_whitespace())
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(after_cursor.len());
+                    let end_idx = safe_cursor + end_rel_idx;
+
+                    self.textarea.replace_range(start_idx..end_idx, "");
+                    self.textarea.set_cursor(start_idx);
+
+                    self.attach_directory(dir_path, item_count);
+                    self.textarea.insert_str(" ");
                 } else {
-                    // Non-image: inserting file path.
+                    // Non-image, non-directory: inserting file path.
                     self.insert_selected_path(&sel_path);
                 }
                 // No selection: treat Enter as closing the popup/session.
@@ -1217,7 +1279,8 @@ impl ChatComposer {
                 self.pending_pastes.clear();
 
                 // If there is neither text nor attachments, suppress submission entirely.
-                let has_attachments = !self.attached_images.is_empty();
+                let has_attachments =
+                    !self.attached_images.is_empty() || !self.attached_directories.is_empty();
                 text = text.trim().to_string();
                 if let Some((name, _rest)) = parse_slash_name(&text) {
                     let treat_as_plain_text = input_starts_with_space || name.contains('/');
@@ -1443,6 +1506,29 @@ impl ChatComposer {
             self.attached_images = kept;
         }
 
+        // Keep attached directories in proportion to how many matching placeholders exist.
+        if !self.attached_directories.is_empty() {
+            let mut needed: HashMap<String, usize> = HashMap::new();
+            for dir in &self.attached_directories {
+                needed
+                    .entry(dir.placeholder.clone())
+                    .or_insert_with(|| text_after.matches(&dir.placeholder).count());
+            }
+
+            let mut used: HashMap<String, usize> = HashMap::new();
+            let mut kept: Vec<AttachedDirectory> =
+                Vec::with_capacity(self.attached_directories.len());
+            for dir in self.attached_directories.drain(..) {
+                let total_needed = *needed.get(&dir.placeholder).unwrap_or(&0);
+                let used_count = used.entry(dir.placeholder.clone()).or_insert(0);
+                if *used_count < total_needed {
+                    kept.push(dir);
+                    *used_count += 1;
+                }
+            }
+            self.attached_directories = kept;
+        }
+
         (InputResult::None, true)
     }
 
@@ -1549,6 +1635,98 @@ impl ChatComposer {
         if let Some((idx, placeholder)) = out {
             self.textarea.replace_range(p..p + placeholder.len(), "");
             self.attached_images.remove(idx);
+            return true;
+        }
+
+        // Try directory placeholders (cursor at END)
+        let mut dir_out: Option<(usize, String)> = None;
+        for (i, dir) in self.attached_directories.iter().enumerate() {
+            let ph = &dir.placeholder;
+            if p < ph.len() {
+                continue;
+            }
+            let start = p - ph.len();
+            if text.get(start..p) != Some(ph.as_str()) {
+                continue;
+            }
+
+            let mut occ_before = 0usize;
+            let mut search_pos = 0usize;
+            while search_pos < start {
+                let segment = match text.get(search_pos..start) {
+                    Some(s) => s,
+                    None => break,
+                };
+                if let Some(found) = segment.find(ph) {
+                    occ_before += 1;
+                    search_pos += found + ph.len();
+                } else {
+                    break;
+                }
+            }
+
+            dir_out = if let Some((remove_idx, _)) = self
+                .attached_directories
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.placeholder == *ph)
+                .nth(occ_before)
+            {
+                Some((remove_idx, ph.clone()))
+            } else {
+                Some((i, ph.clone()))
+            };
+            break;
+        }
+        if let Some((idx, placeholder)) = dir_out {
+            self.textarea.replace_range(p - placeholder.len()..p, "");
+            self.attached_directories.remove(idx);
+            return true;
+        }
+
+        // Try directory placeholders (cursor at START)
+        let dir_out: Option<(usize, String)> = 'dir_out: {
+            for (i, dir) in self.attached_directories.iter().enumerate() {
+                let ph = &dir.placeholder;
+                if p + ph.len() > text.len() {
+                    continue;
+                }
+                if text.get(p..p + ph.len()) != Some(ph.as_str()) {
+                    continue;
+                }
+
+                let mut occ_before = 0usize;
+                let mut search_pos = 0usize;
+                while search_pos < p {
+                    let segment = match text.get(search_pos..p) {
+                        Some(s) => s,
+                        None => break 'dir_out None,
+                    };
+                    if let Some(found) = segment.find(ph) {
+                        occ_before += 1;
+                        search_pos += found + ph.len();
+                    } else {
+                        break 'dir_out None;
+                    }
+                }
+
+                if let Some((remove_idx, _)) = self
+                    .attached_directories
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, d)| d.placeholder == *ph)
+                    .nth(occ_before)
+                {
+                    break 'dir_out Some((remove_idx, ph.clone()));
+                } else {
+                    break 'dir_out Some((i, ph.clone()));
+                }
+            }
+            None
+        };
+        if let Some((idx, placeholder)) = dir_out {
+            self.textarea.replace_range(p..p + placeholder.len(), "");
+            self.attached_directories.remove(idx);
             return true;
         }
 

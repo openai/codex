@@ -209,7 +209,7 @@ pub fn run(
 
         Box::new(move |entry| {
             if let Some(path) = get_file_path(&entry, search_directory) {
-                best_list.insert(path);
+                best_list.insert(&path);
             }
 
             processed += 1;
@@ -221,20 +221,25 @@ pub fn run(
         })
     });
 
-    fn get_file_path<'a>(
-        entry_result: &'a Result<ignore::DirEntry, ignore::Error>,
+    fn get_file_path(
+        entry_result: &Result<ignore::DirEntry, ignore::Error>,
         search_directory: &std::path::Path,
-    ) -> Option<&'a str> {
+    ) -> Option<String> {
         let entry = match entry_result {
             Ok(e) => e,
             Err(_) => return None,
         };
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-            return None;
-        }
+        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
         let path = entry.path();
         match path.strip_prefix(search_directory) {
-            Ok(rel_path) => rel_path.to_str(),
+            Ok(rel_path) => {
+                let path_str = rel_path.to_str()?;
+                if is_dir {
+                    Some(format!("{}/", path_str))
+                } else {
+                    Some(path_str.to_string())
+                }
+            }
             Err(_) => None,
         }
     }

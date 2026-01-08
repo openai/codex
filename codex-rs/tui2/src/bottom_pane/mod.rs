@@ -546,6 +546,10 @@ impl BottomPane {
         self.composer.take_recent_submission_images()
     }
 
+    pub(crate) fn take_recent_submission_directories(&mut self) -> Vec<PathBuf> {
+        self.composer.take_recent_submission_directories()
+    }
+
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
             RenderableItem::Borrowed(view)
