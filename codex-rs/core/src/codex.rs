@@ -152,7 +152,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
-use codex_otel::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -644,6 +644,7 @@ impl Session {
             terminal::user_agent(),
             session_configuration.session_source.clone(),
         );
+        config.features.emit_metrics(&otel_manager);
 
         otel_manager.conversation_starts(
             config.model_provider.name.as_str(),

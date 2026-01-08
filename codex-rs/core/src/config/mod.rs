@@ -1439,11 +1439,13 @@ impl Config {
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
                 let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
+                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
                 OtelConfig {
                     log_user_prompt,
                     environment,
                     exporter,
                     trace_exporter,
+                    metrics_exporter,
                 }
             },
         };
