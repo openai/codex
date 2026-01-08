@@ -7,7 +7,6 @@ use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::get_responses_requests;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -21,7 +20,7 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    mount_sse_once(
+    let request_log = mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
@@ -48,17 +47,10 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
     // Wait until the task completes so the request definitely hit the server.
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
-    assert_eq!(requests.len(), 1);
+    let request = request_log.single_request();
+    assert_eq!(request.header("content-encoding").as_deref(), Some("zstd"));
 
-    let request = &requests[0];
-    let content_encoding = request
-        .headers
-        .get("content-encoding")
-        .and_then(|v| v.to_str().ok());
-    assert_eq!(content_encoding, Some("zstd"));
-
-    let decompressed = zstd::stream::decode_all(std::io::Cursor::new(request.body.clone()))?;
+    let decompressed = zstd::stream::decode_all(std::io::Cursor::new(request.body_bytes()))?;
     let json: serde_json::Value = serde_json::from_slice(&decompressed)?;
     assert!(
         json.get("input").is_some(),
@@ -73,7 +65,7 @@ async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> 
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    mount_sse_once(
+    let request_log = mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
@@ -97,16 +89,13 @@ async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> 
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
-    assert_eq!(requests.len(), 1);
-
-    let request = &requests[0];
+    let request = request_log.single_request();
     assert!(
-        request.headers.get("content-encoding").is_none(),
+        request.header("content-encoding").is_none(),
         "did not expect request compression for API-key auth"
     );
 
-    let json: serde_json::Value = serde_json::from_slice(&request.body)?;
+    let json: serde_json::Value = serde_json::from_slice(&request.body_bytes())?;
     assert!(
         json.get("input").is_some(),
         "expected request body to be plain Responses API JSON"
