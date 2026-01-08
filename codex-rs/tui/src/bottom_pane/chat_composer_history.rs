@@ -28,6 +28,23 @@ pub(crate) struct ChatComposerHistory {
     /// history navigation. Used to decide if further Up/Down presses should be
     /// treated as navigation versus normal cursor movement.
     last_history_text: Option<String>,
+
+    reverse_search: Option<ReverseSearchState>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum HistorySearchResult {
+    Found(String),
+    Pending,
+    NotFound,
+}
+
+#[derive(Clone, Debug)]
+struct ReverseSearchState {
+    query: String,
+    query_lower: String,
+    next_offset: Option<isize>,
+    awaiting_offset: Option<usize>,
 }
 
 impl ChatComposerHistory {
@@ -39,6 +56,7 @@ impl ChatComposerHistory {
             fetched_history: HashMap::new(),
             history_cursor: None,
             last_history_text: None,
+            reverse_search: None,
         }
     }
 
@@ -50,6 +68,7 @@ impl ChatComposerHistory {
         self.local_history.clear();
         self.history_cursor = None;
         self.last_history_text = None;
+        self.reverse_search = None;
     }
 
     /// Record a message submitted by the user in the current session so it can
@@ -61,6 +80,7 @@ impl ChatComposerHistory {
 
         self.history_cursor = None;
         self.last_history_text = None;
+        self.reverse_search = None;
 
         // Avoid inserting a duplicate if identical to the previous entry.
         if self.local_history.last().is_some_and(|prev| prev == text) {
@@ -74,6 +94,7 @@ impl ChatComposerHistory {
     pub fn reset_navigation(&mut self) {
         self.history_cursor = None;
         self.last_history_text = None;
+        self.reverse_search = None;
     }
 
     /// Should Up/Down key presses be interpreted as history navigation given
@@ -100,6 +121,7 @@ impl ChatComposerHistory {
     /// Handle <Up>. Returns true when the key was consumed and the caller
     /// should request a redraw.
     pub fn navigate_up(&mut self, app_event_tx: &AppEventSender) -> Option<String> {
+        self.reverse_search = None;
         let total_entries = self.history_entry_count + self.local_history.len();
         if total_entries == 0 {
             return None;
@@ -117,6 +139,7 @@ impl ChatComposerHistory {
 
     /// Handle <Down>.
     pub fn navigate_down(&mut self, app_event_tx: &AppEventSender) -> Option<String> {
+        self.reverse_search = None;
         let total_entries = self.history_entry_count + self.local_history.len();
         if total_entries == 0 {
             return None;
@@ -148,6 +171,7 @@ impl ChatComposerHistory {
         log_id: u64,
         offset: usize,
         entry: Option<String>,
+        app_event_tx: &AppEventSender,
     ) -> Option<String> {
         if self.history_log_id != Some(log_id) {
             return None;
@@ -159,12 +183,137 @@ impl ChatComposerHistory {
             self.last_history_text = Some(text.clone());
             return Some(text);
         }
+
+        if let Some(search) = &mut self.reverse_search
+            && search.awaiting_offset == Some(offset) {
+                search.awaiting_offset = None;
+                if Self::matches_query(&text, search) {
+                    self.history_cursor = Some(offset as isize);
+                    self.last_history_text = Some(text.clone());
+                    search.next_offset = offset.checked_sub(1).map(|o| o as isize);
+                    return Some(text);
+                }
+                if let HistorySearchResult::Found(next) = self.advance_reverse_search(app_event_tx)
+                {
+                    return Some(next);
+                }
+            }
         None
+    }
+
+    pub fn reverse_search(
+        &mut self,
+        query: &str,
+        app_event_tx: &AppEventSender,
+    ) -> HistorySearchResult {
+        let total_entries = self.total_entries();
+        if total_entries == 0 {
+            self.reverse_search = None;
+            return HistorySearchResult::NotFound;
+        }
+
+        let base_offset = match &self.reverse_search {
+            Some(existing) if existing.query == query => existing.next_offset,
+            _ => match self.history_cursor {
+                Some(cur) if cur > 0 => Some(cur - 1),
+                Some(_) => None,
+                None => Some((total_entries as isize) - 1),
+            },
+        };
+
+        let next_offset = match base_offset {
+            Some(offset) if offset >= 0 => Some(offset),
+            _ => None,
+        };
+
+        if next_offset.is_none() {
+            self.reverse_search = None;
+            return HistorySearchResult::NotFound;
+        }
+
+        self.reverse_search = Some(ReverseSearchState {
+            query: query.to_string(),
+            query_lower: query.to_lowercase(),
+            next_offset,
+            awaiting_offset: None,
+        });
+
+        self.advance_reverse_search(app_event_tx)
     }
 
     // ---------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------
+
+    fn total_entries(&self) -> usize {
+        self.history_entry_count + self.local_history.len()
+    }
+
+    fn advance_reverse_search(&mut self, app_event_tx: &AppEventSender) -> HistorySearchResult {
+        let total_entries = self.total_entries();
+        let Some(search) = &mut self.reverse_search else {
+            return HistorySearchResult::NotFound;
+        };
+
+        while let Some(offset) = search.next_offset {
+            if offset < 0 {
+                self.reverse_search = None;
+                return HistorySearchResult::NotFound;
+            }
+            let offset_usize = offset as usize;
+            search.next_offset = offset.checked_sub(1);
+
+            if offset_usize >= total_entries {
+                self.reverse_search = None;
+                return HistorySearchResult::NotFound;
+            }
+
+            if offset_usize >= self.history_entry_count {
+                if let Some(text) = self
+                    .local_history
+                    .get(offset_usize - self.history_entry_count)
+                {
+                    if Self::matches_query(text, search) {
+                        return self.search_match(offset_usize, text.clone());
+                    }
+                    continue;
+                }
+            } else if let Some(text) = self.fetched_history.get(&offset_usize) {
+                if Self::matches_query(text, search) {
+                    return self.search_match(offset_usize, text.clone());
+                }
+                continue;
+            } else if let Some(log_id) = self.history_log_id {
+                search.awaiting_offset = Some(offset_usize);
+                let op = Op::GetHistoryEntryRequest {
+                    offset: offset_usize,
+                    log_id,
+                };
+                app_event_tx.send(AppEvent::CodexOp(op));
+                return HistorySearchResult::Pending;
+            }
+        }
+
+        self.reverse_search = None;
+        HistorySearchResult::NotFound
+    }
+
+    fn search_match(&mut self, offset: usize, text: String) -> HistorySearchResult {
+        self.history_cursor = Some(offset as isize);
+        self.last_history_text = Some(text.clone());
+        if let Some(search) = &mut self.reverse_search {
+            search.awaiting_offset = None;
+            search.next_offset = offset.checked_sub(1).map(|o| o as isize);
+        }
+        HistorySearchResult::Found(text)
+    }
+
+    fn matches_query(text: &str, search: &ReverseSearchState) -> bool {
+        if search.query.is_empty() {
+            return true;
+        }
+        text.to_lowercase().contains(&search.query_lower)
+    }
 
     fn populate_history_at_index(
         &mut self,
@@ -199,6 +348,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -253,7 +403,7 @@ mod tests {
         // Inject the async response.
         assert_eq!(
             Some("latest".into()),
-            history.on_entry_response(1, 2, Some("latest".into()))
+            history.on_entry_response(1, 2, Some("latest".into()), &tx)
         );
 
         // Next Up should move to offset 1.
@@ -274,7 +424,7 @@ mod tests {
 
         assert_eq!(
             Some("older".into()),
-            history.on_entry_response(1, 1, Some("older".into()))
+            history.on_entry_response(1, 1, Some("older".into()), &tx)
         );
     }
 
@@ -296,5 +446,79 @@ mod tests {
         assert!(history.last_history_text.is_none());
 
         assert_eq!(Some("command3".into()), history.navigate_up(&tx));
+    }
+
+    #[test]
+    fn reverse_search_walks_local_history() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        history.record_local_submission("first prompt");
+        history.record_local_submission("second prompt with key");
+        history.record_local_submission("another prompt with key");
+
+        match history.reverse_search("key", &tx) {
+            HistorySearchResult::Found(text) => assert_eq!("another prompt with key", text),
+            other => panic!("expected immediate match, got {other:?}"),
+        }
+        match history.reverse_search("key", &tx) {
+            HistorySearchResult::Found(text) => assert_eq!("second prompt with key", text),
+            other => panic!("expected second match, got {other:?}"),
+        }
+        assert!(matches!(
+            history.reverse_search("key", &tx),
+            HistorySearchResult::NotFound
+        ));
+    }
+
+    #[test]
+    fn reverse_search_fetches_persistent_history_until_match() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        history.set_metadata(42, 2);
+        history.record_local_submission("local prompt");
+
+        assert!(matches!(
+            history.reverse_search("needle", &tx),
+            HistorySearchResult::Pending
+        ));
+
+        let first_event = rx.try_recv().expect("expected request for latest entry");
+        let AppEvent::CodexOp(first_request) = first_event else {
+            panic!("unexpected event variant");
+        };
+        assert_eq!(
+            Op::GetHistoryEntryRequest {
+                log_id: 42,
+                offset: 1
+            },
+            first_request
+        );
+
+        assert!(
+            history
+                .on_entry_response(42, 1, Some("irrelevant".into()), &tx)
+                .is_none()
+        );
+
+        let second_event = rx.try_recv().expect("expected request for older entry");
+        let AppEvent::CodexOp(second_request) = second_event else {
+            panic!("unexpected event variant");
+        };
+        assert_eq!(
+            Op::GetHistoryEntryRequest {
+                log_id: 42,
+                offset: 0
+            },
+            second_request
+        );
+
+        assert_eq!(
+            Some("persistent needle".into()),
+            history.on_entry_response(42, 0, Some("persistent needle".into()), &tx)
+        );
     }
 }

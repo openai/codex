@@ -17,6 +17,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
+use super::chat_composer_history::HistorySearchResult;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
@@ -228,7 +229,10 @@ impl ChatComposer {
         offset: usize,
         entry: Option<String>,
     ) -> bool {
-        let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
+        let Some(text) = self
+            .history
+            .on_entry_response(log_id, offset, entry, &self.app_event_tx)
+        else {
             return false;
         };
         self.set_text_content(text);
@@ -406,6 +410,12 @@ impl ChatComposer {
     /// Return true if either the slash-command popup or the file-search popup is active.
     pub(crate) fn popup_active(&self) -> bool {
         !matches!(self.active_popup, ActivePopup::None)
+    }
+
+    fn is_history_search_modifier(modifiers: KeyModifiers) -> bool {
+        modifiers.contains(KeyModifiers::SUPER)
+            || modifiers.contains(KeyModifiers::META)
+            || modifiers.contains(KeyModifiers::CONTROL)
     }
 
     /// Handle key event when the slash-command popup is visible.
@@ -1038,6 +1048,31 @@ impl ChatComposer {
             // empty or when the cursor is at the correct position, to avoid
             // interfering with normal cursor movement.
             // -------------------------------------------------------------
+            KeyEvent {
+                code: KeyCode::Char('r' | 'R'),
+                modifiers,
+                ..
+            } if Self::is_history_search_modifier(modifiers) => {
+                let query = self.textarea.text().trim().to_string();
+                match self.history.reverse_search(&query, &self.app_event_tx) {
+                    HistorySearchResult::Found(text) => {
+                        self.set_text_content(text);
+                        (InputResult::None, true)
+                    }
+                    HistorySearchResult::Pending => (InputResult::None, true),
+                    HistorySearchResult::NotFound => {
+                        let message = if query.is_empty() {
+                            "No previous entries in history.".to_string()
+                        } else {
+                            format!("No history entry matching \"{query}\"")
+                        };
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_info_event(message, None),
+                        )));
+                        (InputResult::None, true)
+                    }
+                }
+            }
             KeyEvent {
                 code: KeyCode::Up | KeyCode::Down,
                 ..

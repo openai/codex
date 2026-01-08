@@ -163,6 +163,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
     let mut edit_previous = Line::from("");
+    let mut history_search = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
 
@@ -174,6 +175,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::EditPrevious => edit_previous = text,
+                ShortcutId::HistorySearch => history_search = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
             }
@@ -186,6 +188,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         file_paths,
         paste_image,
         edit_previous,
+        history_search,
         quit,
         Line::from(""),
         show_transcript,
@@ -262,6 +265,7 @@ enum ShortcutId {
     FilePaths,
     PasteImage,
     EditPrevious,
+    HistorySearch,
     Quit,
     ShowTranscript,
 }
@@ -389,6 +393,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: "",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::HistorySearch,
+        bindings: &[ShortcutBinding {
+            key: key_hint::cmd(KeyCode::Char('r')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " search history",
     },
     ShortcutDescriptor {
         id: ShortcutId::Quit,

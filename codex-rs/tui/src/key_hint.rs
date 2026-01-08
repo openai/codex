@@ -12,6 +12,12 @@ const ALT_PREFIX: &str = "⌥ + ";
 const ALT_PREFIX: &str = "⌥ + ";
 #[cfg(all(not(test), not(target_os = "macos")))]
 const ALT_PREFIX: &str = "alt + ";
+#[cfg(test)]
+const SUPER_PREFIX: &str = "cmd + ";
+#[cfg(all(not(test), target_os = "macos"))]
+const SUPER_PREFIX: &str = "⌘ + ";
+#[cfg(all(not(test), not(target_os = "macos")))]
+const SUPER_PREFIX: &str = "cmd + ";
 const CTRL_PREFIX: &str = "ctrl + ";
 const SHIFT_PREFIX: &str = "shift + ";
 
@@ -41,6 +47,10 @@ pub(crate) const fn alt(key: KeyCode) -> KeyBinding {
     KeyBinding::new(key, KeyModifiers::ALT)
 }
 
+pub(crate) const fn cmd(key: KeyCode) -> KeyBinding {
+    KeyBinding::new(key, KeyModifiers::SUPER)
+}
+
 pub(crate) const fn shift(key: KeyCode) -> KeyBinding {
     KeyBinding::new(key, KeyModifiers::SHIFT)
 }
@@ -60,6 +70,9 @@ fn modifiers_to_string(modifiers: KeyModifiers) -> String {
     }
     if modifiers.contains(KeyModifiers::SHIFT) {
         result.push_str(SHIFT_PREFIX);
+    }
+    if modifiers.contains(KeyModifiers::SUPER) || modifiers.contains(KeyModifiers::META) {
+        result.push_str(SUPER_PREFIX);
     }
     if modifiers.contains(KeyModifiers::ALT) {
         result.push_str(ALT_PREFIX);
