@@ -1,6 +1,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::animations::spinners::SpinnerSet;
 use codex_core::protocol::ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 
@@ -29,13 +30,15 @@ pub(crate) struct ExecCall {
 pub(crate) struct ExecCell {
     pub(crate) calls: Vec<ExecCall>,
     animations_enabled: bool,
+    spinner_set: SpinnerSet,
 }
 
 impl ExecCell {
-    pub(crate) fn new(call: ExecCall, animations_enabled: bool) -> Self {
+    pub(crate) fn new(call: ExecCall, animations_enabled: bool, spinner_set: SpinnerSet) -> Self {
         Self {
             calls: vec![call],
             animations_enabled,
+            spinner_set,
         }
     }
 
@@ -61,6 +64,7 @@ impl ExecCell {
             Some(Self {
                 calls: [self.calls.clone(), vec![call]].concat(),
                 animations_enabled: self.animations_enabled,
+                spinner_set: self.spinner_set,
             })
         } else {
             None
@@ -119,6 +123,10 @@ impl ExecCell {
 
     pub(crate) fn animations_enabled(&self) -> bool {
         self.animations_enabled
+    }
+
+    pub(crate) fn spinner_set(&self) -> SpinnerSet {
+        self.spinner_set
     }
 
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {

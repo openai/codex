@@ -3,12 +3,15 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use crate::animations::spinners::SpinnerKind;
+use crate::animations::spinners::SpinnerSet;
+use crate::animations::spinners::spinner;
+use crate::animations::spinners::spinner_seed;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
-use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
@@ -42,6 +45,7 @@ pub(crate) fn new_active_exec_command(
     source: ExecCommandSource,
     interaction_input: Option<String>,
     animations_enabled: bool,
+    spinner_set: SpinnerSet,
 ) -> ExecCell {
     ExecCell::new(
         ExecCall {
@@ -55,6 +59,7 @@ pub(crate) fn new_active_exec_command(
             interaction_input,
         },
         animations_enabled,
+        spinner_set,
     )
 }
 
@@ -177,20 +182,12 @@ pub(crate) fn output_lines(
     }
 }
 
-pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> Span<'static> {
-    if !animations_enabled {
-        return "•".dim();
-    }
-    let elapsed = start_time.map(|st| st.elapsed()).unwrap_or_default();
-    if supports_color::on_cached(supports_color::Stream::Stdout)
-        .map(|level| level.has_16m)
-        .unwrap_or(false)
-    {
-        shimmer_spans("•")[0].clone()
-    } else {
-        let blink_on = (elapsed.as_millis() / 600).is_multiple_of(2);
-        if blink_on { "•".into() } else { "◦".dim() }
-    }
+fn spinner_seed_for_active_call(calls: &[ExecCall]) -> u64 {
+    calls
+        .iter()
+        .find(|call| call.output.is_none())
+        .map(|call| spinner_seed(&call.call_id))
+        .unwrap_or(0)
 }
 
 impl HistoryCell for ExecCell {
@@ -254,9 +251,16 @@ impl HistoryCell for ExecCell {
 impl ExecCell {
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
+        let spinner_seed = spinner_seed_for_active_call(&self.calls);
         out.push(Line::from(vec![
             if self.is_active() {
-                spinner(self.active_start_time(), self.animations_enabled())
+                spinner(
+                    self.spinner_set(),
+                    SpinnerKind::Exploring,
+                    self.active_start_time(),
+                    self.animations_enabled(),
+                    spinner_seed,
+                )
             } else {
                 "•".dim()
             },
@@ -360,13 +364,26 @@ impl ExecCell {
             panic!("Expected exactly one call in a command display cell");
         };
         let layout = EXEC_DISPLAY_LAYOUT;
+        let is_interaction = call.is_unified_exec_interaction();
         let success = call.output.as_ref().map(|o| o.exit_code == 0);
         let bullet = match success {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
-            None => spinner(call.start_time, self.animations_enabled()),
+            None => {
+                let kind = if is_interaction {
+                    SpinnerKind::Waiting
+                } else {
+                    SpinnerKind::Executing
+                };
+                spinner(
+                    self.spinner_set(),
+                    kind,
+                    call.start_time,
+                    self.animations_enabled(),
+                    spinner_seed(&call.call_id),
+                )
+            }
         };
-        let is_interaction = call.is_unified_exec_interaction();
         let title = if is_interaction {
             ""
         } else if self.is_active() {
@@ -681,7 +698,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, false, SpinnerSet::Default);
 
         // Use a narrow width so each logical line wraps into many on-screen lines.
         let lines = cell.command_display_lines(width);

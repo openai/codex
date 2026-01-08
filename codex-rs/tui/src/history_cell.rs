@@ -1,10 +1,13 @@
+use crate::animations::spinners::SpinnerKind;
+use crate::animations::spinners::SpinnerSet;
+use crate::animations::spinners::spinner;
+use crate::animations::spinners::spinner_seed;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
-use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::live_wrap::take_prefix_by_width;
@@ -1093,6 +1096,7 @@ pub(crate) struct McpToolCallCell {
     duration: Option<Duration>,
     result: Option<Result<mcp_types::CallToolResult, String>>,
     animations_enabled: bool,
+    spinner_set: SpinnerSet,
 }
 
 impl McpToolCallCell {
@@ -1100,6 +1104,7 @@ impl McpToolCallCell {
         call_id: String,
         invocation: McpInvocation,
         animations_enabled: bool,
+        spinner_set: SpinnerSet,
     ) -> Self {
         Self {
             call_id,
@@ -1108,6 +1113,7 @@ impl McpToolCallCell {
             duration: None,
             result: None,
             animations_enabled,
+            spinner_set,
         }
     }
 
@@ -1169,7 +1175,13 @@ impl HistoryCell for McpToolCallCell {
         let bullet = match status {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
-            None => spinner(Some(self.start_time), self.animations_enabled),
+            None => spinner(
+                self.spinner_set,
+                SpinnerKind::Tool,
+                Some(self.start_time),
+                self.animations_enabled,
+                spinner_seed(&self.call_id),
+            ),
         };
         let header_text = if status.is_some() {
             "Called"
@@ -1258,8 +1270,9 @@ pub(crate) fn new_active_mcp_tool_call(
     call_id: String,
     invocation: McpInvocation,
     animations_enabled: bool,
+    spinner_set: SpinnerSet,
 ) -> McpToolCallCell {
-    McpToolCallCell::new(call_id, invocation, animations_enabled)
+    McpToolCallCell::new(call_id, invocation, animations_enabled, spinner_set)
 }
 
 pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
@@ -1660,6 +1673,11 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_reasoning_header(header: String) -> PlainHistoryCell {
+    let lines: Vec<Line<'static>> = vec![vec!["• ".dim(), header.bold()].into()];
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
@@ -2022,7 +2040,7 @@ mod tests {
             })),
         };
 
-        let cell = new_active_mcp_tool_call("call-1".into(), invocation, true);
+        let cell = new_active_mcp_tool_call("call-1".into(), invocation, true, SpinnerSet::Default);
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
         insta::assert_snapshot!(rendered);
@@ -2049,7 +2067,8 @@ mod tests {
             structured_content: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-2".into(), invocation, true);
+        let mut cell =
+            new_active_mcp_tool_call("call-2".into(), invocation, true, SpinnerSet::Default);
         assert!(
             cell.complete(Duration::from_millis(1420), Ok(result))
                 .is_none()
@@ -2071,7 +2090,8 @@ mod tests {
             })),
         };
 
-        let mut cell = new_active_mcp_tool_call("call-3".into(), invocation, true);
+        let mut cell =
+            new_active_mcp_tool_call("call-3".into(), invocation, true, SpinnerSet::Default);
         assert!(
             cell.complete(Duration::from_secs(2), Err("network timeout".into()))
                 .is_none()
@@ -2115,7 +2135,8 @@ mod tests {
             structured_content: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-4".into(), invocation, true);
+        let mut cell =
+            new_active_mcp_tool_call("call-4".into(), invocation, true, SpinnerSet::Default);
         assert!(
             cell.complete(Duration::from_millis(640), Ok(result))
                 .is_none()
@@ -2147,7 +2168,8 @@ mod tests {
             structured_content: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-5".into(), invocation, true);
+        let mut cell =
+            new_active_mcp_tool_call("call-5".into(), invocation, true, SpinnerSet::Default);
         assert!(
             cell.complete(Duration::from_millis(1280), Ok(result))
                 .is_none()
@@ -2186,7 +2208,8 @@ mod tests {
             structured_content: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-6".into(), invocation, true);
+        let mut cell =
+            new_active_mcp_tool_call("call-6".into(), invocation, true, SpinnerSet::Default);
         assert!(
             cell.complete(Duration::from_millis(320), Ok(result))
                 .is_none()
@@ -2272,6 +2295,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         // Mark call complete so markers are ✓
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -2299,6 +2323,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         // Call 1: Search only
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
@@ -2368,6 +2393,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -2392,6 +2418,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         // Mark call complete so it renders as "Ran"
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -2418,6 +2445,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
@@ -2442,6 +2470,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
@@ -2465,6 +2494,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -2489,6 +2519,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
@@ -2513,6 +2544,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
@@ -2563,6 +2595,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            SpinnerSet::Default,
         );
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();

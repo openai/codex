@@ -753,6 +753,7 @@ mod tests {
             ExecCommandSource::Agent,
             None,
             true,
+            crate::animations::spinners::SpinnerSet::Default,
         );
         exec_cell.complete_call(
             "exec-1",

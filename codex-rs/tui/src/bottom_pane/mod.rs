@@ -1,6 +1,7 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 use std::path::PathBuf;
 
+use crate::animations::spinners::SpinnerSet;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
@@ -78,6 +79,7 @@ pub(crate) struct BottomPane {
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
+    spinner_set: SpinnerSet,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
@@ -97,6 +99,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
     pub(crate) animations_enabled: bool,
+    pub(crate) spinner_set: SpinnerSet,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
@@ -110,6 +113,7 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
             animations_enabled,
+            spinner_set,
             skills,
         } = params;
         let mut composer = ChatComposer::new(
@@ -134,6 +138,7 @@ impl BottomPane {
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
             animations_enabled,
+            spinner_set,
             context_window_percent: None,
             context_window_used_tokens: None,
         }
@@ -353,6 +358,7 @@ impl BottomPane {
                         self.app_event_tx.clone(),
                         self.frame_requester.clone(),
                         self.animations_enabled,
+                        self.spinner_set,
                     ));
                 }
                 if let Some(status) = self.status.as_mut() {
@@ -379,6 +385,7 @@ impl BottomPane {
                 self.app_event_tx.clone(),
                 self.frame_requester.clone(),
                 self.animations_enabled,
+                self.spinner_set,
             ));
             self.request_redraw();
         }
@@ -636,6 +643,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            spinner_set: SpinnerSet::Default,
             skills: Some(Vec::new()),
         });
         pane.push_approval_request(exec_request(), &features);
@@ -659,6 +667,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            spinner_set: SpinnerSet::Default,
             skills: Some(Vec::new()),
         });
 
@@ -693,6 +702,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            spinner_set: SpinnerSet::Default,
             skills: Some(Vec::new()),
         });
 
@@ -760,6 +770,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            spinner_set: SpinnerSet::Default,
             skills: Some(Vec::new()),
         });
 
@@ -772,7 +783,7 @@ mod tests {
         pane.render(area, &mut buf);
 
         let bufs = snapshot_buffer(&buf);
-        assert!(bufs.contains("• Working"), "expected Working header");
+        assert!(bufs.contains("Working"), "expected Working header");
     }
 
     #[test]
@@ -787,6 +798,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            spinner_set: SpinnerSet::Default,
             skills: Some(Vec::new()),
         });
 
@@ -818,6 +830,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            spinner_set: SpinnerSet::Default,
             skills: Some(Vec::new()),
         });
 
@@ -846,6 +859,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            spinner_set: SpinnerSet::Default,
             skills: Some(Vec::new()),
         });
 

@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use codex_core::protocol::Op;
 use crossterm::event::KeyCode;
@@ -16,9 +18,14 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
+use crate::animations::spinners::SpinnerKind;
+use crate::animations::spinners::SpinnerSet;
+use crate::animations::spinners::animation3_spans;
+use crate::animations::spinners::animation4_spans;
+use crate::animations::spinners::spinner;
+use crate::animations::spinners::spinner_seed;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
@@ -42,6 +49,8 @@ pub(crate) struct StatusIndicatorWidget {
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
     animations_enabled: bool,
+    spinner_set: SpinnerSet,
+    spinner_seed_offset: u64,
 }
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
@@ -66,7 +75,12 @@ impl StatusIndicatorWidget {
         app_event_tx: AppEventSender,
         frame_requester: FrameRequester,
         animations_enabled: bool,
+        spinner_set: SpinnerSet,
     ) -> Self {
+        let seed_offset = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or(0);
         Self {
             header: String::from("Working"),
             details: None,
@@ -74,10 +88,11 @@ impl StatusIndicatorWidget {
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
-
             app_event_tx,
             frame_requester,
             animations_enabled,
+            spinner_set,
+            spinner_seed_offset: seed_offset,
         }
     }
 
@@ -88,6 +103,7 @@ impl StatusIndicatorWidget {
     /// Update the animated header label (left of the brackets).
     pub(crate) fn update_header(&mut self, header: String) {
         self.header = header;
+        self.spinner_seed_offset = self.spinner_seed_offset.wrapping_add(1);
     }
 
     /// Update the details text shown below the header.
@@ -207,32 +223,88 @@ impl Renderable for StatusIndicatorWidget {
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
-        let mut spans = Vec::with_capacity(5);
-        spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
-        spans.push(" ".into());
-        if self.animations_enabled {
-            spans.extend(shimmer_spans(&self.header));
-        } else if !self.header.is_empty() {
-            spans.push(self.header.clone().into());
-        }
-        spans.push(" ".into());
-        if self.show_interrupt_hint {
-            spans.extend(vec![
-                format!("({pretty_elapsed} • ").dim(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to interrupt)".dim(),
-            ]);
+        let spinner_kind = SpinnerKind::from_header(&self.header);
+        let spinner_seed = if self.header.is_empty() {
+            spinner_seed("working")
         } else {
-            spans.push(format!("({pretty_elapsed})").dim());
-        }
-
+            spinner_seed(&self.header)
+        };
         let mut lines = Vec::new();
-        lines.push(Line::from(spans));
-        if area.height > 1 {
-            // If there is enough space, add the details lines below the header.
+        if matches!(
+            self.spinner_set,
+            SpinnerSet::Animation3 | SpinnerSet::Animation4
+        ) {
+            let frame = match self.spinner_set {
+                SpinnerSet::Animation3 => animation3_spans(
+                    spinner_kind,
+                    Some(self.last_resume_at),
+                    self.animations_enabled,
+                    spinner_seed ^ self.spinner_seed_offset,
+                ),
+                SpinnerSet::Animation4 => animation4_spans(
+                    spinner_kind,
+                    Some(self.last_resume_at),
+                    self.animations_enabled,
+                    spinner_seed ^ self.spinner_seed_offset,
+                ),
+                _ => unreachable!("animation set mismatch"),
+            };
+            let mut spans = Vec::with_capacity(10);
+            spans.push(frame.face);
+            spans.push(" ".into());
+            if self.spinner_set == SpinnerSet::Animation4 && self.animations_enabled {
+                spans.extend(shimmer_spans(frame.text.content.as_ref()));
+            } else {
+                spans.push(frame.text);
+            }
+            spans.push(" ".into());
+            if self.show_interrupt_hint {
+                spans.extend(vec![
+                    format!("({pretty_elapsed} • ").dim(),
+                    key_hint::plain(KeyCode::Esc).into(),
+                    " to interrupt)".dim(),
+                ]);
+            } else {
+                spans.push(format!("({pretty_elapsed})").dim());
+            }
+            lines.push(Line::from(spans));
+
             let details = self.wrapped_details_lines(area.width);
             let max_details = usize::from(area.height.saturating_sub(1));
             lines.extend(details.into_iter().take(max_details));
+        } else {
+            let mut spans = Vec::with_capacity(5);
+            spans.push(spinner(
+                self.spinner_set,
+                spinner_kind,
+                Some(self.last_resume_at),
+                self.animations_enabled,
+                spinner_seed ^ self.spinner_seed_offset,
+            ));
+            spans.push(" ".into());
+            if self.animations_enabled {
+                spans.extend(shimmer_spans(&self.header));
+            } else if !self.header.is_empty() {
+                spans.push(self.header.clone().into());
+            }
+            spans.push(" ".into());
+            if self.show_interrupt_hint {
+                spans.extend(vec![
+                    format!("({pretty_elapsed} • ").dim(),
+                    key_hint::plain(KeyCode::Esc).into(),
+                    " to interrupt)".dim(),
+                ]);
+            } else {
+                spans.push(format!("({pretty_elapsed})").dim());
+            }
+
+            lines.push(Line::from(spans));
+            if area.height > 1 {
+                // If there is enough space, add the details lines below the header.
+                let details = self.wrapped_details_lines(area.width);
+                let max_details = usize::from(area.height.saturating_sub(1));
+                lines.extend(details.into_iter().take(max_details));
+            }
         }
 
         Paragraph::new(Text::from(lines)).render_ref(area, buf);
@@ -270,7 +342,12 @@ mod tests {
     fn renders_with_working_header() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            true,
+            SpinnerSet::Default,
+        );
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
@@ -284,7 +361,12 @@ mod tests {
     fn renders_truncated() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            true,
+            SpinnerSet::Default,
+        );
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
@@ -298,7 +380,12 @@ mod tests {
     fn renders_wrapped_details_panama_two_lines() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            false,
+            SpinnerSet::Default,
+        );
         w.update_details(Some("A man a plan a canal panama".to_string()));
         w.set_interrupt_hint_visible(false);
 
@@ -319,8 +406,12 @@ mod tests {
     fn timer_pauses_when_requested() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut widget =
-            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let mut widget = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            true,
+            SpinnerSet::Default,
+        );
 
         let baseline = Instant::now();
         widget.last_resume_at = baseline;
@@ -341,7 +432,12 @@ mod tests {
     fn details_overflow_adds_ellipsis() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            true,
+            SpinnerSet::Default,
+        );
         w.update_details(Some("abcd abcd abcd abcd".to_string()));
 
         let lines = w.wrapped_details_lines(6);

@@ -84,6 +84,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
+use crate::animations::spinners::SpinnerSet;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
@@ -340,10 +341,12 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    reasoning_header_emitted: bool,
     // Current status header shown in the status indicator.
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
+    spinner_set: SpinnerSet,
     thread_id: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -526,13 +529,13 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
-        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
-            // Update the shimmer header to the extracted reasoning chunk header.
-            self.set_status_header(header);
-        } else {
-            // Fallback while we don't yet have a bold header: leave existing header as-is.
+        if !self.reasoning_header_emitted {
+            if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+                self.add_to_history(history_cell::new_reasoning_header(header));
+                self.reasoning_header_emitted = true;
+                self.request_redraw();
+            }
         }
-        self.request_redraw();
     }
 
     fn on_agent_reasoning_final(&mut self) {
@@ -545,6 +548,7 @@ impl ChatWidget {
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
+        self.reasoning_header_emitted = false;
         self.request_redraw();
     }
 
@@ -553,6 +557,7 @@ impl ChatWidget {
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         self.full_reasoning_buffer.push_str("\n\n");
         self.reasoning_buffer.clear();
+        self.reasoning_header_emitted = false;
     }
 
     // Raw reasoning uses the same flow as summarized reasoning
@@ -565,6 +570,7 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.reasoning_header_emitted = false;
         self.request_redraw();
     }
 
@@ -1200,6 +1206,7 @@ impl ChatWidget {
                 source,
                 ev.interaction_input.clone(),
                 self.config.animations,
+                self.spinner_set,
             )));
         }
 
@@ -1350,6 +1357,7 @@ impl ChatWidget {
                 ev.source,
                 interaction_input,
                 self.config.animations,
+                self.spinner_set,
             )));
         }
 
@@ -1363,6 +1371,7 @@ impl ChatWidget {
             ev.call_id,
             ev.invocation,
             self.config.animations,
+            self.spinner_set,
         )));
         self.request_redraw();
     }
@@ -1388,6 +1397,7 @@ impl ChatWidget {
                     call_id,
                     invocation,
                     self.config.animations,
+                    self.spinner_set,
                 );
                 let extra_cell = cell.complete(duration, result);
                 self.active_cell = Some(Box::new(cell));
@@ -1417,6 +1427,7 @@ impl ChatWidget {
         } = common;
         let mut config = config;
         config.model = Some(model.clone());
+        let spinner_set = SpinnerSet::from_features(&config.features);
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
@@ -1433,6 +1444,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                spinner_set,
                 skills: None,
             }),
             active_cell: None,
@@ -1461,8 +1473,10 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            reasoning_header_emitted: false,
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            spinner_set,
             thread_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
@@ -1503,6 +1517,7 @@ impl ChatWidget {
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let spinner_set = SpinnerSet::from_features(&config.features);
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -1519,6 +1534,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                spinner_set,
                 skills: None,
             }),
             active_cell: None,
@@ -1547,8 +1563,10 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            reasoning_header_emitted: false,
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            spinner_set,
             thread_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::animations::spinners::SpinnerSet;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
@@ -363,6 +364,7 @@ async fn make_chatwidget_manual(
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
+        spinner_set: SpinnerSet::Default,
         skills: None,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
@@ -394,8 +396,10 @@ async fn make_chatwidget_manual(
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
+        reasoning_header_emitted: false,
         current_status_header: String::from("Working"),
         retry_status_header: None,
+        spinner_set: SpinnerSet::Default,
         thread_id: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,

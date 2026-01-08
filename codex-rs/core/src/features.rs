@@ -87,6 +87,14 @@ pub enum Feature {
     ShellSnapshot,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
+    /// Experimental TUI animation set 1.
+    Animation1,
+    /// Experimental TUI animation set 2.
+    Animation2,
+    /// Experimental TUI animation set 3.
+    Animation3,
+    /// Experimental TUI animation set 4.
+    Animation4,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
 }
@@ -377,6 +385,30 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Tui2,
         key: "tui2",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Animation1,
+        key: "animation1",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Animation2,
+        key: "animation2",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Animation3,
+        key: "animation3",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Animation4,
+        key: "animation4",
         stage: Stage::Experimental,
         default_enabled: false,
     },

@@ -32,6 +32,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 mod additional_dirs;
+mod animations;
 mod app;
 mod app_backtrack;
 mod app_event;
