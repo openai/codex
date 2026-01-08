@@ -50,6 +50,7 @@ use tokio::sync::Mutex;
 use crate::find_codex_home::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
+const MCP_OAUTH_KEYRING_DEBUG_ALLOW_ENV_VAR: &str = "CODEX_MCP_OAUTH_KEYRING_DEBUG_ALLOW";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,6 +96,15 @@ pub(crate) fn load_oauth_tokens(
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<Option<StoredOAuthTokens>> {
+    if keyring_load_disabled_in_debug() {
+        if store_mode == OAuthCredentialsStoreMode::Keyring {
+            return Err(anyhow::anyhow!(
+                "MCP OAuth keyring access is disabled in debug builds on macOS; set {MCP_OAUTH_KEYRING_DEBUG_ALLOW_ENV_VAR}=1 to enable."
+            ));
+        }
+        return load_oauth_tokens_from_file(server_name, url);
+    }
+
     let keyring_store = DefaultKeyringStore;
     match store_mode {
         OAuthCredentialsStoreMode::Auto => {
@@ -114,6 +124,12 @@ pub(crate) fn has_oauth_tokens(
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<bool> {
     Ok(load_oauth_tokens(server_name, url, store_mode)?.is_some())
+}
+
+fn keyring_load_disabled_in_debug() -> bool {
+    cfg!(debug_assertions)
+        && cfg!(target_os = "macos")
+        && std::env::var_os(MCP_OAUTH_KEYRING_DEBUG_ALLOW_ENV_VAR).is_none()
 }
 
 fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {

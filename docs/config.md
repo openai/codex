@@ -12,6 +12,8 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
+On macOS debug builds, Codex skips reading MCP OAuth tokens from the system keychain to avoid repeated access prompts. Set `CODEX_MCP_OAUTH_KEYRING_DEBUG_ALLOW=1` to allow keychain reads when debugging.
+
 ## Notify
 
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
