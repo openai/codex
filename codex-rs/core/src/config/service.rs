@@ -4,6 +4,7 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::config_loader::merge_toml_values;
@@ -155,6 +156,22 @@ impl ConfigService {
                     .collect()
             }),
         })
+    }
+
+    pub async fn read_requirements(
+        &self,
+    ) -> Result<Option<ConfigRequirementsToml>, ConfigServiceError> {
+        let layers = self
+            .load_thread_agnostic_config()
+            .await
+            .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
+
+        let requirements = layers.requirements_toml().clone();
+        if requirements.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(requirements))
+        }
     }
 
     pub async fn write_value(

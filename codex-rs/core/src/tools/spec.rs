@@ -22,7 +22,6 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub web_search_cached: bool,
-    pub include_view_image_tool: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -40,7 +39,6 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_web_search_cached = features.enabled(Feature::WebSearchCached);
-        let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -72,7 +70,6 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             web_search_cached: include_web_search_cached,
-            include_view_image_tool,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -1107,10 +1104,8 @@ pub(crate) fn build_specs(
         });
     }
 
-    if config.include_view_image_tool {
-        builder.push_spec_with_parallel_support(create_view_image_tool(), true);
-        builder.register_handler("view_image", view_image_handler);
-    }
+    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+    builder.register_handler("view_image", view_image_handler);
 
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
@@ -1236,7 +1231,6 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
-        features.enable(Feature::ViewImageTool);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -1556,7 +1550,6 @@ mod tests {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
-        features.disable(Feature::ViewImageTool);
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -1575,8 +1568,7 @@ mod tests {
     fn test_test_model_info_includes_sync_tool() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.disable(Feature::ViewImageTool);
+        let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,

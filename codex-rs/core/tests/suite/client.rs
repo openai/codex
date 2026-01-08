@@ -15,12 +15,11 @@ use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_otel::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
@@ -59,7 +58,7 @@ use wiremock::matchers::query_param;
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[expect(clippy::unwrap_used)]
@@ -683,7 +682,6 @@ async fn skills_append_to_instructions() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
     config.cwd = codex_home.path().to_path_buf();
-    config.features.enable(Feature::Skills);
 
     let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),

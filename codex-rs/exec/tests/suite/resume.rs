@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
+use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
-use std::path::Path;
 use std::string::ToString;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -103,11 +103,19 @@ fn last_user_image_count(path: &std::path::Path) -> usize {
     last_count
 }
 
+fn exec_fixture() -> anyhow::Result<std::path::PathBuf> {
+    Ok(find_resource!("tests/fixtures/cli_responses_fixture.sse")?)
+}
+
+fn exec_repo_root() -> anyhow::Result<std::path::PathBuf> {
+    Ok(find_resource!(".")?)
+}
+
 #[test]
 fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     let test = test_codex_exec();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
+    let fixture = exec_fixture()?;
+    let repo_root = exec_repo_root()?;
 
     // 1) First run: create a session with a unique marker in the content.
     let marker = format!("resume-last-{}", Uuid::new_v4());
@@ -118,7 +126,7 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt)
         .assert()
         .success();
@@ -137,7 +145,7 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt2)
         .arg("resume")
         .arg("--last")
@@ -160,8 +168,8 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
 #[test]
 fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<()> {
     let test = test_codex_exec();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
+    let fixture = exec_fixture()?;
+    let repo_root = exec_repo_root()?;
 
     // 1) First run: create a session with a unique marker in the content.
     let marker = format!("resume-last-json-{}", Uuid::new_v4());
@@ -172,7 +180,7 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt)
         .assert()
         .success();
@@ -191,7 +199,7 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("--json")
         .arg("resume")
         .arg("--last")
@@ -214,8 +222,7 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
 #[test]
 fn exec_resume_accepts_global_flags_after_subcommand() -> anyhow::Result<()> {
     let test = test_codex_exec();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
+    let fixture = exec_fixture()?;
 
     // Seed a session.
     test.cmd()
@@ -249,8 +256,8 @@ fn exec_resume_accepts_global_flags_after_subcommand() -> anyhow::Result<()> {
 #[test]
 fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
     let test = test_codex_exec();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
+    let fixture = exec_fixture()?;
+    let repo_root = exec_repo_root()?;
 
     // 1) First run: create a session
     let marker = format!("resume-by-id-{}", Uuid::new_v4());
@@ -261,7 +268,7 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt)
         .assert()
         .success();
@@ -284,7 +291,7 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt2)
         .arg("resume")
         .arg(&session_id)
@@ -306,8 +313,8 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
 #[test]
 fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
     let test = test_codex_exec();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
+    let fixture = exec_fixture()?;
+    let repo_root = exec_repo_root()?;
 
     let marker = format!("resume-config-{}", Uuid::new_v4());
     let prompt = format!("echo {marker}");
@@ -321,7 +328,7 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
         .arg("--model")
         .arg("gpt-5.1")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt)
         .assert()
         .success();
@@ -343,7 +350,7 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
         .arg("--model")
         .arg("gpt-5.1-high")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt2)
         .arg("resume")
         .arg("--last")
@@ -382,8 +389,8 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
 #[test]
 fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
     let test = test_codex_exec();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
+    let fixture = exec_fixture()?;
+    let repo_root = exec_repo_root()?;
 
     let marker = format!("resume-image-{}", Uuid::new_v4());
     let prompt = format!("echo {marker}");
@@ -393,7 +400,7 @@ fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt)
         .assert()
         .success();
@@ -417,7 +424,7 @@ fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("resume")
         .arg("--last")
         .arg("--image")

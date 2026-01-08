@@ -18,12 +18,13 @@ use clap::Parser;
 use clap::Subcommand;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -845,7 +846,7 @@ impl CodexClient {
         }
 
         let response = CommandExecutionRequestApprovalResponse {
-            decision: ApprovalDecision::Accept,
+            decision: CommandExecutionApprovalDecision::Accept,
         };
         self.send_server_request_response(request_id, &response)?;
         println!("< approved commandExecution request for item {item_id}");
@@ -876,7 +877,7 @@ impl CodexClient {
         }
 
         let response = FileChangeRequestApprovalResponse {
-            decision: ApprovalDecision::Accept,
+            decision: FileChangeApprovalDecision::Accept,
         };
         self.send_server_request_response(request_id, &response)?;
         println!("< approved fileChange request for item {item_id}");

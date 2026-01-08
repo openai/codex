@@ -121,6 +121,10 @@ client_request_definitions! {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
     },
+    ThreadLoadedList => "thread/loaded/list" {
+        params: v2::ThreadLoadedListParams,
+        response: v2::ThreadLoadedListResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
@@ -195,6 +199,11 @@ client_request_definitions! {
     ConfigBatchWrite => "config/batchWrite" {
         params: v2::ConfigBatchWriteParams,
         response: v2::ConfigWriteResponse,
+    },
+
+    ConfigRequirementsRead => "configRequirements/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::ConfigRequirementsReadResponse,
     },
 
     GetAccount => "account/read" {
@@ -704,6 +713,22 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
+                "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_config_requirements_read() -> Result<()> {
+        let request = ClientRequest::ConfigRequirementsRead {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        assert_eq!(
+            json!({
+                "method": "configRequirements/read",
                 "id": 1,
             }),
             serde_json::to_value(&request)?,
