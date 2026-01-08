@@ -63,9 +63,10 @@ impl TextArea {
     pub fn set_text(&mut self, text: &str) {
         self.text = text.to_string();
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
+        self.elements.clear();
+        self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
         self.wrap_cache.replace(None);
         self.preferred_col = None;
-        self.elements.clear();
         self.kill_buffer.clear();
     }
 
@@ -735,18 +736,36 @@ impl TextArea {
             .position(|e| pos > e.range.start && pos < e.range.end)
     }
 
-    fn clamp_pos_to_nearest_boundary(&self, mut pos: usize) -> usize {
-        if pos > self.text.len() {
-            pos = self.text.len();
+    fn clamp_pos_to_char_boundary(&self, pos: usize) -> usize {
+        let pos = pos.min(self.text.len());
+        if self.text.is_char_boundary(pos) {
+            return pos;
         }
+        let mut prev = pos;
+        while prev > 0 && !self.text.is_char_boundary(prev) {
+            prev -= 1;
+        }
+        let mut next = pos;
+        while next < self.text.len() && !self.text.is_char_boundary(next) {
+            next += 1;
+        }
+        if pos.saturating_sub(prev) <= next.saturating_sub(pos) {
+            prev
+        } else {
+            next
+        }
+    }
+
+    fn clamp_pos_to_nearest_boundary(&self, pos: usize) -> usize {
+        let pos = self.clamp_pos_to_char_boundary(pos);
         if let Some(idx) = self.find_element_containing(pos) {
             let e = &self.elements[idx];
             let dist_start = pos.saturating_sub(e.range.start);
             let dist_end = e.range.end.saturating_sub(pos);
             if dist_start <= dist_end {
-                e.range.start
+                self.clamp_pos_to_char_boundary(e.range.start)
             } else {
-                e.range.end
+                self.clamp_pos_to_char_boundary(e.range.end)
             }
         } else {
             pos
@@ -754,6 +773,7 @@ impl TextArea {
     }
 
     fn clamp_pos_for_insertion(&self, pos: usize) -> usize {
+        let pos = self.clamp_pos_to_char_boundary(pos);
         // Do not allow inserting into the middle of an element
         if let Some(idx) = self.find_element_containing(pos) {
             let e = &self.elements[idx];
@@ -761,9 +781,9 @@ impl TextArea {
             let dist_start = pos.saturating_sub(e.range.start);
             let dist_end = e.range.end.saturating_sub(pos);
             if dist_start <= dist_end {
-                e.range.start
+                self.clamp_pos_to_char_boundary(e.range.start)
             } else {
-                e.range.end
+                self.clamp_pos_to_char_boundary(e.range.end)
             }
         } else {
             pos
@@ -1041,6 +1061,7 @@ impl TextArea {
 mod tests {
     use super::*;
     // crossterm types are intentionally not imported here to avoid unused warnings
+    use pretty_assertions::assert_eq;
     use rand::prelude::*;
 
     fn rand_grapheme(rng: &mut rand::rngs::StdRng) -> String {
@@ -1131,6 +1152,27 @@ mod tests {
         t.replace_range(0..1, "AA");
         assert_eq!(t.text(), "AAbcd");
         assert_eq!(t.cursor(), 5);
+    }
+
+    #[test]
+    fn insert_str_at_clamps_to_char_boundary() {
+        let mut t = TextArea::new();
+        t.insert_str("你");
+        t.set_cursor(0);
+        t.insert_str_at(1, "A");
+        assert_eq!(t.text(), "A你");
+        assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn set_text_clamps_cursor_to_char_boundary() {
+        let mut t = TextArea::new();
+        t.insert_str("abcd");
+        t.set_cursor(1);
+        t.set_text("你");
+        assert_eq!(t.cursor(), 0);
+        t.insert_str("a");
+        assert_eq!(t.text(), "a你");
     }
 
     #[test]

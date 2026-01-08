@@ -6,6 +6,12 @@ use std::time::Instant;
 const PASTE_BURST_MIN_CHARS: u16 = 3;
 const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
 const PASTE_ENTER_SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
+// Slower paste burts have been observed in windows environments, but ideally
+// we want to keep this low
+#[cfg(not(windows))]
+const PASTE_BURST_ACTIVE_IDLE_TIMEOUT: Duration = Duration::from_millis(8);
+#[cfg(windows)]
+const PASTE_BURST_ACTIVE_IDLE_TIMEOUT: Duration = Duration::from_millis(60);
 
 #[derive(Default)]
 pub(crate) struct PasteBurst {
@@ -52,16 +58,14 @@ impl PasteBurst {
         PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1)
     }
 
+    #[cfg(test)]
+    pub(crate) fn recommended_active_flush_delay() -> Duration {
+        PASTE_BURST_ACTIVE_IDLE_TIMEOUT + Duration::from_millis(1)
+    }
+
     /// Entry point: decide how to treat a plain char with current timing.
     pub fn on_plain_char(&mut self, ch: char, now: Instant) -> CharDecision {
-        match self.last_plain_char_time {
-            Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
-                self.consecutive_plain_char_burst =
-                    self.consecutive_plain_char_burst.saturating_add(1)
-            }
-            _ => self.consecutive_plain_char_burst = 1,
-        }
-        self.last_plain_char_time = Some(now);
+        self.note_plain_char(now);
 
         if self.active {
             self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
@@ -92,6 +96,40 @@ impl PasteBurst {
         CharDecision::RetainFirstChar
     }
 
+    /// Like on_plain_char(), but never holds the first char.
+    ///
+    /// Used for non-ASCII input paths (e.g., IMEs) where holding a character can
+    /// feel like dropped input, while still allowing burst-based paste detection.
+    ///
+    /// Note: This method will only ever return BufferAppend or BeginBuffer.
+    pub fn on_plain_char_no_hold(&mut self, now: Instant) -> Option<CharDecision> {
+        self.note_plain_char(now);
+
+        if self.active {
+            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+            return Some(CharDecision::BufferAppend);
+        }
+
+        if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
+            return Some(CharDecision::BeginBuffer {
+                retro_chars: self.consecutive_plain_char_burst.saturating_sub(1),
+            });
+        }
+
+        None
+    }
+
+    fn note_plain_char(&mut self, now: Instant) {
+        match self.last_plain_char_time {
+            Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
+                self.consecutive_plain_char_burst =
+                    self.consecutive_plain_char_burst.saturating_add(1)
+            }
+            _ => self.consecutive_plain_char_burst = 1,
+        }
+        self.last_plain_char_time = Some(now);
+    }
+
     /// Flush the buffered burst if the inter-key timeout has elapsed.
     ///
     /// Returns Some(String) when either:
@@ -102,9 +140,14 @@ impl PasteBurst {
     ///
     /// Returns None if the timeout has not elapsed or there is nothing to flush.
     pub fn flush_if_due(&mut self, now: Instant) -> FlushResult {
+        let timeout = if self.is_active_internal() {
+            PASTE_BURST_ACTIVE_IDLE_TIMEOUT
+        } else {
+            PASTE_BURST_CHAR_INTERVAL
+        };
         let timed_out = self
             .last_plain_char_time
-            .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
+            .is_some_and(|t| now.duration_since(t) > timeout);
         if timed_out && self.is_active_internal() {
             self.active = false;
             let out = std::mem::take(&mut self.buffer);
