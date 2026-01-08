@@ -1,6 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
-use app_test_support::create_mock_chat_completions_server;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -17,7 +17,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn thread_loaded_list_returns_loaded_thread_ids() -> Result<()> {
-    let server = create_mock_chat_completions_server(vec![]).await;
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -47,7 +47,7 @@ async fn thread_loaded_list_returns_loaded_thread_ids() -> Result<()> {
 
 #[tokio::test]
 async fn thread_loaded_list_paginates() -> Result<()> {
-    let server = create_mock_chat_completions_server(vec![]).await;
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -114,7 +114,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "chat"
+wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#
