@@ -503,7 +503,7 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
         "expected models call to time out before the delayed response; took {elapsed:?}"
     );
     match err {
-        CodexErr::Timeout | CodexErr::UnexpectedStatus(_) => {}
+        CodexErr::Timeout => {}
         other => panic!("expected timeout error, got {other:?}; requests: {request_summaries:?}"),
     }
     assert_eq!(

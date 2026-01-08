@@ -1,6 +1,7 @@
 use chrono::Utc;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
+use codex_api::provider::RetryConfig as ApiRetryConfig;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
+use tokio::time::timeout;
 use tracing::error;
 
 use super::cache;
@@ -21,6 +23,7 @@ use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
+use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
@@ -29,6 +32,7 @@ use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
+const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
 const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
@@ -99,16 +103,26 @@ impl ModelsManager {
             return Ok(());
         }
         let auth = self.auth_manager.auth().await;
-        let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
+        let mut api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
+        api_provider.retry = ApiRetryConfig {
+            max_attempts: 0,
+            base_delay: Duration::from_millis(200),
+            retry_429: false,
+            retry_5xx: false,
+            retry_transport: false,
+        };
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
         let client_version = format_client_version_to_whole();
-        let (models, etag) = client
-            .list_models(&client_version, HeaderMap::new())
-            .await
-            .map_err(map_api_error)?;
+        let (models, etag) = timeout(
+            MODELS_REFRESH_TIMEOUT,
+            client.list_models(&client_version, HeaderMap::new()),
+        )
+        .await
+        .map_err(|_| CodexErr::Timeout)?
+        .map_err(map_api_error)?;
 
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();

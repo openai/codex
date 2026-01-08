@@ -11,9 +11,6 @@ use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
 use std::sync::Arc;
-use std::time::Duration;
-
-const MODELS_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {
     transport: T,
@@ -49,7 +46,6 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
         let builder = || {
             let mut req = self.provider.build_request(Method::GET, self.path());
             req.headers.extend(extra_headers.clone());
-            req.timeout = Some(MODELS_TIMEOUT);
 
             let separator = if req.url.contains('?') { '&' } else { '?' };
             req.url = format!("{}{}client_version={client_version}", req.url, separator);
