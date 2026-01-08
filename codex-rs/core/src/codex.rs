@@ -2125,10 +2125,9 @@ mod handlers {
             .terminate_all_processes()
             .await;
         info!("Shutting down Codex instance");
-        let turn_count = sess
-            .clone_history()
-            .await
-            .get_history()
+        let history = sess.clone_history().await;
+        let turn_count = history
+            .raw_items()
             .iter()
             .filter(|item| is_user_turn_boundary(item))
             .count();
