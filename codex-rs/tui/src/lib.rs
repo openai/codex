@@ -68,8 +68,11 @@ mod resume_picker;
 mod selection_list;
 mod session_log;
 mod shimmer;
+#[cfg(feature = "entertainment")]
+mod shimmer_text;
 mod slash_command;
 mod status;
+mod status_indicator_shimmer;
 mod status_indicator_widget;
 mod streaming;
 mod style;

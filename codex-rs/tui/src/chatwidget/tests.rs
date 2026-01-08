@@ -394,6 +394,7 @@ async fn make_chatwidget_manual(
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
+        reasoning_header_emitted: false,
         current_status_header: String::from("Working"),
         retry_status_header: None,
         thread_id: None,
@@ -2713,12 +2714,6 @@ async fn ui_snapshots_small_heights_task_running() {
             model_context_window: None,
         }),
     });
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Thinking**".into(),
-        }),
-    });
     for h in [1u16, 2, 3] {
         let name = format!("chat_small_running_h{h}");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
@@ -2742,13 +2737,6 @@ async fn status_widget_and_approval_modal_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
-        }),
-    });
-    // Provide a deterministic header for the status line.
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Analyzing**".into(),
         }),
     });
 
@@ -2794,13 +2782,6 @@ async fn status_widget_active_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
-        }),
-    });
-    // Provide a deterministic header via a bold reasoning chunk.
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Analyzing**".into(),
         }),
     });
     // Render and snapshot.
@@ -3343,7 +3324,7 @@ async fn stream_error_updates_status_indicator() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), msg);
+    assert_eq!(status.header(), msg.to_string());
     assert_eq!(status.details(), Some(details));
 }
 
@@ -3396,7 +3377,7 @@ async fn stream_recovery_restores_previous_status_header() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Working".to_string());
     assert_eq!(status.details(), None);
     assert!(chat.retry_status_header.is_none());
 }

@@ -22,6 +22,8 @@ use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
+use crate::status_indicator_shimmer::RenderHeader;
+use crate::status_indicator_shimmer::StatusShimmer;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
 use crate::wrapping::RtOptions;
@@ -31,8 +33,7 @@ const DETAILS_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
 
 pub(crate) struct StatusIndicatorWidget {
-    /// Animated header text (defaults to "Working").
-    header: String,
+    shimmer: StatusShimmer,
     details: Option<String>,
     show_interrupt_hint: bool,
 
@@ -67,12 +68,13 @@ impl StatusIndicatorWidget {
         frame_requester: FrameRequester,
         animations_enabled: bool,
     ) -> Self {
+        let now = Instant::now();
         Self {
-            header: String::from("Working"),
+            shimmer: StatusShimmer::new(now),
             details: None,
             show_interrupt_hint: true,
             elapsed_running: Duration::ZERO,
-            last_resume_at: Instant::now(),
+            last_resume_at: now,
             is_paused: false,
 
             app_event_tx,
@@ -87,7 +89,7 @@ impl StatusIndicatorWidget {
 
     /// Update the animated header label (left of the brackets).
     pub(crate) fn update_header(&mut self, header: String) {
-        self.header = header;
+        self.shimmer.update_header(header);
     }
 
     /// Update the details text shown below the header.
@@ -98,8 +100,8 @@ impl StatusIndicatorWidget {
     }
 
     #[cfg(test)]
-    pub(crate) fn header(&self) -> &str {
-        &self.header
+    pub(crate) fn header(&self) -> String {
+        self.shimmer.header_for_test()
     }
 
     #[cfg(test)]
@@ -188,6 +190,10 @@ impl StatusIndicatorWidget {
 
         out
     }
+
+    fn shimmer_header(&self, now: Instant) -> RenderHeader {
+        self.shimmer.render_header(now)
+    }
 }
 
 impl Renderable for StatusIndicatorWidget {
@@ -206,14 +212,18 @@ impl Renderable for StatusIndicatorWidget {
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
-
+        let header = self.shimmer_header(now);
         let mut spans = Vec::with_capacity(5);
-        spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
+        if let Some(face) = header.face {
+            spans.push(face.into());
+        } else {
+            spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
+        }
         spans.push(" ".into());
         if self.animations_enabled {
-            spans.extend(shimmer_spans(&self.header));
-        } else if !self.header.is_empty() {
-            spans.push(self.header.clone().into());
+            spans.extend(shimmer_spans(&header.text));
+        } else if !header.text.is_empty() {
+            spans.push(header.text.into());
         }
         spans.push(" ".into());
         if self.show_interrupt_hint {

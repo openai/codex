@@ -340,6 +340,8 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    // Tracks whether the current reasoning section header has been emitted to history.
+    reasoning_header_emitted: bool,
     // Current status header shown in the status indicator.
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
@@ -523,16 +525,26 @@ impl ChatWidget {
     fn on_agent_reasoning_delta(&mut self, delta: String) {
         // For reasoning deltas, do not stream to history. Accumulate the
         // current reasoning block and extract the first bold element
-        // (between **/**) as the chunk header. Show this header as status.
+        // (between **/**) as the chunk header. Emit this header as a history entry.
         self.reasoning_buffer.push_str(&delta);
 
-        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
-            // Update the shimmer header to the extracted reasoning chunk header.
-            self.set_status_header(header);
-        } else {
-            // Fallback while we don't yet have a bold header: leave existing header as-is.
+        if !self.reasoning_header_emitted {
+            if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+                self.emit_reasoning_header(header);
+                self.reasoning_header_emitted = true;
+            }
         }
         self.request_redraw();
+    }
+
+    fn emit_reasoning_header(&mut self, header: String) {
+        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        append_markdown(&format!("**{header}**"), None, &mut rendered);
+        if rendered.is_empty() {
+            return;
+        }
+        let cell = AgentMessageCell::new(rendered, true);
+        self.add_boxed_history(Box::new(cell));
     }
 
     fn on_agent_reasoning_final(&mut self) {
@@ -545,6 +557,7 @@ impl ChatWidget {
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
+        self.reasoning_header_emitted = false;
         self.request_redraw();
     }
 
@@ -553,6 +566,7 @@ impl ChatWidget {
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         self.full_reasoning_buffer.push_str("\n\n");
         self.reasoning_buffer.clear();
+        self.reasoning_header_emitted = false;
     }
 
     // Raw reasoning uses the same flow as summarized reasoning
@@ -565,6 +579,7 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.reasoning_header_emitted = false;
         self.request_redraw();
     }
 
@@ -1461,6 +1476,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            reasoning_header_emitted: false,
             current_status_header: String::from("Working"),
             retry_status_header: None,
             thread_id: None,
@@ -1547,6 +1563,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            reasoning_header_emitted: false,
             current_status_header: String::from("Working"),
             retry_status_header: None,
             thread_id: None,
