@@ -315,7 +315,8 @@ pub async fn run_main(
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
-    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), true);
+    let otel =
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true);
 
     #[allow(clippy::print_stderr)]
     let otel = match otel {

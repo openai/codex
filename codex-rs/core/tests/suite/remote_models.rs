@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
-use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::error::CodexErr;
@@ -39,6 +37,8 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
@@ -98,19 +98,19 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     )
     .await;
 
-    let harness = build_remote_models_harness(&server, |config| {
-        config.features.enable(Feature::RemoteModels);
-        config.model = Some("gpt-5.1".to_string());
-    })
-    .await?;
-
-    let RemoteModelsHarness {
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some("gpt-5.1".to_string());
+        });
+    let TestCodex {
         codex,
         cwd,
         config,
         thread_manager,
         ..
-    } = harness;
+    } = builder.build(&server).await?;
 
     let models_manager = thread_manager.get_models_manager();
     let available_model =
@@ -214,16 +214,19 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
     )
     .await;
 
-    let harness = build_remote_models_harness(&server, |config| {
-        config.model = Some("gpt-5.1".to_string());
-    })
-    .await?;
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some("gpt-5.1".to_string());
+        });
+    let test = builder.build(&server).await?;
 
-    let models_manager = harness.thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, slug, &harness.config).await;
+    let models_manager = test.thread_manager.get_models_manager();
+    wait_for_model_available(&models_manager, slug, &test.config).await;
 
     let model_info = models_manager
-        .construct_model_info(slug, &harness.config)
+        .construct_model_info(slug, &test.config)
         .await;
     assert_eq!(
         model_info.truncation_policy,
@@ -258,17 +261,20 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     )
     .await;
 
-    let harness = build_remote_models_harness(&server, |config| {
-        config.model = Some("gpt-5.1".to_string());
-        config.tool_output_token_limit = Some(50);
-    })
-    .await?;
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some("gpt-5.1".to_string());
+            config.tool_output_token_limit = Some(50);
+        });
+    let test = builder.build(&server).await?;
 
-    let models_manager = harness.thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, slug, &harness.config).await;
+    let models_manager = test.thread_manager.get_models_manager();
+    wait_for_model_available(&models_manager, slug, &test.config).await;
 
     let model_info = models_manager
-        .construct_model_info(slug, &harness.config)
+        .construct_model_info(slug, &test.config)
         .await;
     assert_eq!(
         model_info.truncation_policy,
@@ -335,19 +341,19 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     )
     .await;
 
-    let harness = build_remote_models_harness(&server, |config| {
-        config.features.enable(Feature::RemoteModels);
-        config.model = Some("gpt-5.1".to_string());
-    })
-    .await?;
-
-    let RemoteModelsHarness {
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some("gpt-5.1".to_string());
+        });
+    let TestCodex {
         codex,
         cwd,
         config,
         thread_manager,
         ..
-    } = harness;
+    } = builder.build(&server).await?;
 
     let models_manager = thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, model, &config).await;
@@ -575,50 +581,6 @@ async fn wait_for_model_available(
         }
         sleep(Duration::from_millis(25)).await;
     }
-}
-
-struct RemoteModelsHarness {
-    codex: Arc<CodexThread>,
-    cwd: Arc<TempDir>,
-    config: Config,
-    thread_manager: Arc<ThreadManager>,
-}
-
-// todo(aibrahim): move this to with_model_provier in test_codex
-async fn build_remote_models_harness<F>(
-    server: &MockServer,
-    mutate_config: F,
-) -> Result<RemoteModelsHarness>
-where
-    F: FnOnce(&mut Config),
-{
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let home = Arc::new(TempDir::new()?);
-    let cwd = Arc::new(TempDir::new()?);
-
-    let mut config = load_default_config_for_test(&home).await;
-    config.cwd = cwd.path().to_path_buf();
-    config.features.enable(Feature::RemoteModels);
-
-    let provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    config.model_provider = provider.clone();
-
-    mutate_config(&mut config);
-
-    let thread_manager = ThreadManager::with_models_provider(auth, provider);
-    let thread_manager = Arc::new(thread_manager);
-
-    let new_conversation = thread_manager.start_thread(config.clone()).await?;
-
-    Ok(RemoteModelsHarness {
-        codex: new_conversation.thread,
-        cwd,
-        config,
-        thread_manager,
-    })
 }
 
 fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> ModelInfo {
