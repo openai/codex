@@ -60,7 +60,6 @@ use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
-use codex_app_server_protocol::McpServerRefreshParams;
 use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::ModelListParams;
@@ -2308,7 +2307,7 @@ impl CodexMessageProcessor {
         outgoing.send_response(request_id, response).await;
     }
 
-    async fn mcp_server_refresh(&self, request_id: RequestId, _params: McpServerRefreshParams) {
+    async fn mcp_server_refresh(&self, request_id: RequestId, _params: Option<()>) {
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {

@@ -157,7 +157,7 @@ client_request_definitions! {
     },
 
     McpServerRefresh => "mcpServer/refresh" {
-        params: v2::McpServerRefreshParams,
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v2::McpServerRefreshResponse,
     },
 
