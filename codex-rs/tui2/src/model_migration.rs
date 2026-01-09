@@ -57,6 +57,7 @@ impl MigrationMenuOption {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn migration_copy_for_models(
     current_model: &str,
     target_model: &str,
@@ -300,7 +301,7 @@ impl ModelMigrationScreen {
     ) {
         let horizontal_inset = 2;
         let content_width = area_width.saturating_sub(horizontal_inset);
-        let wrap_width = (content_width > 0).then(|| content_width as usize);
+        let wrap_width = (content_width > 0).then_some(content_width as usize);
         let rendered = render_markdown_text_with_width(markdown, wrap_width);
         for line in rendered.lines {
             column.push(line.inset(Insets::tlbr(0, horizontal_inset, 0, 0)));
