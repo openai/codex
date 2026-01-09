@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
+use codex_utils_image::decode_data_url;
+use codex_utils_image::load_and_resize_bytes;
 use codex_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
@@ -203,6 +206,24 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
     }
 }
 
+fn inline_image_error_placeholder(error: impl std::fmt::Display) -> ContentItem {
+    ContentItem::InputText {
+        text: format!("Codex could not read the provided image data: {error}"),
+    }
+}
+
+fn invalid_inline_image_error_placeholder(error: impl std::fmt::Display) -> ContentItem {
+    ContentItem::InputText {
+        text: format!("Provided image data is invalid: {error}"),
+    }
+}
+
+fn unsupported_inline_image_error_placeholder(mime: &str) -> ContentItem {
+    ContentItem::InputText {
+        text: format!("Codex cannot attach image data: unsupported image format `{mime}`."),
+    }
+}
+
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
@@ -302,7 +323,37 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .filter_map(|c| match c {
                     UserInput::Text { text } => Some(ContentItem::InputText { text }),
-                    UserInput::Image { image_url } => Some(ContentItem::InputImage { image_url }),
+                    UserInput::Image { image_url } => {
+                        if image_url.starts_with("data:") {
+                            let inline = match decode_data_url(&image_url) {
+                                Ok(inline) => inline,
+                                Err(err) => return Some(inline_image_error_placeholder(err)),
+                            };
+                            let Some(mime) = inline.mime.as_deref() else {
+                                return Some(unsupported_inline_image_error_placeholder("unknown"));
+                            };
+                            if !mime.starts_with("image/") {
+                                return Some(unsupported_inline_image_error_placeholder(mime));
+                            }
+                            match load_and_resize_bytes(
+                                inline.bytes,
+                                PathBuf::from("<inline image>"),
+                            ) {
+                                Ok(image) => Some(ContentItem::InputImage {
+                                    image_url: image.into_data_url(),
+                                }),
+                                Err(err) => {
+                                    if err.is_invalid_image() {
+                                        Some(invalid_inline_image_error_placeholder(err))
+                                    } else {
+                                        Some(inline_image_error_placeholder(err))
+                                    }
+                                }
+                            }
+                        } else {
+                            Some(ContentItem::InputImage { image_url })
+                        }
+                    }
                     UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
                         Ok(image) => Some(ContentItem::InputImage {
                             image_url: image.into_data_url(),
@@ -555,6 +606,47 @@ mod tests {
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    #[test]
+    fn data_url_images_are_processed_locally() {
+        let data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAD0AAAA9CAYAAAAeYmHpAAAE6klEQVR4Aeyau44UVxCGx1fZsmRLlm3Zoe0XcGQ5cUiCCIgJeS9CHgAhMkISQnIuGQgJEkBcxLW+nqnZ6uqqc+nuWRC7q/P3qetf9e+MtOwyX25O4Nep6JPyop++0qev9HrfgZ+F6r2DuB/vHOrt/UIkqdDHYvujOW6fO7h/CNEI+a5jc+pBR8uy0jVFsziYu5HtfSUk+Io34q921hLNctFSX0gwww+S8wce8K1LfCU+cYW4888aov8NxqvQILUPPReLOrm6zyLxa4i+6VZuFbJo8d1MOHZm+7VUtB/aIvhPWc/3SWg49JcwFLlHxuXKjtyloo+YNhuW3VS+WPBuUEMvCFKjEDVgFBQHXrnazpqiSxNZCkQ1kYiozsbm9Oz7l4i2Il7vGccGNWAc3XosDrZe/9P3ZnMmzHNEQw4smf8RQ87XEAMsC7Az0Au+dgXerfH4+sHvEc0SYGic8WBBUGqFH2gN7yDrazy7m2pbRTeRmU3+MjZmr1h6LJgPbGy23SI6GlYT0brQ71IY8Us4PNQCm+zepSbaD2BY9xCaAsD9IIj/IzFmKMSdHHonwdZATbTnYREf6/VZGER98N9yCWIvXQwXDoDdhZJoT8jwLnJXDB9w4Sb3e6nK5ndzlkTLnP3JBu4LKkbrYrU69gCVceV0JvpyuW1xlsUVngzhwMetn/XamtTORF9IO5YnWNiyeF9zCAfqR3fUW+vZZKLtgP+ts8BmQRBREAdRDhH3o8QuRh/YucNFz2BEjxbRN6LGzphfKmvP6v6QhqIQyZ8XNJ0W0X83MR1PEcJBNO2KC2Z1TW/v244scp9FwRViZxIOBF0Lctk7ZVSavdLvRlV1hz/ysUi9sr8CIcB3nvWBwA93ykTz18eAYxQ6N/K2DkPA1lv3iXCwmDUT7YkjIby9siXueIJj9H+pzSqJ9oIuJWTUgSSt4WO7o/9GGg0viR4VinNRUDoIj34xoCd6pxD3aK3zfdbnx5v1J3ZNNEJsE0sBG7N27ReDrJc4sFxz7dI/ZAbOmmiKvHBitQXpAdR6+F7v+/ol/tOouUV01EeMZQF2BoQDn6dP4XNr+j9GZEtEK1/L8pFw7bd3a53tsTa7WD+054jOFmPg1XBKPQgnqFfmFcy32ZRvjmiIIQTYFvyDxQ8nH8WIwwGwlyDjDznnilYyFr6njrlZwsKkBpO59A7OwgdzPEWRm+G+oeb7IfyNuzjEEVLrOVxJsxvxwF8kmCM6I2QYmJunz4u4TrADpfl7mlbRTWQ7VmrBzh3+C9f6Grc3YoGN9dg/SXFthpRsT6vobfXRs2VBlgBHXVMLHjDNbIZv1sZ9+X3hB09cXdH1JKViyG0+W9bWZDa/r2f9zAFR71sTzGpMSWz2iI4YssWjWo3REy1MDGjdwe5e0dFSiAC1JakBvu4/CUS8Eh6dqHdU0Or0ioY3W5ClSqDXAy7/6SRfgw8vt4I+tbvvNtFT2kVDhY5+IGb1rCqYaXNF08vSALsXCPmt0kQNqJT1p5eI1mkIV/BxCY1z85lOzeFbPBQHURkkPTlwTYK9gTVE25l84IbFFN+YJDHjdpn0gq6mrHht0dkcjbM4UL9283O5p77GN+SPW/QwVB4IUYg7Or+Kp7naR6qktP98LNF2UxWo9yObPIT9KYg+hK4i56no4rfnM0qeyFf6AwAAAP//trwR3wAAAAZJREFUAwBZ0sR75itw5gAAAABJRU5ErkJggg==".to_string();
+
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: data_url,
+        }]);
+
+        let ResponseInputItem::Message { content, .. } = item else {
+            panic!("expected message response input");
+        };
+        match content.as_slice() {
+            [ContentItem::InputImage { image_url }] => {
+                assert!(image_url.starts_with("data:image/"));
+            }
+            [ContentItem::InputText { text }] => {
+                panic!("expected input image, got placeholder: {text}");
+            }
+            _ => panic!("expected single input content item"),
+        }
+    }
+
+    #[test]
+    fn data_url_with_non_image_mime_renders_placeholder() {
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: "data:text/plain;base64,SGVsbG8=".to_string(),
+        }]);
+
+        let ResponseInputItem::Message { content, .. } = item else {
+            panic!("expected message response input");
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected single input text content item");
+        };
+
+        assert_eq!(
+            text,
+            "Codex cannot attach image data: unsupported image format `text/plain`."
+        );
+    }
 
     #[test]
     fn serializes_success_as_plain_string() -> Result<()> {

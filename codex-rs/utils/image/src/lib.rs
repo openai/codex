@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::error::ImageProcessingError;
@@ -30,6 +31,12 @@ pub struct EncodedImage {
     pub height: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct InlineImageData {
+    pub mime: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
 impl EncodedImage {
     pub fn into_data_url(self) -> String {
         let encoded = BASE64_STANDARD.encode(&self.bytes);
@@ -45,6 +52,84 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
 
     let file_bytes = read_file_bytes(path, &path_buf)?;
 
+    process_image_bytes(file_bytes, path_buf)
+}
+
+pub fn load_and_resize_bytes(
+    bytes: Vec<u8>,
+    path_for_error: PathBuf,
+) -> Result<EncodedImage, ImageProcessingError> {
+    process_image_bytes(bytes, path_for_error)
+}
+
+pub fn decode_data_url(image_url: &str) -> Result<InlineImageData, ImageProcessingError> {
+    let Some(rest) = image_url.strip_prefix("data:") else {
+        return Err(ImageProcessingError::DataUrl {
+            message: "missing data URL prefix".to_string(),
+        });
+    };
+    let Some((header, data)) = rest.split_once(',') else {
+        return Err(ImageProcessingError::DataUrl {
+            message: "missing data URL header separator".to_string(),
+        });
+    };
+
+    let mut mime = None;
+    let mut is_base64 = false;
+
+    let mut parts = header.split(';');
+    if let Some(first) = parts.next()
+        && !first.is_empty()
+    {
+        mime = Some(first.to_string());
+    }
+    for part in parts {
+        if part == "base64" {
+            is_base64 = true;
+        }
+    }
+
+    if !is_base64 {
+        return Err(ImageProcessingError::DataUrl {
+            message: "data URL is not base64 encoded".to_string(),
+        });
+    }
+
+    let decoded =
+        BASE64_STANDARD
+            .decode(data.trim())
+            .map_err(|err| ImageProcessingError::DataUrl {
+                message: format!("invalid base64 image data: {err}"),
+            })?;
+
+    Ok(InlineImageData {
+        mime,
+        bytes: decoded,
+    })
+}
+
+fn read_file_bytes(path: &Path, path_for_error: &Path) -> Result<Vec<u8>, ImageProcessingError> {
+    match tokio::runtime::Handle::try_current() {
+        // If we're inside a Tokio runtime, avoid block_on (it panics on worker threads).
+        // Use block_in_place and do a standard blocking read safely.
+        Ok(_) => tokio::task::block_in_place(|| std::fs::read(path)).map_err(|source| {
+            ImageProcessingError::Read {
+                path: path_for_error.to_path_buf(),
+                source,
+            }
+        }),
+        // Outside a runtime, just read synchronously.
+        Err(_) => std::fs::read(path).map_err(|source| ImageProcessingError::Read {
+            path: path_for_error.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn process_image_bytes(
+    file_bytes: Vec<u8>,
+    path_for_error: PathBuf,
+) -> Result<EncodedImage, ImageProcessingError> {
     let key = sha1_digest(&file_bytes);
 
     IMAGE_CACHE.get_or_try_insert_with(key, move || {
@@ -56,7 +141,7 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
 
         let dynamic = image::load_from_memory(&file_bytes).map_err(|source| {
             ImageProcessingError::Decode {
-                path: path_buf.clone(),
+                path: path_for_error.clone(),
                 source,
             }
         })?;
@@ -97,24 +182,6 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
 
         Ok(encoded)
     })
-}
-
-fn read_file_bytes(path: &Path, path_for_error: &Path) -> Result<Vec<u8>, ImageProcessingError> {
-    match tokio::runtime::Handle::try_current() {
-        // If we're inside a Tokio runtime, avoid block_on (it panics on worker threads).
-        // Use block_in_place and do a standard blocking read safely.
-        Ok(_) => tokio::task::block_in_place(|| std::fs::read(path)).map_err(|source| {
-            ImageProcessingError::Read {
-                path: path_for_error.to_path_buf(),
-                source,
-            }
-        }),
-        // Outside a runtime, just read synchronously.
-        Err(_) => std::fs::read(path).map_err(|source| ImageProcessingError::Read {
-            path: path_for_error.to_path_buf(),
-            source,
-        }),
-    }
 }
 
 fn encode_image(

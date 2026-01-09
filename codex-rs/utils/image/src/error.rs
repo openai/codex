@@ -23,6 +23,8 @@ pub enum ImageProcessingError {
         #[source]
         source: image::ImageError,
     },
+    #[error("invalid data URL: {message}")]
+    DataUrl { message: String },
 }
 
 impl ImageProcessingError {
