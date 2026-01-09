@@ -69,6 +69,10 @@ jobs:
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
 
+      # TODO(mbolin): Bring this back once we have caching working. Currently,
+      # we never seem to get a cache hit but we still end up paying the cost of
+      # uploading at the end of the build, which takes over a minute!
+      #
       # Cache build and external artifacts so that the next ci build is incremental.
       # Because github action caches cannot be updated after a build, we need to
       # store the contents of each build in a unique cache key, then fall back to loading
@@ -80,15 +84,15 @@ jobs:
       # In the case of a cache miss, you want the fallback cache to contain most of the
       # previously built artifacts to minimize build time. The more precise you are with
       # hashFiles sources the less work bazel will have to do.
-      - name: Mount bazel caches
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/bazel-repo-cache
-            ~/.cache/bazel-repo-contents-cache
-          key: bazel-cache-${{ matrix.os }}-${{ hashFiles('**/BUILD.bazel', '**/*.bzl', 'MODULE.bazel') }}
-          restore-keys: |
-            bazel-cache-${{ matrix.os }}
+      # - name: Mount bazel caches
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: |
+      #       ~/.cache/bazel-repo-cache
+      #       ~/.cache/bazel-repo-contents-cache
+      #     key: bazel-cache-${{ matrix.os }}-${{ hashFiles('**/BUILD.bazel', '**/*.bzl', 'MODULE.bazel') }}
+      #     restore-keys: |
+      #       bazel-cache-${{ matrix.os }}
 
       - name: bazel test //...
         env:
