@@ -41,7 +41,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let resumed = builder.resume(&server, home, rollout_path).await?;
     let initial_messages = resumed
@@ -94,7 +94,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let resumed = builder.resume(&server, home, rollout_path).await?;
     let initial_messages = resumed

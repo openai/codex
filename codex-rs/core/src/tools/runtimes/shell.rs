@@ -98,7 +98,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
-            with_cached_approval(&session.services, keys, move || async move {
+            with_cached_approval(&session.services, "shell", keys, move || async move {
                 session
                     .request_command_approval(
                         turn,

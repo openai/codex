@@ -38,11 +38,11 @@ use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TaskCompleteEvent;
-use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
+use codex_core::protocol::TurnCompleteEvent;
+use codex_core::protocol::TurnStartedEvent;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
@@ -1589,7 +1589,7 @@ async fn interrupted_turn_error_message_snapshot() {
     // Simulate an in-progress task so the widget is in a running state.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -2383,7 +2383,7 @@ async fn ui_snapshots_small_heights_task_running() {
     // Activate status line
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -2414,7 +2414,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     // Begin a running task so the status indicator would be active.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -2466,7 +2466,7 @@ async fn status_widget_active_snapshot() {
     // Activate the status indicator by simulating a task start.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3041,7 +3041,7 @@ async fn stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "task".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3078,7 +3078,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // Begin turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3102,7 +3102,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // End turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
         }),
     });
@@ -3272,7 +3272,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3316,7 +3316,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3387,7 +3387,7 @@ printf 'fenced within fenced\n'
     // Finalize the stream without sending a final AgentMessage, to flush any tail.
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
         }),
     });
@@ -3404,7 +3404,7 @@ async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });

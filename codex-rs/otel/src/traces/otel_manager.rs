@@ -447,7 +447,11 @@ impl OtelManager {
         output: &str,
     ) {
         let success_str = if success { "true" } else { "false" };
-
+        self.counter(
+            "codex.tool.call",
+            1,
+            &[("tool", tool_name), ("success", success_str)],
+        );
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.tool_result",

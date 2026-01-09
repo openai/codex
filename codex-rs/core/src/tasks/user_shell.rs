@@ -22,7 +22,7 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::SandboxPolicy;
-use crate::protocol::TaskStartedEvent;
+use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::TaskKind;
@@ -64,7 +64,7 @@ impl SessionTask for UserShellCommandTask {
             .otel_manager
             .counter("codex.task.user_shell", 1, &[]);
 
-        let event = EventMsg::TaskStarted(TaskStartedEvent {
+        let event = EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: turn_context.client.get_model_context_window(),
         });
         let session = session.clone_session();

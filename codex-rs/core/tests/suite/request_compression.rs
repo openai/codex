@@ -45,7 +45,7 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
         .await?;
 
     // Wait until the task completes so the request definitely hit the server.
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = request_log.single_request();
     assert_eq!(request.header("content-encoding").as_deref(), Some("zstd"));
@@ -87,7 +87,7 @@ async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> 
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = request_log.single_request();
     assert!(

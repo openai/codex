@@ -75,7 +75,7 @@ async fn fork_thread_twice_drops_to_first_message() {
             })
             .await
             .unwrap();
-        let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+        let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
 
     // Request history from the base conversation to obtain rollout path.

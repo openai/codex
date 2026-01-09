@@ -64,7 +64,7 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // We fork the notify script, so we need to wait for it to write to the file.
     fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
