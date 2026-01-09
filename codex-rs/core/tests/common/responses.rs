@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
@@ -667,6 +668,24 @@ pub async fn mount_models_once(server: &MockServer, body: ModelsResponse) -> Mod
         ResponseTemplate::new(200)
             .insert_header("content-type", "application/json")
             .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    models_mock
+}
+
+pub async fn mount_models_once_with_delay(
+    server: &MockServer,
+    body: ModelsResponse,
+    delay: Duration,
+) -> ModelsMock {
+    let (mock, models_mock) = models_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(body.clone())
+            .set_delay(delay),
     )
     .up_to_n_times(1)
     .mount(server)
