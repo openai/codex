@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::config::ConfigToml;
+use crate::config::types::RawMcpServerConfig;
 use crate::features::FEATURES;
-use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 #[cfg(test)]
 use schemars::r#gen::SchemaSettings;
@@ -11,13 +11,10 @@ use schemars::schema::ObjectValidation;
 use schemars::schema::RootSchema;
 use schemars::schema::Schema;
 use schemars::schema::SchemaObject;
-use schemars::schema::SubschemaValidation;
-use serde::Deserialize;
-use serde::Serialize;
-use std::collections::HashMap;
 #[cfg(test)]
 use std::path::Path;
 
+/// Build the config schema used by the fixture test.
 #[cfg(test)]
 pub(crate) fn config_schema() -> RootSchema {
     SchemaSettings::draft07()
@@ -28,6 +25,7 @@ pub(crate) fn config_schema() -> RootSchema {
         .into_root_schema_for::<ConfigToml>()
 }
 
+/// Write the config schema fixture to disk.
 #[cfg(test)]
 pub(crate) fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
     let schema = config_schema();
@@ -36,6 +34,7 @@ pub(crate) fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Schema for the `[features]` map with known keys only.
 pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     let mut object = SchemaObject {
         instance_type: Some(InstanceType::Object.into()),
@@ -54,6 +53,7 @@ pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     Schema::Object(object)
 }
 
+/// Schema for the `[mcp_servers]` map using the raw input shape.
 pub(crate) fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     let mut object = SchemaObject {
         instance_type: Some(InstanceType::Object.into()),
@@ -61,76 +61,12 @@ pub(crate) fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     };
 
     let validation = ObjectValidation {
-        additional_properties: Some(Box::new(mcp_server_schema(schema_gen))),
+        additional_properties: Some(Box::new(schema_gen.subschema_for::<RawMcpServerConfig>())),
         ..Default::default()
     };
     object.object = Some(Box::new(validation));
 
     Schema::Object(object)
-}
-
-fn mcp_server_schema(schema_gen: &mut SchemaGenerator) -> Schema {
-    let server = SchemaObject {
-        subschemas: Some(Box::new(SubschemaValidation {
-            one_of: Some(vec![
-                schema_gen.subschema_for::<McpServerStdioSchema>(),
-                schema_gen.subschema_for::<McpServerStreamableHttpSchema>(),
-            ]),
-            ..Default::default()
-        })),
-        ..Default::default()
-    };
-    Schema::Object(server)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-struct McpServerStdioSchema {
-    command: String,
-    #[serde(default)]
-    args: Option<Vec<String>>,
-    #[serde(default)]
-    env: Option<HashMap<String, String>>,
-    #[serde(default)]
-    env_vars: Option<Vec<String>>,
-    #[serde(default)]
-    cwd: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    startup_timeout_sec: Option<f64>,
-    #[serde(default)]
-    startup_timeout_ms: Option<u64>,
-    #[serde(default)]
-    tool_timeout_sec: Option<f64>,
-    #[serde(default)]
-    enabled_tools: Option<Vec<String>>,
-    #[serde(default)]
-    disabled_tools: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-struct McpServerStreamableHttpSchema {
-    url: String,
-    #[serde(default)]
-    bearer_token_env_var: Option<String>,
-    #[serde(default)]
-    http_headers: Option<HashMap<String, String>>,
-    #[serde(default)]
-    env_http_headers: Option<HashMap<String, String>>,
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    startup_timeout_sec: Option<f64>,
-    #[serde(default)]
-    startup_timeout_ms: Option<u64>,
-    #[serde(default)]
-    tool_timeout_sec: Option<f64>,
-    #[serde(default)]
-    enabled_tools: Option<Vec<String>>,
-    #[serde(default)]
-    disabled_tools: Option<Vec<String>>,
 }
 
 #[cfg(test)]

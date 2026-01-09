@@ -49,47 +49,51 @@ pub struct McpServerConfig {
     pub disabled_tools: Option<Vec<String>>,
 }
 
+// Raw MCP config shape used for deserialization and JSON Schema generation.
+// Keep this in sync with the validation logic in `McpServerConfig`.
+#[derive(Deserialize, Clone, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawMcpServerConfig {
+    // stdio
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub env_vars: Option<Vec<String>>,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+    pub http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub env_http_headers: Option<HashMap<String, String>>,
+
+    // streamable_http
+    pub url: Option<String>,
+    pub bearer_token: Option<String>,
+    pub bearer_token_env_var: Option<String>,
+
+    // shared
+    #[serde(default)]
+    pub startup_timeout_sec: Option<f64>,
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
+    #[serde(default, with = "option_duration_secs")]
+    #[schemars(with = "Option<f64>")]
+    pub tool_timeout_sec: Option<Duration>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub disabled_tools: Option<Vec<String>>,
+}
+
 impl<'de> Deserialize<'de> for McpServerConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize, Clone)]
-        struct RawMcpServerConfig {
-            // stdio
-            command: Option<String>,
-            #[serde(default)]
-            args: Option<Vec<String>>,
-            #[serde(default)]
-            env: Option<HashMap<String, String>>,
-            #[serde(default)]
-            env_vars: Option<Vec<String>>,
-            #[serde(default)]
-            cwd: Option<PathBuf>,
-            http_headers: Option<HashMap<String, String>>,
-            #[serde(default)]
-            env_http_headers: Option<HashMap<String, String>>,
-
-            // streamable_http
-            url: Option<String>,
-            bearer_token: Option<String>,
-            bearer_token_env_var: Option<String>,
-
-            // shared
-            #[serde(default)]
-            startup_timeout_sec: Option<f64>,
-            #[serde(default)]
-            startup_timeout_ms: Option<u64>,
-            #[serde(default, with = "option_duration_secs")]
-            tool_timeout_sec: Option<Duration>,
-            #[serde(default)]
-            enabled: Option<bool>,
-            #[serde(default)]
-            enabled_tools: Option<Vec<String>>,
-            #[serde(default)]
-            disabled_tools: Option<Vec<String>>,
-        }
-
         let mut raw = RawMcpServerConfig::deserialize(deserializer)?;
 
         let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {

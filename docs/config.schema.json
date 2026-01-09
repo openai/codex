@@ -182,14 +182,7 @@
       "default": {},
       "type": "object",
       "additionalProperties": {
-        "oneOf": [
-          {
-            "$ref": "#/definitions/McpServerStdioSchema"
-          },
-          {
-            "$ref": "#/definitions/McpServerStreamableHttpSchema"
-          }
-        ]
+        "$ref": "#/definitions/RawMcpServerConfig"
       }
     },
     "model": {
@@ -626,142 +619,6 @@
         }
       ]
     },
-    "McpServerStdioSchema": {
-      "description": "Schema-only representations of MCP server configs.\n\nKeep these in sync with the custom MCP config parsing in `crate::config::types::McpServerConfig`.",
-      "type": "object",
-      "required": [
-        "command"
-      ],
-      "properties": {
-        "args": {
-          "default": null,
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "command": {
-          "type": "string"
-        },
-        "cwd": {
-          "default": null,
-          "type": "string"
-        },
-        "disabled_tools": {
-          "default": null,
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "enabled": {
-          "default": null,
-          "type": "boolean"
-        },
-        "enabled_tools": {
-          "default": null,
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "env": {
-          "default": null,
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "env_vars": {
-          "default": null,
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "startup_timeout_ms": {
-          "default": null,
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "startup_timeout_sec": {
-          "default": null,
-          "type": "number",
-          "format": "double"
-        },
-        "tool_timeout_sec": {
-          "default": null,
-          "type": "number",
-          "format": "double"
-        }
-      },
-      "additionalProperties": false
-    },
-    "McpServerStreamableHttpSchema": {
-      "type": "object",
-      "required": [
-        "url"
-      ],
-      "properties": {
-        "bearer_token_env_var": {
-          "default": null,
-          "type": "string"
-        },
-        "disabled_tools": {
-          "default": null,
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "enabled": {
-          "default": null,
-          "type": "boolean"
-        },
-        "enabled_tools": {
-          "default": null,
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "env_http_headers": {
-          "default": null,
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "http_headers": {
-          "default": null,
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "startup_timeout_ms": {
-          "default": null,
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "startup_timeout_sec": {
-          "default": null,
-          "type": "number",
-          "format": "double"
-        },
-        "tool_timeout_sec": {
-          "default": null,
-          "type": "number",
-          "format": "double"
-        },
-        "url": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "ModelProviderInfo": {
       "description": "Serializable representation of a provider definition.",
       "type": "object",
@@ -1076,6 +933,96 @@
       "properties": {
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RawMcpServerConfig": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "default": null,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bearer_token": {
+          "type": "string"
+        },
+        "bearer_token_env_var": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "default": null,
+          "type": "string"
+        },
+        "disabled_tools": {
+          "default": null,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "default": null,
+          "type": "boolean"
+        },
+        "enabled_tools": {
+          "default": null,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "default": null,
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "env_http_headers": {
+          "default": null,
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "env_vars": {
+          "default": null,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "http_headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "startup_timeout_ms": {
+          "default": null,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "startup_timeout_sec": {
+          "default": null,
+          "type": "number",
+          "format": "double"
+        },
+        "tool_timeout_sec": {
+          "default": null,
+          "type": "number",
+          "format": "double"
+        },
+        "url": {
+          "type": "string"
         }
       },
       "additionalProperties": false
