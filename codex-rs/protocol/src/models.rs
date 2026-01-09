@@ -190,7 +190,7 @@ pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
 }
 
-fn local_image_open_tag_text(label_number: usize) -> String {
+pub fn local_image_open_tag_text(label_number: usize) -> String {
     let label = local_image_label_text(label_number);
     format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
 }
