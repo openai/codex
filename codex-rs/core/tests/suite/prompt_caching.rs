@@ -369,27 +369,9 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
-    // After overriding the turn context, the environment context should be emitted again
-    // reflecting the new writable roots. Omit cwd because it did not change.
-    let shell = default_user_shell();
-    let expected_env_text_2 = format!(
-        r#"<environment_context>
-  <writable_roots>
-    <root>{}</root>
-  </writable_roots>
-  <shell>{}</shell>
-</environment_context>"#,
-        writable.path().display(),
-        shell.name()
-    );
-    let expected_env_msg_2 = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
-    });
+    // After overriding the turn context, emit an updated permissions message.
     let expected_permissions_msg_2 = permissions_message(&new_policy, AskForApproval::Never);
     let mut expected_body2 = body1["input"].as_array().expect("input array").to_vec();
-    expected_body2.push(expected_env_msg_2);
     expected_body2.push(expected_permissions_msg_2);
     expected_body2.push(expected_user_message_2);
     assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
@@ -584,13 +566,9 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let expected_env_text_2 = format!(
         r#"<environment_context>
   <cwd>{}</cwd>
-  <writable_roots>
-    <root>{}</root>
-  </writable_roots>
   <shell>{}</shell>
 </environment_context>"#,
         new_cwd.path().display(),
-        writable.path().display(),
         shell.name()
     );
     let expected_env_msg_2 = serde_json::json!({
