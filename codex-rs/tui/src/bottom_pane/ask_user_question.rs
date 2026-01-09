@@ -281,7 +281,6 @@ impl Renderable for AskUserQuestionTextView {
             width: area.width.saturating_sub(2),
             height: text_area_height,
         };
-        let state = self.textarea_state.borrow();
         self.textarea.cursor_pos(textarea_rect)
     }
 }

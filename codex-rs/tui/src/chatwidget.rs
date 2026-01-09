@@ -1410,7 +1410,7 @@ impl ChatWidget {
             }
         }
 
-        drop(flow);
+        let _ = flow;
         self.open_ask_user_question_current();
     }
 
@@ -1517,7 +1517,7 @@ impl ChatWidget {
             }
         }
 
-        drop(flow);
+        let _ = flow;
         self.open_ask_user_question_current();
     }
 
@@ -1552,7 +1552,7 @@ impl ChatWidget {
         }
 
         flow.index = flow.index.saturating_add(1);
-        drop(flow);
+        let _ = flow;
         self.open_ask_user_question_current();
     }
 
