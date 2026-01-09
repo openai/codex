@@ -108,3 +108,24 @@ jobs:
             --build_metadata=ROLE=CI \
             --build_metadata=VISIBILITY=PUBLIC \
             "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+
+  cloud-build:
+    name: just bazel-remote-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+      - name: bazel test //... --config=remote
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel test //... \
+            --build_metadata=REPO_URL=https://github.com/openai/codex.git \
+            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD) \
+            --build_metadata=ROLE=CI \
+            --build_metadata=VISIBILITY=PUBLIC \
+            "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
+            --config=remote --platforms=//:rbe --keep_going
