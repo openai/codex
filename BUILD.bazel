@@ -1,0 +1,27 @@
+# We mark the local platform as glibc-compatible so that rust can grab a toolchain for us.
+# TODO(zbarsky): Upstream a better libc constraint into rules_rust.
+# We only enable this on linux though for sanity.
+platform(
+    name = "local",
+    parents = [
+        "@platforms//host",
+    ],
+    constraint_values = [
+        "@toolchains_llvm_bootstrapped//constraints/libc:gnu.2.28",
+    ],
+)
+
+platform(
+    name = "rbe",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+        "@bazel_tools//tools/cpp:clang",
+        "@toolchains_llvm_bootstrapped//constraints/libc:gnu.2.28",
+    ],
+    exec_properties = {
+        # Need git in the image...
+        "container-image": "docker://ghcr.io/cicirello/pyaction:latest",
+        "OSFamily": "Linux",
+    },
+)
