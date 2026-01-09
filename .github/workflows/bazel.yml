@@ -46,10 +46,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.90
-        with:
-          targets: ${{ matrix.target }}
-          components: clippy
 
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
