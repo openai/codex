@@ -236,16 +236,13 @@ impl DeveloperInstructions {
     fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
         let text = match mode {
             SandboxMode::DangerFullAccess => format!(
-                "You are working in an environment that is not sandboxed, which is dangerous. All commands you issue will be executed. Network access is {network}. Be careful with destructive actions.",
-                network = network_access
+                "You are working in an environment that is not sandboxed, which is dangerous. All commands you issue will be executed. Network access is {network_access}. Be careful with destructive actions."
             ),
             SandboxMode::WorkspaceWrite => format!(
-                "You are working in a sandbox. The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Commands that edit files in other directories will fail unless approved by the user. Network access is {network}.",
-                network = network_access
+                "You are working in a sandbox. The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Commands that edit files in other directories will fail unless approved by the user. Network access is {network_access}."
             ),
             SandboxMode::ReadOnly => format!(
-                "You are working in a sandbox. The sandbox permits reading files, but not editing files. Network access is {network}.",
-                network = network_access
+                "You are working in a sandbox. The sandbox permits reading files, but not editing files. Network access is {network_access}."
             ),
         };
 
