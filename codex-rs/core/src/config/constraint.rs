@@ -1,25 +1,26 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::config_loader::RequirementSource;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ConstraintError {
-    #[error("value `{candidate}` is not in the allowed set {allowed}")]
-    InvalidValue { candidate: String, allowed: String },
+    #[error(
+        "invalid value for `{field_name}`: `{candidate}` is not in the allowed set {allowed} (set by {requirement_source})"
+    )]
+    InvalidValue {
+        field_name: &'static str,
+        candidate: String,
+        allowed: String,
+        requirement_source: RequirementSource,
+    },
 
     #[error("field `{field_name}` cannot be empty")]
     EmptyField { field_name: String },
 }
 
 impl ConstraintError {
-    pub fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> Self {
-        Self::InvalidValue {
-            candidate: candidate.into(),
-            allowed: allowed.into(),
-        }
-    }
-
     pub fn empty_field(field_name: impl Into<String>) -> Self {
         Self::EmptyField {
             field_name: field_name.into(),
@@ -63,46 +64,12 @@ impl<T: Send + Sync> Constrained<T> {
         }
     }
 
-    pub fn allow_only(value: T) -> Self
-    where
-        T: PartialEq + Send + Sync + fmt::Debug + Clone + 'static,
-    {
-        #[expect(clippy::expect_used)]
-        Self::new(value.clone(), move |candidate| {
-            if *candidate == value {
-                Ok(())
-            } else {
-                Err(ConstraintError::invalid_value(
-                    format!("{candidate:?}"),
-                    format!("{value:?}"),
-                ))
-            }
-        })
-        .expect("initial value should always be valid")
-    }
-
     /// Allow any value of T, using T's Default as the initial value.
     pub fn allow_any_from_default() -> Self
     where
         T: Default,
     {
         Self::allow_any(T::default())
-    }
-
-    pub fn allow_values(initial_value: T, allowed: Vec<T>) -> ConstraintResult<Self>
-    where
-        T: PartialEq + Send + Sync + fmt::Debug + 'static,
-    {
-        Self::new(initial_value, move |candidate| {
-            if allowed.contains(candidate) {
-                Ok(())
-            } else {
-                Err(ConstraintError::invalid_value(
-                    format!("{candidate:?}"),
-                    format!("{allowed:?}"),
-                ))
-            }
-        })
     }
 
     pub fn get(&self) -> &T {
@@ -154,6 +121,15 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
+        ConstraintError::InvalidValue {
+            field_name: "<unknown>",
+            candidate: candidate.into(),
+            allowed: allowed.into(),
+            requirement_source: RequirementSource::Unknown,
+        }
+    }
+
     #[test]
     fn constrained_allow_any_accepts_any_value() {
         let mut constrained = Constrained::allow_any(5);
@@ -173,17 +149,11 @@ mod tests {
             if *value > 0 {
                 Ok(())
             } else {
-                Err(ConstraintError::invalid_value(
-                    value.to_string(),
-                    "positive values",
-                ))
+                Err(invalid_value(value.to_string(), "positive values"))
             }
         });
 
-        assert_eq!(
-            result,
-            Err(ConstraintError::invalid_value("0", "positive values"))
-        );
+        assert_eq!(result, Err(invalid_value("0", "positive values")));
     }
 
     #[test]
@@ -192,10 +162,7 @@ mod tests {
             if *value > 0 {
                 Ok(())
             } else {
-                Err(ConstraintError::invalid_value(
-                    value.to_string(),
-                    "positive values",
-                ))
+                Err(invalid_value(value.to_string(), "positive values"))
             }
         })
         .expect("initial value should be accepted");
@@ -203,7 +170,7 @@ mod tests {
         let err = constrained
             .set(-5)
             .expect_err("negative values should be rejected");
-        assert_eq!(err, ConstraintError::invalid_value("-5", "positive values"));
+        assert_eq!(err, invalid_value("-5", "positive values"));
         assert_eq!(constrained.value(), 1);
     }
 
@@ -213,10 +180,7 @@ mod tests {
             if *value > 0 {
                 Ok(())
             } else {
-                Err(ConstraintError::invalid_value(
-                    value.to_string(),
-                    "positive values",
-                ))
+                Err(invalid_value(value.to_string(), "positive values"))
             }
         })
         .expect("initial value should be accepted");
@@ -227,7 +191,7 @@ mod tests {
         let err = constrained
             .can_set(&-1)
             .expect_err("can_set should reject negative value");
-        assert_eq!(err, ConstraintError::invalid_value("-1", "positive values"));
+        assert_eq!(err, invalid_value("-1", "positive values"));
         assert_eq!(constrained.value(), 1);
     }
 }

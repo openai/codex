@@ -47,7 +47,6 @@ pub struct LegacyFeatureToggles {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub tools_web_search: Option<bool>,
-    pub tools_view_image: Option<bool>,
 }
 
 impl LegacyFeatureToggles {
@@ -75,12 +74,6 @@ impl LegacyFeatureToggles {
             Feature::WebSearchRequest,
             self.tools_web_search,
             "tools.web_search",
-        );
-        set_if_some(
-            features,
-            Feature::ViewImageTool,
-            self.tools_view_image,
-            "tools.view_image",
         );
     }
 }

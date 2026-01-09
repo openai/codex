@@ -273,6 +273,21 @@ pub enum HistoryPersistence {
     None,
 }
 
+// ===== Analytics configuration =====
+
+/// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct AnalyticsConfigToml {
+    /// When `false`, disables analytics across Codex product surfaces in this profile.
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct FeedbackConfigToml {
+    /// When `false`, disables the feedback flow across Codex product surfaces.
+    pub enabled: Option<bool>,
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -297,6 +312,7 @@ pub struct OtelTlsConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum OtelExporterKind {
     None,
+    Statsig,
     OtlpHttp {
         endpoint: String,
         #[serde(default)]
@@ -337,6 +353,7 @@ pub struct OtelConfig {
     pub environment: String,
     pub exporter: OtelExporterKind,
     pub trace_exporter: OtelExporterKind,
+    pub metrics_exporter: OtelExporterKind,
 }
 
 impl Default for OtelConfig {
@@ -346,6 +363,7 @@ impl Default for OtelConfig {
             environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
             exporter: OtelExporterKind::None,
             trace_exporter: OtelExporterKind::None,
+            metrics_exporter: OtelExporterKind::Statsig,
         }
     }
 }

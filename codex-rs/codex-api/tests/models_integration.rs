@@ -56,7 +56,7 @@ async fn models_client_hits_models_endpoint() {
             slug: "gpt-test".to_string(),
             display_name: "gpt-test".to_string(),
             description: Some("desc".to_string()),
-            default_reasoning_level: ReasoningEffort::Medium,
+            default_reasoning_level: Some(ReasoningEffort::Medium),
             supported_reasoning_levels: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
@@ -76,17 +76,18 @@ async fn models_client_hits_models_endpoint() {
             supported_in_api: true,
             priority: 1,
             upgrade: None,
-            base_instructions: None,
+            base_instructions: "base instructions".to_string(),
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
-            context_window: None,
+            context_window: Some(272_000),
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
         }],
-        etag: String::new(),
     };
 
     Mock::given(method("GET"))
@@ -102,13 +103,13 @@ async fn models_client_hits_models_endpoint() {
     let transport = ReqwestTransport::new(reqwest::Client::new());
     let client = ModelsClient::new(transport, provider(&base_url), DummyAuth);
 
-    let result = client
+    let (models, _) = client
         .list_models("0.1.0", HeaderMap::new())
         .await
         .expect("models request should succeed");
 
-    assert_eq!(result.models.len(), 1);
-    assert_eq!(result.models[0].slug, "gpt-test");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].slug, "gpt-test");
 
     let received = server
         .received_requests()

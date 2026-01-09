@@ -29,9 +29,16 @@ where
                 "HOME", "LOGNAME", "PATH", "SHELL", "USER", "USERNAME", "TMPDIR", "TEMP", "TMP",
             ];
             let allow: HashSet<&str> = CORE_VARS.iter().copied().collect();
-            vars.into_iter()
-                .filter(|(k, _)| allow.contains(k.as_str()))
-                .collect()
+            let is_core_var = |name: &str| {
+                if cfg!(target_os = "windows") {
+                    CORE_VARS
+                        .iter()
+                        .any(|allowed| allowed.eq_ignore_ascii_case(name))
+                } else {
+                    allow.contains(name)
+                }
+            };
+            vars.into_iter().filter(|(k, _)| is_core_var(k)).collect()
         }
     };
 
@@ -195,6 +202,30 @@ mod tests {
         let expected: HashMap<String, String> = hashmap! {
             "PATH".to_string() => "/usr/bin".to_string(),
         };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_core_inherit_respects_case_insensitive_names_on_windows() {
+        let vars = make_vars(&[
+            ("Path", "C:\\Windows\\System32"),
+            ("TEMP", "C:\\Temp"),
+            ("FOO", "bar"),
+        ]);
+
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: true,
+            ..Default::default()
+        };
+
+        let result = populate_env(vars, &policy);
+        let expected: HashMap<String, String> = hashmap! {
+            "Path".to_string() => "C:\\Windows\\System32".to_string(),
+            "TEMP".to_string() => "C:\\Temp".to_string(),
+        };
+
         assert_eq!(result, expected);
     }
 

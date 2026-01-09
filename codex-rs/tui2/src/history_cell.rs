@@ -119,6 +119,19 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// Most cells can use the default implementation (no joiners), but cells that apply wrapping
     /// should override this and return joiners derived from the same wrapping operation so
     /// clipboard reconstruction can distinguish hard breaks from soft wraps.
+    ///
+    /// `joiner_before[i]` describes the boundary *between* `lines[i - 1]` and `lines[i]`:
+    ///
+    /// - `None` means "hard break": copy inserts a newline between the two lines.
+    /// - `Some(joiner)` means "soft wrap continuation": copy inserts `joiner` and continues on the
+    ///   same logical line.
+    ///
+    /// Example (one logical line wrapped across two visual lines):
+    ///
+    /// - `lines = ["• Hello", "  world"]`
+    /// - `joiner_before = [None, Some(\" \")]`
+    ///
+    /// Copy should produce `"Hello world"` (no hard newline).
     fn transcript_lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
         let lines = self.transcript_lines(width);
         TranscriptLinesWithJoiners {
@@ -313,14 +326,64 @@ impl HistoryCell for ReasoningSummaryCell {
 
 #[derive(Debug)]
 pub(crate) struct AgentMessageCell {
-    lines: Vec<Line<'static>>,
+    /// Width-agnostic logical markdown lines for this chunk.
+    ///
+    /// These are produced either:
+    /// - by streaming (`markdown_stream` → `markdown_render::render_markdown_logical_lines`), or
+    /// - by legacy/non-streaming callers that pass pre-rendered `Vec<Line>` via [`Self::new`].
+    ///
+    /// Importantly, this stores *logical* lines, not already-wrapped visual lines, so the transcript
+    /// can reflow on resize.
+    logical_lines: Vec<crate::markdown_render::MarkdownLogicalLine>,
+    /// Whether this cell should render the leading transcript bullet (`• `).
+    ///
+    /// Streaming emits multiple immutable `AgentMessageCell`s per assistant message; only the first
+    /// chunk shows the bullet. Continuations use a two-space gutter.
     is_first_line: bool,
 }
 
 impl AgentMessageCell {
+    /// Construct an agent message cell from already-rendered `Line`s.
+    ///
+    /// This is primarily used by non-streaming paths. The lines are treated as already "logical"
+    /// lines (no additional markdown indentation metadata is available), and wrapping is still
+    /// performed at render time so the transcript can reflow on resize.
     pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
         Self {
-            lines,
+            logical_lines: lines
+                .into_iter()
+                .map(|line| {
+                    let is_preformatted = line.style.fg == Some(ratatui::style::Color::Cyan);
+                    let line_style = line.style;
+                    let content = Line {
+                        style: Style::default(),
+                        alignment: line.alignment,
+                        spans: line.spans,
+                    };
+                    crate::markdown_render::MarkdownLogicalLine {
+                        content,
+                        initial_indent: Line::default(),
+                        subsequent_indent: Line::default(),
+                        line_style,
+                        is_preformatted,
+                    }
+                })
+                .collect(),
+            is_first_line,
+        }
+    }
+
+    /// Construct an agent message cell from markdown logical lines.
+    ///
+    /// This is the preferred streaming constructor: it preserves markdown indentation rules (list
+    /// markers, nested list continuation indent, blockquote prefix, etc.) so wrapping can be
+    /// performed correctly at render time for the current viewport width.
+    pub(crate) fn new_logical(
+        logical_lines: Vec<crate::markdown_render::MarkdownLogicalLine>,
+        is_first_line: bool,
+    ) -> Self {
+        Self {
+            logical_lines,
             is_first_line,
         }
     }
@@ -331,42 +394,97 @@ impl HistoryCell for AgentMessageCell {
         self.transcript_lines_with_joiners(width).lines
     }
 
+    /// Render wrapped transcript lines plus soft-wrap joiners.
+    ///
+    /// This is where width-dependent wrapping happens for streaming agent output. The cell composes
+    /// indentation as:
+    ///
+    /// - transcript gutter (`• ` or `  `), plus
+    /// - markdown-provided indent/prefix spans (`initial_indent` / `subsequent_indent`)
+    ///
+    /// The wrapping algorithm returns a `joiner_before` vector so copy/paste can treat soft wraps
+    /// as joinable (no hard newline) while preserving exact whitespace at wrap boundaries.
     fn transcript_lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
-        use ratatui::style::Color;
+        if width == 0 {
+            return TranscriptLinesWithJoiners {
+                lines: Vec::new(),
+                joiner_before: Vec::new(),
+            };
+        }
 
         let mut out_lines: Vec<Line<'static>> = Vec::new();
         let mut joiner_before: Vec<Option<String>> = Vec::new();
 
-        let mut is_first_output_line = true;
-        for line in &self.lines {
-            let is_code_block_line = line.style.fg == Some(Color::Cyan);
-            let initial_indent: Line<'static> = if is_first_output_line && self.is_first_line {
+        // `at_cell_start` tracks whether we're about to emit the first *visual* line of this cell.
+        // Only the first chunk of a streamed message gets the `• ` gutter; continuations use `  `.
+        let mut at_cell_start = true;
+        for logical in &self.logical_lines {
+            let gutter_first_visual_line: Line<'static> = if at_cell_start && self.is_first_line {
                 "• ".dim().into()
             } else {
                 "  ".into()
             };
-            let subsequent_indent: Line<'static> = "  ".into();
+            let gutter_continuation: Line<'static> = "  ".into();
 
-            if is_code_block_line {
-                let mut spans = initial_indent.spans;
-                spans.extend(line.spans.iter().cloned());
-                out_lines.push(Line::from(spans).style(line.style));
+            // Compose the transcript gutter with markdown-provided indentation:
+            //
+            // - `gutter_*` is the transcript-level prefix (`• ` / `  `).
+            // - `initial_indent` / `subsequent_indent` come from markdown structure (blockquote
+            //   prefix, list marker indentation, nested list continuation indentation, etc.).
+            //
+            // We apply these indents during wrapping so:
+            // - the UI renders with correct continuation indentation, and
+            // - soft-wrap joiners stay aligned with the exact whitespace the wrapper skipped.
+            let compose_indent =
+                |gutter: &Line<'static>, md_indent: &Line<'static>| -> Line<'static> {
+                    let mut spans = gutter.spans.clone();
+                    spans.extend(md_indent.spans.iter().cloned());
+                    Line::from(spans)
+                };
+
+            // Preformatted lines are rendered as a single visual line (no wrapping).
+            // This preserves code-block whitespace and keeps code copy behavior stable.
+            if logical.is_preformatted {
+                let mut spans = gutter_first_visual_line.spans.clone();
+                spans.extend(logical.initial_indent.spans.iter().cloned());
+                spans.extend(logical.content.spans.iter().cloned());
+                out_lines.push(Line::from(spans).style(logical.line_style));
                 joiner_before.push(None);
-                is_first_output_line = false;
+                at_cell_start = false;
                 continue;
             }
 
+            // Prose path: wrap to current width and capture joiners.
+            //
+            // `word_wrap_line_with_joiners` guarantees:
+            // - `wrapped.len() == wrapped_joiners.len()`
+            // - `wrapped_joiners[0] == None` (first visual segment of a logical line is a hard break)
+            // - subsequent entries are `Some(joiner)` (soft-wrap continuations).
             let opts = RtOptions::new(width as usize)
-                .initial_indent(initial_indent)
-                .subsequent_indent(subsequent_indent.clone());
+                .initial_indent(compose_indent(
+                    &gutter_first_visual_line,
+                    &logical.initial_indent,
+                ))
+                .subsequent_indent(compose_indent(
+                    &gutter_continuation,
+                    &logical.subsequent_indent,
+                ));
+
             let (wrapped, wrapped_joiners) =
-                crate::wrapping::word_wrap_line_with_joiners(line, opts);
-            for (l, j) in wrapped.into_iter().zip(wrapped_joiners) {
-                out_lines.push(line_to_static(&l));
-                joiner_before.push(j);
-                is_first_output_line = false;
+                crate::wrapping::word_wrap_line_with_joiners(&logical.content, opts);
+            for (visual, joiner) in wrapped.into_iter().zip(wrapped_joiners) {
+                out_lines.push(line_to_static(&visual).style(logical.line_style));
+                joiner_before.push(joiner);
+                at_cell_start = false;
             }
         }
+
+        debug_assert_eq!(out_lines.len(), joiner_before.len());
+        debug_assert!(
+            joiner_before
+                .first()
+                .is_none_or(std::option::Option::is_none)
+        );
 
         TranscriptLinesWithJoiners {
             lines: out_lines,
@@ -699,11 +817,11 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 
 #[derive(Debug)]
 struct TooltipHistoryCell {
-    tip: &'static str,
+    tip: String,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: &'static str) -> Self {
+    fn new(tip: String) -> Self {
         Self { tip }
     }
 }
@@ -1672,6 +1790,131 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    /// Remove a single leading markdown blockquote marker (`> `) from `line`.
+    ///
+    /// This is a test-only normalization helper.
+    ///
+    /// In the rendered transcript, blockquote indentation is represented as literal `> ` spans in
+    /// the line prefix. For wrapped blockquote prose, those prefix spans can appear on every visual
+    /// line (including soft-wrap continuations). When we want to compare the *logical* joined text
+    /// across different widths, we strip the repeated marker on continuation lines so the
+    /// comparison doesn't fail due to prefix duplication.
+    fn strip_leading_blockquote_marker(line: &str) -> String {
+        let mut out = String::with_capacity(line.len());
+        let mut seen_non_space = false;
+        let mut removed = false;
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if !seen_non_space {
+                if ch == ' ' {
+                    out.push(ch);
+                    continue;
+                }
+                seen_non_space = true;
+                if ch == '>' && !removed {
+                    removed = true;
+                    if matches!(chars.peek(), Some(' ')) {
+                        chars.next();
+                    }
+                    continue;
+                }
+            }
+            out.push(ch);
+        }
+        out
+    }
+
+    /// Normalize rendered transcript output into a width-insensitive "logical text" string.
+    ///
+    /// This is used by resize/reflow tests:
+    ///
+    /// - Joiners tell us which visual line breaks are soft wraps (`Some(joiner)`) vs hard breaks
+    ///   (`None`).
+    /// - For soft-wrap continuation lines, we strip repeated blockquote markers so we can compare
+    ///   the underlying prose independent of prefix repetition.
+    /// - Finally, we collapse whitespace so wrapping differences (line breaks vs spaces) do not
+    ///   affect equality.
+    fn normalize_rendered_text_with_joiners(tr: &TranscriptLinesWithJoiners) -> String {
+        let mut rendered = render_lines(&tr.lines);
+        for (line, joiner) in rendered.iter_mut().zip(&tr.joiner_before) {
+            if joiner.is_some() {
+                *line = strip_leading_blockquote_marker(line);
+            }
+        }
+        rendered
+            .join("\n")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn agent_message_cell_reflows_streamed_prose_on_resize() {
+        let md = concat!(
+            "- This is a long list item that should reflow when the viewport width changes. ",
+            "The old streaming implementation used to bake soft wraps into hard line breaks.\n",
+            "> A blockquote line that is also long enough to wrap and should reflow cleanly.\n",
+        );
+        let logical_lines = crate::markdown_stream::simulate_stream_markdown_for_tests(&[md], true);
+        let cell = AgentMessageCell::new_logical(logical_lines, true);
+
+        let narrow = cell.transcript_lines_with_joiners(28);
+        let wide = cell.transcript_lines_with_joiners(80);
+
+        assert!(
+            narrow.lines.len() > wide.lines.len(),
+            "expected fewer visual lines at wider width; narrow={} wide={}",
+            narrow.lines.len(),
+            wide.lines.len()
+        );
+        assert_eq!(
+            normalize_rendered_text_with_joiners(&narrow),
+            normalize_rendered_text_with_joiners(&wide)
+        );
+
+        let snapshot = format!(
+            "narrow:\n{}\n\nwide:\n{}",
+            render_lines(&narrow.lines).join("\n"),
+            render_lines(&wide.lines).join("\n")
+        );
+        insta::assert_snapshot!("agent_message_cell_reflow_on_resize", snapshot);
+    }
+
+    #[test]
+    fn agent_message_cell_reflows_streamed_prose_vt100_snapshot() {
+        use crate::test_backend::VT100Backend;
+
+        let md = concat!(
+            "- This is a long list item that should reflow when the viewport width changes.\n",
+            "> A blockquote that also reflows across widths.\n",
+        );
+        let logical_lines = crate::markdown_stream::simulate_stream_markdown_for_tests(&[md], true);
+        let cell = AgentMessageCell::new_logical(logical_lines, true);
+
+        let render = |width, height| -> String {
+            let backend = VT100Backend::new(width, height);
+            let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    let lines = cell.display_lines(area.width);
+                    Paragraph::new(Text::from(lines))
+                        .wrap(Wrap { trim: false })
+                        .render(area, f.buffer_mut());
+                })
+                .expect("draw");
+            terminal.backend().vt100().screen().contents()
+        };
+
+        let narrow = render(30, 12);
+        let wide = render(70, 12);
+
+        insta::assert_snapshot!(
+            "agent_message_cell_reflow_on_resize_vt100",
+            format!("narrow:\n{narrow}\n\nwide:\n{wide}")
+        );
     }
 
     #[tokio::test]

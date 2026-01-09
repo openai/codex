@@ -10,10 +10,10 @@ use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
+use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::model_family::ModelFamily;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -62,7 +62,7 @@ use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
@@ -84,6 +84,9 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+#[cfg(target_os = "windows")]
+use crate::app_event::WindowsSandboxEnableMode;
+use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
@@ -132,7 +135,7 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
@@ -267,7 +270,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) model_family: ModelFamily,
+    pub(crate) model: String,
 }
 
 #[derive(Default)]
@@ -284,7 +287,7 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     config: Config,
-    model_family: ModelFamily,
+    model: String,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -312,7 +315,7 @@ pub(crate) struct ChatWidget {
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
-    conversation_id: Option<ConversationId>,
+    conversation_id: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -573,12 +576,10 @@ impl ChatWidget {
     }
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
-        info.model_context_window
-            .or(self.model_family.context_window)
-            .map(|window| {
-                info.last_token_usage
-                    .percent_of_context_window_remaining(window)
-            })
+        info.model_context_window.map(|window| {
+            info.last_token_usage
+                .percent_of_context_window_remaining(window)
+        })
     }
 
     fn context_used_tokens(&self, info: &TokenUsageInfo, percent_known: bool) -> Option<i64> {
@@ -646,7 +647,7 @@ impl ChatWidget {
 
             if high_usage
                 && !self.rate_limit_switch_prompt_hidden()
-                && self.model_family.get_model_slug() != NUDGE_MODEL_SLUG
+                && self.model != NUDGE_MODEL_SLUG
                 && !matches!(
                     self.rate_limit_switch_prompt,
                     RateLimitSwitchPromptState::Shown
@@ -679,9 +680,6 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
-    }
-    pub(crate) fn get_model_family(&self) -> ModelFamily {
-        self.model_family.clone()
     }
 
     fn on_error(&mut self, message: String) {
@@ -974,6 +972,7 @@ impl ChatWidget {
             if let Some(cell) = cell {
                 self.bottom_pane.hide_status_indicator();
                 self.add_boxed_history(cell);
+                self.request_redraw();
             }
             if is_idle {
                 self.app_event_tx.send(AppEvent::StopCommitAnimation);
@@ -1015,6 +1014,7 @@ impl ChatWidget {
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
+        let mut needs_redraw = self.active_cell.is_some();
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
@@ -1025,17 +1025,20 @@ impl ChatWidget {
                     .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
                 self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
                 self.needs_final_message_separator = false;
+                needs_redraw = true;
             }
-            self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
-            ));
+            // Streaming must not capture the current viewport width: width-derived wraps are
+            // applied later, at render time, so the transcript can reflow on resize.
+            self.stream_controller = Some(StreamController::new());
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
-        self.request_redraw();
+        if needs_redraw {
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
@@ -1265,10 +1268,7 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn new(
-        common: ChatWidgetInit,
-        conversation_manager: Arc<ConversationManager>,
-    ) -> Self {
+    pub(crate) fn new(common: ChatWidgetInit, thread_manager: Arc<ThreadManager>) -> Self {
         let ChatWidgetInit {
             config,
             frame_requester,
@@ -1280,14 +1280,13 @@ impl ChatWidget {
             models_manager,
             feedback,
             is_first_run,
-            model_family,
+            model,
         } = common;
-        let model_slug = model_family.get_model_slug().to_string();
         let mut config = config;
-        config.model = Some(model_slug.clone());
+        config.model = Some(model.clone());
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
+        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -1305,10 +1304,10 @@ impl ChatWidget {
             }),
             active_cell: None,
             config,
-            model_family,
+            model: model.clone(),
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model_slug),
+            session_header: SessionHeader::new(model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1351,7 +1350,7 @@ impl ChatWidget {
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
-        conversation: std::sync::Arc<codex_core::CodexConversation>,
+        conversation: std::sync::Arc<codex_core::CodexThread>,
         session_configured: codex_core::protocol::SessionConfiguredEvent,
     ) -> Self {
         let ChatWidgetInit {
@@ -1364,10 +1363,9 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
-            model_family,
+            model,
             ..
         } = common;
-        let model_slug = model_family.get_model_slug().to_string();
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
@@ -1390,10 +1388,10 @@ impl ChatWidget {
             }),
             active_cell: None,
             config,
-            model_family,
+            model: model.clone(),
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model_slug),
+            session_header: SessionHeader::new(model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1503,6 +1501,9 @@ impl ChatWidget {
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
                     }
+                    InputResult::CommandWithArgs(cmd, args) => {
+                        self.dispatch_command_with_args(cmd, args);
+                    }
                     InputResult::None => {}
                 }
             }
@@ -1536,6 +1537,12 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Feedback => {
+                if !self.config.feedback_enabled {
+                    let params = crate::bottom_pane::feedback_disabled_params();
+                    self.bottom_pane.show_selection_view(params);
+                    self.request_redraw();
+                    return;
+                }
                 // Step 1: pick a category (UI built in feedback_view)
                 let params =
                     crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
@@ -1572,6 +1579,45 @@ impl ChatWidget {
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
+            }
+            SlashCommand::ElevateSandbox => {
+                #[cfg(target_os = "windows")]
+                {
+                    let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox()
+                        .is_some()
+                        && !codex_core::is_windows_elevated_sandbox_enabled();
+                    if !windows_degraded_sandbox_enabled
+                        || !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                    {
+                        // This command should not be visible/recognized outside degraded mode,
+                        // but guard anyway in case something dispatches it directly.
+                        return;
+                    }
+
+                    let Some(preset) = builtin_approval_presets()
+                        .into_iter()
+                        .find(|preset| preset.id == "auto")
+                    else {
+                        // Avoid panicking in interactive UI; treat this as a recoverable
+                        // internal error.
+                        self.add_error_message(
+                            "Internal error: missing the 'auto' approval preset.".to_string(),
+                        );
+                        return;
+                    };
+
+                    if let Err(err) = self.config.approval_policy.can_set(&preset.approval) {
+                        self.add_error_message(err.to_string());
+                        return;
+                    }
+
+                    self.app_event_tx
+                        .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    // Not supported; on non-Windows this command should never be reachable.
+                };
             }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_exit();
@@ -1665,6 +1711,33 @@ impl ChatWidget {
                     }),
                 }));
             }
+        }
+    }
+
+    fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
+        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            let message = format!(
+                "'/{}' is disabled while a task is in progress.",
+                cmd.command()
+            );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
+
+        let trimmed = args.trim();
+        match cmd {
+            SlashCommand::Review if !trimmed.is_empty() => {
+                self.submit_op(Op::Review {
+                    review_request: ReviewRequest {
+                        target: ReviewTarget::Custom {
+                            instructions: trimmed.to_string(),
+                        },
+                        user_facing_hint: None,
+                    },
+                });
+            }
+            _ => self.dispatch_command(cmd),
         }
     }
 
@@ -1764,7 +1837,10 @@ impl ChatWidget {
         }
 
         self.codex_op_tx
-            .send(Op::UserInput { items })
+            .send(Op::UserInput {
+                items,
+                final_output_json_schema: None,
+            })
             .unwrap_or_else(|e| {
                 tracing::error!("failed to send message: {e}");
             });
@@ -1921,6 +1997,7 @@ impl ChatWidget {
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
+            | EventMsg::ThreadRolledBack(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
@@ -2052,22 +2129,20 @@ impl ChatWidget {
 
     pub(crate) fn add_status_output(&mut self) {
         let default_usage = TokenUsage::default();
-        let (total_usage, context_usage) = if let Some(ti) = &self.token_info {
-            (&ti.total_token_usage, Some(&ti.last_token_usage))
-        } else {
-            (&default_usage, Some(&default_usage))
-        };
+        let token_info = self.token_info.as_ref();
+        let total_usage = token_info
+            .map(|ti| &ti.total_token_usage)
+            .unwrap_or(&default_usage);
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
-            &self.model_family,
+            token_info,
             total_usage,
-            context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
             Local::now(),
-            self.model_family.get_model_slug(),
+            &self.model,
         ));
     }
     fn stop_rate_limit_poller(&mut self) {
@@ -2079,21 +2154,22 @@ impl ChatWidget {
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
-        let Some(auth) = self.auth_manager.auth() else {
-            return;
-        };
-        if auth.mode != AuthMode::ChatGPT {
+        if self.auth_manager.auth_cached().map(|auth| auth.mode) != Some(AuthMode::ChatGPT) {
             return;
         }
 
         let base_url = self.config.chatgpt_base_url.clone();
         let app_event_tx = self.app_event_tx.clone();
+        let auth_manager = Arc::clone(&self.auth_manager);
 
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
 
             loop {
-                if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
+                if let Some(auth) = auth_manager.auth().await
+                    && auth.mode == AuthMode::ChatGPT
+                    && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
+                {
                     app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
                 }
                 interval.tick().await;
@@ -2107,7 +2183,7 @@ impl ChatWidget {
         let models = self.models_manager.try_list_models(&self.config).ok()?;
         models
             .iter()
-            .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+            .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
     }
 
@@ -2210,26 +2286,30 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
-        let current_model = self.model_family.get_model_slug().to_string();
-        let presets: Vec<ModelPreset> =
-            // todo(aibrahim): make this async function
-            match self.models_manager.try_list_models(&self.config) {
-                Ok(models) => models,
-                Err(_) => {
-                    self.add_info_message(
-                        "Models are being updated; please try /model again in a moment."
-                            .to_string(),
-                        None,
-                    );
-                    return;
-                }
-            };
+        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
+            Ok(models) => models,
+            Err(_) => {
+                self.add_info_message(
+                    "Models are being updated; please try /model again in a moment.".to_string(),
+                    None,
+                );
+                return;
+            }
+        };
+        self.open_model_popup_with_presets(presets);
+    }
+
+    pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        let presets: Vec<ModelPreset> = presets
+            .into_iter()
+            .filter(|preset| preset.show_in_picker)
+            .collect();
 
         let current_label = presets
             .iter()
-            .find(|preset| preset.model == current_model)
+            .find(|preset| preset.model == self.model)
             .map(|preset| preset.display_name.to_string())
-            .unwrap_or_else(|| current_model.clone());
+            .unwrap_or_else(|| self.model.clone());
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
             .into_iter()
@@ -2255,7 +2335,7 @@ impl ChatWidget {
                 SelectionItem {
                     name: preset.display_name.clone(),
                     description,
-                    is_current: model == current_model,
+                    is_current: model == self.model,
                     is_default: preset.is_default,
                     actions,
                     dismiss_on_select: true,
@@ -2318,12 +2398,11 @@ impl ChatWidget {
             return;
         }
 
-        let current_model = self.model_family.get_model_slug().to_string();
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = preset.model == current_model;
+            let is_current = preset.model == self.model;
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -2449,7 +2528,7 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.model_family.get_model_slug() == preset.model;
+        let is_current_model = self.model == preset.model;
         let highlight_choice = if is_current_model {
             self.config.model_reasoning_effort
         } else {
@@ -2564,10 +2643,25 @@ impl ChatWidget {
         let current_sandbox = self.config.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+
+        #[cfg(target_os = "windows")]
+        let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox().is_some()
+            && !codex_core::is_windows_elevated_sandbox_enabled();
+        #[cfg(not(target_os = "windows"))]
+        let windows_degraded_sandbox_enabled = false;
+
+        let show_elevate_sandbox_hint = codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            && windows_degraded_sandbox_enabled
+            && presets.iter().any(|preset| preset.id == "auto");
+
         for preset in presets.into_iter() {
             let is_current =
                 Self::preset_matches_current(current_approval, current_sandbox, &preset);
-            let name = preset.label.to_string();
+            let name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
+                "Agent (non-elevated sandbox)".to_string()
+            } else {
+                preset.label.to_string()
+            };
             let description_text = preset.description;
             let description = Some(description_text.to_string());
             let requires_confirmation = preset.id == "full-access"
@@ -2588,11 +2682,24 @@ impl ChatWidget {
                 {
                     if codex_core::get_platform_sandbox().is_none() {
                         let preset_clone = preset.clone();
-                        vec![Box::new(move |tx| {
-                            tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
-                                preset: preset_clone.clone(),
-                            });
-                        })]
+                        if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                            && codex_core::windows_sandbox::sandbox_setup_is_complete(
+                                self.config.codex_home.as_path(),
+                            )
+                        {
+                            vec![Box::new(move |tx| {
+                                tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                                    preset: preset_clone.clone(),
+                                    mode: WindowsSandboxEnableMode::Elevated,
+                                });
+                            })]
+                        } else {
+                            vec![Box::new(move |tx| {
+                                tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                                    preset: preset_clone.clone(),
+                                });
+                            })]
+                        }
                     } else if let Some((sample_paths, extra_count, failed_scan)) =
                         self.world_writable_warning_details()
                     {
@@ -2626,8 +2733,18 @@ impl ChatWidget {
             });
         }
 
+        let footer_note = show_elevate_sandbox_hint.then(|| {
+            vec![
+                "The non-elevated sandbox protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected. To upgrade to the elevated sandbox, run ".dim(),
+                "/setup-elevated-sandbox".cyan(),
+                ".".dim(),
+            ]
+            .into()
+        });
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Approval Mode".to_string()),
+            footer_note,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(()),
@@ -2885,36 +3002,106 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
+        if !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
+            // Legacy flow (pre-NUX): explain the experimental sandbox and let the user enable it
+            // directly (no elevation prompts).
+            let mut header = ColumnRenderable::new();
+            header.push(*Box::new(
+                Paragraph::new(vec![
+                    line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
+                    line!["Learn more: https://developers.openai.com/codex/windows"],
+                ])
+                .wrap(Wrap { trim: false }),
+            ));
+
+            let preset_clone = preset;
+            let items = vec![
+                SelectionItem {
+                    name: "Enable experimental sandbox".to_string(),
+                    description: None,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset: preset_clone.clone(),
+                            mode: WindowsSandboxEnableMode::Legacy,
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Go back".to_string(),
+                    description: None,
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::OpenApprovalsPopup);
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ];
+
+            self.bottom_pane.show_selection_view(SelectionViewParams {
+                title: None,
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                header: Box::new(header),
+                ..Default::default()
+            });
+            return;
+        }
+
+        let current_approval = self.config.approval_policy.value();
+        let current_sandbox = self.config.sandbox_policy.get();
+        let presets = builtin_approval_presets();
+        let stay_full_access = presets
+            .iter()
+            .find(|preset| preset.id == "full-access")
+            .is_some_and(|preset| {
+                Self::preset_matches_current(current_approval, current_sandbox, preset)
+            });
+        let stay_actions = if stay_full_access {
+            Vec::new()
+        } else {
+            presets
+                .iter()
+                .find(|preset| preset.id == "read-only")
+                .map(|preset| {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                })
+                .unwrap_or_default()
+        };
+        let stay_label = if stay_full_access {
+            "Stay in Agent Full Access".to_string()
+        } else {
+            "Stay in Read-Only".to_string()
+        };
+
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
             Paragraph::new(vec![
-                line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
-                line![
-                    "Learn more: https://developers.openai.com/codex/windows"
-                ],
+                line!["Set Up Agent Sandbox".bold()],
+                line![""],
+                line!["Agent mode uses an experimental Windows sandbox that protects your files and prevents network access by default."],
+                line!["Learn more: https://developers.openai.com/codex/windows"],
             ])
             .wrap(Wrap { trim: false }),
         ));
 
-        let preset_clone = preset;
         let items = vec![
             SelectionItem {
-                name: "Enable experimental sandbox".to_string(),
+                name: "Set up agent sandbox (requires elevation)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                        preset: preset_clone.clone(),
+                    tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                        preset: preset.clone(),
                     });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Go back".to_string(),
+                name: stay_label,
                 description: None,
-                actions: vec![Box::new(|tx| {
-                    tx.send(AppEvent::OpenApprovalsPopup);
-                })],
+                actions: stay_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -2933,6 +3120,107 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
+    pub(crate) fn open_windows_sandbox_fallback_prompt(
+        &mut self,
+        preset: ApprovalPreset,
+        reason: WindowsSandboxFallbackReason,
+    ) {
+        use ratatui_macros::line;
+
+        let _ = reason;
+
+        let current_approval = self.config.approval_policy.value();
+        let current_sandbox = self.config.sandbox_policy.get();
+        let presets = builtin_approval_presets();
+        let stay_full_access = presets
+            .iter()
+            .find(|preset| preset.id == "full-access")
+            .is_some_and(|preset| {
+                Self::preset_matches_current(current_approval, current_sandbox, preset)
+            });
+        let stay_actions = if stay_full_access {
+            Vec::new()
+        } else {
+            presets
+                .iter()
+                .find(|preset| preset.id == "read-only")
+                .map(|preset| {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                })
+                .unwrap_or_default()
+        };
+        let stay_label = if stay_full_access {
+            "Stay in Agent Full Access".to_string()
+        } else {
+            "Stay in Read-Only".to_string()
+        };
+
+        let mut lines = Vec::new();
+        lines.push(line!["Use Non-Elevated Sandbox?".bold()]);
+        lines.push(line![""]);
+        lines.push(line![
+            "Elevation failed. You can also use a non-elevated sandbox, which protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected."
+        ]);
+        lines.push(line![
+            "Learn more: https://developers.openai.com/codex/windows"
+        ]);
+
+        let mut header = ColumnRenderable::new();
+        header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
+
+        let elevated_preset = preset.clone();
+        let legacy_preset = preset;
+        let items = vec![
+            SelectionItem {
+                name: "Try elevated agent sandbox setup again".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                        preset: elevated_preset.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Use non-elevated agent sandbox".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                        preset: legacy_preset.clone(),
+                        mode: WindowsSandboxEnableMode::Legacy,
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: stay_label,
+                description: None,
+                actions: stay_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: None,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn open_windows_sandbox_fallback_prompt(
+        &mut self,
+        _preset: ApprovalPreset,
+        _reason: WindowsSandboxFallbackReason,
+    ) {
+    }
+
+    #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
         if self.config.forced_auto_mode_downgraded_on_windows
             && codex_core::get_platform_sandbox().is_none()
@@ -2946,6 +3234,34 @@ impl ChatWidget {
 
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn show_windows_sandbox_setup_status(&mut self) {
+        // While elevated sandbox setup runs, prevent typing so the user doesn't
+        // accidentally queue messages that will run under an unexpected mode.
+        self.bottom_pane.set_composer_input_enabled(
+            false,
+            Some("Input disabled until setup completes.".to_string()),
+        );
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane.set_interrupt_hint_visible(false);
+        self.set_status_header("Setting up agent sandbox. This can take a minute.".to_string());
+        self.request_redraw();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
+    pub(crate) fn show_windows_sandbox_setup_status(&mut self) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {
+        self.bottom_pane.set_composer_input_enabled(true, None);
+        self.bottom_pane.hide_status_indicator();
+        self.request_redraw();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {}
 
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
@@ -2979,6 +3295,15 @@ impl ChatWidget {
         Ok(())
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
+        if enabled {
+            self.config.features.enable(feature);
+        } else {
+            self.config.features.disable(feature);
+        }
+    }
+
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
         self.config.notices.hide_full_access_warning = Some(acknowledged);
     }
@@ -3008,9 +3333,9 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy.
-    pub(crate) fn set_model(&mut self, model: &str, model_family: ModelFamily) {
+    pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
-        self.model_family = model_family;
+        self.model = model.to_string();
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
@@ -3103,12 +3428,14 @@ impl ChatWidget {
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
         copy_selection_key: crate::key_hint::KeyBinding,
+        copy_feedback: Option<crate::transcript_copy_action::TranscriptCopyFeedback>,
     ) {
         self.bottom_pane.set_transcript_ui_state(
             scrolled,
             selection_active,
             scroll_position,
             copy_selection_key,
+            copy_feedback,
         );
     }
 
@@ -3308,7 +3635,7 @@ impl ChatWidget {
             .unwrap_or_default()
     }
 
-    pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
+    pub(crate) fn conversation_id(&self) -> Option<ThreadId> {
         self.conversation_id
     }
 
@@ -3471,7 +3798,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
-    match BackendClient::from_auth(base_url, &auth).await {
+    match BackendClient::from_auth(base_url, &auth) {
         Ok(client) => match client.get_rate_limits().await {
             Ok(snapshot) => Some(snapshot),
             Err(err) => {

@@ -19,11 +19,13 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use image::GenericImageView;
 use image::ImageBuffer;
 use image::Rgba;
 use image::load_from_memory;
 use serde_json::Value;
+use tokio::time::Duration;
 
 fn find_image_message(body: &Value) -> Option<&Value> {
     body.get("input")
@@ -181,14 +183,20 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         .await?;
 
     let mut tool_event = None;
-    wait_for_event(&codex, |event| match event {
-        EventMsg::ViewImageToolCall(_) => {
-            tool_event = Some(event.clone());
-            false
-        }
-        EventMsg::TaskComplete(_) => true,
-        _ => false,
-    })
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::ViewImageToolCall(_) => {
+                tool_event = Some(event.clone());
+                false
+            }
+            EventMsg::TaskComplete(_) => true,
+            _ => false,
+        },
+        // Empirically, we have seen this run slow when run under
+        // Bazel on arm Linux.
+        Duration::from_secs(10),
+    )
     .await;
 
     let tool_event = match tool_event.expect("view image tool event emitted") {

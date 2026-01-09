@@ -25,7 +25,7 @@ fn sse_incomplete() -> String {
 }
 
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -96,6 +96,7 @@ async fn retries_on_early_close() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();

@@ -1,9 +1,8 @@
 use crate::config::OtelExporter;
 use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
-use crate::config::OtelTlsConfig;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use http::Uri;
+use crate::metrics::MetricsClient;
+use crate::metrics::MetricsConfig;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
 use opentelemetry::context::ContextGuard;
@@ -14,14 +13,14 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::LogExporter;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_LOGS_TIMEOUT;
-use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT;
-use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TRACES_TIMEOUT;
 use opentelemetry_otlp::Protocol;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
+use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
+use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
@@ -29,25 +28,11 @@ use opentelemetry_sdk::trace::BatchSpanProcessor;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::Tracer;
 use opentelemetry_semantic_conventions as semconv;
-use reqwest::Certificate as ReqwestCertificate;
-use reqwest::Identity as ReqwestIdentity;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-use std::fs;
-use std::io::ErrorKind;
-use std::io::{self};
-use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::time::Duration;
-use tonic::metadata::MetadataMap;
-use tonic::transport::Certificate as TonicCertificate;
-use tonic::transport::ClientTlsConfig;
-use tonic::transport::Identity as TonicIdentity;
 use tracing::debug;
 use tracing::level_filters::LevelFilter;
 use tracing::warn;
@@ -62,11 +47,11 @@ static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
 thread_local! {
     static TRACEPARENT_GUARD: RefCell<Option<ContextGuard>> = const { RefCell::new(None) };
 }
-
 pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
     pub tracer: Option<Tracer>,
+    pub metrics: Option<MetricsClient>,
 }
 
 impl OtelProvider {
@@ -77,14 +62,33 @@ impl OtelProvider {
         if let Some(tracer_provider) = &self.tracer_provider {
             let _ = tracer_provider.shutdown();
         }
+        if let Some(metrics) = &self.metrics {
+            let _ = metrics.shutdown();
+        }
     }
 
     pub fn from(settings: &OtelSettings) -> Result<Option<Self>, Box<dyn Error>> {
         let log_enabled = !matches!(settings.exporter, OtelExporter::None);
         let trace_enabled = !matches!(settings.trace_exporter, OtelExporter::None);
 
-        if !log_enabled && !trace_enabled {
-            debug!("No exporter enabled in OTLP settings.");
+        let metric_exporter = crate::config::resolve_exporter(&settings.metrics_exporter);
+        let metrics = if matches!(metric_exporter, OtelExporter::None) {
+            None
+        } else {
+            Some(MetricsClient::new(MetricsConfig::otlp(
+                settings.environment.clone(),
+                settings.service_name.clone(),
+                settings.service_version.clone(),
+                metric_exporter,
+            ))?)
+        };
+
+        if let Some(metrics) = metrics.as_ref() {
+            crate::metrics::install_global(metrics.clone());
+        }
+
+        if !log_enabled && !trace_enabled && metrics.is_none() {
+            debug!("No OTEL exporter enabled in settings.");
             return Ok(None);
         }
 
@@ -102,7 +106,7 @@ impl OtelProvider {
             .map(|provider| provider.tracer(settings.service_name.clone()));
 
         if let Some(provider) = tracer_provider.clone() {
-            let _ = global::set_tracer_provider(provider);
+            global::set_tracer_provider(provider);
             global::set_text_map_propagator(TraceContextPropagator::new());
         }
         if tracer.is_some() {
@@ -113,6 +117,7 @@ impl OtelProvider {
             logger,
             tracer_provider,
             tracer,
+            metrics,
         }))
     }
 
@@ -141,6 +146,10 @@ impl OtelProvider {
     pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
         meta.target().starts_with("codex_otel")
     }
+
+    pub fn metrics(&self) -> Option<&MetricsClient> {
+        self.metrics.as_ref()
+    }
 }
 
 impl Drop for OtelProvider {
@@ -150,6 +159,9 @@ impl Drop for OtelProvider {
         }
         if let Some(tracer_provider) = &self.tracer_provider {
             let _ = tracer_provider.shutdown();
+        }
+        if let Some(metrics) = &self.metrics {
+            let _ = metrics.shutdown();
         }
     }
 }
@@ -223,8 +235,9 @@ fn build_logger(
 ) -> Result<SdkLoggerProvider, Box<dyn Error>> {
     let mut builder = SdkLoggerProvider::builder().with_resource(resource.clone());
 
-    match exporter {
+    match crate::config::resolve_exporter(exporter) {
         OtelExporter::None => return Ok(builder.build()),
+        OtelExporter::Statsig => unreachable!("statsig exporter should be resolved"),
         OtelExporter::OtlpGrpc {
             endpoint,
             headers,
@@ -232,14 +245,14 @@ fn build_logger(
         } => {
             debug!("Using OTLP Grpc exporter: {endpoint}");
 
-            let header_map = build_header_map(headers);
+            let header_map = crate::otlp::build_header_map(&headers);
 
             let base_tls_config = ClientTlsConfig::new()
                 .with_enabled_roots()
                 .assume_http2(true);
 
             let tls_config = match tls.as_ref() {
-                Some(tls) => build_grpc_tls_config(endpoint, base_tls_config, tls)?,
+                Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)?,
                 None => base_tls_config,
             };
 
@@ -269,10 +282,10 @@ fn build_logger(
                 .with_http()
                 .with_endpoint(endpoint)
                 .with_protocol(protocol)
-                .with_headers(headers.clone());
+                .with_headers(headers);
 
             if let Some(tls) = tls.as_ref() {
-                let client = build_http_client(tls, OTEL_EXPORTER_OTLP_LOGS_TIMEOUT)?;
+                let client = crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_LOGS_TIMEOUT)?;
                 exporter_builder = exporter_builder.with_http_client(client);
             }
 
@@ -289,8 +302,9 @@ fn build_tracer_provider(
     resource: &Resource,
     exporter: &OtelExporter,
 ) -> Result<SdkTracerProvider, Box<dyn Error>> {
-    let span_exporter = match exporter {
+    let span_exporter = match crate::config::resolve_exporter(exporter) {
         OtelExporter::None => return Ok(SdkTracerProvider::builder().build()),
+        OtelExporter::Statsig => unreachable!("statsig exporter should be resolved"),
         OtelExporter::OtlpGrpc {
             endpoint,
             headers,
@@ -298,14 +312,14 @@ fn build_tracer_provider(
         } => {
             debug!("Using OTLP Grpc exporter for traces: {endpoint}");
 
-            let header_map = build_header_map(headers);
+            let header_map = crate::otlp::build_header_map(&headers);
 
             let base_tls_config = ClientTlsConfig::new()
                 .with_enabled_roots()
                 .assume_http2(true);
 
             let tls_config = match tls.as_ref() {
-                Some(tls) => build_grpc_tls_config(endpoint, base_tls_config, tls)?,
+                Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)?,
                 None => base_tls_config,
             };
 
@@ -333,10 +347,11 @@ fn build_tracer_provider(
                 .with_http()
                 .with_endpoint(endpoint)
                 .with_protocol(protocol)
-                .with_headers(headers.clone());
+                .with_headers(headers);
 
             if let Some(tls) = tls.as_ref() {
-                let client = build_http_client(tls, OTEL_EXPORTER_OTLP_TRACES_TIMEOUT)?;
+                let client =
+                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_TRACES_TIMEOUT)?;
                 exporter_builder = exporter_builder.with_http_client(client);
             }
 
@@ -350,150 +365,6 @@ fn build_tracer_provider(
         .with_resource(resource.clone())
         .with_span_processor(processor)
         .build())
-}
-
-fn build_header_map(headers: &HashMap<String, String>) -> HeaderMap {
-    let mut header_map = HeaderMap::new();
-    for (key, value) in headers {
-        if let Ok(name) = HeaderName::from_bytes(key.as_bytes())
-            && let Ok(val) = HeaderValue::from_str(value)
-        {
-            header_map.insert(name, val);
-        }
-    }
-    header_map
-}
-
-fn build_grpc_tls_config(
-    endpoint: &str,
-    tls_config: ClientTlsConfig,
-    tls: &OtelTlsConfig,
-) -> Result<ClientTlsConfig, Box<dyn Error>> {
-    let uri: Uri = endpoint.parse()?;
-    let host = uri.host().ok_or_else(|| {
-        config_error(format!(
-            "OTLP gRPC endpoint {endpoint} does not include a host"
-        ))
-    })?;
-
-    let mut config = tls_config.domain_name(host.to_owned());
-
-    if let Some(path) = tls.ca_certificate.as_ref() {
-        let (pem, _) = read_bytes(path)?;
-        config = config.ca_certificate(TonicCertificate::from_pem(pem));
-    }
-
-    match (&tls.client_certificate, &tls.client_private_key) {
-        (Some(cert_path), Some(key_path)) => {
-            let (cert_pem, _) = read_bytes(cert_path)?;
-            let (key_pem, _) = read_bytes(key_path)?;
-            config = config.identity(TonicIdentity::from_pem(cert_pem, key_pem));
-        }
-        (Some(_), None) | (None, Some(_)) => {
-            return Err(config_error(
-                "client_certificate and client_private_key must both be provided for mTLS",
-            ));
-        }
-        (None, None) => {}
-    }
-
-    Ok(config)
-}
-
-/// Build a blocking HTTP client with TLS configuration for the OTLP HTTP exporter.
-///
-/// We use `reqwest::blocking::Client` instead of the async client because the
-/// `opentelemetry_sdk` `BatchLogProcessor` spawns a dedicated OS thread that uses
-/// `futures_executor::block_on()` rather than tokio. When the async reqwest client's
-/// timeout calls `tokio::time::sleep()`, it panics with "no reactor running".
-fn build_http_client(
-    tls: &OtelTlsConfig,
-    timeout_var: &str,
-) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
-    // Wrap in block_in_place because reqwest::blocking::Client creates its own
-    // internal tokio runtime, which would panic if built directly from an async context.
-    tokio::task::block_in_place(|| build_http_client_inner(tls, timeout_var))
-}
-
-fn build_http_client_inner(
-    tls: &OtelTlsConfig,
-    timeout_var: &str,
-) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
-    let mut builder =
-        reqwest::blocking::Client::builder().timeout(resolve_otlp_timeout(timeout_var));
-
-    if let Some(path) = tls.ca_certificate.as_ref() {
-        let (pem, location) = read_bytes(path)?;
-        let certificate = ReqwestCertificate::from_pem(pem.as_slice()).map_err(|error| {
-            config_error(format!(
-                "failed to parse certificate {}: {error}",
-                location.display()
-            ))
-        })?;
-        // Disable built-in root certificates and use only our custom CA
-        builder = builder
-            .tls_built_in_root_certs(false)
-            .add_root_certificate(certificate);
-    }
-
-    match (&tls.client_certificate, &tls.client_private_key) {
-        (Some(cert_path), Some(key_path)) => {
-            let (mut cert_pem, cert_location) = read_bytes(cert_path)?;
-            let (key_pem, key_location) = read_bytes(key_path)?;
-            cert_pem.extend_from_slice(key_pem.as_slice());
-            let identity = ReqwestIdentity::from_pem(cert_pem.as_slice()).map_err(|error| {
-                config_error(format!(
-                    "failed to parse client identity using {} and {}: {error}",
-                    cert_location.display(),
-                    key_location.display()
-                ))
-            })?;
-            builder = builder.identity(identity).https_only(true);
-        }
-        (Some(_), None) | (None, Some(_)) => {
-            return Err(config_error(
-                "client_certificate and client_private_key must both be provided for mTLS",
-            ));
-        }
-        (None, None) => {}
-    }
-
-    builder
-        .build()
-        .map_err(|error| Box::new(error) as Box<dyn Error>)
-}
-
-fn resolve_otlp_timeout(signal_var: &str) -> Duration {
-    if let Some(timeout) = read_timeout_env(signal_var) {
-        return timeout;
-    }
-    if let Some(timeout) = read_timeout_env(OTEL_EXPORTER_OTLP_TIMEOUT) {
-        return timeout;
-    }
-    OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT
-}
-
-fn read_timeout_env(var: &str) -> Option<Duration> {
-    let value = env::var(var).ok()?;
-    let parsed = value.parse::<i64>().ok()?;
-    if parsed < 0 {
-        return None;
-    }
-    Some(Duration::from_millis(parsed as u64))
-}
-
-fn read_bytes(path: &AbsolutePathBuf) -> Result<(Vec<u8>, PathBuf), Box<dyn Error>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok((bytes, path.to_path_buf())),
-        Err(error) => Err(Box::new(io::Error::new(
-            error.kind(),
-            format!("failed to read {}: {error}", path.display()),
-        ))),
-    }
-}
-
-fn config_error(message: impl Into<String>) -> Box<dyn Error> {
-    Box::new(io::Error::new(ErrorKind::InvalidData, message.into()))
 }
 
 #[cfg(test)]

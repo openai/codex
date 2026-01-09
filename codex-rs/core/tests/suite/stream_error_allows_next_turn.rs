@@ -16,7 +16,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -89,6 +89,7 @@ async fn continue_after_stream_error() {
             items: vec![UserInput::Text {
                 text: "first message".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -106,6 +107,7 @@ async fn continue_after_stream_error() {
             items: vec![UserInput::Text {
                 text: "follow up".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();

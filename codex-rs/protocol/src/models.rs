@@ -397,7 +397,6 @@ pub struct FunctionCallOutputPayload {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
-    // TODO(jif) drop this.
     pub success: Option<bool>,
 }
 
@@ -416,7 +415,6 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
-        tracing::debug!("Function call output payload: {:?}", self);
         if let Some(items) = &self.content_items {
             items.serialize(serializer)
         } else {

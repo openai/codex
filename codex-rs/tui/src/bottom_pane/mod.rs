@@ -34,6 +34,7 @@ mod prompt_args;
 mod skill_popup;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
+pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 mod paste_burst;
@@ -264,6 +265,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn set_composer_input_enabled(
+        &mut self,
+        enabled: bool,
+        placeholder: Option<String>,
+    ) {
+        self.composer.set_input_enabled(enabled, placeholder);
+        self.request_redraw();
+    }
+
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         self.composer.clear_for_ctrl_c();
         self.request_redraw();
@@ -416,8 +427,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_unified_exec_sessions(&mut self, sessions: Vec<String>) {
-        if self.unified_exec_footer.set_sessions(sessions) {
+    pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
+        if self.unified_exec_footer.set_processes(processes) {
             self.request_redraw();
         }
     }

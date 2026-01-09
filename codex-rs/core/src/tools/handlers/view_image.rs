@@ -8,6 +8,7 @@ use crate::protocol::ViewImageToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::user_input::UserInput;
@@ -43,9 +44,7 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
-        let args: ViewImageArgs = serde_json::from_str(&arguments).map_err(|e| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
-        })?;
+        let args: ViewImageArgs = parse_arguments(&arguments)?;
 
         let abs_path = turn.resolve_path(Some(args.path));
 
