@@ -44,9 +44,9 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_rmcp_client::ElicitationResponse;
 use futures::future::BoxFuture;
 use futures::prelude::*;
@@ -2324,9 +2324,9 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 /// - If the model requests a function call, we execute it and send the output
 ///   back to the model in the next turn.
 /// - If the model sends only an assistant message, we record it in the
-///   conversation history and consider the task complete.
+///   conversation history and consider the turn complete.
 ///
-pub(crate) async fn run_task(
+pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
@@ -2342,7 +2342,7 @@ pub(crate) async fn run_task(
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
     }
-    let event = EventMsg::TaskStarted(TaskStartedEvent {
+    let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, event).await;
@@ -2407,7 +2407,7 @@ pub(crate) async fn run_task(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
-        match run_turn(
+        match run_model_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
@@ -2484,7 +2484,7 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
         cwd = %turn_context.cwd.display()
     )
 )]
-async fn run_turn(
+async fn run_model_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,

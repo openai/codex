@@ -545,7 +545,7 @@ impl CodexClient {
                         print!("{}", event.delta);
                         std::io::stdout().flush().ok();
                     }
-                    EventMsg::TaskComplete(event) => {
+                    EventMsg::TurnComplete(event) => {
                         println!("\n[task complete: {event:?}]");
                         break;
                     }

@@ -46,9 +46,9 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::TaskCompleteEvent;
-use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::TerminalInteractionEvent;
+use codex_core::protocol::TurnCompleteEvent;
+use codex_core::protocol::TurnStartedEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -127,8 +127,8 @@ impl EventProcessorWithJsonOutput {
                 }
                 Vec::new()
             }
-            EventMsg::TaskStarted(ev) => self.handle_task_started(ev),
-            EventMsg::TaskComplete(_) => self.handle_task_complete(),
+            EventMsg::TurnStarted(ev) => self.handle_task_started(ev),
+            EventMsg::TurnComplete(_) => self.handle_task_complete(),
             EventMsg::Error(ev) => {
                 let error = ThreadErrorEvent {
                     message: ev.message.clone(),
@@ -459,7 +459,7 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
-    fn handle_task_started(&mut self, _: &TaskStartedEvent) -> Vec<ThreadEvent> {
+    fn handle_task_started(&mut self, _: &TurnStartedEvent) -> Vec<ThreadEvent> {
         self.last_critical_error = None;
         vec![ThreadEvent::TurnStarted(TurnStartedEvent {})]
     }
@@ -536,7 +536,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
 
         let Event { msg, .. } = event;
 
-        if let EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) = msg {
+        if let EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) = msg {
             if let Some(output_file) = self.last_message_path.as_deref() {
                 handle_last_message(last_agent_message.as_deref(), output_file);
             }
