@@ -9,6 +9,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::error::CodexErr;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AskForApproval;
@@ -32,6 +33,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
+use core_test_support::responses::mount_models_once_with_delay;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -45,6 +47,7 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
@@ -433,6 +436,75 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
             .any(|model| model.model == "gpt-5.1-codex-max"),
         "builtin presets should remain available after refresh"
     );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected a single /models request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_request_times_out_after_5s() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let remote_model = test_remote_model("remote-timeout", ModelVisibility::List, 0);
+    let models_mock = mount_models_once_with_delay(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+        Duration::from_secs(6),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    let start = Instant::now();
+    let refresh = timeout(
+        Duration::from_secs(7),
+        manager.refresh_available_models_with_cache(&config),
+    )
+    .await;
+    let elapsed = start.elapsed();
+    let err = refresh
+        .expect("refresh should finish")
+        .expect_err("refresh should time out");
+    let request_summaries: Vec<String> = server
+        .received_requests()
+        .await
+        .expect("mock server should capture requests")
+        .iter()
+        .map(|req| format!("{} {}", req.method, req.url.path()))
+        .collect();
+    assert!(
+        elapsed >= Duration::from_millis(4_500),
+        "expected models call to block near the timeout; took {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(5_800),
+        "expected models call to time out before the delayed response; took {elapsed:?}"
+    );
+    match err {
+        CodexErr::Timeout => {}
+        other => panic!("expected timeout error, got {other:?}; requests: {request_summaries:?}"),
+    }
     assert_eq!(
         models_mock.requests().len(),
         1,
