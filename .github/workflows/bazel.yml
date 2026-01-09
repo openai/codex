@@ -103,6 +103,8 @@ jobs:
         shell: bash
         run: |
           bazel $BAZEL_STARTUP_ARGS test //... \
+            --remote_download_minimal \
+            --nobuild_runfile_links \
             --build_metadata=REPO_URL=https://github.com/openai/codex.git \
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD) \
             --build_metadata=ROLE=CI \
