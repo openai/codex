@@ -41,6 +41,7 @@ single_version_override(
         "//patches:rules_rust.patch",
         "//patches:rules_rust_windows_gnu.patch",
         "//patches:rules_rust_musl.patch",
+        "//patches:rules_rust_build_script_exec.patch",
     ],
 )
 
