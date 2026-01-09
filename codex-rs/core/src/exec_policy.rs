@@ -6,6 +6,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
+use crate::config::types::ExecPolicyConfigToml;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use codex_execpolicy::AmendError;
@@ -28,6 +29,7 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
@@ -200,7 +202,9 @@ async fn load_exec_policy_for_features(
     if !features.enabled(Feature::ExecPolicy) {
         Ok(Policy::empty())
     } else {
-        load_exec_policy(config_stack).await
+        let mut policy = load_exec_policy(config_stack).await?;
+        apply_auto_allow_prefixes(&mut policy, config_stack);
+        Ok(policy)
     }
 }
 
@@ -240,6 +244,57 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     tracing::debug!("loaded execpolicy from {} files", policy_paths.len());
 
     Ok(policy)
+}
+
+fn apply_auto_allow_prefixes(policy: &mut Policy, config_stack: &ConfigLayerStack) {
+    for prefix in execpolicy_auto_allow_prefixes(config_stack) {
+        if prefix.trim().is_empty() {
+            continue;
+        }
+
+        match shlex_split(&prefix) {
+            Some(argv) if argv.is_empty() => {
+                tracing::warn!(
+                    prefix = %prefix,
+                    "execpolicy auto-allow prefix resolved to empty argv; skipping"
+                );
+            }
+            Some(argv) => {
+                if let Err(err) = policy.add_prefix_rule(&argv, Decision::Allow) {
+                    tracing::warn!(
+                        prefix = %prefix,
+                        error = %err,
+                        "failed to add execpolicy auto-allow prefix"
+                    );
+                }
+            }
+            None => {
+                tracing::warn!(
+                    prefix = %prefix,
+                    "execpolicy auto-allow prefix failed to parse; skipping"
+                );
+            }
+        }
+    }
+}
+
+fn execpolicy_auto_allow_prefixes(config_stack: &ConfigLayerStack) -> Vec<String> {
+    let Some(execpolicy) = config_stack.effective_config().get("execpolicy").cloned() else {
+        return Vec::new();
+    };
+
+    let execpolicy_config: ExecPolicyConfigToml = match execpolicy.try_into() {
+        Ok(config) => config,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "failed to parse execpolicy config; ignoring auto-allow prefixes"
+            );
+            return Vec::new();
+        }
+    };
+
+    execpolicy_config.auto_allow_prefixes.unwrap_or_default()
 }
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
@@ -418,6 +473,7 @@ async fn collect_policy_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, Exe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CONFIG_TOML_FILE;
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
@@ -448,6 +504,11 @@ mod tests {
             ConfigRequirementsToml::default(),
         )
         .expect("ConfigLayerStack")
+    }
+
+    fn config_entry_from_str(source: ConfigLayerSource, toml: &str) -> ConfigLayerEntry {
+        let config: TomlValue = toml::from_str(toml).expect("parse toml");
+        ConfigLayerEntry::new(source, config)
     }
 
     #[tokio::test]
@@ -514,6 +575,174 @@ mod tests {
                 }],
             },
             policy.check_multiple(command.iter(), &|_| Decision::Allow)
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_allow_prefixes_allow_exec_commands() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let dot_codex_folder = temp_dir.path().join(".codex");
+        let config_stack = ConfigLayerStack::new(
+            vec![config_entry_from_str(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: AbsolutePathBuf::from_absolute_path(&dot_codex_folder)
+                        .expect("absolute dot_codex_folder"),
+                },
+                r#"
+[execpolicy]
+auto_allow_prefixes = ["git status"]
+"#,
+            )],
+            ConfigRequirements::default(),
+        )
+        .expect("ConfigLayerStack");
+
+        let manager = ExecPolicyManager::load(&Features::with_defaults(), &config_stack)
+            .await
+            .expect("manager");
+        let policy = manager.current();
+
+        let command = vec![
+            "git".to_string(),
+            "status".to_string(),
+            "--short".to_string(),
+        ];
+        let evaluation = policy.check(&command, &|_| Decision::Prompt);
+
+        assert_eq!(
+            evaluation,
+            Evaluation {
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["git".to_string(), "status".to_string()],
+                    decision: Decision::Allow,
+                    justification: None,
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_allow_prefixes_respect_layer_precedence() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let user_file = AbsolutePathBuf::from_absolute_path(temp_dir.path().join(CONFIG_TOML_FILE))
+            .expect("absolute user config file");
+        let project_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path().join(".codex"))
+            .expect("absolute dot_codex_folder");
+
+        let config_stack = ConfigLayerStack::new(
+            vec![
+                config_entry_from_str(
+                    ConfigLayerSource::User { file: user_file },
+                    r#"
+[execpolicy]
+auto_allow_prefixes = ["git status"]
+"#,
+                ),
+                config_entry_from_str(
+                    ConfigLayerSource::Project {
+                        dot_codex_folder: project_folder,
+                    },
+                    r#"
+[execpolicy]
+auto_allow_prefixes = ["cargo test"]
+"#,
+                ),
+            ],
+            ConfigRequirements::default(),
+        )
+        .expect("ConfigLayerStack");
+
+        let manager = ExecPolicyManager::load(&Features::with_defaults(), &config_stack)
+            .await
+            .expect("manager");
+        let policy = manager.current();
+
+        let git_command = vec![
+            "git".to_string(),
+            "status".to_string(),
+            "--short".to_string(),
+        ];
+        let git_evaluation = policy.check(&git_command, &|_| Decision::Prompt);
+        assert_eq!(
+            git_evaluation,
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                    command: git_command,
+                    decision: Decision::Prompt,
+                }],
+            }
+        );
+
+        let cargo_command = vec!["cargo".to_string(), "test".to_string(), "--all".to_string()];
+        let cargo_evaluation = policy.check(&cargo_command, &|_| Decision::Prompt);
+        assert_eq!(
+            cargo_evaluation,
+            Evaluation {
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["cargo".to_string(), "test".to_string()],
+                    decision: Decision::Allow,
+                    justification: None,
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_allow_prefixes_ignores_empty_and_invalid_entries() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let dot_codex_folder = temp_dir.path().join(".codex");
+        let config_stack = ConfigLayerStack::new(
+            vec![config_entry_from_str(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: AbsolutePathBuf::from_absolute_path(&dot_codex_folder)
+                        .expect("absolute dot_codex_folder"),
+                },
+                r#"
+[execpolicy]
+auto_allow_prefixes = ["   ", "git status", "git \"status"]
+"#,
+            )],
+            ConfigRequirements::default(),
+        )
+        .expect("ConfigLayerStack");
+
+        let manager = ExecPolicyManager::load(&Features::with_defaults(), &config_stack)
+            .await
+            .expect("manager");
+        let policy = manager.current();
+
+        let git_command = vec![
+            "git".to_string(),
+            "status".to_string(),
+            "--short".to_string(),
+        ];
+        let git_evaluation = policy.check(&git_command, &|_| Decision::Prompt);
+        assert_eq!(
+            git_evaluation,
+            Evaluation {
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["git".to_string(), "status".to_string()],
+                    decision: Decision::Allow,
+                    justification: None,
+                }],
+            }
+        );
+
+        let invalid_command = vec!["git".to_string(), "\"status".to_string()];
+        let invalid_evaluation = policy.check(&invalid_command, &|_| Decision::Prompt);
+        assert_eq!(
+            invalid_evaluation,
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                    command: invalid_command,
+                    decision: Decision::Prompt,
+                }],
+            }
         );
     }
 

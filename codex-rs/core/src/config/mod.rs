@@ -1,5 +1,6 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
+use crate::config::types::ExecPolicyConfigToml;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
@@ -700,6 +701,9 @@ pub struct ConfigToml {
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
+
+    /// Optional execpolicy configuration.
+    pub execpolicy: Option<ExecPolicyConfigToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,

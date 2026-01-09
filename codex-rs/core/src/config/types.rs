@@ -18,6 +18,11 @@ use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExecPolicyConfigToml {
+    pub auto_allow_prefixes: Option<Vec<String>>,
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
@@ -389,19 +394,15 @@ impl Default for Notifications {
 /// infer wheel vs trackpad per stream, or forces a specific behavior.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ScrollInputMode {
     /// Infer wheel vs trackpad behavior per scroll stream.
+    #[default]
     Auto,
     /// Always treat scroll events as mouse-wheel input (fixed lines per tick).
     Wheel,
     /// Always treat scroll events as trackpad input (fractional accumulation).
     Trackpad,
-}
-
-impl Default for ScrollInputMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// Collection of settings that are specific to the TUI.
