@@ -63,7 +63,7 @@ def codex_rust_crate(
         integration_compile_data_extra: Extra compile_data for integration tests.
         test_data_extra: Extra runtime data for tests.
         test_tags: Tags applied to unit + integration test targets.
-            Typicaly used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
+            Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
