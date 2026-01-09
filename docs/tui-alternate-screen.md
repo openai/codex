@@ -9,6 +9,7 @@ This document explains the design decision behind Codex's alternate screen handl
 ### Fullscreen TUI Benefits
 
 Codex's TUI uses the terminal's **alternate screen buffer** to provide a clean fullscreen experience. This approach:
+
 - Uses the entire viewport without polluting the terminal's scrollback history
 - Provides a dedicated environment for the chat interface
 - Mirrors the behavior of other terminal applications (vim, tmux, etc.)
@@ -22,6 +23,7 @@ Terminal multiplexers like **Zellij** strictly follow the xterm specification, w
 - **Configurability:** This is not configurable in Zellij—there is no option to enable scrollback in alternate screen mode
 
 When using Codex's TUI in Zellij, users cannot scroll back through the conversation history because:
+
 1. The TUI runs in alternate screen mode (fullscreen)
 2. Zellij disables scrollback in alternate screen buffers (per xterm spec)
 3. The entire conversation becomes inaccessible via normal terminal scrolling
@@ -31,16 +33,19 @@ When using Codex's TUI in Zellij, users cannot scroll back through the conversat
 Codex implements a **pragmatic workaround** with three modes, controlled by `tui.alternate_screen` in `config.toml`:
 
 ### 1. `auto` (default)
+
 - **Behavior:** Automatically detect the terminal multiplexer
 - **In Zellij:** Disable alternate screen mode (inline mode, preserves scrollback)
 - **Elsewhere:** Enable alternate screen mode (fullscreen experience)
 - **Rationale:** Provides the best UX in each environment
 
 ### 2. `always`
+
 - **Behavior:** Always use alternate screen mode (original behavior)
 - **Use case:** Users who prefer fullscreen and don't use Zellij, or who have found a workaround
 
 ### 3. `never`
+
 - **Behavior:** Never use alternate screen mode (inline mode)
 - **Use case:** Users who always want scrollback history preserved
 - **Trade-off:** Pollutes the terminal scrollback with TUI output
@@ -54,6 +59,7 @@ codex --no-alt-screen
 ```
 
 This runs the TUI in inline mode regardless of the configuration, useful for:
+
 - One-off sessions where scrollback is critical
 - Debugging terminal-related issues
 - Testing alternate screen behavior
@@ -84,6 +90,7 @@ alternate_screen = "auto"
 ### Why Not Just Disable Alternate Screen in Zellij Permanently?
 
 We use `auto` detection instead of always disabling in Zellij because:
+
 1. Many Zellij users don't care about scrollback and prefer the fullscreen experience
 2. Some users may use tmux inside Zellij, creating a chain of multiplexers
 3. Provides user choice without requiring manual configuration
@@ -110,12 +117,14 @@ Codex's transcript pager (opened with Ctrl+T) provides an alternative way to rev
 ## For Developers
 
 When modifying TUI code, remember:
+
 - The `determine_alt_screen_mode()` function encapsulates all the logic
 - Configuration is in `config.tui_alternate_screen`
 - CLI flag is in `cli.no_alt_screen`
 - The behavior is applied via `tui.set_alt_screen_enabled()`
 
 If you encounter issues with terminal state after running Codex, you can restore your terminal with:
+
 ```bash
 reset
 ```
