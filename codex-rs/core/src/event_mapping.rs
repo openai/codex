@@ -37,7 +37,12 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
         match content_item {
             ContentItem::InputText { text } => {
                 if is_local_image_label_text(text)
-                    && matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. }))
+                    && (matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. }))
+                        || (idx > 0
+                            && matches!(
+                                message.get(idx - 1),
+                                Some(ContentItem::InputImage { .. })
+                            )))
                 {
                     continue;
                 }
@@ -197,6 +202,9 @@ mod tests {
                 ContentItem::InputText { text: label },
                 ContentItem::InputImage {
                     image_url: image_url.clone(),
+                },
+                ContentItem::InputText {
+                    text: "</image>".to_string(),
                 },
                 ContentItem::InputText {
                     text: user_text.clone(),
