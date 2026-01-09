@@ -167,10 +167,12 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
+use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -851,7 +853,7 @@ impl Session {
                 otel_manager.clone(),
             );
         }
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), config.codex_home.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1946,6 +1948,21 @@ impl Session {
     {
         let mut state = self.state.lock().await;
         state.record_mcp_dependency_prompted(names);
+    }
+
+    pub async fn dependency_env(&self) -> HashMap<String, String> {
+        let state = self.state.lock().await;
+        state.dependency_env()
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        let mut state = self.state.lock().await;
+        state.set_dependency_env(values);
+    }
+
+    pub async fn codex_home(&self) -> PathBuf {
+        let state = self.state.lock().await;
+        state.codex_home()
     }
 
     pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
@@ -3220,6 +3237,15 @@ pub(crate) async fn run_turn(
     )
     .await;
 
+    let config = turn_context.client.config();
+    if config
+        .features
+        .enabled(Feature::SkillEnvVarDependencyPrompt)
+    {
+        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
+        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
+    }
+
     let otel_manager = turn_context.client.get_otel_manager();
     let SkillInjections {
         items: skill_items,
@@ -4376,7 +4402,7 @@ mod tests {
             dynamic_tools: Vec::new(),
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(session_configuration, config.codex_home.clone());
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -4457,7 +4483,7 @@ mod tests {
             dynamic_tools: Vec::new(),
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(session_configuration, config.codex_home.clone());
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -4733,7 +4759,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let mut state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone(), config.codex_home.clone());
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
@@ -4845,7 +4871,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let mut state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone(), config.codex_home.clone());
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
