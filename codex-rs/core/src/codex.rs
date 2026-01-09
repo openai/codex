@@ -964,6 +964,7 @@ impl Session {
             self.conversation_id,
             sub_id,
         );
+        turn_context.tools_config.default_shell_name = Some(self.user_shell().display_name());
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
@@ -2219,10 +2220,11 @@ async fn spawn_review_thread(
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
         .disable(crate::features::Feature::WebSearchCached);
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
     });
+    tools_config.default_shell_name = Some(sess.user_shell().display_name());
 
     let base_instructions = REVIEW_PROMPT.to_string();
     let review_prompt = resolved.prompt.clone();

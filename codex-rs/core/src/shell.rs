@@ -33,6 +33,14 @@ impl Shell {
         }
     }
 
+    pub(crate) fn display_name(&self) -> String {
+        self.shell_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| self.name().to_string())
+    }
+
     /// Takes a string of shell and returns the full list of command args to
     /// use with `exec()` to run the shell command.
     pub fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {

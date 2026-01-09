@@ -21,6 +21,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
+    pub default_shell_name: Option<String>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub web_search_cached: bool,
@@ -71,6 +72,7 @@ impl ToolsConfig {
 
         Self {
             shell_type,
+            default_shell_name: None,
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             web_search_cached: include_web_search_cached,
@@ -78,6 +80,12 @@ impl ToolsConfig {
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
+}
+
+fn default_shell_display(default_shell_name: Option<&str>) -> String {
+    default_shell_name
+        .map(str::to_string)
+        .unwrap_or_else(|| "the user's default shell".to_string())
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -136,7 +144,8 @@ impl From<JsonSchema> for AdditionalProperties {
     }
 }
 
-fn create_exec_command_tool() -> ToolSpec {
+fn create_exec_command_tool(default_shell_name: Option<&str>) -> ToolSpec {
+    let default_shell_display = default_shell_display(default_shell_name);
     let properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -156,7 +165,9 @@ fn create_exec_command_tool() -> ToolSpec {
         (
             "shell".to_string(),
             JsonSchema::String {
-                description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),
+                description: Some(format!(
+                    "Shell binary to launch. Defaults to {default_shell_display}."
+                )),
             },
         ),
         (
@@ -329,13 +340,16 @@ Examples of valid command strings:
     })
 }
 
-fn create_shell_command_tool() -> ToolSpec {
+fn create_shell_command_tool(default_shell_name: Option<&str>) -> ToolSpec {
+    let default_shell_display = default_shell_display(default_shell_name);
     let properties = BTreeMap::from([
         (
             "command".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "The shell script to execute in the user's default shell".to_string(),
+                    format!(
+                        "The shell script to execute in {default_shell_display}"
+                    ),
                 ),
             },
         ),
@@ -1127,6 +1141,7 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
+    let default_shell_name = config.default_shell_name.as_deref();
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1136,7 +1151,7 @@ pub(crate) fn build_specs(
             builder.push_spec(ToolSpec::LocalShell {});
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec(create_exec_command_tool());
+            builder.push_spec(create_exec_command_tool(default_shell_name));
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1145,7 +1160,7 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec(create_shell_command_tool());
+            builder.push_spec(create_shell_command_tool(default_shell_name));
         }
     }
 
@@ -1391,7 +1406,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(),
+            create_exec_command_tool(None),
             create_write_stdin_tool(),
             create_list_mcp_resources_tool(),
             create_list_mcp_resource_templates_tool(),
@@ -2168,7 +2183,7 @@ Examples of valid command strings:
 
     #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool();
+        let tool = super::create_shell_command_tool(None);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool
