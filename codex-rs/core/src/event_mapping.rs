@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn skips_local_image_label_text() {
         let image_url = "data:image/png;base64,abc".to_string();
-        let label = local_image_label_text(std::path::Path::new("/tmp/example.png"));
+        let label = local_image_label_text(1);
         let user_text = "Please review this image.".to_string();
 
         let item = ResponseItem::Message {

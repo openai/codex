@@ -46,6 +46,7 @@ use crate::style::user_message_style;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use codex_protocol::models::local_image_label_text;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -59,7 +60,6 @@ use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -266,17 +266,15 @@ impl ChatComposer {
 
         // normalize_pasted_path already handles Windows → WSL path conversion,
         // so we can directly try to read the image dimensions.
-        match image::image_dimensions(&path_buf) {
-            Ok((w, h)) => {
-                tracing::info!("OK: {pasted}");
-                let format_label = pasted_image_format(&path_buf).label();
-                self.attach_image(path_buf, w, h, format_label);
-                true
-            }
-            Err(err) => {
-                tracing::trace!("ERR: {err}");
-                false
-            }
+        if image::image_dimensions(&path_buf).is_ok() {
+            tracing::info!("OK: {pasted}");
+            let format = pasted_image_format(&path_buf);
+            tracing::debug!("attached image format={}", format.label());
+            self.attach_image(path_buf);
+            true
+        } else {
+            tracing::trace!("ERR: not an image path");
+            false
         }
     }
 
@@ -401,19 +399,10 @@ impl ChatComposer {
     }
 
     /// Attempt to start a burst by retro-capturing recent chars before the cursor.
-    pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, _format_label: &str) {
+    pub fn attach_image(&mut self, path: PathBuf) {
         let image_number = self.attached_images.len() + 1;
-        let placeholder = if Self::is_default_clipboard_filename(&path) {
-            let base_placeholder = format!("Image #{image_number}");
-            self.next_image_placeholder(&base_placeholder)
-        } else {
-            let file_label = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "image".to_string());
-            let base_placeholder = format!("{file_label} {width}x{height}");
-            self.next_image_placeholder(&base_placeholder)
-        };
+        let base_placeholder = local_image_label_text(image_number);
+        let placeholder = self.next_image_placeholder(&base_placeholder);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
@@ -481,22 +470,17 @@ impl ChatComposer {
         let mut suffix = 1;
         loop {
             let placeholder = if suffix == 1 {
-                format!("[{base}]")
+                base.to_string()
+            } else if let Some(base_trimmed) = base.strip_suffix(']') {
+                format!("{base_trimmed} #{suffix}]")
             } else {
-                format!("[{base} #{suffix}]")
+                format!("{base} #{suffix}")
             };
             if !text.contains(&placeholder) {
                 return placeholder;
             }
             suffix += 1;
         }
-    }
-
-    fn is_default_clipboard_filename(path: &Path) -> bool {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.starts_with("codex-clipboard-"))
-            .unwrap_or(false)
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -824,7 +808,7 @@ impl ChatComposer {
                 if is_image {
                     // Determine dimensions; if that fails fall back to normal path insertion.
                     let path_buf = PathBuf::from(&sel_path);
-                    if let Ok((w, h)) = image::image_dimensions(&path_buf) {
+                    if image::image_dimensions(&path_buf).is_ok() {
                         // Remove the current @token (mirror logic from insert_selected_path without inserting text)
                         // using the flat text and byte-offset cursor API.
                         let cursor_offset = self.textarea.cursor();
@@ -850,16 +834,7 @@ impl ChatComposer {
                         self.textarea.replace_range(start_idx..end_idx, "");
                         self.textarea.set_cursor(start_idx);
 
-                        let format_label = match Path::new(&sel_path)
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .map(str::to_ascii_lowercase)
-                        {
-                            Some(ext) if ext == "png" => "PNG",
-                            Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
-                            _ => "IMG",
-                        };
-                        self.attach_image(path_buf, w, h, format_label);
+                        self.attach_image(path_buf);
                         // Add a trailing space to keep typing fluid.
                         self.textarea.insert_str(" ");
                     } else {
@@ -3511,12 +3486,12 @@ mod tests {
             false,
         );
         let path = PathBuf::from("/tmp/image1.png");
-        composer.attach_image(path.clone(), 32, 16, "PNG");
+        composer.attach_image(path.clone());
         composer.handle_paste(" hi".into());
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[image1.png 32x16] hi"),
+            InputResult::Submitted(text) => assert_eq!(text, "[Image #1] hi"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -3535,11 +3510,11 @@ mod tests {
             false,
         );
         let path = PathBuf::from("/tmp/image2.png");
-        composer.attach_image(path.clone(), 10, 5, "PNG");
+        composer.attach_image(path.clone());
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[image2.png 10x5]"),
+            InputResult::Submitted(text) => assert_eq!(text, "[Image #1]"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -3560,21 +3535,15 @@ mod tests {
             false,
         );
         let path = PathBuf::from("/tmp/image_dup.png");
-        composer.attach_image(path.clone(), 10, 5, "PNG");
+        composer.attach_image(path.clone());
         composer.handle_paste(" ".into());
-        composer.attach_image(path, 10, 5, "PNG");
+        composer.attach_image(path);
 
         let text = composer.textarea.text().to_string();
-        assert!(text.contains("[image_dup.png 10x5]"));
-        assert!(text.contains("[image_dup.png 10x5 #2]"));
-        assert_eq!(
-            composer.attached_images[0].placeholder,
-            "[image_dup.png 10x5]"
-        );
-        assert_eq!(
-            composer.attached_images[1].placeholder,
-            "[image_dup.png 10x5 #2]"
-        );
+        assert!(text.contains("[Image #1]"));
+        assert!(text.contains("[Image #2]"));
+        assert_eq!(composer.attached_images[0].placeholder, "[Image #1]");
+        assert_eq!(composer.attached_images[1].placeholder, "[Image #2]");
     }
 
     #[test]
@@ -3589,7 +3558,7 @@ mod tests {
             false,
         );
         let path = PathBuf::from("/tmp/image3.png");
-        composer.attach_image(path.clone(), 20, 10, "PNG");
+        composer.attach_image(path.clone());
         let placeholder = composer.attached_images[0].placeholder.clone();
 
         // Case 1: backspace at end
@@ -3600,7 +3569,7 @@ mod tests {
 
         // Re-add and test backspace in middle: should break the placeholder string
         // and drop the image mapping (same as text placeholder behavior).
-        composer.attach_image(path, 20, 10, "PNG");
+        composer.attach_image(path);
         let placeholder2 = composer.attached_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
@@ -3632,7 +3601,7 @@ mod tests {
 
         // Insert an image placeholder at the start
         let path = PathBuf::from("/tmp/image_multibyte.png");
-        composer.attach_image(path, 10, 5, "PNG");
+        composer.attach_image(path);
         // Add multibyte text after the placeholder
         composer.textarea.insert_str("日本語");
 
@@ -3641,12 +3610,7 @@ mod tests {
         composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
         assert_eq!(composer.attached_images.len(), 1);
-        assert!(
-            composer
-                .textarea
-                .text()
-                .starts_with("[image_multibyte.png 10x5]")
-        );
+        assert!(composer.textarea.text().starts_with("[Image #1]"));
     }
 
     #[test]
@@ -3664,10 +3628,10 @@ mod tests {
         let path1 = PathBuf::from("/tmp/image_dup1.png");
         let path2 = PathBuf::from("/tmp/image_dup2.png");
 
-        composer.attach_image(path1, 10, 5, "PNG");
+        composer.attach_image(path1);
         // separate placeholders with a space for clarity
         composer.handle_paste(" ".into());
-        composer.attach_image(path2.clone(), 10, 5, "PNG");
+        composer.attach_image(path2.clone());
 
         let placeholder1 = composer.attached_images[0].placeholder.clone();
         let placeholder2 = composer.attached_images[1].placeholder.clone();
@@ -3693,7 +3657,7 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: "[image_dup2.png 10x5]".to_string()
+                placeholder: "[Image #2]".to_string()
             }],
             composer.attached_images,
             "one image mapping remains"
@@ -3720,12 +3684,7 @@ mod tests {
 
         let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
         assert!(needs_redraw);
-        assert!(
-            composer
-                .textarea
-                .text()
-                .starts_with("[codex_tui_test_paste_image.png 3x2] ")
-        );
+        assert!(composer.textarea.text().starts_with("[Image #1] "));
 
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs, vec![tmp_path]);
