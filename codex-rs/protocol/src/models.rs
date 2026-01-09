@@ -752,7 +752,7 @@ mod tests {
         assert_eq!(
             approval,
             DeveloperInstructions::new(
-                " Run your commands as normal. If a command fails due to sandboxing, the environment will automatically ask the user for approval. When possible, run commands that do not require approval to avoid annoying the user."
+                " Approvals are your mechanism to get user consent to run shell commands without the sandbox. `approval_policy` is `on-failure`: The harness will allow all commands to run in the sandbox (if enabled), and failures will be escalated to the user for approval to run again without the sandbox."
             )
         );
 
@@ -789,7 +789,7 @@ mod tests {
             "expected network access to be enabled in message"
         );
         assert!(
-            text.contains("require_escalated"),
+            text.contains("`approval_policy` is `on-request`"),
             "expected approval guidance to be included"
         );
     }
@@ -807,7 +807,7 @@ mod tests {
             DeveloperInstructions::from_policy(&policy, AskForApproval::UnlessTrusted);
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
-        assert!(text.contains("You must ask for approval for all commands"));
+        assert!(text.contains("`approval_policy` is `unless-trusted`"));
     }
 
     #[test]
