@@ -353,8 +353,8 @@ pub struct Config {
     pub disable_paste_burst: bool,
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
-    /// Defaults to `true`.
-    pub analytics: bool,
+    /// Voluntarily left as Optional because the default value might depend on the client.
+    pub analytics_enabled: Option<bool>,
 
     /// When `false`, disables feedback collection across Codex product surfaces.
     /// Defaults to `true`.
@@ -1405,12 +1405,11 @@ impl Config {
             notices: cfg.notice.unwrap_or_default(),
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
-            analytics: config_profile
+            analytics_enabled: config_profile
                 .analytics
                 .as_ref()
                 .and_then(|a| a.enabled)
-                .or(cfg.analytics.as_ref().and_then(|a| a.enabled))
-                .unwrap_or(true),
+                .or(cfg.analytics.as_ref().and_then(|a| a.enabled)),
             feedback_enabled: cfg
                 .feedback
                 .as_ref()
@@ -3266,7 +3265,7 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
-                analytics: true,
+                analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
@@ -3351,7 +3350,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: true,
+            analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
@@ -3451,7 +3450,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: false,
+            analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
@@ -3537,7 +3536,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: true,
+            analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,

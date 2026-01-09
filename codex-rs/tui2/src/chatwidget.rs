@@ -48,11 +48,11 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillsListEntry;
 use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
+use codex_core::protocol::TurnCompleteEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
@@ -1918,8 +1918,8 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted(_) => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+            EventMsg::TurnStarted(_) => self.on_task_started(),
+            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message)
             }
             EventMsg::TokenCount(ev) => {

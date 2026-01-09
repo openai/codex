@@ -12,8 +12,8 @@ use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
-use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
@@ -54,7 +54,7 @@ pub(crate) async fn run_compact_task(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) {
-    let start_event = EventMsg::TaskStarted(TaskStartedEvent {
+    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;

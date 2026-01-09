@@ -226,7 +226,7 @@ pub enum Op {
     ///
     /// The command string is executed using the user's default shell and may
     /// include shell syntax (pipes, redirects, etc.). Output is streamed via
-    /// `ExecCommand*` events and the UI regains control upon `TaskComplete`.
+    /// `ExecCommand*` events and the UI regains control upon `TurnComplete`.
     RunUserShellCommand {
         /// The raw command string after '!'
         command: String,
@@ -541,7 +541,7 @@ pub enum EventMsg {
     Error(ErrorEvent),
 
     /// Warning issued while processing a submission. Unlike `Error`, this
-    /// indicates the task continued but the user should still be notified.
+    /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
     /// Conversation history was compacted (either automatically or manually).
@@ -550,11 +550,15 @@ pub enum EventMsg {
     /// Conversation history was rolled back by dropping the last N user turns.
     ThreadRolledBack(ThreadRolledBackEvent),
 
-    /// Agent has started a task
-    TaskStarted(TaskStartedEvent),
+    /// Agent has started a turn.
+    /// v1 wire format uses `task_started`; accept `turn_started` for v2 interop.
+    #[serde(rename = "task_started", alias = "turn_started")]
+    TurnStarted(TurnStartedEvent),
 
-    /// Agent has completed all actions
-    TaskComplete(TaskCompleteEvent),
+    /// Agent has completed all actions.
+    /// v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.
+    #[serde(rename = "task_complete", alias = "turn_complete")]
+    TurnComplete(TurnCompleteEvent),
 
     /// Usage update for the current session, including totals and last turn.
     /// Optional means unknown — UIs should not display when `None`.
@@ -868,12 +872,12 @@ pub struct WarningEvent {
 pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct TaskCompleteEvent {
+pub struct TurnCompleteEvent {
     pub last_agent_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct TaskStartedEvent {
+pub struct TurnStartedEvent {
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
 }
