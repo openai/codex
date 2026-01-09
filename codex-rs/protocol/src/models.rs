@@ -170,6 +170,15 @@ pub struct DeveloperInstructions {
     text: String,
 }
 
+const APPROVAL_POLICY_NEVER: &str = include_str!("../prompts/permissions/approval_policy/never.md");
+const APPROVAL_POLICY_UNLESS_TRUSTED: &str = include_str!("../prompts/permissions/approval_policy/unless_trusted.md");
+const APPROVAL_POLICY_ON_FAILURE: &str = include_str!("../prompts/permissions/approval_policy/on_failure.md");
+const APPROVAL_POLICY_ON_REQUEST: &str = include_str!("../prompts/permissions/approval_policy/on_request.md");
+
+const SANDBOX_MODE_DANGER_FULL_ACCESS: &str = include_str!("../prompts/permissions/sandbox_mode/danger_full_access.md");
+const SANDBOX_MODE_WORKSPACE_WRITE: &str = include_str!("../prompts/permissions/sandbox_mode/workspace_write.md");
+const SANDBOX_MODE_READ_ONLY: &str = include_str!("../prompts/permissions/sandbox_mode/read_only.md");
+
 impl DeveloperInstructions {
     pub fn new<T: Into<String>>(text: T) -> Self {
         Self { text: text.into() }
@@ -234,17 +243,12 @@ impl DeveloperInstructions {
     }
 
     fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
-        let text = match mode {
-            SandboxMode::DangerFullAccess => format!(
-                "You are working in an environment that is not sandboxed, which is dangerous. All commands you issue will be executed. Network access is {network_access}. Be careful with destructive actions."
-            ),
-            SandboxMode::WorkspaceWrite => format!(
-                "You are working in a sandbox. The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Commands that edit files in other directories will fail unless approved by the user. Network access is {network_access}."
-            ),
-            SandboxMode::ReadOnly => format!(
-                "You are working in a sandbox. The sandbox permits reading files, but not editing files. Network access is {network_access}."
-            ),
+        let template = match mode {
+            SandboxMode::DangerFullAccess => SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end(),
+            SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
+            SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
         };
+        let text = template.replace("{network_access}", &network_access.to_string());
 
         DeveloperInstructions::new(text)
     }
@@ -276,10 +280,10 @@ impl From<SandboxMode> for DeveloperInstructions {
 impl From<AskForApproval> for DeveloperInstructions {
     fn from(mode: AskForApproval) -> Self {
         let text = match mode {
-            AskForApproval::Never => " The user has requested you NEVER ask for approval; any request for approval will be automatically denied. Do what the user asks as best you can without any access outside the sandbox.",
-            AskForApproval::UnlessTrusted => " You must ask for approval for all commands, including network access, except for reading files, by including a 1-sentence justification for why you need to run it.",
-            AskForApproval::OnFailure => " Run your commands as normal. If a command fails due to sandboxing, the environment will automatically ask the user for approval. When possible, run commands that do not require approval to avoid annoying the user.",
-            AskForApproval::OnRequest => " When running a command that requires approval, you can use the `functions.shell_command` and set the `sandbox_permissions` field to 'require_escalated' and add a 1 sentence justification to the `justification` field.\n\nFor example:\n{\n  \"recipient_name\": \"functions.shell_command\",\n  \"parameters\": {\n    \"workdir\": \"/Users/mia/code/codex-oss\",\n    \"command\": \"cargo install cargo-insta\",\n    \"sandbox_permissions\": \"require_escalated\",\n    \"justification\": \"Need network access to download and install cargo-insta.\"\n  }\n}\n\nHere are scenarios where you might need to request approval:\n- You need to run a command that writes to a directory that requires it (e.g. running tests that write to /var)\n- You need to run a GUI app (e.g., open/xdg-open/osascript) to open browsers or files.\n- Network is restricted and you need to run a command that requires network access (e.g. installing packages)\n- If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with approval. ALWAYS proceed to use the `sandbox_permissions` and `justification` parameters - do not message the user before requesting approval for the command.\n- You are about to take a potentially destructive action such as an `rm` or `git reset` that the user did not explicitly ask for.\n\nOnly run commands that require approval if it is absolutely necessary to solve the user's query, don't try and circumvent approvals by using other tools.",
+            AskForApproval::Never => APPROVAL_POLICY_NEVER.trim_end(),
+            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.trim_end(),
+            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.trim_end(),
+            AskForApproval::OnRequest => APPROVAL_POLICY_ON_REQUEST.trim_end(),
         };
 
         DeveloperInstructions::new(text)
