@@ -1458,7 +1458,7 @@ impl ChatWidget {
                             info.height,
                             info.encoded_format.label()
                         );
-                        self.attach_image(path);
+                        self.attach_image(path, info.width, info.height, info.encoded_format.label());
                     }
                     Err(err) => {
                         tracing::warn!("failed to paste image: {err}");
@@ -1511,9 +1511,16 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn attach_image(&mut self, path: PathBuf) {
+    pub(crate) fn attach_image(
+        &mut self,
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &str,
+    ) {
         tracing::info!("attach_image path={path:?}");
-        self.bottom_pane.attach_image(path);
+        self.bottom_pane
+            .attach_image(path, width, height, format_label);
         self.request_redraw();
     }
 

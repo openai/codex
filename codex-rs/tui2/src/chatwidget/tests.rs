@@ -1065,7 +1065,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
 
     chat.bottom_pane.insert_str("draft message ");
     chat.bottom_pane
-        .attach_image(PathBuf::from("/tmp/preview.png"));
+        .attach_image(PathBuf::from("/tmp/preview.png"), 10, 10, "PNG");
     let placeholder = "[Image #1]";
     assert!(
         chat.bottom_pane.composer_text().ends_with(placeholder),

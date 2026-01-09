@@ -542,9 +542,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn attach_image(&mut self, path: PathBuf) {
+    pub(crate) fn attach_image(
+        &mut self,
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &str,
+    ) {
         if self.view_stack.is_empty() {
-            self.composer.attach_image(path);
+            self.composer
+                .attach_image(path, width, height, format_label);
             self.request_redraw();
         }
     }
