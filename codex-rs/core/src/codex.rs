@@ -801,6 +801,7 @@ impl Session {
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
+                let append_env_context = matches!(conversation_history, InitialHistory::Resumed(_));
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 if let InitialHistory::Resumed(_) = conversation_history
@@ -843,6 +844,12 @@ impl Session {
                 if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
+                }
+
+                if append_env_context {
+                    let env_item = self.build_environment_context_item(&turn_context);
+                    self.record_conversation_items(&turn_context, std::slice::from_ref(&env_item))
+                        .await;
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -1333,9 +1340,18 @@ impl Session {
         }
     }
 
+    fn build_environment_context_item(&self, turn_context: &TurnContext) -> ResponseItem {
+        let shell = self.user_shell();
+        ResponseItem::from(EnvironmentContext::new(
+            Some(turn_context.cwd.clone()),
+            Some(turn_context.approval_policy),
+            Some(turn_context.sandbox_policy.clone()),
+            shell.as_ref().clone(),
+        ))
+    }
+
     pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
         let mut items = Vec::<ResponseItem>::with_capacity(3);
-        let shell = self.user_shell();
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
@@ -1348,12 +1364,7 @@ impl Session {
                 .into(),
             );
         }
-        items.push(ResponseItem::from(EnvironmentContext::new(
-            Some(turn_context.cwd.clone()),
-            Some(turn_context.approval_policy),
-            Some(turn_context.sandbox_policy.clone()),
-            shell.as_ref().clone(),
-        )));
+        items.push(self.build_environment_context_item(turn_context));
         items
     }
 
@@ -2925,6 +2936,8 @@ mod tests {
     async fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let mut expected = expected;
+        expected.push(session.build_environment_context_item(&turn_context));
 
         session
             .record_initial_history(InitialHistory::Resumed(ResumedHistory {

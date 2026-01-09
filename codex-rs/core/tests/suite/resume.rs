@@ -1,4 +1,7 @@
 use anyhow::Result;
+use codex_core::config::Constrained;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -12,6 +15,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -117,6 +121,81 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
         }
         other => panic!("unexpected initial messages after resume: {other:#?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_appends_environment_context_on_first_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    let codex = Arc::clone(&initial.codex);
+    let home = initial.home.clone();
+    let rollout_path = initial.session_configured.rollout_path.clone();
+
+    let initial_sse = sse(vec![
+        ev_response_created("resp-initial"),
+        ev_assistant_message("msg-1", "Completed first turn"),
+        ev_completed("resp-initial"),
+    ]);
+    mount_sse_once(&server, initial_sse).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Record some messages".into(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        config.approval_policy = Constrained::allow_any(AskForApproval::Never);
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+
+    let resumed_sse = sse(vec![
+        ev_response_created("resp-resume"),
+        ev_assistant_message("msg-2", "Completed after resume"),
+        ev_completed("resp-resume"),
+    ]);
+    let resumed_mock = mount_sse_once(&server, resumed_sse).await;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "After resume".into(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TaskComplete(_))
+    })
+    .await;
+
+    let body = resumed_mock.single_request().body_json();
+    let input = body["input"]
+        .as_array()
+        .expect("resume request input is an array");
+    let env_texts: Vec<&str> = input
+        .iter()
+        .filter_map(|item| item["content"][0]["text"].as_str())
+        .filter(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
+        .collect();
+
+    assert_eq!(env_texts.is_empty(), false);
+    let last_env = env_texts.last().expect("environment context present");
+    assert_eq!(
+        last_env.contains("<approval_policy>never</approval_policy>"),
+        true,
+    );
 
     Ok(())
 }
