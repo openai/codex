@@ -182,24 +182,32 @@ fn local_image_error_placeholder(
 
 pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 
-fn local_image_label_suffix() -> String {
-    format!(" follows (you can see it without using the {VIEW_IMAGE_TOOL_NAME} tool):")
-}
+const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=\"";
+const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = "\">";
+const LOCAL_IMAGE_CLOSE_TAG: &str = "</image>";
 
 pub fn local_image_label_text(path: &std::path::Path) -> String {
     local_image_label_text_with_number(path, None)
 }
 
 pub fn is_local_image_label_text(text: &str) -> bool {
-    let suffix = local_image_label_suffix();
     let trimmed = text.trim();
-    trimmed.starts_with("[Image ") && trimmed.ends_with(&suffix)
+    is_local_image_open_tag_text(trimmed) || is_local_image_close_tag_text(trimmed)
 }
 
 fn local_image_label(path: &std::path::Path, label_number: Option<usize>) -> ContentItem {
     ContentItem::InputText {
         text: local_image_label_text_with_number(path, label_number),
     }
+}
+
+fn is_local_image_open_tag_text(text: &str) -> bool {
+    text.strip_prefix(LOCAL_IMAGE_OPEN_TAG_PREFIX)
+        .is_some_and(|rest| rest.ends_with(LOCAL_IMAGE_OPEN_TAG_SUFFIX))
+}
+
+fn is_local_image_close_tag_text(text: &str) -> bool {
+    text == LOCAL_IMAGE_CLOSE_TAG
 }
 
 fn invalid_image_error_placeholder(
@@ -233,10 +241,11 @@ fn local_image_label_text_with_number(
     path: &std::path::Path,
     label_number: Option<usize>,
 ) -> String {
-    match label_number {
-        Some(label_number) => format!("[Image #{label_number}]{}", local_image_label_suffix()),
-        None => format!("[Image {}]{}", path.display(), local_image_label_suffix()),
-    }
+    let label = match label_number {
+        Some(label_number) => format!("[Image #{label_number}]"),
+        None => format!("[Image {}]", path.display()),
+    };
+    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
 }
 
 fn local_image_content_items_with_label_number(
@@ -246,13 +255,18 @@ fn local_image_content_items_with_label_number(
 ) -> Vec<ContentItem> {
     match load_and_resize_to_fit(path) {
         Ok(image) => {
-            let mut items = Vec::with_capacity(2);
+            let mut items = Vec::with_capacity(3);
             if include_label {
                 items.push(local_image_label(path, label_number));
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
             });
+            if include_label {
+                items.push(ContentItem::InputText {
+                    text: LOCAL_IMAGE_CLOSE_TAG.to_string(),
+                });
+            }
             items
         }
         Err(err) => {
