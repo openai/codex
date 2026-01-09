@@ -684,8 +684,13 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
+// The JSON Schema in `docs/config.schema.json` is generated from this struct.
+// If you add, remove, or rename fields, regenerate the schema via
+// `just write-config-schema` and update the fixture test.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
+    pub test: Option<String>,
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.
@@ -886,6 +891,7 @@ impl From<ConfigToml> for UserSavedConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
 }
@@ -901,6 +907,7 @@ impl ProjectConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,
@@ -920,6 +927,7 @@ impl From<ToolsToml> for Tools {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct GhostSnapshotToml {
     /// Exclude untracked files larger than this many bytes from ghost snapshots.
     #[serde(alias = "ignore_untracked_files_over_bytes")]

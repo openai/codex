@@ -56,3 +56,7 @@ build-for-release:
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"
+
+# Regenerate the json schema for config.toml from the current config types.
+write-config-schema:
+    cargo test -p codex-core write_config_schema_fixture -- --ignored

@@ -118,9 +118,7 @@
           "type": "boolean"
         }
       },
-      "additionalProperties": {
-        "type": "boolean"
-      }
+      "additionalProperties": false
     },
     "file_opener": {
       "description": "Optional URI-based file opener. If set, citations to files in the model output will be hyperlinked using the specified URI scheme.",
@@ -371,6 +369,7 @@
       "type": "boolean"
     }
   },
+  "additionalProperties": false,
   "definitions": {
     "AbsolutePathBuf": {
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
@@ -384,7 +383,8 @@
           "description": "When `false`, disables analytics across Codex product surfaces in this profile.",
           "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
@@ -521,9 +521,7 @@
               "type": "boolean"
             }
           },
-          "additionalProperties": {
-            "type": "boolean"
-          }
+          "additionalProperties": false
         },
         "include_apply_patch_tool": {
           "type": "boolean"
@@ -556,7 +554,8 @@
         "tools_web_search": {
           "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ForcedLoginMethod": {
       "type": "string",
@@ -582,7 +581,8 @@
           "type": "integer",
           "format": "int64"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "History": {
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`.",
@@ -605,7 +605,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "HistoryPersistence": {
       "oneOf": [
@@ -626,6 +627,7 @@
       ]
     },
     "McpServerStdioSchema": {
+      "description": "Schema-only representations of MCP server configs.\n\nKeep these in sync with the custom MCP config parsing in `crate::config::types::McpServerConfig`.",
       "type": "object",
       "required": [
         "command"
@@ -693,7 +695,8 @@
           "type": "number",
           "format": "double"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "McpServerStreamableHttpSchema": {
       "type": "object",
@@ -756,7 +759,8 @@
         "url": {
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ModelProviderInfo": {
       "description": "Serializable representation of a provider definition.",
@@ -838,7 +842,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
@@ -872,7 +877,8 @@
             "type": "string"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Notifications": {
       "anyOf": [
@@ -941,7 +947,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "OtelExporterKind": {
       "description": "Which OTEL exporter to use.",
@@ -987,7 +994,8 @@
                     }
                   ]
                 }
-              }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
@@ -1022,7 +1030,8 @@
                     }
                   ]
                 }
-              }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
@@ -1059,7 +1068,8 @@
         "client-private-key": {
           "$ref": "#/definitions/AbsolutePathBuf"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ProjectConfig": {
       "type": "object",
@@ -1067,7 +1077,8 @@
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -1131,7 +1142,8 @@
             "$ref": "#/definitions/AbsolutePathBuf"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ScrollInputMode": {
       "description": "How TUI2 should interpret mouse scroll events.\n\nTerminals generally encode both mouse wheels and trackpads as the same \"scroll up/down\" mouse button events, without a magnitude. This setting controls whether Codex uses a heuristic to infer wheel vs trackpad per stream, or forces a specific behavior.",
@@ -1217,7 +1229,8 @@
             "type": "string"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ToolsToml": {
       "type": "object",
@@ -1231,7 +1244,8 @@
           "default": null,
           "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "TrustLevel": {
       "description": "Represents the trust level for a project directory. This determines the approval policy and sandbox mode applied.",
@@ -1320,7 +1334,8 @@
           "default": true,
           "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "UriBasedFileOpener": {
       "oneOf": [
