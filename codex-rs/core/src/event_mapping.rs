@@ -146,7 +146,6 @@ mod tests {
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::models::WebSearchAction;
-    use codex_protocol::models::local_image_label_text;
     use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
 
@@ -191,7 +190,7 @@ mod tests {
     #[test]
     fn skips_local_image_label_text() {
         let image_url = "data:image/png;base64,abc".to_string();
-        let label = local_image_label_text(1);
+        let label = codex_protocol::models::local_image_open_tag_text(1);
         let user_text = "Please review this image.".to_string();
 
         let item = ResponseItem::Message {
