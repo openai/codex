@@ -94,12 +94,19 @@ jobs:
       #     restore-keys: |
       #       bazel-cache-${{ matrix.os }}
 
+      - name: Configure Bazel startup args (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Use a very short path to reduce argv/path length issues.
+          "BAZEL_STARTUP_ARGS=--output_user_root=C:\_bzl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          bazel test //... \
+          bazel $BAZEL_STARTUP_ARGS test //... \
             --build_metadata=REPO_URL=https://github.com/openai/codex.git \
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD) \
             --build_metadata=ROLE=CI \
