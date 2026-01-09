@@ -31,7 +31,6 @@ struct SendInputArgs {
 #[derive(Debug, Deserialize)]
 struct WaitArgs {
     id: String,
-    #[serde(default, alias = "timeout", alias = "timout")]
     timeout_ms: Option<i64>,
 }
 
