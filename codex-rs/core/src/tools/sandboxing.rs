@@ -6,6 +6,7 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::codex::make_session_and_context_with_rx;
 use crate::error::CodexErr;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
@@ -57,6 +58,8 @@ impl ApprovalStore {
 ///   so future requests touching any subset can also skip prompting.
 pub(crate) async fn with_cached_approval<K, F, Fut>(
     services: &SessionServices,
+    /// Name of the tool, used for metrics collection.
+    tool_name: &str,
     keys: Vec<K>,
     fetch: F,
 ) -> ReviewDecision
@@ -81,6 +84,15 @@ where
     }
 
     let decision = fetch().await;
+
+    services.otel_manager.counter(
+        "codex.approval.requested",
+        1,
+        &[
+            ("tool", tool_name),
+            ("approved", decision.to_opaque_string()),
+        ],
+    );
 
     if matches!(decision, ReviewDecision::ApprovedForSession) {
         let mut store = services.tool_approvals.lock().await;
