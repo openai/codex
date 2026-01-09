@@ -361,6 +361,7 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
+    should_refresh_mcp_servers: AtomicBool,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -685,7 +686,7 @@ impl Session {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -706,6 +707,7 @@ impl Session {
             agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
+            should_refresh_mcp_servers: AtomicBool::new(false),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -742,6 +744,8 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: session_configuration.cwd.clone(),
         };
+        let cancel_token = sess.mcp_startup_cancellation_token().await;
+
         sess.services
             .mcp_connection_manager
             .write()
@@ -751,7 +755,7 @@ impl Session {
                 config.mcp_oauth_credentials_store_mode,
                 auth_statuses.clone(),
                 tx_event.clone(),
-                sess.services.mcp_startup_cancellation_token.clone(),
+                cancel_token,
                 sandbox_state,
             )
             .await;
@@ -1649,12 +1653,74 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
+    fn request_mcp_server_refresh(&self) {
+        self.should_refresh_mcp_servers
+            .store(true, Ordering::SeqCst);
+    }
+
+    async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
+        if !self
+            .should_refresh_mcp_servers
+            .swap(false, Ordering::SeqCst)
+        {
+            return;
+        }
+
+        let config = turn_context.client.config();
+        let auth_statuses = compute_auth_statuses(
+            config.mcp_servers.iter(),
+            config.mcp_oauth_credentials_store_mode,
+        )
+        .await;
+        let sandbox_state = SandboxState {
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+            sandbox_cwd: turn_context.cwd.clone(),
+        };
+        let cancel_token = self.reset_mcp_startup_cancellation_token().await;
+
+        let mut refreshed_manager = McpConnectionManager::default();
+        refreshed_manager
+            .initialize(
+                config.mcp_servers.clone(),
+                config.mcp_oauth_credentials_store_mode,
+                auth_statuses,
+                self.get_tx_event(),
+                cancel_token,
+                sandbox_state,
+            )
+            .await;
+
+        let mut manager = self.services.mcp_connection_manager.write().await;
+        *manager = refreshed_manager;
+    }
+
+    async fn mcp_startup_cancellation_token(&self) -> CancellationToken {
+        self.services
+            .mcp_startup_cancellation_token
+            .lock()
+            .await
+            .clone()
+    }
+
+    async fn reset_mcp_startup_cancellation_token(&self) -> CancellationToken {
+        let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
+        guard.cancel();
+        let cancel_token = CancellationToken::new();
+        *guard = cancel_token.clone();
+        cancel_token
+    }
+
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
 
     async fn cancel_mcp_startup(&self) {
-        self.services.mcp_startup_cancellation_token.cancel();
+        self.services
+            .mcp_startup_cancellation_token
+            .lock()
+            .await
+            .cancel();
     }
 }
 
@@ -1711,6 +1777,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             }
             Op::ListMcpTools => {
                 handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
+            }
+            Op::RefreshMcpServers => {
+                handlers::refresh_mcp_servers(&sess).await;
             }
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
@@ -1878,6 +1947,8 @@ mod handlers {
                     .await;
             }
 
+            sess.refresh_mcp_servers_if_requested(&current_context)
+                .await;
             sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
                 .await;
             *previous_context = Some(current_context);
@@ -2007,6 +2078,10 @@ mod handlers {
 
             sess_clone.send_event_raw(event).await;
         });
+    }
+
+    pub async fn refresh_mcp_servers(sess: &Arc<Session>) {
+        sess.request_mcp_server_refresh();
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
@@ -2193,6 +2268,7 @@ mod handlers {
         review_request: ReviewRequest,
     ) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        sess.refresh_mcp_servers_if_requested(&turn_context).await;
         match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
@@ -3528,7 +3604,7 @@ mod tests {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -3560,6 +3636,7 @@ mod tests {
             agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
+            should_refresh_mcp_servers: AtomicBool::new(false),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -3622,7 +3699,7 @@ mod tests {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -3654,6 +3731,7 @@ mod tests {
             agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
+            should_refresh_mcp_servers: AtomicBool::new(false),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),

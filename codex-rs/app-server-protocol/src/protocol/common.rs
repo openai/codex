@@ -156,6 +156,11 @@ client_request_definitions! {
         response: v2::McpServerOauthLoginResponse,
     },
 
+    McpServerRefresh => "mcpServer/refresh" {
+        params: v2::McpServerRefreshParams,
+        response: v2::McpServerRefreshResponse,
+    },
+
     McpServerStatusList => "mcpServerStatus/list" {
         params: v2::ListMcpServerStatusParams,
         response: v2::ListMcpServerStatusResponse,

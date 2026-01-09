@@ -60,6 +60,8 @@ use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
+use codex_app_server_protocol::McpServerRefreshParams;
+use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
@@ -424,6 +426,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
+            }
+            ClientRequest::McpServerRefresh { request_id, params } => {
+                self.mcp_server_refresh(request_id, params).await;
             }
             ClientRequest::McpServerStatusList { request_id, params } => {
                 self.list_mcp_server_status(request_id, params).await;
@@ -2300,6 +2305,12 @@ impl CodexMessageProcessor {
             next_cursor,
         };
         outgoing.send_response(request_id, response).await;
+    }
+
+    async fn mcp_server_refresh(&self, request_id: RequestId, _params: McpServerRefreshParams) {
+        self.thread_manager.refresh_mcp_servers().await;
+        let response = McpServerRefreshResponse {};
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn mcp_server_oauth_login(

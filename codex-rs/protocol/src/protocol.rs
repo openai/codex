@@ -186,6 +186,9 @@ pub enum Op {
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
 
+    /// Request MCP servers to reinitialize and refresh cached tool lists.
+    RefreshMcpServers,
+
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
