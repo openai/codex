@@ -9,10 +9,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::models::is_image_close_tag_text;
-use codex_protocol::models::is_image_open_tag_text;
-use codex_protocol::models::is_local_image_close_tag_text;
-use codex_protocol::models::is_local_image_open_tag_text;
+use codex_protocol::models::is_local_image_label_text;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
@@ -39,11 +36,8 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     for (idx, content_item) in message.iter().enumerate() {
         match content_item {
             ContentItem::InputText { text } => {
-                if (is_local_image_open_tag_text(text) || is_image_open_tag_text(text))
-                    && (matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. })))
-                    || (idx > 0
-                        && (is_local_image_close_tag_text(text) || is_image_close_tag_text(text))
-                        && matches!(message.get(idx - 1), Some(ContentItem::InputImage { .. })))
+                if is_local_image_label_text(text)
+                    && matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. }))
                 {
                     continue;
                 }
@@ -148,6 +142,7 @@ mod tests {
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::models::WebSearchAction;
+    use codex_protocol::models::local_image_label_text;
     use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
 
@@ -192,7 +187,7 @@ mod tests {
     #[test]
     fn skips_local_image_label_text() {
         let image_url = "data:image/png;base64,abc".to_string();
-        let label = codex_protocol::models::local_image_open_tag_text(1);
+        let label = local_image_label_text(std::path::Path::new("/tmp/example.png"));
         let user_text = "Please review this image.".to_string();
 
         let item = ResponseItem::Message {
@@ -202,46 +197,6 @@ mod tests {
                 ContentItem::InputText { text: label },
                 ContentItem::InputImage {
                     image_url: image_url.clone(),
-                },
-                ContentItem::InputText {
-                    text: "</image>".to_string(),
-                },
-                ContentItem::InputText {
-                    text: user_text.clone(),
-                },
-            ],
-        };
-
-        let turn_item = parse_turn_item(&item).expect("expected user message turn item");
-
-        match turn_item {
-            TurnItem::UserMessage(user) => {
-                let expected_content = vec![
-                    UserInput::Image { image_url },
-                    UserInput::Text { text: user_text },
-                ];
-                assert_eq!(user.content, expected_content);
-            }
-            other => panic!("expected TurnItem::UserMessage, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn skips_unnamed_image_label_text() {
-        let image_url = "data:image/png;base64,abc".to_string();
-        let label = codex_protocol::models::image_open_tag_text();
-        let user_text = "Please review this image.".to_string();
-
-        let item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![
-                ContentItem::InputText { text: label },
-                ContentItem::InputImage {
-                    image_url: image_url.clone(),
-                },
-                ContentItem::InputText {
-                    text: codex_protocol::models::image_close_tag_text(),
                 },
                 ContentItem::InputText {
                     text: user_text.clone(),

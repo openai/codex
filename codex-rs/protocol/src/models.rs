@@ -182,44 +182,24 @@ fn local_image_error_placeholder(
 
 pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 
-const IMAGE_OPEN_TAG: &str = "<image>";
-const IMAGE_CLOSE_TAG: &str = "</image>";
-const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
-const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
-const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
-
-pub fn image_open_tag_text() -> String {
-    IMAGE_OPEN_TAG.to_string()
+fn local_image_label_suffix() -> String {
+    format!(" follows (you can see it without using the {VIEW_IMAGE_TOOL_NAME} tool):")
 }
 
-pub fn image_close_tag_text() -> String {
-    IMAGE_CLOSE_TAG.to_string()
+pub fn local_image_label_text(path: &std::path::Path) -> String {
+    format!("Image {}{}", path.display(), local_image_label_suffix())
 }
 
-pub fn local_image_label_text(label_number: usize) -> String {
-    format!("[Image #{label_number}]")
+pub fn is_local_image_label_text(text: &str) -> bool {
+    let suffix = local_image_label_suffix();
+    let trimmed = text.trim();
+    trimmed.starts_with("Image ") && trimmed.ends_with(&suffix)
 }
 
-pub fn local_image_open_tag_text(label_number: usize) -> String {
-    let label = local_image_label_text(label_number);
-    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
-}
-
-pub fn is_local_image_open_tag_text(text: &str) -> bool {
-    text.strip_prefix(LOCAL_IMAGE_OPEN_TAG_PREFIX)
-        .is_some_and(|rest| rest.ends_with(LOCAL_IMAGE_OPEN_TAG_SUFFIX))
-}
-
-pub fn is_local_image_close_tag_text(text: &str) -> bool {
-    is_image_close_tag_text(text)
-}
-
-pub fn is_image_open_tag_text(text: &str) -> bool {
-    text == IMAGE_OPEN_TAG
-}
-
-pub fn is_image_close_tag_text(text: &str) -> bool {
-    text == IMAGE_CLOSE_TAG
+fn local_image_label(path: &std::path::Path) -> ContentItem {
+    ContentItem::InputText {
+        text: local_image_label_text(path),
+    }
 }
 
 fn invalid_image_error_placeholder(
@@ -245,26 +225,16 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
     }
 }
 
-pub fn local_image_content_items_with_label_number(
-    path: &std::path::Path,
-    label_number: Option<usize>,
-) -> Vec<ContentItem> {
+pub fn local_image_content_items(path: &std::path::Path, include_label: bool) -> Vec<ContentItem> {
     match load_and_resize_to_fit(path) {
         Ok(image) => {
-            let mut items = Vec::with_capacity(3);
-            if let Some(label_number) = label_number {
-                items.push(ContentItem::InputText {
-                    text: local_image_open_tag_text(label_number),
-                });
+            let mut items = Vec::with_capacity(2);
+            if include_label {
+                items.push(local_image_label(path));
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
             });
-            if label_number.is_some() {
-                items.push(ContentItem::InputText {
-                    text: LOCAL_IMAGE_CLOSE_TAG.to_string(),
-                });
-            }
             items
         }
         Err(err) => {
@@ -385,26 +355,14 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
-        let mut image_index = 0;
         Self::Message {
             role: "user".to_string(),
             content: items
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url } => vec![
-                        ContentItem::InputText {
-                            text: image_open_tag_text(),
-                        },
-                        ContentItem::InputImage { image_url },
-                        ContentItem::InputText {
-                            text: image_close_tag_text(),
-                        },
-                    ],
-                    UserInput::LocalImage { path } => {
-                        image_index += 1;
-                        local_image_content_items_with_label_number(&path, Some(image_index))
-                    }
+                    UserInput::Image { image_url } => vec![ContentItem::InputImage { image_url }],
+                    UserInput::LocalImage { path } => local_image_content_items(&path, true),
                     UserInput::Skill { .. } => Vec::new(), // Skill bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
@@ -842,33 +800,6 @@ mod tests {
             },
             params
         );
-        Ok(())
-    }
-
-    #[test]
-    fn wraps_image_user_input_with_tags() -> Result<()> {
-        let image_url = "data:image/png;base64,abc".to_string();
-
-        let item = ResponseInputItem::from(vec![UserInput::Image {
-            image_url: image_url.clone(),
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                let expected = vec![
-                    ContentItem::InputText {
-                        text: image_open_tag_text(),
-                    },
-                    ContentItem::InputImage { image_url },
-                    ContentItem::InputText {
-                        text: image_close_tag_text(),
-                    },
-                ];
-                assert_eq!(content, expected);
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
         Ok(())
     }
 
