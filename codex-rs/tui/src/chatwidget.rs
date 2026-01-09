@@ -1734,6 +1734,9 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
+            SlashCommand::Rename => {
+                self.show_rename_prompt();
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }

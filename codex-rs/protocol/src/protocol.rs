@@ -1296,11 +1296,8 @@ pub struct SessionMeta {
     pub id: ThreadId,
     pub timestamp: String,
     pub cwd: PathBuf,
-<<<<<<< HEAD
-=======
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
->>>>>>> 9f1ca0435 (changing attribute to name + support command with arg)
     pub originator: String,
     pub cli_version: String,
     pub instructions: Option<String>,
@@ -1315,10 +1312,7 @@ impl Default for SessionMeta {
             id: ThreadId::default(),
             timestamp: String::new(),
             cwd: PathBuf::new(),
-<<<<<<< HEAD
-=======
             name: None,
->>>>>>> 9f1ca0435 (changing attribute to name + support command with arg)
             originator: String::new(),
             cli_version: String::new(),
             instructions: None,
