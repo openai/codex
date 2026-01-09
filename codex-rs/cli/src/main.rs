@@ -418,14 +418,6 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     }
 }
 
-/// As early as possible in the process lifecycle, apply hardening measures. We
-/// skip this in debug builds to avoid interfering with debugging.
-#[ctor::ctor]
-#[cfg(not(debug_assertions))]
-fn pre_main_hardening() {
-    codex_process_hardening::pre_main_hardening();
-}
-
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
