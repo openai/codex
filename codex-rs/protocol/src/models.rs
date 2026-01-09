@@ -227,11 +227,7 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
     }
 }
 
-pub fn local_image_content_items(path: &std::path::Path, include_label: bool) -> Vec<ContentItem> {
-    local_image_content_items_with_label_number(path, include_label, 1)
-}
-
-fn local_image_content_items_with_label_number(
+pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     include_label: bool,
     label_number: usize,
