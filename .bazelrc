@@ -7,7 +7,7 @@ common --disk_cache=~/.cache/bazel-disk-cache
 common --repo_contents_cache=~/.cache/bazel-repo-contents-cache
 common --repository_cache=~/.cache/bazel-repo-cache
 common --remote_cache_compression
-startup --experimental_remote_repo_contents_cache
+#startup --experimental_remote_repo_contents_cache
 
 common --experimental_platform_in_output_dir
 
@@ -17,6 +17,7 @@ common --noenable_runfiles
 common --enable_platform_specific_config
 common:linux --host_platform=//:local_linux
 common:windows --host_platform=//:local_windows
+
 common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
 common --@toolchains_llvm_bootstrapped//config:experimental_stub_libgcc_s
 

@@ -1,5 +1,5 @@
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.5.3")
+bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.5.4")
 single_version_override(
     module_name = "toolchains_llvm_bootstrapped",
     patch_strip = 1,
@@ -38,9 +38,9 @@ bazel_dep(name = "rules_rs", version = "0.0.23")
 # Special toolchains branch
 archive_override(
     module_name = "rules_rs",
-    integrity = "sha256-YbDRjZos4UmfIPY98znK1BgBWRQ1/ui3CtL6RqxE30I=",
-    strip_prefix = "rules_rs-6cf3d940fdc48baf3ebd6c37daf8e0be8fc73ecb",
-    url = "https://github.com/dzbarsky/rules_rs/archive/6cf3d940fdc48baf3ebd6c37daf8e0be8fc73ecb.tar.gz",
+    integrity = "sha256-C5nTK7oyhrP+qWGx+AXHlWk4hz6PlC2F9sTvO/gM77g=",
+    strip_prefix = "rules_rs-7a47423f9f52de881b82beda8b1d8a76968775aa",
+    url = "https://github.com/dzbarsky/rules_rs/archive/7a47423f9f52de881b82beda8b1d8a76968775aa.tar.gz",
 )
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
@@ -68,10 +68,12 @@ crate.from_cargo(
         "aarch64-unknown-linux-musl",
         "aarch64-apple-darwin",
         "aarch64-pc-windows-gnullvm",
+        "aarch64-pc-windows-msvc",
         "x86_64-unknown-linux-gnu",
         "x86_64-unknown-linux-musl",
         "x86_64-apple-darwin",
         "x86_64-pc-windows-gnullvm",
+        "x86_64-pc-windows-msvc",
     ],
 )
 
