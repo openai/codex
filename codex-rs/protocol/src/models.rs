@@ -220,11 +220,9 @@ impl DeveloperInstructions {
         approval_policy: AskForApproval,
         writable_roots: Option<Vec<AbsolutePathBuf>>,
     ) -> Self {
-        let instructions = DeveloperInstructions::sandbox_text(sandbox_mode, network_access)
+        DeveloperInstructions::sandbox_text(sandbox_mode, network_access)
             .concat(DeveloperInstructions::from(approval_policy))
-            .concat(DeveloperInstructions::from_writable_roots(writable_roots));
-
-        instructions
+            .concat(DeveloperInstructions::from_writable_roots(writable_roots))
     }
 
     fn from_writable_roots(writable_roots: Option<Vec<AbsolutePathBuf>>) -> Self {
