@@ -1,9 +1,6 @@
 use crate::codex::TurnContext;
-use crate::protocol::AskForApproval;
-use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::shell::Shell;
-use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
@@ -17,9 +14,6 @@ use std::path::PathBuf;
 #[serde(rename = "environment_context", rename_all = "snake_case")]
 pub(crate) struct EnvironmentContext {
     pub cwd: Option<PathBuf>,
-    pub approval_policy: Option<AskForApproval>,
-    pub sandbox_mode: Option<SandboxMode>,
-    pub network_access: Option<NetworkAccess>,
     pub writable_roots: Option<Vec<AbsolutePathBuf>>,
     pub shell: Shell,
 }
@@ -27,33 +21,11 @@ pub(crate) struct EnvironmentContext {
 impl EnvironmentContext {
     pub fn new(
         cwd: Option<PathBuf>,
-        approval_policy: Option<AskForApproval>,
         sandbox_policy: Option<SandboxPolicy>,
         shell: Shell,
     ) -> Self {
         Self {
             cwd,
-            approval_policy,
-            sandbox_mode: match sandbox_policy {
-                Some(SandboxPolicy::DangerFullAccess) => Some(SandboxMode::DangerFullAccess),
-                Some(SandboxPolicy::ReadOnly) => Some(SandboxMode::ReadOnly),
-                Some(SandboxPolicy::ExternalSandbox { .. }) => Some(SandboxMode::DangerFullAccess),
-                Some(SandboxPolicy::WorkspaceWrite { .. }) => Some(SandboxMode::WorkspaceWrite),
-                None => None,
-            },
-            network_access: match sandbox_policy {
-                Some(SandboxPolicy::DangerFullAccess) => Some(NetworkAccess::Enabled),
-                Some(SandboxPolicy::ReadOnly) => Some(NetworkAccess::Restricted),
-                Some(SandboxPolicy::ExternalSandbox { network_access }) => Some(network_access),
-                Some(SandboxPolicy::WorkspaceWrite { network_access, .. }) => {
-                    if network_access {
-                        Some(NetworkAccess::Enabled)
-                    } else {
-                        Some(NetworkAccess::Restricted)
-                    }
-                }
-                None => None,
-            },
             writable_roots: match sandbox_policy {
                 Some(SandboxPolicy::WorkspaceWrite { writable_roots, .. }) => {
                     if writable_roots.is_empty() {
@@ -74,18 +46,12 @@ impl EnvironmentContext {
     pub fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
         let EnvironmentContext {
             cwd,
-            approval_policy,
-            sandbox_mode,
-            network_access,
             writable_roots,
             // should compare all fields except shell
             shell: _,
         } = other;
 
         self.cwd == *cwd
-            && self.approval_policy == *approval_policy
-            && self.sandbox_mode == *sandbox_mode
-            && self.network_access == *network_access
             && self.writable_roots == *writable_roots
     }
 
@@ -95,23 +61,17 @@ impl EnvironmentContext {
         } else {
             None
         };
-        let approval_policy = if before.approval_policy != after.approval_policy {
-            Some(after.approval_policy)
-        } else {
-            None
-        };
         let sandbox_policy = if before.sandbox_policy != after.sandbox_policy {
             Some(after.sandbox_policy.clone())
         } else {
             None
         };
-        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, shell.clone())
+        EnvironmentContext::new(cwd, sandbox_policy, shell.clone())
     }
 
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             Some(turn_context.cwd.clone()),
-            Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
             shell.clone(),
         )
@@ -126,10 +86,7 @@ impl EnvironmentContext {
     /// ```xml
     /// <environment_context>
     ///   <cwd>...</cwd>
-    ///   <approval_policy>...</approval_policy>
-    ///   <sandbox_mode>...</sandbox_mode>
     ///   <writable_roots>...</writable_roots>
-    ///   <network_access>...</network_access>
     ///   <shell>...</shell>
     /// </environment_context>
     /// ```
@@ -137,19 +94,6 @@ impl EnvironmentContext {
         let mut lines = vec![ENVIRONMENT_CONTEXT_OPEN_TAG.to_string()];
         if let Some(cwd) = self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
-        }
-        if let Some(approval_policy) = self.approval_policy {
-            lines.push(format!(
-                "  <approval_policy>{approval_policy}</approval_policy>"
-            ));
-        }
-        if let Some(sandbox_mode) = self.sandbox_mode {
-            lines.push(format!("  <sandbox_mode>{sandbox_mode}</sandbox_mode>"));
-        }
-        if let Some(network_access) = self.network_access {
-            lines.push(format!(
-                "  <network_access>{network_access}</network_access>"
-            ));
         }
         if let Some(writable_roots) = self.writable_roots {
             lines.push("  <writable_roots>".to_string());
@@ -184,6 +128,7 @@ impl From<EnvironmentContext> for ResponseItem {
 #[cfg(test)]
 mod tests {
     use crate::shell::ShellType;
+    use crate::protocol::NetworkAccess;
 
     use super::*;
     use core_test_support::test_path_buf;
@@ -220,7 +165,6 @@ mod tests {
             .expect("writable root is valid utf-8");
         let context = EnvironmentContext::new(
             Some(cwd.clone()),
-            Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(
                 vec![cwd_str, writable_root_str],
                 false,
@@ -231,9 +175,6 @@ mod tests {
         let expected = format!(
             r#"<environment_context>
   <cwd>{cwd}</cwd>
-  <approval_policy>on-request</approval_policy>
-  <sandbox_mode>workspace-write</sandbox_mode>
-  <network_access>restricted</network_access>
   <writable_roots>
     <root>{cwd}</root>
     <root>{writable_root}</root>
@@ -251,15 +192,11 @@ mod tests {
     fn serialize_read_only_environment_context() {
         let context = EnvironmentContext::new(
             None,
-            Some(AskForApproval::Never),
             Some(SandboxPolicy::ReadOnly),
             fake_shell(),
         );
 
         let expected = r#"<environment_context>
-  <approval_policy>never</approval_policy>
-  <sandbox_mode>read-only</sandbox_mode>
-  <network_access>restricted</network_access>
   <shell>bash</shell>
 </environment_context>"#;
 
@@ -270,7 +207,6 @@ mod tests {
     fn serialize_external_sandbox_environment_context() {
         let context = EnvironmentContext::new(
             None,
-            Some(AskForApproval::OnRequest),
             Some(SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
             }),
@@ -278,9 +214,6 @@ mod tests {
         );
 
         let expected = r#"<environment_context>
-  <approval_policy>on-request</approval_policy>
-  <sandbox_mode>danger-full-access</sandbox_mode>
-  <network_access>enabled</network_access>
   <shell>bash</shell>
 </environment_context>"#;
 
@@ -291,7 +224,6 @@ mod tests {
     fn serialize_external_sandbox_with_restricted_network_environment_context() {
         let context = EnvironmentContext::new(
             None,
-            Some(AskForApproval::OnRequest),
             Some(SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Restricted,
             }),
@@ -299,9 +231,6 @@ mod tests {
         );
 
         let expected = r#"<environment_context>
-  <approval_policy>on-request</approval_policy>
-  <sandbox_mode>danger-full-access</sandbox_mode>
-  <network_access>restricted</network_access>
   <shell>bash</shell>
 </environment_context>"#;
 
@@ -312,15 +241,11 @@ mod tests {
     fn serialize_full_access_environment_context() {
         let context = EnvironmentContext::new(
             None,
-            Some(AskForApproval::OnFailure),
             Some(SandboxPolicy::DangerFullAccess),
             fake_shell(),
         );
 
         let expected = r#"<environment_context>
-  <approval_policy>on-failure</approval_policy>
-  <sandbox_mode>danger-full-access</sandbox_mode>
-  <network_access>enabled</network_access>
   <shell>bash</shell>
 </environment_context>"#;
 
@@ -329,33 +254,28 @@ mod tests {
 
     #[test]
     fn equals_except_shell_compares_approval_policy() {
-        // Approval policy
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo"], false)),
             fake_shell(),
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::Never),
             Some(workspace_write_policy(vec!["/repo"], true)),
             fake_shell(),
         );
-        assert!(!context1.equals_except_shell(&context2));
+        assert!(context1.equals_except_shell(&context2));
     }
 
     #[test]
     fn equals_except_shell_compares_sandbox_policy() {
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::OnRequest),
             Some(SandboxPolicy::new_read_only_policy()),
             fake_shell(),
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::OnRequest),
             Some(SandboxPolicy::new_workspace_write_policy()),
             fake_shell(),
         );
@@ -367,13 +287,11 @@ mod tests {
     fn equals_except_shell_compares_workspace_write_policy() {
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo", "/tmp", "/var"], false)),
             fake_shell(),
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo", "/tmp"], true)),
             fake_shell(),
         );
@@ -385,7 +303,6 @@ mod tests {
     fn equals_except_shell_ignores_shell() {
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo"], false)),
             Shell {
                 shell_type: ShellType::Bash,
@@ -395,7 +312,6 @@ mod tests {
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo"], false)),
             Shell {
                 shell_type: ShellType::Zsh,

@@ -9,6 +9,10 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::config_types::SandboxMode;
+use crate::protocol::AskForApproval;
+use crate::protocol::NetworkAccess;
+use crate::protocol::SandboxPolicy;
 use crate::user_input::UserInput;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
@@ -157,6 +161,134 @@ pub enum ResponseItem {
     #[serde(other)]
     Other,
 }
+
+/// Developer-provided guidance that is injected into a turn as a developer role
+/// message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(rename = "developer_instructions", rename_all = "snake_case")]
+pub struct DeveloperInstructions {
+    text: String,
+}
+
+impl DeveloperInstructions {
+    pub fn new<T: Into<String>>(text: T) -> Self {
+        Self { text: text.into() }
+    }
+
+    pub fn into_text(self) -> String {
+        self.text
+    }
+
+    pub fn concat(self, other: impl Into<DeveloperInstructions>) -> Self {
+        let mut text = self.text;
+        text.push_str(&other.into().text);
+        Self { text }
+    }
+
+    pub fn from_permissions(sandbox_mode: SandboxMode, approval_policy: AskForApproval) -> Self {
+        let network_access = match sandbox_mode {
+            SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
+            SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
+        };
+        DeveloperInstructions::from_permissions_with_network(
+            sandbox_mode,
+            network_access,
+            approval_policy,
+        )
+    }
+
+    pub fn from_permissions_with_network(
+        sandbox_mode: SandboxMode,
+        network_access: NetworkAccess,
+        approval_policy: AskForApproval,
+    ) -> Self {
+        DeveloperInstructions::sandbox_text(sandbox_mode, network_access)
+            .concat(DeveloperInstructions::from(approval_policy))
+    }
+
+    pub fn from_policy(
+        sandbox_policy: &SandboxPolicy,
+        approval_policy: AskForApproval,
+    ) -> Self {
+        let (sandbox_mode, network_access) = match sandbox_policy {
+            SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, NetworkAccess::Enabled),
+            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, NetworkAccess::Restricted),
+            SandboxPolicy::ExternalSandbox { network_access } => {
+                (SandboxMode::DangerFullAccess, *network_access)
+            }
+            SandboxPolicy::WorkspaceWrite { network_access, .. } => {
+                let net = if *network_access {
+                    NetworkAccess::Enabled
+                } else {
+                    NetworkAccess::Restricted
+                };
+                (SandboxMode::WorkspaceWrite, net)
+            }
+        };
+
+        DeveloperInstructions::from_permissions_with_network(
+            sandbox_mode,
+            network_access,
+            approval_policy,
+        )
+    }
+
+    fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
+        let text = match mode {
+            SandboxMode::DangerFullAccess => format!(
+                "You are working in an environment that is not sandboxed, which is dangerous. All commands you issue will be executed. Network access is {network}. Be careful with destructive actions.",
+                network = network_access
+            ),
+            SandboxMode::WorkspaceWrite => format!(
+                "You are working in a sandbox. The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Commands that edit files in other directories will fail unless approved by the user. Network access is {network}.",
+                network = network_access
+            ),
+            SandboxMode::ReadOnly => format!(
+                "You are working in a sandbox. The sandbox permits reading files, but not editing files. Network access is {network}.",
+                network = network_access
+            ),
+        };
+
+        DeveloperInstructions::new(text)
+    }
+}
+
+impl From<DeveloperInstructions> for ResponseItem {
+    fn from(di: DeveloperInstructions) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: di.into_text(),
+            }],
+        }
+    }
+}
+
+impl From<SandboxMode> for DeveloperInstructions {
+    fn from(mode: SandboxMode) -> Self {
+        let network_access = match mode {
+            SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
+            SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
+        };
+
+        DeveloperInstructions::sandbox_text(mode, network_access)
+    }
+}
+
+impl From<AskForApproval> for DeveloperInstructions {
+    fn from(mode: AskForApproval) -> Self {
+        let text = match mode {
+            AskForApproval::Never => " The user has requested you NEVER ask for approval; any request for approval will be automatically denied. Do what the user asks as best you can without any access outside the sandbox.",
+            AskForApproval::UnlessTrusted => " You must ask for approval for all commands, including network access, except for reading files, by including a 1-sentence justification for why you need to run it.",
+            AskForApproval::OnFailure => " Run your commands as normal. If a command fails due to sandboxing, the environment will automatically ask the user for approval. When possible, run commands that do not require approval to avoid annoying the user.",
+            AskForApproval::OnRequest => " When running a command that requires approval, you can use the `functions.shell_command` and set the `sandbox_permissions` field to 'require_escalated' and add a 1 sentence justification to the `justification` field.\n\nFor example:\n{\n  \"recipient_name\": \"functions.shell_command\",\n  \"parameters\": {\n    \"workdir\": \"/Users/mia/code/codex-oss\",\n    \"command\": \"cargo install cargo-insta\",\n    \"sandbox_permissions\": \"require_escalated\",\n    \"justification\": \"Need network access to download and install cargo-insta.\"\n  }\n}\n\nHere are scenarios where you might need to request approval:\n- You need to run a command that writes to a directory that requires it (e.g. running tests that write to /var)\n- You need to run a GUI app (e.g., open/xdg-open/osascript) to open browsers or files.\n- Network is restricted and you need to run a command that requires network access (e.g. installing packages)\n- If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with approval. ALWAYS proceed to use the `sandbox_permissions` and `justification` parameters - do not message the user before requesting approval for the command.\n- You are about to take a potentially destructive action such as an `rm` or `git reset` that the user did not explicitly ask for.\n\nOnly run commands that require approval if it is absolutely necessary to solve the user's query, don't try and circumvent approvals by using other tools.",
+        };
+
+        DeveloperInstructions::new(text)
+    }
+}
+
 
 fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
     match content {
@@ -551,10 +683,92 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use crate::config_types::SandboxMode;
+    use crate::protocol::AskForApproval;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    #[test]
+    fn converts_sandbox_mode_into_developer_instructions() {
+        assert_eq!(
+            DeveloperInstructions::from(SandboxMode::WorkspaceWrite),
+            DeveloperInstructions::new(
+                "You are working in a sandbox. The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Commands that edit files in other directories will fail unless approved by the user. Network access is restricted."
+            )
+        );
+
+        assert_eq!(
+            DeveloperInstructions::from(SandboxMode::ReadOnly),
+            DeveloperInstructions::new(
+                "You are working in a sandbox. The sandbox permits reading files, but not editing files. Network access is restricted."
+            )
+        );
+    }
+
+    #[test]
+    fn converts_approval_policy_into_developer_instructions_and_concatenates() {
+        let approval = DeveloperInstructions::from(AskForApproval::OnFailure);
+        assert_eq!(
+            approval,
+            DeveloperInstructions::new(
+                " Run your commands as normal. If a command fails due to sandboxing, the environment will automatically ask the user for approval. When possible, run commands that do not require approval to avoid annoying the user."
+            )
+        );
+
+        let combined = DeveloperInstructions::from(SandboxMode::DangerFullAccess)
+            .concat(DeveloperInstructions::from(AskForApproval::Never));
+        assert_eq!(
+            combined,
+            DeveloperInstructions::new(
+                "You are working in an environment that is not sandboxed, which is dangerous. All commands you issue will be executed. Network access is enabled. Be careful with destructive actions. The user has requested you NEVER ask for approval; any request for approval will be automatically denied. Do what the user asks as best you can without any access outside the sandbox."
+            )
+        );
+
+        assert_eq!(
+            DeveloperInstructions::from_permissions(
+                SandboxMode::DangerFullAccess,
+                AskForApproval::Never
+            ),
+            combined
+        );
+    }
+
+    #[test]
+    fn builds_permissions_with_network_access_override() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            AskForApproval::OnRequest,
+        );
+
+        let text = instructions.into_text();
+        assert!(
+            text.contains("Network access is enabled."),
+            "expected network access to be enabled in message"
+        );
+        assert!(
+            text.contains("require_escalated"),
+            "expected approval guidance to be included"
+        );
+    }
+
+    #[test]
+    fn builds_permissions_from_policy() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        let instructions =
+            DeveloperInstructions::from_policy(&policy, AskForApproval::UnlessTrusted);
+        let text = instructions.into_text();
+        assert!(text.contains("Network access is enabled."));
+        assert!(text.contains("You must ask for approval for all commands"));
+    }
 
     #[test]
     fn serializes_success_as_plain_string() -> Result<()> {
