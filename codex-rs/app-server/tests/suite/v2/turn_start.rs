@@ -46,7 +46,7 @@ const TEST_ORIGINATOR: &str = "codex_vscode";
 #[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
-    let server = create_mock_chat_completions_server_unchecked(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
