@@ -1,10 +1,11 @@
-use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::LazyLock;
-use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::sync::mpsc;
+use std::thread;
 
 use codex_core::config::Config;
 use codex_core::protocol::Op;
@@ -16,17 +17,21 @@ use crate::app_event::AppEvent;
 static LOGGER: LazyLock<SessionLogger> = LazyLock::new(SessionLogger::new);
 
 struct SessionLogger {
-    file: OnceLock<Mutex<File>>,
+    worker: OnceLock<LoggerWorker>,
 }
 
 impl SessionLogger {
     fn new() -> Self {
         Self {
-            file: OnceLock::new(),
+            worker: OnceLock::new(),
         }
     }
 
     fn open(&self, path: PathBuf) -> std::io::Result<()> {
+        if self.worker.get().is_some() {
+            return Ok(());
+        }
+
         let mut opts = OpenOptions::new();
         opts.create(true).truncate(true).write(true);
 
@@ -37,39 +42,76 @@ impl SessionLogger {
         }
 
         let file = opts.open(path)?;
-        self.file.get_or_init(|| Mutex::new(file));
+        let (tx, rx) = mpsc::channel::<LogEntry>();
+        let handle = thread::Builder::new()
+            .name("tui-session-log".to_string())
+            .spawn(move || {
+                let mut writer = BufWriter::with_capacity(64 * 1024, file);
+                for entry in rx {
+                    match entry {
+                        LogEntry::Line(serialized) => {
+                            if let Err(e) = writer.write_all(serialized.as_bytes()) {
+                                tracing::warn!("session log write error: {e}");
+                                continue;
+                            }
+                            if let Err(e) = writer.write_all(b"\n") {
+                                tracing::warn!("session log write error: {e}");
+                                continue;
+                            }
+                        }
+                        LogEntry::Flush => {
+                            if let Err(e) = writer.flush() {
+                                tracing::warn!("session log flush error: {e}");
+                            }
+                        }
+                    }
+                }
+                let _ = writer.flush();
+            })?;
+
+        let _ = self.worker.set(LoggerWorker {
+            tx,
+            _handle: handle,
+        });
         Ok(())
     }
 
     fn write_json_line(&self, value: serde_json::Value) {
-        let Some(mutex) = self.file.get() else {
+        let Some(worker) = self.worker.get() else {
             return;
-        };
-        let mut guard = match mutex.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
         };
         match serde_json::to_string(&value) {
             Ok(serialized) => {
-                if let Err(e) = guard.write_all(serialized.as_bytes()) {
-                    tracing::warn!("session log write error: {}", e);
-                    return;
-                }
-                if let Err(e) = guard.write_all(b"\n") {
-                    tracing::warn!("session log write error: {}", e);
-                    return;
-                }
-                if let Err(e) = guard.flush() {
-                    tracing::warn!("session log flush error: {}", e);
+                if let Err(e) = worker.tx.send(LogEntry::Line(serialized)) {
+                    tracing::warn!("session log write error: {e}");
                 }
             }
-            Err(e) => tracing::warn!("session log serialize error: {}", e),
+            Err(e) => tracing::warn!("session log serialize error: {e}"),
         }
     }
 
     fn is_enabled(&self) -> bool {
-        self.file.get().is_some()
+        self.worker.get().is_some()
     }
+
+    fn flush(&self) {
+        let Some(worker) = self.worker.get() else {
+            return;
+        };
+        if let Err(e) = worker.tx.send(LogEntry::Flush) {
+            tracing::warn!("session log flush error: {e}");
+        }
+    }
+}
+
+struct LoggerWorker {
+    tx: mpsc::Sender<LogEntry>,
+    _handle: thread::JoinHandle<()>,
+}
+
+enum LogEntry {
+    Line(String),
+    Flush,
 }
 
 fn now_ts() -> String {
@@ -194,6 +236,7 @@ pub(crate) fn log_session_end() {
         "kind": "session_end",
     });
     LOGGER.write_json_line(value);
+    LOGGER.flush();
 }
 
 fn write_record<T>(dir: &str, kind: &str, obj: &T)
