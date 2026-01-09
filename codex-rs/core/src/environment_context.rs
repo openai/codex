@@ -101,18 +101,6 @@ mod tests {
         }
     }
 
-    fn workspace_write_policy(writable_roots: Vec<&str>, network_access: bool) -> SandboxPolicy {
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots: writable_roots
-                .into_iter()
-                .map(|s| AbsolutePathBuf::try_from(s).unwrap())
-                .collect(),
-            network_access,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
-        }
-    }
-
     #[test]
     fn serialize_workspace_write_environment_context() {
         let cwd = test_path_buf("/repo");
