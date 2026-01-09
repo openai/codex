@@ -9,7 +9,8 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::models::is_local_image_label_text;
+use codex_protocol::models::is_local_image_close_tag_text;
+use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
@@ -36,13 +37,11 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     for (idx, content_item) in message.iter().enumerate() {
         match content_item {
             ContentItem::InputText { text } => {
-                if is_local_image_label_text(text)
-                    && (matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. }))
-                        || (idx > 0
-                            && matches!(
-                                message.get(idx - 1),
-                                Some(ContentItem::InputImage { .. })
-                            )))
+                if is_local_image_open_tag_text(text)
+                    && (matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. })))
+                    || (idx > 0
+                        && is_local_image_close_tag_text(text)
+                        && matches!(message.get(idx - 1), Some(ContentItem::InputImage { .. })))
                 {
                     continue;
                 }
