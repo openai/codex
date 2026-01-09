@@ -392,6 +392,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
+                        session_name: None,
                         update_action: Some(action),
                         session_lines: Vec::new(),
                     });
@@ -432,6 +433,7 @@ async fn run_ratatui_app(
             return Ok(AppExitInfo {
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
+                session_name: None,
                 update_action: None,
                 session_lines: Vec::new(),
             });
@@ -473,6 +475,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
+                    session_name: None,
                     update_action: None,
                     session_lines: Vec::new(),
                 });
@@ -512,6 +515,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
+                    session_name: None,
                     update_action: None,
                     session_lines: Vec::new(),
                 });

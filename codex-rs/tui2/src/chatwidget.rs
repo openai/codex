@@ -3675,6 +3675,10 @@ impl ChatWidget {
         self.conversation_id
     }
 
+    pub(crate) fn session_name(&self) -> Option<String> {
+        self.session_name.clone()
+    }
+
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
     }

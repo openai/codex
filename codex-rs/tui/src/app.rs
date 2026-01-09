@@ -75,16 +75,21 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
+    pub session_name: Option<String>,
     pub update_action: Option<UpdateAction>,
 }
 
-fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Option<SessionSummary> {
+fn session_summary(
+    token_usage: TokenUsage,
+    thread_id: Option<ThreadId>,
+    session_name: Option<String>,
+) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = thread_id.map(|thread_id| format!("codex resume {thread_id}"));
+    let resume_command = codex_core::util::resume_command(session_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -276,6 +281,7 @@ async fn handle_model_migration_prompt_if_needed(
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
                     thread_id: None,
+                    session_name: None,
                     update_action: None,
                 });
             }
@@ -495,6 +501,7 @@ impl App {
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: app.chat_widget.thread_id(),
+            session_name: app.chat_widget.session_name(),
             update_action: app.pending_update_action,
         })
     }
@@ -555,8 +562,11 @@ impl App {
             .await;
         match event {
             AppEvent::NewSession => {
-                let summary =
-                    session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.thread_id(),
+                    self.chat_widget.session_name(),
+                );
                 self.shutdown_current_thread().await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
@@ -596,6 +606,7 @@ impl App {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.thread_id(),
+                            self.chat_widget.session_name(),
                         );
                         match self
                             .server
@@ -1778,7 +1789,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_summary_skip_zero_usage() {
-        assert!(session_summary(TokenUsage::default(), None).is_none());
+        assert!(session_summary(TokenUsage::default(), None, None).is_none());
     }
 
     #[tokio::test]
@@ -1791,7 +1802,7 @@ mod tests {
         };
         let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
-        let summary = session_summary(usage, Some(conversation)).expect("summary");
+        let summary = session_summary(usage, Some(conversation), None).expect("summary");
         assert_eq!(
             summary.usage_line,
             "Token usage: total=12 input=10 output=2"
@@ -1799,6 +1810,24 @@ mod tests {
         assert_eq!(
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn session_summary_prefers_name_over_id() {
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 2,
+            total_tokens: 12,
+            ..Default::default()
+        };
+        let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+
+        let summary = session_summary(usage, Some(conversation), Some("my-session".to_string()))
+            .expect("summary");
+        assert_eq!(
+            summary.resume_command,
+            Some("codex resume my-session".to_string())
         );
     }
 }

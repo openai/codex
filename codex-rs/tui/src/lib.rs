@@ -374,6 +374,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         thread_id: None,
+                        session_name: None,
                         update_action: Some(action),
                     });
                 }
@@ -413,6 +414,7 @@ async fn run_ratatui_app(
             return Ok(AppExitInfo {
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 thread_id: None,
+                session_name: None,
                 update_action: None,
             });
         }
@@ -453,6 +455,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     thread_id: None,
+                    session_name: None,
                     update_action: None,
                 });
             }
@@ -491,6 +494,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     thread_id: None,
+                    session_name: None,
                     update_action: None,
                 });
             }
