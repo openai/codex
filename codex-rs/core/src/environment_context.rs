@@ -89,8 +89,8 @@ mod tests {
     use crate::shell::ShellType;
 
     use super::*;
+    use codex_protocol::protocol::SandboxPolicy;
     use core_test_support::test_path_buf;
-    use core_test_support::test_tmp_path_buf;
     use pretty_assertions::assert_eq;
 
     fn fake_shell() -> Shell {
