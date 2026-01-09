@@ -10,6 +10,12 @@ common:linux --host_platform=//:local
 common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
 common --@toolchains_llvm_bootstrapped//config:experimental_stub_libgcc_s
 
+# TODO(zbarsky): Should these be auto-enabled in the toolchain?
+common --features=compiler_param_file
+common --features=archive_param_file
+common --host_features=compiler_param_file
+common --host_features=archive_param_file
+
 # TODO(zbarsky): rules_rust doesn't implement this flag properly with remote exec...
 # common --@rules_rust//rust/settings:pipelined_compilation
 
