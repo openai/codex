@@ -2148,6 +2148,19 @@ mod handlers {
             return;
         }
 
+        if !is_valid_session_name(&name) {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Session name must use only letters, numbers, '.', '_' or '-', and cannot start with '-'."
+                        .to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
+
         let recorder = {
             let guard = sess.services.rollout.lock().await;
             guard.clone()
@@ -2190,6 +2203,39 @@ mod handlers {
             }),
         })
         .await;
+    }
+
+    fn is_valid_session_name(name: &str) -> bool {
+        let mut chars = name.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+
+        if first == '-' || !is_valid_session_name_char(first) {
+            return false;
+        }
+
+        chars.all(is_valid_session_name_char)
+    }
+
+    fn is_valid_session_name_char(ch: char) -> bool {
+        matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-')
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn validates_session_name_tokens() {
+            assert_eq!(is_valid_session_name("my-session"), true);
+            assert_eq!(is_valid_session_name("Alpha_1.2"), true);
+            assert_eq!(is_valid_session_name("-starts-with-dash"), false);
+            assert_eq!(is_valid_session_name("has space"), false);
+            assert_eq!(is_valid_session_name("slash/name"), false);
+            assert_eq!(is_valid_session_name(""), false);
+        }
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

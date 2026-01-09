@@ -571,9 +571,7 @@ mod tests {
         )
         .await?;
 
-        recorder
-            .set_session_name("My Session Name".to_string())
-            .await?;
+        recorder.set_session_name("my-session".to_string()).await?;
 
         let text = tokio::fs::read_to_string(&recorder.rollout_path).await?;
         let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
@@ -581,7 +579,7 @@ mod tests {
         let RolloutItem::SessionMeta(meta_line) = rollout_line.item else {
             panic!("expected SessionMeta as first rollout line");
         };
-        assert_eq!(meta_line.meta.name.as_deref(), Some("My Session Name"));
+        assert_eq!(meta_line.meta.name.as_deref(), Some("my-session"));
         Ok(())
     }
 

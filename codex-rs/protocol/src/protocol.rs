@@ -1830,6 +1830,7 @@ pub struct SessionConfiguredEvent {
 
     /// Optional user-facing session name (may be unset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub session_name: Option<String>,
 
     /// Tell the client what model is being queried.
@@ -1870,6 +1871,7 @@ pub struct SessionMetaUpdatedEvent {
     /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub session_name: Option<String>,
 }
 

@@ -133,7 +133,7 @@ sequenceDiagram
 
 ### Session Metadata
 
-Sessions may include an optional user-facing name. `Event::SessionConfigured` can include `session_name` when available, and clients may receive `Event::SessionMetaUpdated` when the session name changes.
+Sessions may include an optional user-facing name. `Event::SessionConfigured` can include `session_name` when available, and clients may receive `Event::SessionMetaUpdated` when the session name changes. When unset, `session_name` is omitted (not sent as `null`). Session names are shell-safe tokens: they may include letters, numbers, `.`, `_`, or `-`, and cannot start with `-`.
 
 ### Task Interrupt
 
