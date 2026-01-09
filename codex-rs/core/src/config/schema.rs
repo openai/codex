@@ -34,7 +34,7 @@ pub(crate) fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Schema for the `[features]` map with known keys only.
+/// Schema for the `[features]` map with known + legacy keys only.
 pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     let mut object = SchemaObject {
         instance_type: Some(InstanceType::Object.into()),
@@ -46,6 +46,11 @@ pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
         validation
             .properties
             .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());
+    }
+    for legacy_key in crate::features::legacy_feature_keys() {
+        validation
+            .properties
+            .insert(legacy_key.to_string(), schema_gen.subschema_for::<bool>());
     }
     validation.additional_properties = Some(Box::new(Schema::Bool(false)));
     object.object = Some(Box::new(validation));
