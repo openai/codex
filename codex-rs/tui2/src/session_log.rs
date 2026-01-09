@@ -59,10 +59,11 @@ impl SessionLogger {
                                 continue;
                             }
                         }
-                        LogEntry::Flush => {
+                        LogEntry::Flush(done_tx) => {
                             if let Err(e) = writer.flush() {
                                 tracing::warn!("session log flush error: {e}");
                             }
+                            let _ = done_tx.send(());
                         }
                     }
                 }
@@ -98,9 +99,12 @@ impl SessionLogger {
         let Some(worker) = self.worker.get() else {
             return;
         };
-        if let Err(e) = worker.tx.send(LogEntry::Flush) {
+        let (done_tx, done_rx) = mpsc::channel();
+        if let Err(e) = worker.tx.send(LogEntry::Flush(done_tx)) {
             tracing::warn!("session log flush error: {e}");
+            return;
         }
+        let _ = done_rx.recv();
     }
 }
 
@@ -111,7 +115,7 @@ struct LoggerWorker {
 
 enum LogEntry {
     Line(String),
-    Flush,
+    Flush(mpsc::Sender<()>),
 }
 
 fn now_ts() -> String {
