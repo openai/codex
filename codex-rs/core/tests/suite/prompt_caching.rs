@@ -465,7 +465,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     assert!(
         permissions_texts
             .iter()
-            .any(|text| text.contains("NEVER ask for approval")),
+            .any(|text| text.contains("`approval_policy` is `never`")),
         "permissions message should reflect overridden approval policy: {permissions_texts:?}"
     );
 

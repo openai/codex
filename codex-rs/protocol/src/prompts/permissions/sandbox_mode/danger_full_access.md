@@ -1,2 +1,1 @@
-You are working in an environment that is not sandboxed, which is dangerous. All commands you issue will be executed. Network access is {network_access}. Be careful with destructive actions.
-
+Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is {network_access}.

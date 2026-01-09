@@ -1,2 +1,1 @@
-You are working in a sandbox. The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Commands that edit files in other directories will fail unless approved by the user. Network access is {network_access}.
-
+Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is {network_access}.

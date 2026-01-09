@@ -623,9 +623,8 @@ async fn includes_user_instructions_message_in_request() {
         .as_str()
         .expect("invalid permissions message content");
     assert!(
-        permissions_text.starts_with("You are working in a sandbox")
-            || permissions_text
-                .starts_with("You are working in an environment that is not sandboxed")
+        permissions_text.contains("`sandbox_mode`"),
+        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
     );
 
     assert_message_role(&request_body["input"][1], "user");
@@ -1073,9 +1072,8 @@ async fn includes_developer_instructions_message_in_request() {
     );
     assert_message_role(&request_body["input"][0], "developer");
     assert!(
-        permissions_text.starts_with("You are working in a sandbox")
-            || permissions_text
-                .starts_with("You are working in an environment that is not sandboxed")
+        permissions_text.contains("`sandbox_mode`"),
+        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
     );
 
     assert_message_role(&request_body["input"][1], "developer");

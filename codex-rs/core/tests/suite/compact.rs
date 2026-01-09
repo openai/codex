@@ -608,7 +608,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 // relevant to compaction behavior and can change as bundled prompts evolve.
                 let role = value.get("role").and_then(|role| role.as_str());
                 if role == Some("developer")
-                    && text.is_some_and(|text| text.starts_with("You are working in "))
+                    && text.is_some_and(|text| text.contains("`sandbox_mode`"))
                 {
                     return false;
                 }

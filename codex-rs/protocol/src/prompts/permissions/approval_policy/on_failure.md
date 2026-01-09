@@ -1,2 +1,1 @@
- Run your commands as normal. If a command fails due to sandboxing, the environment will automatically ask the user for approval. When possible, run commands that do not require approval to avoid annoying the user.
-
+ Approvals are your mechanism to get user consent to run shell commands without the sandbox. `approval_policy` is `on-failure`: The harness will allow all commands to run in the sandbox (if enabled), and failures will be escalated to the user for approval to run again without the sandbox.

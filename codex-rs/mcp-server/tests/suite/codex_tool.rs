@@ -392,9 +392,9 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         .filter_map(|msg| msg.get("content").and_then(|value| value.as_str()))
         .collect();
     assert!(
-        developer_contents.iter().any(|content| content
-            .starts_with("You are working in a sandbox.")
-            || content.starts_with("You are working in an environment that is not sandboxed")),
+        developer_contents
+            .iter()
+            .any(|content| content.contains("`sandbox_mode`")),
         "expected permissions developer message, got {developer_contents:?}"
     );
     assert!(
