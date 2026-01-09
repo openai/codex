@@ -211,7 +211,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
     let call_id = "shell-command-timeout";
     let command = if cfg!(windows) {
-        "timeout /t 5"
+        "Start-Sleep -Seconds 5"
     } else {
         "sleep 5"
     };
@@ -253,14 +253,13 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
     .await?;
 
     let call_id = "unicode_output";
-    mount_shell_responses_with_timeout(
-        &harness,
-        call_id,
-        "git -c alias.say='!printf \"%s\" \"naïve_café\"' say",
-        Some(login),
-        MEDIUM_TIMEOUT,
-    )
-    .await;
+    let command = if cfg!(windows) {
+        "Write-Output 'naïve_café'"
+    } else {
+        "git -c alias.say='!printf \"%s\" \"naïve_café\"' say"
+    };
+    mount_shell_responses_with_timeout(&harness, call_id, command, Some(login), MEDIUM_TIMEOUT)
+        .await;
     harness.submit("run the command without login").await?;
 
     let output = harness.function_call_stdout(call_id).await;

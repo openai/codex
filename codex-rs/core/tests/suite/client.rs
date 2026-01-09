@@ -60,10 +60,38 @@ use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
+use wiremock::matchers::header;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
+
+fn existing_env_var_with_value() -> (&'static str, String) {
+    let candidates: &[&str] = if cfg!(windows) {
+        &[
+            "SystemRoot",
+            "SYSTEMROOT",
+            "WINDIR",
+            "ComSpec",
+            "TEMP",
+            "TMP",
+            "OS",
+            "USERNAME",
+            "COMPUTERNAME",
+            "PATH",
+        ]
+    } else {
+        &["USER", "LOGNAME", "HOME", "SHELL", "PATH"]
+    };
+    for &key in candidates {
+        if let Ok(val) = std::env::var(key)
+            && !val.is_empty()
+        {
+            return (key, val);
+        }
+    }
+    panic!("expected one of {candidates:?} to be set");
+}
 
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
@@ -1712,7 +1740,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_overrides_assign_properties_used_for_responses_url() {
     skip_if_no_network!();
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+    let (env_key, env_value) = existing_env_var_with_value();
 
     // Mock server
     let server = MockServer::start().await;
@@ -1730,14 +1758,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
         .and(header_regex("Custom-Header", "Value"))
-        .and(header_regex(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
-            )
-            .as_str(),
-        ))
+        .and(header("Authorization", format!("Bearer {env_value}")))
         .respond_with(first)
         .expect(1)
         .mount(&server)
@@ -1747,7 +1768,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
-        env_key: Some(existing_env_var_with_random_value.to_string()),
+        env_key: Some(env_key.to_string()),
         experimental_bearer_token: None,
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
@@ -1796,7 +1817,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn env_var_overrides_loaded_auth() {
     skip_if_no_network!();
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+    let (env_key, env_value) = existing_env_var_with_value();
 
     // Mock server
     let server = MockServer::start().await;
@@ -1814,14 +1835,7 @@ async fn env_var_overrides_loaded_auth() {
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
         .and(header_regex("Custom-Header", "Value"))
-        .and(header_regex(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
-            )
-            .as_str(),
-        ))
+        .and(header("Authorization", format!("Bearer {env_value}")))
         .respond_with(first)
         .expect(1)
         .mount(&server)
@@ -1831,7 +1845,7 @@ async fn env_var_overrides_loaded_auth() {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
-        env_key: Some(existing_env_var_with_random_value.to_string()),
+        env_key: Some(env_key.to_string()),
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
             "2025-04-01-preview".to_string(),

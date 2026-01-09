@@ -21,13 +21,13 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerRequest;
+use codex_core::parse_command::parse_command;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use pretty_assertions::assert_eq;
@@ -203,25 +203,32 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
-    // Mock server will request a python shell call for the first and second turn, then finish.
-    let responses = vec![
-        create_shell_command_sse_response(
+    let (shell_command, expected_shell_command) = if cfg!(windows) {
+        let command = "Get-Process".to_string();
+        (vec![command.clone()], format_with_current_shell(&command))
+    } else {
+        let command = "python3 -c 'print(42)'";
+        (
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
+            format_with_current_shell(command),
+        )
+    };
+
+    // Mock server will request an untrusted shell call for the first and second turn, then finish.
+    let responses = vec![
+        create_shell_command_sse_response(
+            shell_command.clone(),
             Some(&working_directory),
             Some(5000),
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
         create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+            shell_command.clone(),
             Some(&working_directory),
             Some(5000),
             "call2",
@@ -294,16 +301,16 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         panic!("expected ExecCommandApproval request, got: {request:?}");
     };
 
+    let parsed_cmd = parse_command(&expected_shell_command);
+
     assert_eq!(
         ExecCommandApprovalParams {
             conversation_id,
             call_id: "call1".to_string(),
-            command: format_with_current_shell("python3 -c 'print(42)'"),
+            command: expected_shell_command,
             cwd: working_directory.clone(),
             reason: None,
-            parsed_cmd: vec![ParsedCommand::Unknown {
-                cmd: "python3 -c 'print(42)'".to_string()
-            }],
+            parsed_cmd,
         },
         params
     );

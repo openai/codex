@@ -57,6 +57,18 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const TEST_ORIGINATOR: &str = "codex_vscode";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 
+fn untrusted_shell_command() -> Vec<String> {
+    if cfg!(windows) {
+        vec!["Get-Process".to_string()]
+    } else {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            "print(42)".to_string(),
+        ]
+    }
+}
+
 #[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
@@ -755,30 +767,12 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().to_path_buf();
 
-    // Mock server: first turn requests a shell call (elicitation), then completes.
+    // Mock server: first turn requests an untrusted shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
     let responses = vec![
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
-            None,
-            Some(5000),
-            "call1",
-        )?,
+        create_shell_command_sse_response(untrusted_shell_command(), None, Some(5000), "call1")?,
         create_final_assistant_message_sse_response("done 1")?,
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
-            None,
-            Some(5000),
-            "call2",
-        )?,
+        create_shell_command_sse_response(untrusted_shell_command(), None, Some(5000), "call2")?,
         create_final_assistant_message_sse_response("done 2")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
@@ -901,11 +895,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 
     let responses = vec![
         create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+            untrusted_shell_command(),
             None,
             Some(5000),
             "call-decline",
