@@ -242,7 +242,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
-        permissions_message.clone(),
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -292,7 +292,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
-        permissions_message.clone(),
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -362,7 +362,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
-        permissions_message.clone(),
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -423,7 +423,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
-        permissions_message.clone(),
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -504,7 +504,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
-        permissions_message.clone(),
+        permissions_message,
         {
           "type": "message",
           "role": "user",

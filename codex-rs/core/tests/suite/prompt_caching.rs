@@ -763,8 +763,8 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
         expected_ui_msg,
-        expected_env_msg_1.clone(),
-        expected_user_message_1.clone(),
+        expected_env_msg_1,
+        expected_user_message_1,
         expected_permissions_msg_2,
         expected_user_message_2,
     ]);
