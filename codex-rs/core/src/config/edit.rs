@@ -28,8 +28,6 @@ pub enum ConfigEdit {
     SetNoticeHideWorldWritableWarning(bool),
     /// Toggle the rate limit model nudge acknowledgement flag.
     SetNoticeHideRateLimitModelNudge(bool),
-    /// Toggle the exit confirmation prompt acknowledgement flag.
-    SetNoticeHideExitConfirmationPrompt(bool),
     /// Toggle the Windows onboarding acknowledgement flag.
     SetWindowsWslSetupAcknowledged(bool),
     /// Toggle the model migration prompt acknowledgement flag.
@@ -280,11 +278,6 @@ impl ConfigDocument {
             ConfigEdit::SetNoticeHideRateLimitModelNudge(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &[Notice::TABLE_KEY, "hide_rate_limit_model_nudge"],
-                value(*acknowledged),
-            )),
-            ConfigEdit::SetNoticeHideExitConfirmationPrompt(acknowledged) => Ok(self.write_value(
-                Scope::Global,
-                &[Notice::TABLE_KEY, "hide_exit_confirmation_prompt"],
                 value(*acknowledged),
             )),
             ConfigEdit::SetNoticeHideModelMigrationPrompt(migration_config, acknowledged) => {
@@ -618,14 +611,6 @@ impl ConfigEditsBuilder {
     pub fn set_hide_rate_limit_model_nudge(mut self, acknowledged: bool) -> Self {
         self.edits
             .push(ConfigEdit::SetNoticeHideRateLimitModelNudge(acknowledged));
-        self
-    }
-
-    pub fn set_hide_exit_confirmation_prompt(mut self, acknowledged: bool) -> Self {
-        self.edits
-            .push(ConfigEdit::SetNoticeHideExitConfirmationPrompt(
-                acknowledged,
-            ));
         self
     }
 
@@ -1023,33 +1008,6 @@ hide_rate_limit_model_nudge = true
         assert_eq!(contents, expected);
     }
 
-    #[test]
-    fn blocking_set_hide_exit_confirmation_prompt_preserves_table() {
-        let tmp = tempdir().expect("tmpdir");
-        let codex_home = tmp.path();
-        std::fs::write(
-            codex_home.join(CONFIG_TOML_FILE),
-            r#"[notice]
-existing = "value"
-"#,
-        )
-        .expect("seed");
-
-        apply_blocking(
-            codex_home,
-            None,
-            &[ConfigEdit::SetNoticeHideExitConfirmationPrompt(true)],
-        )
-        .expect("persist");
-
-        let contents =
-            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"[notice]
-existing = "value"
-hide_exit_confirmation_prompt = true
-"#;
-        assert_eq!(contents, expected);
-    }
     #[test]
     fn blocking_set_hide_gpt5_1_migration_prompt_preserves_table() {
         let tmp = tempdir().expect("tmpdir");

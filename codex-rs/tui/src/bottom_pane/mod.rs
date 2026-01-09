@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
@@ -46,6 +48,15 @@ mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
 
+/// How long the "press again to quit" hint stays visible.
+///
+/// This is shared between:
+/// - `ChatWidget`: arming the double-press quit shortcut.
+/// - `BottomPane`/`ChatComposer`: rendering and expiring the footer hint.
+///
+/// Keeping a single value ensures Ctrl+C and Ctrl+D behave identically.
+pub(crate) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
     Handled,
@@ -76,7 +87,6 @@ pub(crate) struct BottomPane {
 
     has_input_focus: bool,
     is_task_running: bool,
-    ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
 
@@ -129,7 +139,6 @@ impl BottomPane {
             frame_requester,
             has_input_focus,
             is_task_running: false,
-            ctrl_c_quit_hint: false,
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
             queued_user_messages: QueuedUserMessages::new(),
@@ -228,7 +237,7 @@ impl BottomPane {
                     self.view_stack.pop();
                     self.on_active_view_complete();
                 }
-                self.show_ctrl_c_quit_hint();
+                self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
             }
             event
         } else if self.composer_is_empty() {
@@ -236,7 +245,7 @@ impl BottomPane {
         } else {
             self.view_stack.pop();
             self.clear_composer_for_ctrl_c();
-            self.show_ctrl_c_quit_hint();
+            self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
             CancellationEvent::Handled
         }
     }
@@ -314,25 +323,41 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
-        self.ctrl_c_quit_hint = true;
+    /// Show the transient "press again to quit" hint for `key`.
+    ///
+    /// `ChatWidget` owns the quit shortcut state machine (it decides when quit is
+    /// allowed), while the bottom pane owns rendering. We also schedule a redraw
+    /// after [`QUIT_SHORTCUT_TIMEOUT`] so the hint disappears even if the user
+    /// stops typing and no other events trigger a draw.
+    pub(crate) fn show_quit_shortcut_hint(&mut self, key: KeyBinding) {
         self.composer
-            .set_ctrl_c_quit_hint(true, self.has_input_focus);
+            .show_quit_shortcut_hint(key, self.has_input_focus);
+        let frame_requester = self.frame_requester.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                tokio::time::sleep(QUIT_SHORTCUT_TIMEOUT).await;
+                frame_requester.schedule_frame();
+            });
+        } else {
+            // In tests (and other non-Tokio contexts), fall back to a thread so
+            // the hint can still expire without requiring an explicit draw.
+            std::thread::spawn(move || {
+                std::thread::sleep(QUIT_SHORTCUT_TIMEOUT);
+                frame_requester.schedule_frame();
+            });
+        }
         self.request_redraw();
     }
 
-    pub(crate) fn clear_ctrl_c_quit_hint(&mut self) {
-        if self.ctrl_c_quit_hint {
-            self.ctrl_c_quit_hint = false;
-            self.composer
-                .set_ctrl_c_quit_hint(false, self.has_input_focus);
-            self.request_redraw();
-        }
+    /// Clear the "press again to quit" hint immediately.
+    pub(crate) fn clear_quit_shortcut_hint(&mut self) {
+        self.composer.clear_quit_shortcut_hint(self.has_input_focus);
+        self.request_redraw();
     }
 
     #[cfg(test)]
-    pub(crate) fn ctrl_c_quit_hint_visible(&self) -> bool {
-        self.ctrl_c_quit_hint
+    pub(crate) fn quit_shortcut_hint_visible(&self) -> bool {
+        self.composer.quit_shortcut_hint_visible()
     }
 
     #[cfg(test)]
@@ -648,7 +673,7 @@ mod tests {
         });
         pane.push_approval_request(exec_request(), &features);
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
-        assert!(pane.ctrl_c_quit_hint_visible());
+        assert!(pane.quit_shortcut_hint_visible());
         assert_eq!(CancellationEvent::NotHandled, pane.on_ctrl_c());
     }
 

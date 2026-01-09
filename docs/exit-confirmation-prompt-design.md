@@ -1,32 +1,31 @@
 # Exit and shutdown flow (tui + tui2)
 
-This document describes how exit, shutdown, and interruption work in the Rust TUIs
-(`codex-rs/tui` and `codex-rs/tui2`). It is intended for Codex developers and
-Codex itself when reasoning about future exit/shutdown changes.
+This document describes how exit, shutdown, and interruption work in the Rust TUIs (`codex-rs/tui`
+and `codex-rs/tui2`). It is intended for Codex developers and Codex itself when reasoning about
+future exit/shutdown changes.
 
-This doc replaces earlier separate history and design notes. High-level history is
-summarized below; full details are captured in PR #8936.
+This doc replaces earlier separate history and design notes. High-level history is summarized
+below; full details are captured in PR #8936.
 
 ## Terms
 
 - **Exit**: end the UI event loop and terminate the process.
-- **Shutdown**: request a graceful agent/core shutdown (`Op::Shutdown`) and wait
-  for `ShutdownComplete` so cleanup can run.
+- **Shutdown**: request a graceful agent/core shutdown (`Op::Shutdown`) and wait for
+  `ShutdownComplete` so cleanup can run.
 - **Interrupt**: cancel a running operation (`Op::Interrupt`).
 
 ## Event model (AppEvent)
 
 Exit is coordinated via a single event with explicit modes:
 
-- `AppEvent::Exit(ExitMode::ShutdownFirst { confirm })`
+- `AppEvent::Exit(ExitMode::ShutdownFirst)`
   - Prefer this for user-initiated quits so cleanup runs.
 - `AppEvent::Exit(ExitMode::Immediate)`
   - Escape hatch for immediate exit. This bypasses shutdown and can drop
     in-flight work (e.g., tasks, rollout flush, child process cleanup).
 
-`App` is the coordinator: it decides whether to open the confirmation prompt or
-submit `Op::Shutdown`, and it exits the UI loop only when `ExitMode::Immediate`
-arrives (typically after `ShutdownComplete`).
+`App` is the coordinator: it submits `Op::Shutdown` and it exits the UI loop only when
+`ExitMode::Immediate` arrives (typically after `ShutdownComplete`).
 
 ## User-triggered quit flows
 
@@ -37,20 +36,25 @@ Priority order in the UI layer:
 1. Active modal/view gets the first chance to consume (`BottomPane::on_ctrl_c`).
    - If the modal handles it, the quit flow stops.
 2. If cancellable work is active (streaming/tools/review), send `Op::Interrupt`.
-3. If composer has draft input, clear the draft and show the quit hint.
-4. If idle + empty, request shutdown-first quit with confirmation.
+3. If the composer has draft input, clear the draft.
+4. Always show the quit hint (`ctrl + c again to quit`) below the composer prompt.
+   - The hint text matches the key that was pressed (e.g., `ctrl + d again to quit`).
+   - The hint times out after 1 second.
+5. If the user presses Ctrl+C again while the hint is visible, request shutdown-first quit.
+   - The second press must match the first key (Ctrl+C then Ctrl+D will not quit).
 
 ### Ctrl+D
 
-- Only triggers quit when the composer is empty **and** no modal is active.
-- With any modal/popup open, key events are routed to the view and Ctrl+D does
-  not attempt to quit.
+- Only participates in quit when the composer is empty **and** no modal is active.
+  - On first press, show the quit hint (same as Ctrl+C) and start the 1 second timer.
+  - If pressed again while the hint is visible, request shutdown-first quit.
+- With any modal/popup open, key events are routed to the view and Ctrl+D does not attempt to
+  quit.
 
 ### Slash commands
 
 - `/quit`, `/exit`, `/logout` request shutdown-first quit **without** a prompt,
-  because slash commands are harder to trigger accidentally and imply clear
-  intent to quit.
+  because slash commands are harder to trigger accidentally and imply clear intent to quit.
 
 ### /new
 
@@ -59,35 +63,12 @@ Priority order in the UI layer:
 
 ## Shutdown completion and suppression
 
-`ShutdownComplete` is the signal that core cleanup has finished. The UI treats
-it as the boundary for exit:
+`ShutdownComplete` is the signal that core cleanup has finished. The UI treats it as the boundary
+for exit:
 
 - `ChatWidget` requests `Exit(Immediate)` on `ShutdownComplete`.
 - `App` can suppress a single `ShutdownComplete` when shutdown is used as a
   cleanup step (e.g., `/new`).
-
-## Exit confirmation prompt
-
-The confirmation prompt is a safety net for idle quits. When shown, it provides:
-
-- Quit now (shutdown-first).
-- Quit and don't ask again (persists the notice, then shutdown-first).
-- Cancel (stay in the app).
-
-The prompt is a bottom-pane selection view, so it does not appear if another
-modal is already active.
-
-## Configuration
-
-The prompt can be suppressed via:
-
-```toml
-[notice]
-hide_exit_confirmation_prompt = true
-```
-
-This flag is updated and persisted via `UpdateExitConfirmationPromptHidden` and
-`PersistExitConfirmationPromptHidden`.
 
 ## Edge cases and invariants
 
@@ -103,14 +84,13 @@ This flag is updated and persisted via `UpdateExitConfirmationPromptHidden` and
 At a minimum, we want coverage for:
 
 - Ctrl+C while working interrupts, does not quit.
-- Ctrl+C while idle and empty shows confirmation, then shutdown-first quit.
+- Ctrl+C while idle and empty shows quit hint, then shutdown-first quit on second press.
 - Ctrl+D with modal open does not quit.
 - `/quit` / `/exit` / `/logout` quit without prompt, but still shutdown-first.
-- "Don't ask again" persists the notice and suppresses future prompts.
+  - Ctrl+D while idle and empty shows quit hint, then shutdown-first quit on second press.
 
 ## History (high level)
 
-Codex has historically mixed "exit immediately" and "shutdown-first" across
-quit gestures, largely due to incremental changes and regressions in state
-tracking. This doc reflects the current unified, shutdown-first approach. See
-PR #8936 for the detailed history and rationale.
+Codex has historically mixed "exit immediately" and "shutdown-first" across quit gestures, largely
+due to incremental changes and regressions in state tracking. This doc reflects the current
+unified, shutdown-first approach. See PR #8936 for the detailed history and rationale.
