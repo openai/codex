@@ -266,15 +266,19 @@ impl ChatComposer {
 
         // normalize_pasted_path already handles Windows → WSL path conversion,
         // so we can directly try to read the image dimensions.
-        if image::image_dimensions(&path_buf).is_ok() {
-            tracing::info!("OK: {pasted}");
-            let format = pasted_image_format(&path_buf);
-            tracing::debug!("attached image format={}", format.label());
-            self.attach_image(path_buf);
-            true
-        } else {
-            tracing::trace!("ERR: not an image path");
-            false
+        match image::image_dimensions(&path_buf) {
+            Ok((width, height)) => {
+                tracing::info!("OK: {pasted}");
+                tracing::debug!("image dimensions={}x{}", width, height);
+                let format = pasted_image_format(&path_buf);
+                tracing::debug!("attached image format={}", format.label());
+                self.attach_image(path_buf);
+                true
+            }
+            Err(err) => {
+                tracing::trace!("ERR: {err}");
+                false
+            }
         }
     }
 
@@ -789,38 +793,43 @@ impl ChatComposer {
                 if is_image {
                     // Determine dimensions; if that fails fall back to normal path insertion.
                     let path_buf = PathBuf::from(&sel_path);
-                    if image::image_dimensions(&path_buf).is_ok() {
-                        // Remove the current @token (mirror logic from insert_selected_path without inserting text)
-                        // using the flat text and byte-offset cursor API.
-                        let cursor_offset = self.textarea.cursor();
-                        let text = self.textarea.text();
-                        // Clamp to a valid char boundary to avoid panics when slicing.
-                        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                        let before_cursor = &text[..safe_cursor];
-                        let after_cursor = &text[safe_cursor..];
+                    match image::image_dimensions(&path_buf) {
+                        Ok((width, height)) => {
+                            tracing::debug!("selected image dimensions={}x{}", width, height);
+                            // Remove the current @token (mirror logic from insert_selected_path without inserting text)
+                            // using the flat text and byte-offset cursor API.
+                            let cursor_offset = self.textarea.cursor();
+                            let text = self.textarea.text();
+                            // Clamp to a valid char boundary to avoid panics when slicing.
+                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                            let before_cursor = &text[..safe_cursor];
+                            let after_cursor = &text[safe_cursor..];
 
-                        // Determine token boundaries in the full text.
-                        let start_idx = before_cursor
-                            .char_indices()
-                            .rfind(|(_, c)| c.is_whitespace())
-                            .map(|(idx, c)| idx + c.len_utf8())
-                            .unwrap_or(0);
-                        let end_rel_idx = after_cursor
-                            .char_indices()
-                            .find(|(_, c)| c.is_whitespace())
-                            .map(|(idx, _)| idx)
-                            .unwrap_or(after_cursor.len());
-                        let end_idx = safe_cursor + end_rel_idx;
+                            // Determine token boundaries in the full text.
+                            let start_idx = before_cursor
+                                .char_indices()
+                                .rfind(|(_, c)| c.is_whitespace())
+                                .map(|(idx, c)| idx + c.len_utf8())
+                                .unwrap_or(0);
+                            let end_rel_idx = after_cursor
+                                .char_indices()
+                                .find(|(_, c)| c.is_whitespace())
+                                .map(|(idx, _)| idx)
+                                .unwrap_or(after_cursor.len());
+                            let end_idx = safe_cursor + end_rel_idx;
 
-                        self.textarea.replace_range(start_idx..end_idx, "");
-                        self.textarea.set_cursor(start_idx);
+                            self.textarea.replace_range(start_idx..end_idx, "");
+                            self.textarea.set_cursor(start_idx);
 
-                        self.attach_image(path_buf);
-                        // Add a trailing space to keep typing fluid.
-                        self.textarea.insert_str(" ");
-                    } else {
-                        // Fallback to plain path insertion if metadata read fails.
-                        self.insert_selected_path(&sel_path);
+                            self.attach_image(path_buf);
+                            // Add a trailing space to keep typing fluid.
+                            self.textarea.insert_str(" ");
+                        }
+                        Err(err) => {
+                            tracing::trace!("image dimensions lookup failed: {err}");
+                            // Fallback to plain path insertion if metadata read fails.
+                            self.insert_selected_path(&sel_path);
+                        }
                     }
                 } else {
                     // Non-image: inserting file path.
