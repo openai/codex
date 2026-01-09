@@ -1872,6 +1872,12 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Rename if !trimmed.is_empty() => {
+                let name = trimmed.to_string();
+                self.add_info_message(format!("Session renamed to \"{name}\""), None);
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::SetSessionName { name }));
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
@@ -1892,11 +1898,11 @@ impl ChatWidget {
             "Rename session".to_string(),
             "Type a new name and press Enter".to_string(),
             None,
-            Box::new(move |title: String| {
+            Box::new(move |name: String| {
                 tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_info_event(format!("Session renamed to \"{title}\""), None),
+                    history_cell::new_info_event(format!("Session renamed to \"{name}\""), None),
                 )));
-                tx.send(AppEvent::CodexOp(Op::SetSessionTitle { title }));
+                tx.send(AppEvent::CodexOp(Op::SetSessionName { name }));
             }),
         );
 

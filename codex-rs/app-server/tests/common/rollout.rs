@@ -44,7 +44,7 @@ pub fn create_fake_rollout(
         id: conversation_id,
         timestamp: meta_rfc3339.to_string(),
         cwd: PathBuf::from("/"),
-        title: None,
+        name: None,
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         instructions: None,
