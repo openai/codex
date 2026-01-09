@@ -13,7 +13,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::local_image_content_items;
+use codex_protocol::models::local_image_content_items_with_label_number;
 
 pub struct ViewImageHandler;
 
@@ -65,7 +65,8 @@ impl ToolHandler for ViewImageHandler {
         }
         let event_path = abs_path.clone();
 
-        let content: Vec<ContentItem> = local_image_content_items(&abs_path, false);
+        let content: Vec<ContentItem> =
+            local_image_content_items_with_label_number(&abs_path, false, 1);
         let input = ResponseInputItem::Message {
             role: "user".to_string(),
             content,
