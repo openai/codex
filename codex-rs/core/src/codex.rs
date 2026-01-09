@@ -3757,6 +3757,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_mcp_servers_is_deferred_until_next_turn() {
+        let (session, turn_context) = make_session_and_context().await;
+        let old_token = session.mcp_startup_cancellation_token().await;
+        assert!(!old_token.is_cancelled());
+
+        let mcp_oauth_credentials_store_mode =
+            serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
+        let refresh_config = McpServerRefreshConfig {
+            mcp_servers: json!({}),
+            mcp_oauth_credentials_store_mode,
+        };
+        {
+            let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+            *guard = Some(refresh_config);
+        }
+
+        assert!(!old_token.is_cancelled());
+        assert!(
+            session
+                .pending_mcp_server_refresh_config
+                .lock()
+                .await
+                .is_some()
+        );
+
+        session
+            .refresh_mcp_servers_if_requested(&turn_context)
+            .await;
+
+        assert!(old_token.is_cancelled());
+        assert!(
+            session
+                .pending_mcp_server_refresh_config
+                .lock()
+                .await
+                .is_none()
+        );
+        let new_token = session.mcp_startup_cancellation_token().await;
+        assert!(!new_token.is_cancelled());
+    }
+
+    #[tokio::test]
     async fn record_model_warning_appends_user_message() {
         let (mut session, turn_context) = make_session_and_context().await;
         let features = Features::with_defaults();
