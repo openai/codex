@@ -3,22 +3,13 @@ common --nobuild_runfile_links
 common --keep_going
 
 # Prefer to run the build actions entirely remotely, since Github's runners are underwhelming.
-common --config=remote
-common --strategy=remote
-
-# TODO(zbarsky): Linux cannot cross-build because rules_rust cargo_build_script compiles
-# the build_script for the _target_ platform, instead of the _exec_ platform, and thus we get
-# "exec format error" when it runs. We see this with wayland-sys crate in particular, but likely
-# others as well.
-# common:linux --strategy=processwrapper-sandbox,local
+# Currently remote builds only work on Mac hosts, until we untangle the libc constraints mess on linux.
+common:macos --config=remote
+common:macos --strategy=remote
 
 # We have platform-specific tests, so execute the tests locally using the strongest sandboxing available on each platform.
 common:macos --strategy=TestRunner=darwin-sandbox,local
 # Note: linux-sandbox is stronger, but not available in GHA.
 common:linux --strategy=TestRunner=processwrapper-sandbox,local
 common:windows --strategy=TestRunner=local
-
-# rules_rust experiences some confusion around which platform to build cargo build scripts for :( Try to workaround it.
-# Note: linux-sandbox is stronger, but not available in GHA.
-# common:linux --strategy=CargoBuildScriptRun=processwrapper-sandbox,local
 

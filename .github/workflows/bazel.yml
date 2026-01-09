@@ -37,8 +37,8 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
           # TODO: Enable Windows once we fix the toolchain issues there.
-          - os: windows-latest
-            target: x86_64-pc-windows-gnullvm
+          #- os: windows-latest
+          #  target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
 
     # Configure a human readable name for each job

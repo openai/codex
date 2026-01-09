@@ -8,6 +8,7 @@ common --repository_cache=~/.cache/bazel-repo-cache
 common --experimental_platform_in_output_dir
 
 common --enable_platform_specific_config
+# TODO(zbarsky): We need to untangle these libc constraints to get linux remote builds working.
 common:linux --host_platform=//:local
 common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
 common --@toolchains_llvm_bootstrapped//config:experimental_stub_libgcc_s
@@ -38,7 +39,7 @@ common --grpc_keepalive_time=30s
 # memory in exchange for higher download concurrency.
 common --jobs=30
 
-common:remote --host_platform=@platforms//host
 common:remote --extra_execution_platforms=//:rbe
 common:remote --remote_executor=grpcs://remote.buildbuddy.io
 common:remote --jobs=800
+
