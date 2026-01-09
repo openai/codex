@@ -354,7 +354,7 @@ pub struct Config {
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
     /// Defaults to `true`.
-    pub analytics: bool,
+    pub analytics_enabled: bool,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
@@ -1397,7 +1397,7 @@ impl Config {
             notices: cfg.notice.unwrap_or_default(),
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
-            analytics: config_profile
+            analytics_enabled: config_profile
                 .analytics
                 .as_ref()
                 .and_then(|a| a.enabled)
@@ -3233,7 +3233,7 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
-                analytics: true,
+                analytics_enabled: true,
                 tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
                 tui_scroll_trackpad_lines: None,
@@ -3317,7 +3317,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: true,
+            analytics_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3416,7 +3416,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: false,
+            analytics_enabled: false,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3501,7 +3501,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: true,
+            analytics_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
