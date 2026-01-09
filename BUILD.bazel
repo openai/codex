@@ -3,11 +3,11 @@
 # We only enable this on linux though for sanity.
 platform(
     name = "local",
-    parents = [
-        "@platforms//host",
-    ],
     constraint_values = [
         "@toolchains_llvm_bootstrapped//constraints/libc:gnu.2.28",
+    ],
+    parents = [
+        "@platforms//host",
     ],
 )
 
@@ -21,7 +21,7 @@ platform(
     ],
     exec_properties = {
         # Need git in the image...
-        "container-image": "docker://ghcr.io/cicirello/pyaction:latest",
+        "container-image": "docker://docker.io/mbolin491/codex-bazel:latest",
         "OSFamily": "Linux",
     },
 )
