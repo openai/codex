@@ -97,6 +97,7 @@ pub use rollout::SessionMeta;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::find_thread_path_by_id_str;
+pub use rollout::find_thread_path_by_name_str;
 pub use rollout::list::Cursor;
 pub use rollout::list::ThreadItem;
 pub use rollout::list::ThreadsPage;

@@ -20,6 +20,7 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::find_thread_path_by_id_str;
+use codex_core::find_thread_path_by_name_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
@@ -30,6 +31,7 @@ use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
+use uuid::Uuid;
 
 mod additional_dirs;
 mod app;
@@ -430,7 +432,12 @@ async fn run_ratatui_app(
 
     // Determine resume behavior: explicit id, then resume last, then picker.
     let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
-        match find_thread_path_by_id_str(&config.codex_home, id_str).await? {
+        let resume_path = if Uuid::parse_str(id_str).is_ok() {
+            find_thread_path_by_id_str(&config.codex_home, id_str).await?
+        } else {
+            find_thread_path_by_name_str(&config.codex_home, id_str).await?
+        };
+        match resume_path {
             Some(path) => resume_picker::ResumeSelection::Resume(path),
             None => {
                 error!("Error finding conversation path: {id_str}");
@@ -439,7 +446,7 @@ async fn run_ratatui_app(
                 let _ = tui.terminal.clear();
                 if let Err(err) = writeln!(
                     std::io::stdout(),
-                    "No saved session found with ID {id_str}. Run `codex resume` without an ID to choose from existing sessions."
+                    "No saved session found with ID or name {id_str}. Run `codex resume` without an ID to choose from existing sessions."
                 ) {
                     error!("Failed to write resume error message: {err}");
                 }
