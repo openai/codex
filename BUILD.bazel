@@ -22,7 +22,8 @@ platform(
     exec_properties = {
         # Ubuntu-based image that includes git, python3, dotslash, and other
         # tools that various integration tests need.
-        "container-image": "docker://docker.io/mbolin491/codex-bazel@sha256:346cc36980383987326a8449194255a6161ca63d21c6778662f0ca03452489da",
+        # Verify at https://hub.docker.com/layers/mbolin491/codex-bazel/latest/images/sha256:3e7da794f47da2c1381fca18917dd1c914350a6c71a61624e532888a2275a1b2
+        "container-image": "docker://docker.io/mbolin491/codex-bazel@sha256:3e7da794f47da2c1381fca18917dd1c914350a6c71a61624e532888a2275a1b2",
         "OSFamily": "Linux",
     },
 )
