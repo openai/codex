@@ -1709,8 +1709,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
-            Op::SetSessionTitle { title } => {
-                handlers::set_session_title(&sess, sub.id.clone(), title).await;
+            Op::SetSessionName { name } => {
+                handlers::set_session_name(&sess, sub.id.clone(), name).await;
             }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
@@ -2124,13 +2124,13 @@ mod handlers {
         .await;
     }
 
-    pub async fn set_session_title(sess: &Arc<Session>, sub_id: String, title: String) {
-        let title = title.trim().to_string();
-        if title.is_empty() {
+    pub async fn set_session_name(sess: &Arc<Session>, sub_id: String, name: String) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Session title cannot be empty.".to_string(),
+                    message: "Session name cannot be empty.".to_string(),
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
                 }),
             };
@@ -2154,11 +2154,11 @@ mod handlers {
             return;
         };
 
-        if let Err(e) = recorder.set_session_title(title).await {
+        if let Err(e) = recorder.set_session_name(name).await {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: format!("Failed to set session title: {e}"),
+                    message: format!("Failed to set session name: {e}"),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
