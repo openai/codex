@@ -649,7 +649,7 @@ impl Session {
         );
         config.features.emit_metrics(&otel_manager);
         otel_manager.counter(
-            "codex.session.started",
+            "codex.thread.started",
             1,
             &[(
                 "is_git",
