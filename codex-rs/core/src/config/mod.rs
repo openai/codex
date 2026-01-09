@@ -1504,6 +1504,15 @@ impl Config {
         }
         self.forced_auto_mode_downgraded_on_windows = !value;
     }
+
+    pub fn set_windows_elevated_sandbox_globally(&mut self, value: bool) {
+        crate::safety::set_windows_elevated_sandbox_enabled(value);
+        if value {
+            self.features.enable(Feature::WindowsSandboxElevated);
+        } else {
+            self.features.disable(Feature::WindowsSandboxElevated);
+        }
+    }
 }
 
 fn default_review_model() -> String {
