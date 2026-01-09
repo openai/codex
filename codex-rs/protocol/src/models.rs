@@ -15,6 +15,7 @@ use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::user_input::UserInput;
 use codex_git::GhostCommit;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
@@ -209,6 +210,7 @@ impl DeveloperInstructions {
             sandbox_mode,
             network_access,
             approval_policy,
+            None,
         )
     }
 
@@ -216,27 +218,61 @@ impl DeveloperInstructions {
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
         approval_policy: AskForApproval,
+        writable_roots: Option<Vec<AbsolutePathBuf>>,
     ) -> Self {
-        DeveloperInstructions::sandbox_text(sandbox_mode, network_access)
+        let instructions = DeveloperInstructions::sandbox_text(sandbox_mode, network_access)
             .concat(DeveloperInstructions::from(approval_policy))
+            .concat(DeveloperInstructions::from_writable_roots(writable_roots));
+
+        instructions
+    }
+
+    fn from_writable_roots(writable_roots: Option<Vec<AbsolutePathBuf>>) -> Self {
+        let Some(roots) = writable_roots else {
+            return DeveloperInstructions::new("");
+        };
+        
+        if roots.is_empty() {
+            return DeveloperInstructions::new("");
+        }
+
+        let roots_list: Vec<String> = roots
+            .iter()
+            .map(|r| format!("`{}`", r.to_string_lossy()))
+            .collect();
+        let text = if roots_list.len() == 1 {
+            format!(" The writable root is {}.", roots_list[0])
+        } else {
+            format!(" The writable roots are {}.", roots_list.join(", "))
+        };
+        DeveloperInstructions::new(text)
     }
 
     pub fn from_policy(sandbox_policy: &SandboxPolicy, approval_policy: AskForApproval) -> Self {
-        let (sandbox_mode, network_access) = match sandbox_policy {
+        let (sandbox_mode, network_access, writable_roots) = match sandbox_policy {
             SandboxPolicy::DangerFullAccess => {
-                (SandboxMode::DangerFullAccess, NetworkAccess::Enabled)
+                (SandboxMode::DangerFullAccess, NetworkAccess::Enabled, None)
             }
-            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, NetworkAccess::Restricted),
+            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, NetworkAccess::Restricted, None),
             SandboxPolicy::ExternalSandbox { network_access } => {
-                (SandboxMode::DangerFullAccess, *network_access)
+                (SandboxMode::DangerFullAccess, *network_access, None)
             }
-            SandboxPolicy::WorkspaceWrite { network_access, .. } => {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                ..
+            } => {
                 let net = if *network_access {
                     NetworkAccess::Enabled
                 } else {
                     NetworkAccess::Restricted
                 };
-                (SandboxMode::WorkspaceWrite, net)
+                let roots = if writable_roots.is_empty() {
+                    None
+                } else {
+                    Some(writable_roots.clone())
+                };
+                (SandboxMode::WorkspaceWrite, net, roots)
             }
         };
 
@@ -244,6 +280,7 @@ impl DeveloperInstructions {
             sandbox_mode,
             network_access,
             approval_policy,
+            writable_roots,
         )
     }
 
@@ -746,6 +783,7 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
+            None,
         );
 
         let text = instructions.into_text();

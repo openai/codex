@@ -1373,7 +1373,6 @@ impl Session {
         }
         items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
-            Some(turn_context.sandbox_policy.clone()),
             shell.as_ref().clone(),
         )));
         items
