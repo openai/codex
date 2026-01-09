@@ -34,6 +34,7 @@ pub struct ConfigProfile {
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
+    // Injects known feature keys into the schema and forbids unknown keys.
     #[schemars(schema_with = "crate::config::schema::features_schema")]
     pub features: Option<crate::features::FeaturesToml>,
     pub oss_provider: Option<String>,

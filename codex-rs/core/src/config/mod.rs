@@ -690,7 +690,6 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
-    pub test: Option<String>,
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.
@@ -748,6 +747,7 @@ pub struct ConfigToml {
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
+    // Uses the raw MCP input shape (custom deserialization) rather than `McpServerConfig`.
     #[schemars(schema_with = "crate::config::schema::mcp_servers_schema")]
     pub mcp_servers: HashMap<String, McpServerConfig>,
 
@@ -816,6 +816,7 @@ pub struct ConfigToml {
 
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
+    // Injects known feature keys into the schema and forbids unknown keys.
     #[schemars(schema_with = "crate::config::schema::features_schema")]
     pub features: Option<FeaturesToml>,
 
