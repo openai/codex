@@ -66,6 +66,8 @@ impl ToolHandler for CollabHandler {
 
 mod spawn {
     use super::*;
+    use crate::codex::Session;
+    use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
     struct SpawnAgentArgs {
@@ -73,8 +75,8 @@ mod spawn {
     }
 
     pub async fn handle(
-        session: std::sync::Arc<crate::codex::Session>,
-        turn: std::sync::Arc<TurnContext>,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
@@ -101,6 +103,8 @@ mod spawn {
 
 mod send_input {
     use super::*;
+    use crate::codex::Session;
+    use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
     struct SendInputArgs {
@@ -109,7 +113,7 @@ mod send_input {
     }
 
     pub async fn handle(
-        session: std::sync::Arc<crate::codex::Session>,
+        session: Arc<Session>,
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SendInputArgs = parse_arguments(&arguments)?;
@@ -142,6 +146,8 @@ mod send_input {
 #[allow(unused_variables)]
 mod wait {
     use super::*;
+    use crate::codex::Session;
+    use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
     struct WaitArgs {
@@ -156,7 +162,7 @@ mod wait {
     }
 
     pub async fn handle(
-        session: std::sync::Arc<crate::codex::Session>,
+        session: Arc<Session>,
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: WaitArgs = parse_arguments(&arguments)?;
