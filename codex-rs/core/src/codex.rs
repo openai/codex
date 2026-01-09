@@ -1656,11 +1656,6 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
-    async fn request_mcp_server_refresh(&self, refresh_config: McpServerRefreshConfig) {
-        let mut guard = self.pending_mcp_server_refresh_config.lock().await;
-        *guard = Some(refresh_config);
-    }
-
     async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
         let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
         let Some(refresh_config) = refresh_config else {
@@ -2101,7 +2096,8 @@ mod handlers {
     }
 
     pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
-        sess.request_mcp_server_refresh(refresh_config).await;
+        let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
