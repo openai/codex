@@ -92,6 +92,8 @@ pub enum Feature {
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
+    /// Enable collab tools.
+    Collab,
 }
 
 impl Feature {
@@ -395,6 +397,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::EnableRequestCompression,
         key: "enable_request_compression",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Collab,
+        key: "collab",
         stage: Stage::Experimental,
         default_enabled: false,
     },
