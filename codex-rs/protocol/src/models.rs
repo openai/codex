@@ -187,18 +187,18 @@ fn local_image_label_suffix() -> String {
 }
 
 pub fn local_image_label_text(path: &std::path::Path) -> String {
-    format!("Image {}{}", path.display(), local_image_label_suffix())
+    local_image_label_text_with_number(path, None)
 }
 
 pub fn is_local_image_label_text(text: &str) -> bool {
     let suffix = local_image_label_suffix();
     let trimmed = text.trim();
-    trimmed.starts_with("Image ") && trimmed.ends_with(&suffix)
+    trimmed.starts_with("[Image ") && trimmed.ends_with(&suffix)
 }
 
-fn local_image_label(path: &std::path::Path) -> ContentItem {
+fn local_image_label(path: &std::path::Path, label_number: Option<usize>) -> ContentItem {
     ContentItem::InputText {
-        text: local_image_label_text(path),
+        text: local_image_label_text_with_number(path, label_number),
     }
 }
 
@@ -226,11 +226,29 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
 }
 
 pub fn local_image_content_items(path: &std::path::Path, include_label: bool) -> Vec<ContentItem> {
+    local_image_content_items_with_label_number(path, include_label, None)
+}
+
+fn local_image_label_text_with_number(
+    path: &std::path::Path,
+    label_number: Option<usize>,
+) -> String {
+    match label_number {
+        Some(label_number) => format!("[Image #{label_number}]{}", local_image_label_suffix()),
+        None => format!("[Image {}]{}", path.display(), local_image_label_suffix()),
+    }
+}
+
+fn local_image_content_items_with_label_number(
+    path: &std::path::Path,
+    include_label: bool,
+    label_number: Option<usize>,
+) -> Vec<ContentItem> {
     match load_and_resize_to_fit(path) {
         Ok(image) => {
             let mut items = Vec::with_capacity(2);
             if include_label {
-                items.push(local_image_label(path));
+                items.push(local_image_label(path, label_number));
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
@@ -260,6 +278,13 @@ pub fn local_image_content_items(path: &std::path::Path, include_label: bool) ->
             }
         }
     }
+}
+
+fn is_default_clipboard_image_path(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.starts_with("codex-clipboard-"))
+        .unwrap_or(false)
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -355,6 +380,7 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
+        let mut image_index = 0;
         Self::Message {
             role: "user".to_string(),
             content: items
@@ -362,7 +388,15 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .flat_map(|c| match c {
                     UserInput::Text { text } => vec![ContentItem::InputText { text }],
                     UserInput::Image { image_url } => vec![ContentItem::InputImage { image_url }],
-                    UserInput::LocalImage { path } => local_image_content_items(&path, true),
+                    UserInput::LocalImage { path } => {
+                        image_index += 1;
+                        let label_number = if is_default_clipboard_image_path(&path) {
+                            Some(image_index)
+                        } else {
+                            None
+                        };
+                        local_image_content_items_with_label_number(&path, true, label_number)
+                    }
                     UserInput::Skill { .. } => Vec::new(), // Skill bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),

@@ -336,11 +336,16 @@ impl ChatComposer {
 
     /// Attempt to start a burst by retro-capturing recent chars before the cursor.
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, _format_label: &str) {
-        let file_label = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "image".to_string());
-        let placeholder = format!("[{file_label} {width}x{height}]");
+        let image_number = self.attached_images.len() + 1;
+        let placeholder = if Self::is_default_clipboard_filename(&path) {
+            format!("[Image #{image_number}]")
+        } else {
+            let file_label = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "image".to_string());
+            format!("[{file_label} {width}x{height}]")
+        };
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
@@ -401,6 +406,13 @@ impl ChatComposer {
         } else {
             format!("{base} #{next_suffix}")
         }
+    }
+
+    fn is_default_clipboard_filename(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.starts_with("codex-clipboard-"))
+            .unwrap_or(false)
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
