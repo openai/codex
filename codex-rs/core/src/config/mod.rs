@@ -356,6 +356,10 @@ pub struct Config {
     /// Voluntarily left as Optional because the default value might depend on the client.
     pub analytics_enabled: Option<bool>,
 
+    /// When `false`, disables feedback collection across Codex product surfaces.
+    /// Defaults to `true`.
+    pub feedback_enabled: bool,
+
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
 }
@@ -819,6 +823,10 @@ pub struct ConfigToml {
     /// When `false`, disables analytics across Codex product surfaces in this machine.
     /// Defaults to `true`.
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
+
+    /// When `false`, disables feedback collection across Codex product surfaces.
+    /// Defaults to `true`.
+    pub feedback: Option<crate::config::types::FeedbackConfigToml>,
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
@@ -1402,6 +1410,11 @@ impl Config {
                 .as_ref()
                 .and_then(|a| a.enabled)
                 .or(cfg.analytics.as_ref().and_then(|a| a.enabled)),
+            feedback_enabled: cfg
+                .feedback
+                .as_ref()
+                .and_then(|feedback| feedback.enabled)
+                .unwrap_or(true),
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -1558,6 +1571,7 @@ mod tests {
     use crate::config::edit::ConfigEdit;
     use crate::config::edit::ConfigEditsBuilder;
     use crate::config::edit::apply_blocking;
+    use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
@@ -1880,6 +1894,25 @@ trust_level = "trusted"
             config.mcp_oauth_credentials_store_mode,
             OAuthCredentialsStoreMode::Auto,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            feedback: Some(FeedbackConfigToml::default()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.feedback_enabled, true);
 
         Ok(())
     }
@@ -3233,6 +3266,7 @@ model_verbosity = "high"
                 animations: true,
                 show_tooltips: true,
                 analytics_enabled: Some(true),
+                feedback_enabled: true,
                 tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
                 tui_scroll_trackpad_lines: None,
@@ -3317,6 +3351,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics_enabled: Some(true),
+            feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3416,6 +3451,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics_enabled: Some(false),
+            feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3501,6 +3537,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics_enabled: Some(true),
+            feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
