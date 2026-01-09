@@ -3573,7 +3573,11 @@ impl CodexMessageProcessor {
                         // JSON-serializing the `Event` as-is, but these should
                         // be migrated to be variants of `ServerNotification`
                         // instead.
-                        let method = format!("codex/event/{}", event.msg);
+                        let event_formatted = match &event.msg {
+                            EventMsg::TurnStarted(_) => "task_started",
+                            EventMsg::TurnComplete(_) => "task_complete",
+                            _ => &event.msg.to_string(),
+                        };
                         let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
                             Ok(_) => {
@@ -3592,7 +3596,7 @@ impl CodexMessageProcessor {
 
                         outgoing_for_task
                             .send_notification(OutgoingNotification {
-                                method,
+                                method: format!("codex/event/{event_formatted}"),
                                 params: Some(params.into()),
                             })
                             .await;
@@ -3678,6 +3682,16 @@ impl CodexMessageProcessor {
     }
 
     async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
+        if !self.config.feedback_enabled {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "sending feedback is disabled by configuration".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         let FeedbackUploadParams {
             classification,
             reason,

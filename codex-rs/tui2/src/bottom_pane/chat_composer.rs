@@ -67,6 +67,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+fn windows_degraded_sandbox_active() -> bool {
+    cfg!(target_os = "windows")
+        && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+        && codex_core::get_platform_sandbox().is_some()
+        && !codex_core::is_windows_elevated_sandbox_enabled()
+}
+
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -1146,6 +1153,10 @@ impl ChatComposer {
                     && rest.is_empty()
                     && let Some((_n, cmd)) = built_in_slash_commands()
                         .into_iter()
+                        .filter(|(_, cmd)| {
+                            windows_degraded_sandbox_active()
+                                || *cmd != SlashCommand::ElevateSandbox
+                        })
                         .find(|(n, _)| *n == name)
                 {
                     self.textarea.set_text("");
@@ -1213,6 +1224,10 @@ impl ChatComposer {
                     if !treat_as_plain_text {
                         let is_builtin = built_in_slash_commands()
                             .into_iter()
+                            .filter(|(_, cmd)| {
+                                windows_degraded_sandbox_active()
+                                    || *cmd != SlashCommand::ElevateSandbox
+                            })
                             .any(|(command_name, _)| command_name == name);
                         let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                         let is_known_prompt = name
@@ -1659,6 +1674,15 @@ impl ChatComposer {
 
     fn sync_popups(&mut self) {
         let file_token = Self::current_at_token(&self.textarea);
+        let browsing_history = self
+            .history
+            .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
+        // When browsing input history (shell-style Up/Down recall), skip all popup
+        // synchronization so nothing steals focus from continued history navigation.
+        if browsing_history {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
         let skill_token = self.current_skill_token();
 
         let allow_command_popup = file_token.is_none() && skill_token.is_none();
@@ -1728,6 +1752,9 @@ impl ChatComposer {
 
         let builtin_match = built_in_slash_commands()
             .into_iter()
+            .filter(|(_, cmd)| {
+                windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
+            })
             .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
@@ -2971,44 +2998,6 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
-        }
-        assert!(composer.textarea.is_empty(), "composer should be cleared");
-    }
-
-    #[test]
-    fn slash_review_with_args_dispatches_command_with_args() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 'v', 'i', 'e', 'w', ' ']);
-        type_chars_humanlike(&mut composer, &['f', 'i', 'x', ' ', 't', 'h', 'i', 's']);
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        match result {
-            InputResult::CommandWithArgs(cmd, args) => {
-                assert_eq!(cmd, SlashCommand::Review);
-                assert_eq!(args, "fix this");
-            }
-            InputResult::Command(cmd) => {
-                panic!("expected args for '/review', got bare command: {cmd:?}")
-            }
-            InputResult::Submitted(text) => {
-                panic!("expected command dispatch, got literal submit: {text}")
-            }
-            InputResult::None => panic!("expected CommandWithArgs result for '/review'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
@@ -4303,6 +4292,7 @@ mod tests {
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
         );
     }
+
     #[test]
     fn input_disabled_ignores_keypresses_and_hides_cursor() {
         use crossterm::event::KeyCode;

@@ -44,6 +44,15 @@ install:
 test:
     cargo nextest run --no-fail-fast
 
+bazel-test:
+    bazel test //... --keep_going
+
+bazel-remote-test:
+    bazel test //... --config=remote --platforms=//:rbe --keep_going
+
+build-for-release:
+    bazel build //codex-rs/cli:release_binaries --config=remote
+
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"

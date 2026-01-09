@@ -62,7 +62,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
                     "Quota exceeded. Check your plan and billing details."
                 );
             }
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }

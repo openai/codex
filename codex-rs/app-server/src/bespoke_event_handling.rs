@@ -106,7 +106,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
-        EventMsg::TaskComplete(_ev) => {
+        EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(
                 conversation_id,
                 event_turn_id,

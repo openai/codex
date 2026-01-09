@@ -904,7 +904,7 @@ async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
         })
         .await
         .expect("submit user turn");
-    wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
 async fn compact_conversation(conversation: &Arc<CodexThread>) {
@@ -917,7 +917,7 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
         panic!("expected warning event after compact");
     };
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
-    wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
 async fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {

@@ -135,7 +135,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         while let Ok(event) = io_for_bridge.next_event().await {
             let should_shutdown = matches!(
                 event.msg,
-                EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_)
+                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
             );
             let _ = tx_bridge.send(event).await;
             if should_shutdown {
@@ -253,7 +253,7 @@ async fn shutdown_delegate(codex: &Codex) {
         while let Ok(event) = codex.next_event().await {
             if matches!(
                 event.msg,
-                EventMsg::TurnAborted(_) | EventMsg::TaskComplete(_)
+                EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_)
             ) {
                 break;
             }
