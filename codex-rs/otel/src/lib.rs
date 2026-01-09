@@ -1,5 +1,6 @@
 pub mod config;
 pub mod metrics;
+pub mod otel_provider;
 pub mod traces;
 
 mod otlp;
@@ -11,7 +12,7 @@ use crate::metrics::Result as MetricsResult;
 use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
-use crate::traces::otel_provider::OtelProvider;
+use crate::otel_provider::OtelProvider;
 use codex_protocol::ThreadId;
 use serde::Serialize;
 use std::time::Duration;

@@ -47,8 +47,6 @@ static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
 thread_local! {
     static TRACEPARENT_GUARD: RefCell<Option<ContextGuard>> = const { RefCell::new(None) };
 }
-
-// TODO(jif) move OtelProvider out of `traces/`
 pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
