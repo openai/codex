@@ -48,6 +48,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
@@ -84,6 +85,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
@@ -107,6 +109,7 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::Op;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
@@ -361,7 +364,7 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
-    should_refresh_mcp_servers: AtomicBool,
+    pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -707,7 +710,7 @@ impl Session {
             agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
-            should_refresh_mcp_servers: AtomicBool::new(false),
+            pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -1653,25 +1656,41 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
-    fn request_mcp_server_refresh(&self) {
-        self.should_refresh_mcp_servers
-            .store(true, Ordering::SeqCst);
+    async fn request_mcp_server_refresh(&self, refresh_config: McpServerRefreshConfig) {
+        let mut guard = self.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
     }
 
     async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
-        if !self
-            .should_refresh_mcp_servers
-            .swap(false, Ordering::SeqCst)
-        {
+        let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
+        let Some(refresh_config) = refresh_config else {
             return;
-        }
+        };
 
-        let config = turn_context.client.config();
-        let auth_statuses = compute_auth_statuses(
-            config.mcp_servers.iter(),
-            config.mcp_oauth_credentials_store_mode,
-        )
-        .await;
+        let McpServerRefreshConfig {
+            mcp_servers,
+            mcp_oauth_credentials_store_mode,
+        } = refresh_config;
+
+        let mcp_servers =
+            match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {
+                Ok(servers) => servers,
+                Err(err) => {
+                    warn!("failed to parse MCP server refresh config: {err}");
+                    return;
+                }
+            };
+        let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
+            mcp_oauth_credentials_store_mode,
+        ) {
+            Ok(mode) => mode,
+            Err(err) => {
+                warn!("failed to parse MCP OAuth refresh config: {err}");
+                return;
+            }
+        };
+
+        let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         let sandbox_state = SandboxState {
             sandbox_policy: turn_context.sandbox_policy.clone(),
             codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
@@ -1682,8 +1701,8 @@ impl Session {
         let mut refreshed_manager = McpConnectionManager::default();
         refreshed_manager
             .initialize(
-                config.mcp_servers.clone(),
-                config.mcp_oauth_credentials_store_mode,
+                mcp_servers,
+                store_mode,
                 auth_statuses,
                 self.get_tx_event(),
                 cancel_token,
@@ -1778,8 +1797,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListMcpTools => {
                 handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
             }
-            Op::RefreshMcpServers => {
-                handlers::refresh_mcp_servers(&sess).await;
+            Op::RefreshMcpServers { config } => {
+                handlers::refresh_mcp_servers(&sess, config).await;
             }
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
@@ -1849,6 +1868,7 @@ mod handlers {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
+    use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
@@ -2080,8 +2100,8 @@ mod handlers {
         });
     }
 
-    pub async fn refresh_mcp_servers(sess: &Arc<Session>) {
-        sess.request_mcp_server_refresh();
+    pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
+        sess.request_mcp_server_refresh(refresh_config).await;
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
@@ -3636,7 +3656,7 @@ mod tests {
             agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
-            should_refresh_mcp_servers: AtomicBool::new(false),
+            pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -3731,7 +3751,7 @@ mod tests {
             agent_status: Arc::clone(&agent_status),
             state: Mutex::new(state),
             features: config.features.clone(),
-            should_refresh_mcp_servers: AtomicBool::new(false),
+            pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),

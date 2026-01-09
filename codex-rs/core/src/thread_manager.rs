@@ -21,6 +21,7 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -137,7 +138,7 @@ impl ThreadManager {
         self.state.threads.read().await.keys().copied().collect()
     }
 
-    pub async fn refresh_mcp_servers(&self) {
+    pub async fn refresh_mcp_servers(&self, refresh_config: McpServerRefreshConfig) {
         let threads = self
             .state
             .threads
@@ -147,7 +148,12 @@ impl ThreadManager {
             .cloned()
             .collect::<Vec<_>>();
         for thread in threads {
-            if let Err(err) = thread.submit(Op::RefreshMcpServers).await {
+            if let Err(err) = thread
+                .submit(Op::RefreshMcpServers {
+                    config: refresh_config.clone(),
+                })
+                .await
+            {
                 warn!("failed to request MCP server refresh: {err}");
             }
         }

@@ -60,6 +60,13 @@ pub struct Submission {
     pub op: Op,
 }
 
+/// Config payload for refreshing MCP servers.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+pub struct McpServerRefreshConfig {
+    pub mcp_servers: Value,
+    pub mcp_oauth_credentials_store_mode: Value,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -187,7 +194,7 @@ pub enum Op {
     ListMcpTools,
 
     /// Request MCP servers to reinitialize and refresh cached tool lists.
-    RefreshMcpServers,
+    RefreshMcpServers { config: McpServerRefreshConfig },
 
     /// Request the list of available custom prompts.
     ListCustomPrompts,
