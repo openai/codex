@@ -171,13 +171,19 @@ pub struct DeveloperInstructions {
 }
 
 const APPROVAL_POLICY_NEVER: &str = include_str!("../prompts/permissions/approval_policy/never.md");
-const APPROVAL_POLICY_UNLESS_TRUSTED: &str = include_str!("../prompts/permissions/approval_policy/unless_trusted.md");
-const APPROVAL_POLICY_ON_FAILURE: &str = include_str!("../prompts/permissions/approval_policy/on_failure.md");
-const APPROVAL_POLICY_ON_REQUEST: &str = include_str!("../prompts/permissions/approval_policy/on_request.md");
+const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
+    include_str!("../prompts/permissions/approval_policy/unless_trusted.md");
+const APPROVAL_POLICY_ON_FAILURE: &str =
+    include_str!("../prompts/permissions/approval_policy/on_failure.md");
+const APPROVAL_POLICY_ON_REQUEST: &str =
+    include_str!("../prompts/permissions/approval_policy/on_request.md");
 
-const SANDBOX_MODE_DANGER_FULL_ACCESS: &str = include_str!("../prompts/permissions/sandbox_mode/danger_full_access.md");
-const SANDBOX_MODE_WORKSPACE_WRITE: &str = include_str!("../prompts/permissions/sandbox_mode/workspace_write.md");
-const SANDBOX_MODE_READ_ONLY: &str = include_str!("../prompts/permissions/sandbox_mode/read_only.md");
+const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
+    include_str!("../prompts/permissions/sandbox_mode/danger_full_access.md");
+const SANDBOX_MODE_WORKSPACE_WRITE: &str =
+    include_str!("../prompts/permissions/sandbox_mode/workspace_write.md");
+const SANDBOX_MODE_READ_ONLY: &str =
+    include_str!("../prompts/permissions/sandbox_mode/read_only.md");
 
 impl DeveloperInstructions {
     pub fn new<T: Into<String>>(text: T) -> Self {
@@ -215,12 +221,11 @@ impl DeveloperInstructions {
             .concat(DeveloperInstructions::from(approval_policy))
     }
 
-    pub fn from_policy(
-        sandbox_policy: &SandboxPolicy,
-        approval_policy: AskForApproval,
-    ) -> Self {
+    pub fn from_policy(sandbox_policy: &SandboxPolicy, approval_policy: AskForApproval) -> Self {
         let (sandbox_mode, network_access) = match sandbox_policy {
-            SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, NetworkAccess::Enabled),
+            SandboxPolicy::DangerFullAccess => {
+                (SandboxMode::DangerFullAccess, NetworkAccess::Enabled)
+            }
             SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, NetworkAccess::Restricted),
             SandboxPolicy::ExternalSandbox { network_access } => {
                 (SandboxMode::DangerFullAccess, *network_access)
@@ -289,7 +294,6 @@ impl From<AskForApproval> for DeveloperInstructions {
         DeveloperInstructions::new(text)
     }
 }
-
 
 fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
     match content {
@@ -683,9 +687,9 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Result;
     use crate::config_types::SandboxMode;
     use crate::protocol::AskForApproval;
+    use anyhow::Result;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;

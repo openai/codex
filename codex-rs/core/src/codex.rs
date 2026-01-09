@@ -154,8 +154,8 @@ use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -1010,14 +1010,13 @@ impl Session {
         next: &TurnContext,
     ) -> Option<ResponseItem> {
         let prev = previous?;
-        if prev.sandbox_policy == next.sandbox_policy && prev.approval_policy == next.approval_policy
+        if prev.sandbox_policy == next.sandbox_policy
+            && prev.approval_policy == next.approval_policy
         {
             return None;
         }
 
-        Some(
-            DeveloperInstructions::from_policy(&next.sandbox_policy, next.approval_policy).into(),
-        )
+        Some(DeveloperInstructions::from_policy(&next.sandbox_policy, next.approval_policy).into())
     }
 
     /// Persist the event to rollout and send it to clients.

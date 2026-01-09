@@ -1062,7 +1062,8 @@ async fn includes_developer_instructions_message_in_request() {
     assert_message_role(&request_body["input"][0], "developer");
     assert!(
         permissions_text.starts_with("You are working in a sandbox")
-            || permissions_text.starts_with("You are working in an environment that is not sandboxed")
+            || permissions_text
+                .starts_with("You are working in an environment that is not sandboxed")
     );
 
     assert_message_role(&request_body["input"][1], "developer");

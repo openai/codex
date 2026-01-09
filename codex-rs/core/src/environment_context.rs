@@ -19,11 +19,7 @@ pub(crate) struct EnvironmentContext {
 }
 
 impl EnvironmentContext {
-    pub fn new(
-        cwd: Option<PathBuf>,
-        sandbox_policy: Option<SandboxPolicy>,
-        shell: Shell,
-    ) -> Self {
+    pub fn new(cwd: Option<PathBuf>, sandbox_policy: Option<SandboxPolicy>, shell: Shell) -> Self {
         Self {
             cwd,
             writable_roots: match sandbox_policy {
@@ -51,8 +47,7 @@ impl EnvironmentContext {
             shell: _,
         } = other;
 
-        self.cwd == *cwd
-            && self.writable_roots == *writable_roots
+        self.cwd == *cwd && self.writable_roots == *writable_roots
     }
 
     pub fn diff(before: &TurnContext, after: &TurnContext, shell: &Shell) -> Self {
@@ -127,8 +122,8 @@ impl From<EnvironmentContext> for ResponseItem {
 
 #[cfg(test)]
 mod tests {
-    use crate::shell::ShellType;
     use crate::protocol::NetworkAccess;
+    use crate::shell::ShellType;
 
     use super::*;
     use core_test_support::test_path_buf;
@@ -190,11 +185,7 @@ mod tests {
 
     #[test]
     fn serialize_read_only_environment_context() {
-        let context = EnvironmentContext::new(
-            None,
-            Some(SandboxPolicy::ReadOnly),
-            fake_shell(),
-        );
+        let context = EnvironmentContext::new(None, Some(SandboxPolicy::ReadOnly), fake_shell());
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -239,11 +230,8 @@ mod tests {
 
     #[test]
     fn serialize_full_access_environment_context() {
-        let context = EnvironmentContext::new(
-            None,
-            Some(SandboxPolicy::DangerFullAccess),
-            fake_shell(),
-        );
+        let context =
+            EnvironmentContext::new(None, Some(SandboxPolicy::DangerFullAccess), fake_shell());
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
