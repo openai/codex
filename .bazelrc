@@ -10,8 +10,10 @@ common --experimental_platform_in_output_dir
 common --enable_platform_specific_config
 common:linux --host_platform=//:local
 common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
-common --@rules_rust//rust/settings:experimental_use_sh_toolchain_for_bootstrap_process_wrapper
 common --@toolchains_llvm_bootstrapped//config:experimental_stub_libgcc_s
+
+# We need to use the sh toolchain on windows so we don't send host bash paths to the linux executor.
+common:windows --@rules_rust//rust/settings:experimental_use_sh_toolchain_for_bootstrap_process_wrapper
 
 # TODO(zbarsky): rules_rust doesn't implement this flag properly with remote exec...
 # common --@rules_rust//rust/settings:pipelined_compilation
