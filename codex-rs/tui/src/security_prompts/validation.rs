@@ -24,11 +24,7 @@ For python validations, the script must:
 - Exit 0 only when the expected security-relevant signal is observed; otherwise exit non-zero.
 
 Special case: memory corruption
-- If `verification_types` includes `crash_poc` or the finding looks like a memory corruption bug in native code (C/C++ decoder, image preprocessing, FFI boundary, etc.), prefer a single `python` validation that:
-  - Attempts to build and run an AddressSanitizer (ASan) instrumented version of the relevant binary/service/library (best-effort; use existing build system if available).
-  - Triggers the suspected crash/bug against the ASan build (e.g., send a request / upload a crafted file / run the minimal repro).
-  - Captures stderr/log output and checks for ASan signatures (e.g., "AddressSanitizer", "heap-buffer-overflow", "use-after-free").
-  - Exits 0 only when an ASan error is observed for this trigger; otherwise exits non-zero.
+- If `verification_types` includes `crash_poc` or the finding looks like a memory corruption bug in native code (C/C++ decoder, image preprocessing, FFI boundary, etc.), validate that this bug exist by testing it against a asan-compiled version of the program.
 
 Rules:
 - Keep requests minimal and non-destructive; no state-changing actions.
