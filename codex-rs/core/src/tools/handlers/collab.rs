@@ -529,7 +529,7 @@ mod tests {
             .expect("approval policy set");
         expected
             .sandbox_policy
-            .set(turn.sandbox_policy.clone())
+            .set(turn.sandbox_policy)
             .expect("sandbox policy set");
         assert_eq!(config, expected);
     }
