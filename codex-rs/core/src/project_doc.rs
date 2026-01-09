@@ -14,6 +14,8 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
+use crate::features::Feature;
+use crate::prompt_instructions::HIERARCHICAL_AGENTS_MESSAGE;
 use crate::skills::SkillMetadata;
 use crate::skills::render_skills_section;
 use dunce::canonicalize as normalize_path;
@@ -36,36 +38,38 @@ pub(crate) async fn get_user_instructions(
     config: &Config,
     skills: Option<&[SkillMetadata]>,
 ) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+
     let skills_section = skills.and_then(render_skills_section);
 
-    let project_docs = match read_project_docs(config).await {
-        Ok(docs) => docs,
-        Err(e) => {
-            error!("error trying to find project doc: {e:#}");
-            return config.user_instructions.clone();
-        }
-    };
-
-    let combined_project_docs = merge_project_docs_with_skills(project_docs, skills_section);
-
-    let mut parts: Vec<String> = Vec::new();
+    let project_docs = read_project_docs(config).await;
 
     if let Some(instructions) = config.user_instructions.clone() {
         parts.push(instructions);
     }
 
-    if let Some(project_doc) = combined_project_docs {
-        if !parts.is_empty() {
-            parts.push(PROJECT_DOC_SEPARATOR.to_string());
+    match project_docs {
+        Ok(Some(docs)) => {
+            if !parts.is_empty() {
+                parts.push(PROJECT_DOC_SEPARATOR.to_string());
+            }
+            parts.push(docs);
         }
-        parts.push(project_doc);
+        Ok(None) => {}
+        Err(e) => {
+            error!("error trying to find project doc: {e:#}");
+        }
+    };
+
+    if let Some(skills_section) = skills_section {
+        parts.push(skills_section);
     }
 
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.concat())
+    if config.features.enabled(Feature::HierarchicalAgents) {
+        parts.push(HIERARCHICAL_AGENTS_MESSAGE.to_string());
     }
+
+    Some(parts.join("\n\n"))
 }
 
 /// Attempt to locate and load the project documentation.
@@ -215,18 +219,6 @@ fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
         }
     }
     names
-}
-
-fn merge_project_docs_with_skills(
-    project_doc: Option<String>,
-    skills_section: Option<String>,
-) -> Option<String> {
-    match (project_doc, skills_section) {
-        (Some(doc), Some(skills)) => Some(format!("{doc}\n\n{skills}")),
-        (Some(doc), None) => Some(doc),
-        (None, Some(skills)) => Some(skills),
-        (None, None) => None,
-    }
 }
 
 #[cfg(test)]
