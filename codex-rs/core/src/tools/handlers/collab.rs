@@ -1,5 +1,6 @@
 use crate::codex::TurnContext;
 use crate::config::Config;
+use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -10,7 +11,6 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use serde::Deserialize;
-use crate::error::CodexErr;
 
 pub struct CollabHandler;
 
@@ -123,7 +123,9 @@ async fn handle_send_input(
         .send_prompt(agent_id, args.message)
         .await
         .map_err(|err| match err {
-            CodexErr::ThreadNotFound(id) => FunctionCallError::RespondToModel("agent with id {id} not found".to_string()),
+            CodexErr::ThreadNotFound(id) => {
+                FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
+            }
             err => FunctionCallError::Fatal(err.to_string()),
         })?;
 
