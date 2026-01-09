@@ -265,7 +265,7 @@ impl TestCodex {
             .await?;
 
         wait_for_event(&self.codex, |event| {
-            matches!(event, EventMsg::TaskComplete(_))
+            matches!(event, EventMsg::TurnComplete(_))
         })
         .await;
         Ok(())

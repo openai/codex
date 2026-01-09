@@ -18,8 +18,8 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
+use codex_core::protocol::TurnCompleteEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
@@ -233,7 +233,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 };
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
-            EventMsg::TaskStarted(_) => {
+            EventMsg::TurnStarted(_) => {
                 // Ignore.
             }
             EventMsg::ElicitationRequest(ev) => {
@@ -249,7 +249,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "auto-cancelling (not supported in exec mode)".style(self.dimmed)
                 );
             }
-            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                 let last_message = last_agent_message.as_deref();
                 if let Some(output_file) = self.last_message_path.as_deref() {
                     handle_last_message(last_message, output_file);
