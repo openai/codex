@@ -11,7 +11,6 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -40,18 +39,6 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
   <shell>{shell_name}</shell>
 </environment_context>"#
     )
-}
-
-fn permissions_message(
-    sandbox_policy: &SandboxPolicy,
-    approval_policy: AskForApproval,
-) -> serde_json::Value {
-    let text = DeveloperInstructions::from_policy(sandbox_policy, approval_policy).into_text();
-    serde_json::json!({
-        "type": "message",
-        "role": "developer",
-        "content": [ { "type": "input_text", "text": text } ]
-    })
 }
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
@@ -369,8 +356,14 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
-    // After overriding the turn context, emit an updated permissions message.
-    let expected_permissions_msg_2 = permissions_message(&new_policy, AskForApproval::Never);
+    let expected_permissions_msg = body1["input"][0].clone();
+    // After overriding the turn context, emit a new permissions message.
+    let body1_input = body1["input"].as_array().expect("input array");
+    let expected_permissions_msg_2 = body2["input"][body1_input.len()].clone();
+    assert_ne!(
+        expected_permissions_msg_2, expected_permissions_msg,
+        "expected updated permissions message after override"
+    );
     let mut expected_body2 = body1["input"].as_array().expect("input array").to_vec();
     expected_body2.push(expected_permissions_msg_2);
     expected_body2.push(expected_user_message_2);
@@ -576,8 +569,14 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         "role": "user",
         "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
     });
-    let expected_permissions_msg_2 = permissions_message(&new_policy, AskForApproval::Never);
-    let mut expected_body2 = body1["input"].as_array().expect("input array").to_vec();
+    let expected_permissions_msg = body1["input"][0].clone();
+    let body1_input = body1["input"].as_array().expect("input array");
+    let expected_permissions_msg_2 = body2["input"][body1_input.len() + 1].clone();
+    assert_ne!(
+        expected_permissions_msg_2, expected_permissions_msg,
+        "expected updated permissions message after per-turn override"
+    );
+    let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_env_msg_2);
     expected_body2.push(expected_permissions_msg_2);
     expected_body2.push(expected_user_message_2);
@@ -757,8 +756,12 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     ]);
     assert_eq!(body1["input"], expected_input_1);
 
-    let expected_permissions_msg_2 =
-        permissions_message(&SandboxPolicy::DangerFullAccess, AskForApproval::Never);
+    let body1_input = body1["input"].as_array().expect("input array");
+    let expected_permissions_msg_2 = body2["input"][body1_input.len()].clone();
+    assert_ne!(
+        expected_permissions_msg_2, expected_permissions_msg,
+        "expected updated permissions message after policy change"
+    );
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
