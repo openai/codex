@@ -48,7 +48,7 @@ pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
             .properties
             .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());
     }
-    validation.additional_properties = Some(Box::new(schema_gen.subschema_for::<bool>()));
+    validation.additional_properties = Some(Box::new(Schema::Bool(false)));
     object.object = Some(Box::new(validation));
 
     Schema::Object(object)
@@ -84,6 +84,7 @@ fn mcp_server_schema(schema_gen: &mut SchemaGenerator) -> Schema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 struct McpServerStdioSchema {
     command: String,
     #[serde(default)]
@@ -109,6 +110,7 @@ struct McpServerStdioSchema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 struct McpServerStreamableHttpSchema {
     url: String,
     #[serde(default)]
@@ -145,9 +147,13 @@ mod tests {
         let fixture = std::fs::read_to_string(fixture_path).expect("read config schema fixture");
         let fixture_value: serde_json::Value =
             serde_json::from_str(&fixture).expect("parse config schema fixture");
-        assert_eq!(fixture_value, schema_value);
+        assert_eq!(
+            fixture_value, schema_value,
+            "Current schema for `config.toml` doesn't match the fixture. Run `just write-config-schema` to overwrite with your changes."
+        );
     }
 
+    /// Overwrite the config schema fixture with the current schema.
     #[test]
     #[ignore]
     fn write_config_schema_fixture() {
