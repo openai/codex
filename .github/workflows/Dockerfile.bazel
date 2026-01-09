@@ -6,14 +6,6 @@ FROM ubuntu:24.04
 # docker buildx create --use
 # docker buildx build --platform linux/amd64 -f .github/workflows/Dockerfile.bazel -t mbolin491/codex-bazel:latest --push .
 
-ARG DEBIAN_FRONTEND=noninteractive
-# enable 'universe' because musl-tools & clang live there
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    software-properties-common && \
-    add-apt-repository --yes universe
-
-# now install build deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     curl git python3 ca-certificates && \
