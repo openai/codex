@@ -3,7 +3,7 @@ use std::io;
 use std::io::Write;
 
 use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
+use crate::wrapping::word_wrap_line_url_aware;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -23,36 +23,27 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-fn line_contains_url(line: &Line<'_>) -> bool {
-    let mut text = String::new();
-    for span in &line.spans {
-        text.push_str(span.content.as_ref());
-    }
-    text.contains("https://") || text.contains("http://")
-}
-
 fn wrap_history_lines<'a>(lines: &'a [Line<'a>], width: u16) -> Vec<Line<'a>> {
     let base_opts = RtOptions::new(width.max(1) as usize);
     let mut wrapped: Vec<Line<'a>> = Vec::new();
     let mut first = true;
     for line in lines {
-        if line_contains_url(line) {
-            wrapped.push(line.clone());
+        let opts = if first {
+            base_opts.clone()
         } else {
-            let opts = if first {
-                base_opts.clone()
-            } else {
-                base_opts
-                    .clone()
-                    .initial_indent(base_opts.subsequent_indent.clone())
-            };
-            wrapped.extend(word_wrap_line(line, opts));
-        }
+            base_opts
+                .clone()
+                .initial_indent(base_opts.subsequent_indent.clone())
+        };
+        wrapped.extend(word_wrap_line_url_aware(line, opts));
         first = false;
     }
     wrapped
 }
 
+/// Counts the number of terminal rows needed after wrapping `lines` at `width`.
+/// This accounts for any long tokens (like URLs) that are still forced to
+/// hard-wrap by the terminal even after word-aware wrapping.
 fn wrapped_row_count(lines: &[Line<'_>], width: u16) -> u16 {
     let width = width.max(1) as usize;
     let mut rows = 0usize;
@@ -361,12 +352,13 @@ mod tests {
     }
 
     #[test]
-    fn wrap_history_lines_preserves_long_url() {
-        let url = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:thread-1";
-        let line: Line<'static> = Line::from(vec!["  ".into(), url.into()]);
+    fn wrap_history_lines_wraps_before_url() {
+        let url = "http://foobar";
+        let line: Line<'static> =
+            Line::from("Here is some text and a http://foobar url in the middle");
 
         let lines = [line];
-        let wrapped = wrap_history_lines(&lines, 20);
+        let wrapped = wrap_history_lines(&lines, 24);
         let rendered: Vec<String> = wrapped
             .iter()
             .map(|line| {
@@ -377,22 +369,35 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(rendered, vec![format!("  {url}")]);
+        let Some(url_line) = rendered.iter().find(|line| line.contains(url)) else {
+            panic!("expected wrapped output to contain url");
+        };
+
+        assert!(url_line.starts_with(url));
     }
 
     #[test]
-    fn wrapped_row_count_accounts_for_long_url() {
+    fn wrap_history_lines_breaks_long_url_when_too_long() {
         let url = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:thread-1";
-        let line: Line<'static> = Line::from(vec!["  ".into(), url.into()]);
+        let line: Line<'static> = Line::from(url);
         let width = 20u16;
 
         let lines = [line];
         let wrapped = wrap_history_lines(&lines, width);
         let rows = wrapped_row_count(&wrapped, width);
-        let line_width = 2 + url.len();
-        let expected_rows = line_width.div_ceil(width as usize);
+        let rendered: Vec<String> = wrapped
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
 
-        assert_eq!(rows, expected_rows as u16);
+        assert!(wrapped.len() > 1);
+        assert!(rendered.iter().all(|line| !line.contains(url)));
+        assert_eq!(rows as usize, wrapped.len());
     }
 
     #[test]

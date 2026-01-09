@@ -234,6 +234,80 @@ where
     out
 }
 
+#[must_use]
+pub(crate) fn word_wrap_line_url_aware<'a, O>(
+    line: &'a Line<'a>,
+    width_or_options: O,
+) -> Vec<Line<'a>>
+where
+    O: Into<RtOptions<'a>>,
+{
+    let mut rt_opts: RtOptions<'a> = width_or_options.into();
+    rt_opts.word_separator = textwrap::WordSeparator::Custom(url_aware_words);
+    word_wrap_line(line, rt_opts)
+}
+
+fn url_aware_words<'a>(line: &'a str) -> Box<dyn Iterator<Item = textwrap::core::Word<'a>> + 'a> {
+    if !line.contains("http://") && !line.contains("https://") {
+        return textwrap::WordSeparator::new().find_words(line);
+    }
+
+    let mut words: Vec<textwrap::core::Word<'a>> = Vec::new();
+    let mut cursor = 0usize;
+    let separator = textwrap::WordSeparator::new();
+
+    while let Some((url_start, url_end)) = find_next_url(line, cursor) {
+        if cursor < url_start {
+            words.extend(separator.find_words(&line[cursor..url_start]));
+        }
+        let url_with_spaces_end = consume_trailing_spaces(line, url_end);
+        words.push(textwrap::core::Word::from(
+            &line[url_start..url_with_spaces_end],
+        ));
+        cursor = url_with_spaces_end;
+    }
+
+    if cursor < line.len() {
+        words.extend(separator.find_words(&line[cursor..]));
+    }
+
+    Box::new(words.into_iter())
+}
+
+fn find_next_url(line: &str, start: usize) -> Option<(usize, usize)> {
+    let http = line[start..].find("http://");
+    let https = line[start..].find("https://");
+    let (rel_start, scheme_len) = match (http, https) {
+        (Some(http_pos), Some(https_pos)) => {
+            if http_pos <= https_pos {
+                (http_pos, "http://".len())
+            } else {
+                (https_pos, "https://".len())
+            }
+        }
+        (Some(http_pos), None) => (http_pos, "http://".len()),
+        (None, Some(https_pos)) => (https_pos, "https://".len()),
+        (None, None) => return None,
+    };
+    let url_start = start + rel_start;
+    let mut url_end = line.len();
+    for (offset, ch) in line[url_start + scheme_len..].char_indices() {
+        if ch.is_whitespace() {
+            url_end = url_start + scheme_len + offset;
+            break;
+        }
+    }
+    Some((url_start, url_end))
+}
+
+fn consume_trailing_spaces(line: &str, mut idx: usize) -> usize {
+    let bytes = line.as_bytes();
+    while matches!(bytes.get(idx), Some(b' ')) {
+        idx += 1;
+    }
+    idx
+}
+
 /// Utilities to allow wrapping either borrowed or owned lines.
 #[derive(Debug)]
 enum LineInput<'a> {
