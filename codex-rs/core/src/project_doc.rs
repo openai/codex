@@ -15,13 +15,14 @@
 
 use crate::config::Config;
 use crate::features::Feature;
-use crate::prompt_instructions::HIERARCHICAL_AGENTS_MESSAGE;
 use crate::skills::SkillMetadata;
 use crate::skills::render_skills_section;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
+
+pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str = "Files called AGENTS.md commonly appear in many places inside a container - at \"/\", in \"~\", deep within git repositories, or in any other directory; their location is not limited to version-controlled folders.\n\nTheir purpose is to pass along human guidance to you, the agent. Such guidance can include coding standards, explanations of the project layout, steps for building or testing, and even wording that must accompany a GitHub pull-request description produced by the agent; all of it is to be followed.\n\nEach AGENTS.md governs the entire directory that contains it and every child directory beneath that point. Whenever you change a file, you have to comply with every AGENTS.md whose scope covers that file. Naming conventions, stylistic rules and similar directives are restricted to the code that falls inside that scope unless the document explicitly states otherwise.\n\nWhen two AGENTS.md files disagree, the one located deeper in the directory structure overrides the higher-level file, while instructions given directly in the prompt by the system, developer, or user outrank any AGENTS.md content.";
 
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
@@ -38,22 +39,20 @@ pub(crate) async fn get_user_instructions(
     config: &Config,
     skills: Option<&[SkillMetadata]>,
 ) -> Option<String> {
-    let mut parts: Vec<String> = Vec::new();
-
-    let skills_section = skills.and_then(render_skills_section);
-
     let project_docs = read_project_docs(config).await;
 
+    let mut output = String::new();
+
     if let Some(instructions) = config.user_instructions.clone() {
-        parts.push(instructions);
+        output.push_str(&instructions);
     }
 
     match project_docs {
         Ok(Some(docs)) => {
-            if !parts.is_empty() {
-                parts.push(PROJECT_DOC_SEPARATOR.to_string());
+            if !output.is_empty() {
+                output.push_str(PROJECT_DOC_SEPARATOR);
             }
-            parts.push(docs);
+            output.push_str(&docs);
         }
         Ok(None) => {}
         Err(e) => {
@@ -61,15 +60,26 @@ pub(crate) async fn get_user_instructions(
         }
     };
 
+    let skills_section = skills.and_then(render_skills_section);
     if let Some(skills_section) = skills_section {
-        parts.push(skills_section);
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&skills_section);
     }
 
     if config.features.enabled(Feature::HierarchicalAgents) {
-        parts.push(HIERARCHICAL_AGENTS_MESSAGE.to_string());
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(HIERARCHICAL_AGENTS_MESSAGE);
     }
 
-    Some(parts.join("\n\n"))
+    if !output.is_empty() {
+        Some(output)
+    } else {
+        None
+    }
 }
 
 /// Attempt to locate and load the project documentation.
