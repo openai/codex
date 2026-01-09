@@ -401,8 +401,7 @@ impl ChatComposer {
     /// Attempt to start a burst by retro-capturing recent chars before the cursor.
     pub fn attach_image(&mut self, path: PathBuf) {
         let image_number = self.attached_images.len() + 1;
-        let base_placeholder = local_image_label_text(image_number);
-        let placeholder = self.next_image_placeholder(&base_placeholder);
+        let placeholder = local_image_label_text(image_number);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
@@ -462,24 +461,6 @@ impl ChatComposer {
             base
         } else {
             format!("{base} #{next_suffix}")
-        }
-    }
-
-    fn next_image_placeholder(&mut self, base: &str) -> String {
-        let text = self.textarea.text();
-        let mut suffix = 1;
-        loop {
-            let placeholder = if suffix == 1 {
-                base.to_string()
-            } else if let Some(base_trimmed) = base.strip_suffix(']') {
-                format!("{base_trimmed} #{suffix}]")
-            } else {
-                format!("{base} #{suffix}")
-            };
-            if !text.contains(&placeholder) {
-                return placeholder;
-            }
-            suffix += 1;
         }
     }
 
