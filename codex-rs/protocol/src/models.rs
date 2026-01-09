@@ -183,8 +183,7 @@ const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
 const SANDBOX_MODE_WORKSPACE_WRITE: &str =
     include_str!("prompts/permissions/sandbox_mode/workspace_write.md");
-const SANDBOX_MODE_READ_ONLY: &str =
-    include_str!("prompts/permissions/sandbox_mode/read_only.md");
+const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_mode/read_only.md");
 
 impl DeveloperInstructions {
     pub fn new<T: Into<String>>(text: T) -> Self {
