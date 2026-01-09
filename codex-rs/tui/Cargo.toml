@@ -120,6 +120,7 @@ codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+ctor = { workspace = true }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }

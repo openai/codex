@@ -16,6 +16,12 @@ use std::ffi::OsString;
 #[cfg(windows)]
 use std::env;
 #[cfg(windows)]
+use std::ffi::OsStr;
+#[cfg(windows)]
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
+#[cfg(windows)]
 use tracing::debug;
 
 /// Resolves a program to its executable path on Unix systems.
@@ -45,6 +51,15 @@ pub fn resolve(program: OsString, env: &HashMap<String, String>) -> std::io::Res
 
     // Extract PATH from environment for search locations
     let search_path = env.get("PATH");
+    let pathext = env.get("PATHEXT");
+
+    if let Some(resolved) = resolve_with_pathext(&program, search_path, pathext, &cwd) {
+        debug!(
+            "Resolved {:?} to {:?} using PATHEXT-aware search",
+            program, resolved
+        );
+        return Ok(resolved.into_os_string());
+    }
 
     // Attempt resolution via which crate
     match which::which_in(&program, search_path, &cwd) {
@@ -61,6 +76,85 @@ pub fn resolve(program: OsString, env: &HashMap<String, String>) -> std::io::Res
             Ok(program)
         }
     }
+}
+
+#[cfg(windows)]
+fn resolve_with_pathext(
+    program: &OsStr,
+    search_path: Option<&String>,
+    pathext: Option<&String>,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    let pathexts = parse_pathext(pathext);
+    let program_path = Path::new(program);
+    let has_extension = program_path.extension().is_some();
+    let has_path_separator = program_path.components().nth(1).is_some();
+
+    if has_path_separator {
+        let base = if program_path.is_absolute() {
+            program_path.to_path_buf()
+        } else {
+            cwd.join(program_path)
+        };
+        return resolve_with_extensions(&base, has_extension, &pathexts);
+    }
+
+    let search_dirs = search_path
+        .map(String::as_str)
+        .map(std::env::split_paths)
+        .map(Iterator::collect)
+        .or_else(|| std::env::var_os("PATH").map(|paths| std::env::split_paths(&paths).collect()))
+        .unwrap_or_else(|| vec![cwd.to_path_buf()]);
+
+    for dir in search_dirs {
+        let base = dir.join(program_path);
+        if let Some(resolved) = resolve_with_extensions(&base, has_extension, &pathexts) {
+            return Some(resolved);
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn resolve_with_extensions(
+    base: &Path,
+    has_extension: bool,
+    pathexts: &[OsString],
+) -> Option<PathBuf> {
+    if base.exists() {
+        return Some(base.to_path_buf());
+    }
+
+    if has_extension {
+        return None;
+    }
+
+    for ext in pathexts {
+        let candidate = base.with_extension(ext);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn parse_pathext(pathext: Option<&String>) -> Vec<OsString> {
+    let raw = pathext
+        .map(String::as_str)
+        .map(str::to_owned)
+        .or_else(|| std::env::var("PATHEXT").ok())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+
+    raw.split(';')
+        .map(str::trim)
+        .filter(|ext| !ext.is_empty())
+        .map(|ext| ext.trim_start_matches('.'))
+        .filter(|ext| !ext.is_empty())
+        .map(OsString::from)
+        .collect()
 }
 
 #[cfg(test)]
@@ -128,15 +222,24 @@ mod tests {
 
         // Apply platform-specific resolution
         let resolved = resolve(program, &env.mcp_env)?;
+        let resolved_display = resolved.clone();
 
         // Verify resolved path executes successfully
         let mut cmd = Command::new(resolved);
         cmd.envs(&env.mcp_env);
         let output = cmd.output().await;
 
+        if let Err(err) = &output {
+            eprintln!(
+                "resolved execution failed: {err:?}; resolved={resolved_display:?}; PATH={:?}; PATHEXT={:?}",
+                env.mcp_env.get("PATH"),
+                env.mcp_env.get("PATHEXT"),
+            );
+        }
+
         assert!(
             output.is_ok(),
-            "Resolved program should execute successfully"
+            "Resolved program should execute successfully: {output:?}"
         );
         Ok(())
     }

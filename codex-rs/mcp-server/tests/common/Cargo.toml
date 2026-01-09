@@ -25,4 +25,3 @@ tokio = { workspace = true, features = [
 ] }
 wiremock = { workspace = true }
 core_test_support = { path = "../../../core/tests/common" }
-shlex = { workspace = true }

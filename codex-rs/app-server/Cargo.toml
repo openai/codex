@@ -67,4 +67,3 @@ rmcp = { workspace = true, default-features = false, features = [
 ] }
 serial_test = { workspace = true }
 wiremock = { workspace = true }
-shlex = { workspace = true }

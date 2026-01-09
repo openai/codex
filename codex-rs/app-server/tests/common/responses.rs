@@ -1,3 +1,4 @@
+use core_test_support::join_shell_command_args;
 use core_test_support::responses;
 use serde_json::json;
 use std::path::Path;
@@ -9,7 +10,7 @@ pub fn create_shell_command_sse_response(
     call_id: &str,
 ) -> anyhow::Result<String> {
     // The `arguments` for the `shell_command` tool is a serialized JSON object.
-    let command_str = shlex::try_join(command.iter().map(String::as_str))?;
+    let command_str = join_shell_command_args(&command);
     let tool_call_arguments = serde_json::to_string(&json!({
         "command": command_str,
         "workdir": workdir.map(|w| w.to_string_lossy()),
