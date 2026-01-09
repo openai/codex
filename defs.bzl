@@ -50,11 +50,17 @@ def codex_rust_crate(
     Cargo.lock resolution in `@crates`.
 
     Args:
-        name: Bazel target name for the library (and test target prefix).
-        crate_name: Cargo crate name passed to rust_library.
+        name: Bazel target name for the library, should be the directory name.
+            Example: `app-server`.
+        crate_name: Cargo crate name from Cargo.toml
+            Example: `codex_app_server`.
         crate_features: Cargo features to enable for this crate.
+            Crates are only compiled in a single configuration across the workspace, i.e.
+            with all features in this list enabled. So use sparingly, and prefer to refactor
+            optional functionality to a separate crate.
         crate_srcs: Optional explicit srcs; defaults to `src/**/*.rs`.
         crate_edition: Rust edition override, if not default.
+            You probably don't want this, it's only here for a single caller.
         build_script_data: Data files exposed to the build script at runtime.
         compile_data: Non-Rust compile-time data for the library target.
         deps_extra: Extra normal deps beyond @crates resolution.
