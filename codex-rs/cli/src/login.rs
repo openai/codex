@@ -159,6 +159,10 @@ pub async fn run_login_with_device_code(
     }
 }
 
+/// Prefers device-code login (with `open_browser = false`) when headless environment is detected, but keeps
+/// `codex login` working in environments where device-code may be disabled/feature-gated.
+/// If `run_device_code_login` returns `ErrorKind::NotFound` ("device-code unsupported"), this
+/// falls back to starting the local browser login server.
 pub async fn run_login_with_device_code_fallback_to_browser(
     cli_config_overrides: CliConfigOverrides,
     issuer_base_url: Option<String>,
