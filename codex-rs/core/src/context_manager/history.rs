@@ -155,6 +155,34 @@ impl ContextManager {
         }
     }
 
+    pub(crate) fn current_turn_images_tool_only(&self) -> bool {
+        let mut saw_tool = false;
+        for item in self.items.iter().rev() {
+            match item {
+                ResponseItem::Message { role, .. } if role == "assistant" => break,
+                ResponseItem::Message { role, content, .. } if role == "user" => {
+                    if content
+                        .iter()
+                        .any(|item| matches!(item, ContentItem::InputImage { .. }))
+                    {
+                        return false;
+                    }
+                }
+                ResponseItem::FunctionCallOutput { output, .. } => {
+                    if output.content_items.as_ref().map_or(false, |items| {
+                        items.iter().any(|item| {
+                            matches!(item, FunctionCallOutputContentItem::InputImage { .. })
+                        })
+                    }) {
+                        saw_tool = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        saw_tool
+    }
+
     /// Drop the last `num_turns` user turns from this history.
     ///
     /// "User turns" are identified as `ResponseItem::Message` entries whose role is `"user"`.
