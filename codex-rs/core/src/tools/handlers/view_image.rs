@@ -11,6 +11,9 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::user_input::UserInput;
 
 pub struct ViewImageHandler;
@@ -64,15 +67,6 @@ impl ToolHandler for ViewImageHandler {
         let event_path = abs_path.clone();
 
         session
-            .inject_input(vec![UserInput::LocalImage { path: abs_path }])
-            .await
-            .map_err(|_| {
-                FunctionCallError::RespondToModel(
-                    "unable to attach image (no active task)".to_string(),
-                )
-            })?;
-
-        session
             .send_event(
                 turn.as_ref(),
                 EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
@@ -82,9 +76,34 @@ impl ToolHandler for ViewImageHandler {
             )
             .await;
 
+        let response_input: ResponseInputItem = vec![UserInput::LocalImage {
+            path: abs_path.clone(),
+        }]
+        .into();
+        let image_url = match response_input {
+            ResponseInputItem::Message { content, .. } => match content.into_iter().next() {
+                Some(ContentItem::InputImage { image_url }) => image_url,
+                Some(ContentItem::InputText { text }) => {
+                    return Err(FunctionCallError::RespondToModel(text));
+                }
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "unexpected image input payload".to_string(),
+                    ));
+                }
+            },
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "unexpected image input payload".to_string(),
+                ));
+            }
+        };
+
         Ok(ToolOutput::Function {
             content: "attached local image path".to_string(),
-            content_items: None,
+            content_items: Some(vec![FunctionCallOutputContentItem::InputImage {
+                image_url,
+            }]),
             success: Some(true),
         })
     }

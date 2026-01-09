@@ -156,6 +156,7 @@ use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -1551,6 +1552,39 @@ impl Session {
         }
     }
 
+    pub(crate) async fn current_turn_images_tool_only(&self) -> bool {
+        let history = self.state.lock().await.clone_history();
+        let mut saw_user = false;
+        let mut saw_tool = false;
+        for item in history.raw_items().iter().rev() {
+            match item {
+                ResponseItem::Message { role, content, .. } => {
+                    if role == "assistant" {
+                        break;
+                    }
+                    if role == "user"
+                        && content
+                            .iter()
+                            .any(|item| matches!(item, ContentItem::InputImage { .. }))
+                    {
+                        saw_user = true;
+                    }
+                }
+                ResponseItem::FunctionCallOutput { output, .. } => {
+                    if let Some(items) = &output.content_items
+                        && items.iter().any(|item| {
+                            matches!(item, FunctionCallOutputContentItem::InputImage { .. })
+                        })
+                    {
+                        saw_tool = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        saw_tool && !saw_user
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,
@@ -2449,11 +2483,19 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::InvalidImageRequest()) => {
-                let mut state = sess.state.lock().await;
-                error_or_panic(
-                    "Invalid image detected, replacing it in the last turn to prevent poisoning",
-                );
-                state.history.replace_last_turn_images("Invalid image");
+                if sess.current_turn_images_tool_only().await {
+                    let mut state = sess.state.lock().await;
+                    error_or_panic(
+                        "Invalid image detected, replacing it in the last turn to prevent poisoning",
+                    );
+                    state.history.replace_last_turn_images("Invalid image");
+                } else {
+                    let err = CodexErr::InvalidImageRequest();
+                    info!("Turn error: {err:#}");
+                    let event = EventMsg::Error(err.to_error_event(None));
+                    sess.send_event(&turn_context, event).await;
+                    break;
+                }
             }
             Err(e) => {
                 info!("Turn error: {e:#}");

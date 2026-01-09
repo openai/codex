@@ -46,6 +46,27 @@ fn find_image_message(body: &Value) -> Option<&Value> {
         })
 }
 
+fn find_tool_output_image_url(body: &Value, call_id: &str) -> Option<String> {
+    let items = body.get("input").and_then(Value::as_array)?;
+    let output = items
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })?
+        .get("output")?;
+    let output_items = output.as_array()?;
+    output_items.iter().find_map(|span| {
+        if span.get("type").and_then(Value::as_str) == Some("input_image") {
+            span.get("image_url")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        }
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -208,27 +229,8 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let req = mock.single_request();
     let body = req.body_json();
-    let output_text = req
-        .function_call_output_content_and_success(call_id)
-        .and_then(|(content, _)| content)
-        .expect("output text present");
-    assert_eq!(output_text, "attached local image path");
-
-    let image_message =
-        find_image_message(&body).expect("pending input image message not included in request");
-    let image_url = image_message
-        .get("content")
-        .and_then(Value::as_array)
-        .and_then(|content| {
-            content.iter().find_map(|span| {
-                if span.get("type").and_then(Value::as_str) == Some("input_image") {
-                    span.get("image_url").and_then(Value::as_str)
-                } else {
-                    None
-                }
-            })
-        })
-        .expect("image_url present");
+    let image_url =
+        find_tool_output_image_url(&body, call_id).expect("tool output image not included");
 
     let (prefix, encoded) = image_url
         .split_once(',')
@@ -318,7 +320,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()> {
+async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -378,36 +380,19 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         "non-image file should not produce an input_image message"
     );
 
-    let placeholder = request
-        .inputs_of_type("message")
-        .iter()
-        .find_map(|item| {
-            let content = item.get("content").and_then(Value::as_array)?;
-            content.iter().find_map(|span| {
-                if span.get("type").and_then(Value::as_str) == Some("input_text") {
-                    let text = span.get("text").and_then(Value::as_str)?;
-                    if text.contains("Codex could not read the local image at")
-                        && text.contains("unsupported MIME type `application/json`")
-                    {
-                        return Some(text.to_string());
-                    }
-                }
-                None
-            })
-        })
-        .expect("placeholder text found");
-
-    assert!(
-        placeholder.contains(&abs_path.display().to_string()),
-        "placeholder should mention path: {placeholder}"
-    );
-
     let output_text = mock
         .single_request()
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .expect("output text present");
-    assert_eq!(output_text, "attached local image path");
+    assert!(
+        output_text.contains("Codex could not read the local image at"),
+        "expected tool error for non-image file"
+    );
+    assert!(
+        output_text.contains(&abs_path.display().to_string()),
+        "output should mention path: {output_text}"
+    );
 
     Ok(())
 }
@@ -485,7 +470,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
 
 #[cfg(not(debug_assertions))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> {
+async fn reports_invalid_local_image_after_bad_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -542,6 +527,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         })
         .await?;
 
+    wait_for_event(&codex, |event| matches!(event, EventMsg::Error(_))).await;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let first_body = invalid_image_mock.single_request().body_json();
@@ -550,14 +536,10 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         "initial request should include the uploaded image"
     );
 
-    let second_request = completion_mock.single_request();
-    let second_body = second_request.body_json();
     assert!(
-        find_image_message(&second_body).is_none(),
-        "second request should replace the invalid image"
+        completion_mock.requests().is_empty(),
+        "invalid user image should stop the turn before retrying"
     );
-    let user_texts = second_request.message_input_texts("user");
-    assert!(user_texts.iter().any(|text| text == "Invalid image"));
 
     Ok(())
 }
