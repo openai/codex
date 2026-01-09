@@ -18,6 +18,7 @@ pub(crate) use error::map_session_init_error;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
+pub use list::find_thread_path_by_name_str;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 
