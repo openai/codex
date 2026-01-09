@@ -143,7 +143,12 @@ mod imp {
     use super::DefaultColors;
 
     pub(super) fn default_colors() -> Option<DefaultColors> {
-        None
+        // Windows terminals don't support ANSI color queries (OSC 10/11).
+        // Use a dark fallback since most modern terminals default to dark themes.
+        Some(DefaultColors {
+            fg: (255, 255, 255), // White foreground
+            bg: (0, 0, 0),       // Black background (dark theme)
+        })
     }
 
     pub(super) fn requery_default_colors() {}
