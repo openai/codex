@@ -92,8 +92,8 @@ pub async fn run_main(
 
     let feedback = CodexFeedback::new();
 
-    let otel =
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION")).map_err(|e| {
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), false)
+        .map_err(|e| {
             std::io::Error::new(
                 ErrorKind::InvalidData,
                 format!("error loading otel config: {e}"),

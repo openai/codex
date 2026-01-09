@@ -353,8 +353,8 @@ pub struct Config {
     pub disable_paste_burst: bool,
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
-    /// Defaults to `true`.
-    pub analytics_enabled: bool,
+    /// Voluntarily left as Optional because the default value might depend on the client.
+    pub analytics_enabled: Option<bool>,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
@@ -1401,8 +1401,7 @@ impl Config {
                 .analytics
                 .as_ref()
                 .and_then(|a| a.enabled)
-                .or(cfg.analytics.as_ref().and_then(|a| a.enabled))
-                .unwrap_or(true),
+                .or(cfg.analytics.as_ref().and_then(|a| a.enabled)),
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -3233,7 +3232,7 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
-                analytics_enabled: true,
+                analytics_enabled: Some(true),
                 tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
                 tui_scroll_trackpad_lines: None,
@@ -3317,7 +3316,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics_enabled: true,
+            analytics_enabled: Some(true),
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3416,7 +3415,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics_enabled: false,
+            analytics_enabled: Some(false),
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3501,7 +3500,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics_enabled: true,
+            analytics_enabled: Some(true),
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
