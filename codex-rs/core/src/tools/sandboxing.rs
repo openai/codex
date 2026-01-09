@@ -6,7 +6,6 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::codex::make_session_and_context_with_rx;
 use crate::error::CodexErr;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
@@ -58,7 +57,7 @@ impl ApprovalStore {
 ///   so future requests touching any subset can also skip prompting.
 pub(crate) async fn with_cached_approval<K, F, Fut>(
     services: &SessionServices,
-    /// Name of the tool, used for metrics collection.
+    // Name of the tool, used for metrics collection.
     tool_name: &str,
     keys: Vec<K>,
     fetch: F,
