@@ -16,6 +16,7 @@ use std::collections::BTreeSet;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
+pub(crate) use legacy::legacy_feature_keys;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
