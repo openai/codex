@@ -186,27 +186,27 @@ const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=\"";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = "\">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = "</image>";
 
+fn local_image_label_text_with_number(
+    path: &std::path::Path,
+    label_number: Option<usize>,
+) -> String {
+    let label = match label_number {
+        Some(label_number) => format!("[Image #{label_number}]"),
+        None => format!("[Image {}]", path.display()),
+    };
+    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
+}
+
 pub fn local_image_label_text(path: &std::path::Path) -> String {
     local_image_label_text_with_number(path, None)
 }
 
-pub fn is_local_image_label_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    is_local_image_open_tag_text(trimmed) || is_local_image_close_tag_text(trimmed)
-}
-
-fn local_image_label(path: &std::path::Path, label_number: Option<usize>) -> ContentItem {
-    ContentItem::InputText {
-        text: local_image_label_text_with_number(path, label_number),
-    }
-}
-
-fn is_local_image_open_tag_text(text: &str) -> bool {
+pub fn is_local_image_open_tag_text(text: &str) -> bool {
     text.strip_prefix(LOCAL_IMAGE_OPEN_TAG_PREFIX)
         .is_some_and(|rest| rest.ends_with(LOCAL_IMAGE_OPEN_TAG_SUFFIX))
 }
 
-fn is_local_image_close_tag_text(text: &str) -> bool {
+pub fn is_local_image_close_tag_text(text: &str) -> bool {
     text == LOCAL_IMAGE_CLOSE_TAG
 }
 
@@ -237,17 +237,6 @@ pub fn local_image_content_items(path: &std::path::Path, include_label: bool) ->
     local_image_content_items_with_label_number(path, include_label, None)
 }
 
-fn local_image_label_text_with_number(
-    path: &std::path::Path,
-    label_number: Option<usize>,
-) -> String {
-    let label = match label_number {
-        Some(label_number) => format!("[Image #{label_number}]"),
-        None => format!("[Image {}]", path.display()),
-    };
-    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
-}
-
 fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     include_label: bool,
@@ -257,7 +246,9 @@ fn local_image_content_items_with_label_number(
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if include_label {
-                items.push(local_image_label(path, label_number));
+                items.push(ContentItem::InputText {
+                    text: local_image_label_text_with_number(path, label_number),
+                });
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
