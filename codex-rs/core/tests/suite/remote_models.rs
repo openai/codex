@@ -97,10 +97,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model_provider(ModelProviderInfo {
-            base_url: Some(format!("{}/v1", server.uri())),
-            ..built_in_model_providers()["openai"].clone()
-        })
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
@@ -217,10 +213,6 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model_provider(ModelProviderInfo {
-            base_url: Some(format!("{}/v1", server.uri())),
-            ..built_in_model_providers()["openai"].clone()
-        })
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
@@ -268,10 +260,6 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model_provider(ModelProviderInfo {
-            base_url: Some(format!("{}/v1", server.uri())),
-            ..built_in_model_providers()["openai"].clone()
-        })
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
@@ -352,10 +340,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model_provider(ModelProviderInfo {
-            base_url: Some(format!("{}/v1", server.uri())),
-            ..built_in_model_providers()["openai"].clone()
-        })
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
