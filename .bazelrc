@@ -38,6 +38,7 @@ common --grpc_keepalive_time=30s
 # memory in exchange for higher download concurrency.
 common --jobs=30
 
+common:remote --host_platform=@platforms//host
 common:remote --extra_execution_platforms=//:rbe
 common:remote --remote_executor=grpcs://remote.buildbuddy.io
 common:remote --jobs=800
