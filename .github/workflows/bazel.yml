@@ -95,7 +95,7 @@ jobs:
         shell: pwsh
         run: |
           # Use a very short path to reduce argv/path length issues.
-          "BAZEL_STARTUP_ARGS=--output_user_root=C:\_bzl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: bazel test //...
         env:
