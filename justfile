@@ -47,6 +47,9 @@ test:
 bazel-test:
     bazel test //... -k
 
+bazel-remote-test:
+    bazel test //... --config=remote -k
+
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
 
