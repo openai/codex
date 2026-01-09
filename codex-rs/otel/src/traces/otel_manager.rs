@@ -1,4 +1,4 @@
-use crate::traces::otel_provider::traceparent_context_from_env;
+use crate::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ResponseEvent;
@@ -447,7 +447,11 @@ impl OtelManager {
         output: &str,
     ) {
         let success_str = if success { "true" } else { "false" };
-
+        self.counter(
+            "codex.tool.call",
+            1,
+            &[("tool", tool_name), ("success", success_str)],
+        );
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.tool_result",

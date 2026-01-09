@@ -66,6 +66,8 @@ pub struct McpProcess {
     pending_messages: VecDeque<JSONRPCMessage>,
 }
 
+pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env(codex_home, &[]).await
@@ -136,31 +138,60 @@ impl McpProcess {
 
     /// Performs the initialization handshake with the MCP server.
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
-        let params = Some(serde_json::to_value(InitializeParams {
-            client_info: ClientInfo {
-                name: "codex-app-server-tests".to_string(),
+        let initialized = self
+            .initialize_with_client_info(ClientInfo {
+                name: DEFAULT_CLIENT_NAME.to_string(),
                 title: None,
                 version: "0.1.0".to_string(),
-            },
-        })?);
-        let req_id = self.send_request("initialize", params).await?;
-        let initialized = self.read_jsonrpc_message().await?;
-        let JSONRPCMessage::Response(response) = initialized else {
+            })
+            .await?;
+        let JSONRPCMessage::Response(_) = initialized else {
             unreachable!("expected JSONRPCMessage::Response for initialize, got {initialized:?}");
         };
-        if response.id != RequestId::Integer(req_id) {
-            anyhow::bail!(
-                "initialize response id mismatch: expected {}, got {:?}",
-                req_id,
-                response.id
-            );
-        }
-
-        // Send notifications/initialized to ack the response.
-        self.send_notification(ClientNotification::Initialized)
-            .await?;
-
         Ok(())
+    }
+
+    /// Sends initialize with the provided client info and returns the response/error message.
+    pub async fn initialize_with_client_info(
+        &mut self,
+        client_info: ClientInfo,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        let params = Some(serde_json::to_value(InitializeParams { client_info })?);
+        let request_id = self.send_request("initialize", params).await?;
+        let message = self.read_jsonrpc_message().await?;
+        match message {
+            JSONRPCMessage::Response(response) => {
+                if response.id != RequestId::Integer(request_id) {
+                    anyhow::bail!(
+                        "initialize response id mismatch: expected {}, got {:?}",
+                        request_id,
+                        response.id
+                    );
+                }
+
+                // Send notifications/initialized to ack the response.
+                self.send_notification(ClientNotification::Initialized)
+                    .await?;
+
+                Ok(JSONRPCMessage::Response(response))
+            }
+            JSONRPCMessage::Error(error) => {
+                if error.id != RequestId::Integer(request_id) {
+                    anyhow::bail!(
+                        "initialize error id mismatch: expected {}, got {:?}",
+                        request_id,
+                        error.id
+                    );
+                }
+                Ok(JSONRPCMessage::Error(error))
+            }
+            JSONRPCMessage::Notification(notification) => {
+                anyhow::bail!("unexpected JSONRPCMessage::Notification: {notification:?}");
+            }
+            JSONRPCMessage::Request(request) => {
+                anyhow::bail!("unexpected JSONRPCMessage::Request: {request:?}");
+            }
+        }
     }
 
     /// Send a `newConversation` JSON-RPC request.
