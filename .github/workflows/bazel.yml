@@ -22,9 +22,9 @@ jobs:
       matrix:
         include:
           # macOS
-          - os: macos-14
+          - os: macos-15-xlarge
             target: aarch64-apple-darwin
-          - os: macos-14
+          - os: macos-15-xlarge
             target: x86_64-apple-darwin
 
           # Linux
