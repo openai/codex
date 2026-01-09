@@ -182,23 +182,17 @@ fn local_image_error_placeholder(
 
 pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 
-const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=\"";
-const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = "\">";
+const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
+const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = "</image>";
 
-fn local_image_label_text_with_number(
-    path: &std::path::Path,
-    label_number: Option<usize>,
-) -> String {
-    let label = match label_number {
-        Some(label_number) => format!("[Image #{label_number}]"),
-        None => format!("[Image {}]", path.display()),
-    };
-    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
+pub fn local_image_label_text(label_number: usize) -> String {
+    format!("[Image #{label_number}]")
 }
 
-pub fn local_image_label_text(path: &std::path::Path) -> String {
-    local_image_label_text_with_number(path, None)
+fn local_image_open_tag_text(label_number: usize) -> String {
+    let label = local_image_label_text(label_number);
+    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
 }
 
 pub fn is_local_image_open_tag_text(text: &str) -> bool {
@@ -234,20 +228,20 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
 }
 
 pub fn local_image_content_items(path: &std::path::Path, include_label: bool) -> Vec<ContentItem> {
-    local_image_content_items_with_label_number(path, include_label, None)
+    local_image_content_items_with_label_number(path, include_label, 1)
 }
 
 fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     include_label: bool,
-    label_number: Option<usize>,
+    label_number: usize,
 ) -> Vec<ContentItem> {
     match load_and_resize_to_fit(path) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if include_label {
                 items.push(ContentItem::InputText {
-                    text: local_image_label_text_with_number(path, label_number),
+                    text: local_image_open_tag_text(label_number),
                 });
             }
             items.push(ContentItem::InputImage {
@@ -283,13 +277,6 @@ fn local_image_content_items_with_label_number(
             }
         }
     }
-}
-
-fn is_default_clipboard_image_path(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.starts_with("codex-clipboard-"))
-        .unwrap_or(false)
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -395,12 +382,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::Image { image_url } => vec![ContentItem::InputImage { image_url }],
                     UserInput::LocalImage { path } => {
                         image_index += 1;
-                        let label_number = if is_default_clipboard_image_path(&path) {
-                            Some(image_index)
-                        } else {
-                            None
-                        };
-                        local_image_content_items_with_label_number(&path, true, label_number)
+                        local_image_content_items_with_label_number(&path, true, image_index)
                     }
                     UserInput::Skill { .. } => Vec::new(), // Skill bodies are injected later in core
                 })

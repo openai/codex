@@ -405,7 +405,8 @@ fn create_view_image_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: VIEW_IMAGE_TOOL_NAME.to_string(),
-        description: "View a local image from the filesystem.".to_string(),
+        description: "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
