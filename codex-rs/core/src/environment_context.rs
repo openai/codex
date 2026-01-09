@@ -88,8 +88,6 @@ mod tests {
     use crate::shell::ShellType;
 
     use super::*;
-    use codex_protocol::protocol::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use core_test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
