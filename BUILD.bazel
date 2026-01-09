@@ -20,8 +20,9 @@ platform(
         "@toolchains_llvm_bootstrapped//constraints/libc:gnu.2.28",
     ],
     exec_properties = {
-        # Need git in the image...
-        "container-image": "docker://docker.io/mbolin491/codex-bazel:latest",
+        # Ubuntu-based image that includes git, python3, dotslash, and other
+        # tools that various integration tests need.
+        "container-image": "docker://docker.io/mbolin491/codex-bazel@sha256:346cc36980383987326a8449194255a6161ca63d21c6778662f0ca03452489da",
         "OSFamily": "Linux",
     },
 )
