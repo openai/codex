@@ -76,7 +76,7 @@ pub(crate) async fn handle_mcp_tool_call(
     turn_context
         .client
         .get_otel_manager()
-        .counter("mcp.call", 1, &[("status", status)]);
+        .counter("codex.mcp.call", 1, &[("status", status)]);
 
     ResponseInputItem::McpToolCallOutput { call_id, result }
 }
