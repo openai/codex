@@ -573,6 +573,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::WebSearchBegin(_)
+            | EventMsg::SessionMetaUpdated(_)
             | EventMsg::ExecApprovalRequest(_)
             | EventMsg::ApplyPatchApprovalRequest(_)
             | EventMsg::TerminalInteraction(_)

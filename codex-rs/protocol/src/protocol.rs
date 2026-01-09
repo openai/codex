@@ -591,6 +591,9 @@ pub enum EventMsg {
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
+    /// Updated session metadata (e.g., session name changes).
+    SessionMetaUpdated(SessionMetaUpdatedEvent),
+
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
 
@@ -1825,6 +1828,10 @@ pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
 
+    /// Optional user-facing session name (may be unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+
     /// Tell the client what model is being queried.
     pub model: String,
 
@@ -1856,6 +1863,14 @@ pub struct SessionConfiguredEvent {
     pub initial_messages: Option<Vec<EventMsg>>,
 
     pub rollout_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SessionMetaUpdatedEvent {
+    /// Name left as session_id instead of thread_id for backwards compatibility.
+    pub session_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -2044,6 +2059,7 @@ mod tests {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
+                session_name: None,
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,

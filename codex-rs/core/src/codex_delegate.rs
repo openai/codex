@@ -201,6 +201,10 @@ async fn forward_events(
                         msg: EventMsg::SessionConfigured(_),
                     } => {}
                     Event {
+                        id: _,
+                        msg: EventMsg::SessionMetaUpdated(_),
+                    } => {}
+                    Event {
                         id,
                         msg: EventMsg::ExecApprovalRequest(event),
                     } => {

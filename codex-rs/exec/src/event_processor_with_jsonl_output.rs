@@ -107,6 +107,7 @@ impl EventProcessorWithJsonOutput {
     pub fn collect_thread_events(&mut self, event: &Event) -> Vec<ThreadEvent> {
         match &event.msg {
             EventMsg::SessionConfigured(ev) => self.handle_session_configured(ev),
+            EventMsg::SessionMetaUpdated(_) => Vec::new(),
             EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
             EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),

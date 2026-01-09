@@ -681,7 +681,8 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let state = SessionState::new(session_configuration.clone());
+        let session_name = Self::session_name_from_rollout(&initial_history.get_rollout_items());
+        let state = SessionState::new(session_configuration.clone(), session_name.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -718,6 +719,7 @@ impl Session {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
+                session_name,
                 model: session_configuration.model.clone(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
@@ -861,6 +863,13 @@ impl Session {
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
         rollout_items.iter().rev().find_map(|item| match item {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
+            _ => None,
+        })
+    }
+
+    fn session_name_from_rollout(rollout_items: &[RolloutItem]) -> Option<String> {
+        rollout_items.iter().find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => meta_line.meta.name.clone(),
             _ => None,
         })
     }
@@ -1768,6 +1777,7 @@ mod handlers {
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
+    use codex_protocol::protocol::SessionMetaUpdatedEvent;
     use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
@@ -2154,7 +2164,8 @@ mod handlers {
             return;
         };
 
-        if let Err(e) = recorder.set_session_name(name).await {
+        let name_for_recorder = name.clone();
+        if let Err(e) = recorder.set_session_name(name_for_recorder).await {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
@@ -2163,7 +2174,22 @@ mod handlers {
                 }),
             };
             sess.send_event_raw(event).await;
+            return;
         }
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_name = Some(name.clone());
+        }
+
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::SessionMetaUpdated(SessionMetaUpdatedEvent {
+                session_id: sess.conversation_id,
+                session_name: Some(name),
+            }),
+        })
+        .await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -3223,7 +3249,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(session_configuration, None);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -3289,7 +3315,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(session_configuration, None);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -3550,7 +3576,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), None);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
@@ -3644,7 +3670,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), None);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
