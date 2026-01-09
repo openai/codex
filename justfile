@@ -45,10 +45,10 @@ test:
     cargo nextest run --no-fail-fast
 
 bazel-test:
-    bazel test //... -k
+    bazel test //... --keep_going
 
 bazel-remote-test:
-    bazel test //... --config=remote -k
+    bazel test //... --config=remote --platforms=//:rbe --keep_going
 
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote

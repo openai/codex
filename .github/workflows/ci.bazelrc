@@ -2,7 +2,7 @@ common --remote_download_minimal
 common --nobuild_runfile_links
 common --keep_going
 
-# Prefer to run the build actions entirely remotely, since Github's runners are underwhelming.
+# Prefer to run the build actions entirely remotely so we can dial up the concurrency.
 # Currently remote builds only work on Mac hosts, until we untangle the libc constraints mess on linux.
 common:macos --config=remote
 common:macos --strategy=remote
