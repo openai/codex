@@ -223,7 +223,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), false);
+    let otel =
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false);
 
     #[allow(clippy::print_stderr)]
     let otel = match otel {

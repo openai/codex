@@ -66,6 +66,8 @@ pub struct McpProcess {
     pending_messages: VecDeque<JSONRPCMessage>,
 }
 
+pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env(codex_home, &[]).await
@@ -138,7 +140,7 @@ impl McpProcess {
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
         let params = Some(serde_json::to_value(InitializeParams {
             client_info: ClientInfo {
-                name: "codex-app-server-tests".to_string(),
+                name: DEFAULT_CLIENT_NAME.to_string(),
                 title: None,
                 version: "0.1.0".to_string(),
             },
@@ -161,6 +163,38 @@ impl McpProcess {
             .await?;
 
         Ok(())
+    }
+
+    /// Sends initialize with the provided client info and returns the response/error message.
+    pub async fn initialize_with_client_info(
+        &mut self,
+        client_info: ClientInfo,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        let params = Some(serde_json::to_value(InitializeParams { client_info })?);
+        let request_id = self.send_request("initialize", params).await?;
+        let request_id = RequestId::Integer(request_id);
+
+        loop {
+            let message = self.read_jsonrpc_message().await?;
+            match message {
+                JSONRPCMessage::Notification(notification) => {
+                    self.enqueue_user_message(notification);
+                }
+                JSONRPCMessage::Response(response) => {
+                    if response.id == request_id {
+                        return Ok(JSONRPCMessage::Response(response));
+                    }
+                }
+                JSONRPCMessage::Error(error) => {
+                    if error.id == request_id {
+                        return Ok(JSONRPCMessage::Error(error));
+                    }
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
+                }
+            }
+        }
     }
 
     /// Send a `newConversation` JSON-RPC request.
