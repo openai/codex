@@ -22,7 +22,8 @@ use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
 
-pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str = "Files called AGENTS.md commonly appear in many places inside a container - at \"/\", in \"~\", deep within git repositories, or in any other directory; their location is not limited to version-controlled folders.\n\nTheir purpose is to pass along human guidance to you, the agent. Such guidance can include coding standards, explanations of the project layout, steps for building or testing, and even wording that must accompany a GitHub pull-request description produced by the agent; all of it is to be followed.\n\nEach AGENTS.md governs the entire directory that contains it and every child directory beneath that point. Whenever you change a file, you have to comply with every AGENTS.md whose scope covers that file. Naming conventions, stylistic rules and similar directives are restricted to the code that falls inside that scope unless the document explicitly states otherwise.\n\nWhen two AGENTS.md files disagree, the one located deeper in the directory structure overrides the higher-level file, while instructions given directly in the prompt by the system, developer, or user outrank any AGENTS.md content.";
+pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
+    include_str!("../hierarchical_agents_message.md");
 
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
