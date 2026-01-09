@@ -37,19 +37,40 @@ def codex_rust_crate(
         build_script_data = [],
         compile_data = [],
         deps_extra = [],
-        proc_macro_deps_extra = [],
-        dev_deps_extra = [],
-        dev_proc_macro_deps_extra = [],
         integration_deps_extra = [],
         integration_compile_data_extra = [],
         test_data_extra = [],
         test_tags = [],
-        extra_binaries = [],
-        visibility = ["//visibility:public"]):
+        extra_binaries = []):
+    """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
+
+    The macro mirrors Cargo conventions: it builds a library when `src/` exists,
+    wires build scripts, exports `CARGO_BIN_EXE_*` for integration tests, and
+    creates unit + integration test targets. Dependency buckets map to the
+    Cargo.lock resolution in `@crates`.
+
+    Args:
+        name: Bazel target name for the library (and test target prefix).
+        crate_name: Cargo crate name passed to rust_library.
+        crate_features: Cargo features to enable for this crate.
+        crate_srcs: Optional explicit srcs; defaults to `src/**/*.rs`.
+        crate_edition: Rust edition override, if not default.
+        build_script_data: Data files exposed to the build script at runtime.
+        compile_data: Non-Rust compile-time data for the library target.
+        deps_extra: Extra normal deps beyond @crates resolution.
+            Typically only needed when features add additional deps.
+        integration_deps_extra: Extra deps for integration tests only.
+        integration_compile_data_extra: Extra compile_data for integration tests.
+        test_data_extra: Extra runtime data for tests.
+        test_tags: Tags applied to unit + integration test targets.
+            Typicaly used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
+        extra_binaries: Additional binary labels to surface as test data and
+            `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
+    """
     deps = all_crate_deps(normal = True) + deps_extra
-    dev_deps = all_crate_deps(normal_dev = True) + dev_deps_extra
-    proc_macro_deps = all_crate_deps(proc_macro = True) + proc_macro_deps_extra
-    proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True) + dev_proc_macro_deps_extra
+    dev_deps = all_crate_deps(normal_dev = True)
+    proc_macro_deps = all_crate_deps(proc_macro = True)
+    proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True)
 
     test_env = {
         "INSTA_WORKSPACE_ROOT": ".",
