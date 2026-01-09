@@ -285,8 +285,10 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 mod tests {
     use super::*;
     use crate::shell::default_user_shell;
+    #[cfg(not(windows))]
     use crate::shell_snapshot::ShellSnapshot;
     use std::sync::Arc;
+    #[cfg(not(windows))]
     use tempfile::TempDir;
 
     #[test]
