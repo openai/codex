@@ -231,7 +231,7 @@ impl DeveloperInstructions {
         let Some(roots) = writable_roots else {
             return DeveloperInstructions::new("");
         };
-        
+
         if roots.is_empty() {
             return DeveloperInstructions::new("");
         }

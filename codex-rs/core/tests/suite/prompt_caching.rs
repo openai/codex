@@ -11,6 +11,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -36,12 +37,21 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
     format!(
         r#"<environment_context>
   <cwd>{cwd}</cwd>
-  <approval_policy>on-request</approval_policy>
-  <sandbox_mode>read-only</sandbox_mode>
-  <network_access>restricted</network_access>
   <shell>{shell_name}</shell>
 </environment_context>"#
     )
+}
+
+fn permissions_message(
+    sandbox_policy: &SandboxPolicy,
+    approval_policy: AskForApproval,
+) -> serde_json::Value {
+    let text = DeveloperInstructions::from_policy(sandbox_policy, approval_policy).into_text();
+    serde_json::json!({
+        "type": "message",
+        "role": "developer",
+        "content": [ { "type": "input_text", "text": text } ]
+    })
 }
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
@@ -252,9 +262,13 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let body1 = req1.single_request().body_json();
     let input1 = body1["input"].as_array().expect("input array");
-    assert_eq!(input1.len(), 3, "expected cached prefix + env + user msg");
+    assert_eq!(
+        input1.len(),
+        4,
+        "expected permissions + cached prefix + env + user msg"
+    );
 
-    let ui_text = input1[0]["content"][0]["text"]
+    let ui_text = input1[1]["content"][0]["text"]
         .as_str()
         .expect("ui message text");
     assert!(
@@ -266,11 +280,11 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let cwd_str = config.cwd.to_string_lossy();
     let expected_env_text = default_env_context_str(&cwd_str, &shell);
     assert_eq!(
-        input1[1],
+        input1[2],
         text_user_input(expected_env_text),
         "expected environment context after UI message"
     );
-    assert_eq!(input1[2], text_user_input("hello 1".to_string()));
+    assert_eq!(input1[3], text_user_input("hello 1".to_string()));
 
     let body2 = req2.single_request().body_json();
     let input2 = body2["input"].as_array().expect("input array");
@@ -312,16 +326,17 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let writable = TempDir::new().unwrap();
+    let new_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![writable.path().try_into().unwrap()],
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
     codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable.path().try_into().unwrap()],
-                network_access: true,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
-            }),
+            sandbox_policy: Some(new_policy.clone()),
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
@@ -355,14 +370,10 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
     // After overriding the turn context, the environment context should be emitted again
-    // reflecting the new approval policy and sandbox settings. Omit cwd because it did
-    // not change.
+    // reflecting the new writable roots. Omit cwd because it did not change.
     let shell = default_user_shell();
     let expected_env_text_2 = format!(
         r#"<environment_context>
-  <approval_policy>never</approval_policy>
-  <sandbox_mode>workspace-write</sandbox_mode>
-  <network_access>enabled</network_access>
   <writable_roots>
     <root>{}</root>
   </writable_roots>
@@ -376,10 +387,16 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         "role": "user",
         "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
     });
+    let expected_permissions_msg_2 = permissions_message(&new_policy, AskForApproval::Never);
     let expected_body2 = serde_json::json!(
         [
             body1["input"].as_array().unwrap().as_slice(),
-            [expected_env_msg_2, expected_user_message_2].as_slice(),
+            [
+                expected_env_msg_2,
+                expected_permissions_msg_2,
+                expected_user_message_2
+            ]
+            .as_slice(),
         ]
         .concat()
     );
@@ -439,10 +456,8 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         .filter(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
         .collect();
     assert!(
-        env_texts
-            .iter()
-            .any(|text| text.contains("<approval_policy>never</approval_policy>")),
-        "environment context should reflect overridden approval policy: {env_texts:?}"
+        !env_texts.is_empty(),
+        "expected environment context to be emitted: {env_texts:?}"
     );
 
     let env_count = input
@@ -462,9 +477,29 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
                 .is_some()
         })
         .count();
-    assert_eq!(
-        env_count, 2,
-        "environment context should appear exactly twice, found {env_count}"
+    assert!(
+        env_count >= 1,
+        "environment context should appear at least once, found {env_count}"
+    );
+
+    let permissions_texts: Vec<&str> = input
+        .iter()
+        .filter_map(|msg| {
+            let role = msg["role"].as_str()?;
+            if role != "developer" {
+                return None;
+            }
+            msg["content"]
+                .as_array()
+                .and_then(|content| content.first())
+                .and_then(|item| item["text"].as_str())
+        })
+        .collect();
+    assert!(
+        permissions_texts
+            .iter()
+            .any(|text| text.contains("NEVER ask for approval")),
+        "permissions message should reflect overridden approval policy: {permissions_texts:?}"
     );
 
     let user_texts: Vec<&str> = input
@@ -514,6 +549,12 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     // Second turn using per-turn overrides via UserTurn
     let new_cwd = TempDir::new().unwrap();
     let writable = TempDir::new().unwrap();
+    let new_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![AbsolutePathBuf::try_from(writable.path()).unwrap()],
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -521,12 +562,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             }],
             cwd: new_cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![AbsolutePathBuf::try_from(writable.path()).unwrap()],
-                network_access: true,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
-            },
+            sandbox_policy: new_policy.clone(),
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
@@ -556,9 +592,6 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let expected_env_text_2 = format!(
         r#"<environment_context>
   <cwd>{}</cwd>
-  <approval_policy>never</approval_policy>
-  <sandbox_mode>workspace-write</sandbox_mode>
-  <network_access>enabled</network_access>
   <writable_roots>
     <root>{}</root>
   </writable_roots>
@@ -573,10 +606,16 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         "role": "user",
         "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
     });
+    let expected_permissions_msg_2 = permissions_message(&new_policy, AskForApproval::Never);
     let expected_body2 = serde_json::json!(
         [
             body1["input"].as_array().unwrap().as_slice(),
-            [expected_env_msg_2, expected_user_message_2].as_slice(),
+            [
+                expected_env_msg_2,
+                expected_permissions_msg_2,
+                expected_user_message_2
+            ]
+            .as_slice(),
         ]
         .concat()
     );
@@ -648,7 +687,8 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let body1 = req1.single_request().body_json();
     let body2 = req2.single_request().body_json();
 
-    let expected_ui_msg = body1["input"][0].clone();
+    let expected_permissions_msg = body1["input"][0].clone();
+    let expected_ui_msg = body1["input"][1].clone();
 
     let shell = default_user_shell();
     let default_cwd_lossy = default_cwd.to_string_lossy();
@@ -657,6 +697,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let expected_user_message_1 = text_user_input("hello 1".to_string());
 
     let expected_input_1 = serde_json::Value::Array(vec![
+        expected_permissions_msg.clone(),
         expected_ui_msg.clone(),
         expected_env_msg_1.clone(),
         expected_user_message_1.clone(),
@@ -665,6 +706,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
 
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
+        expected_permissions_msg,
         expected_ui_msg,
         expected_env_msg_1,
         expected_user_message_1,
@@ -738,34 +780,30 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let body1 = req1.single_request().body_json();
     let body2 = req2.single_request().body_json();
 
-    let expected_ui_msg = body1["input"][0].clone();
+    let expected_permissions_msg = body1["input"][0].clone();
+    let expected_ui_msg = body1["input"][1].clone();
 
     let shell = default_user_shell();
     let expected_env_text_1 = default_env_context_str(&default_cwd.to_string_lossy(), &shell);
     let expected_env_msg_1 = text_user_input(expected_env_text_1);
     let expected_user_message_1 = text_user_input("hello 1".to_string());
     let expected_input_1 = serde_json::Value::Array(vec![
+        expected_permissions_msg.clone(),
         expected_ui_msg.clone(),
         expected_env_msg_1.clone(),
         expected_user_message_1.clone(),
     ]);
     assert_eq!(body1["input"], expected_input_1);
 
-    let shell_name = shell.name();
-    let expected_env_msg_2 = text_user_input(format!(
-        r#"<environment_context>
-  <approval_policy>never</approval_policy>
-  <sandbox_mode>danger-full-access</sandbox_mode>
-  <network_access>enabled</network_access>
-  <shell>{shell_name}</shell>
-</environment_context>"#
-    ));
+    let expected_permissions_msg_2 =
+        permissions_message(&SandboxPolicy::DangerFullAccess, AskForApproval::Never);
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
+        expected_permissions_msg,
         expected_ui_msg,
-        expected_env_msg_1,
-        expected_user_message_1,
-        expected_env_msg_2,
+        expected_env_msg_1.clone(),
+        expected_user_message_1.clone(),
+        expected_permissions_msg_2,
         expected_user_message_2,
     ]);
     assert_eq!(body2["input"], expected_input_2);

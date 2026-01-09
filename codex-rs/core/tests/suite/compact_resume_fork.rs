@@ -216,11 +216,12 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let user_instructions = requests[0]["input"][0]["content"][0]["text"]
+    let permissions_message = requests[0]["input"][0].clone();
+    let user_instructions = requests[0]["input"][1]["content"][0]["text"]
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let environment_context = requests[0]["input"][1]["content"][0]["text"]
+    let environment_context = requests[0]["input"][2]["content"][0]["text"]
         .as_str()
         .unwrap_or_default()
         .to_string();
@@ -241,6 +242,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message.clone(),
         {
           "type": "message",
           "role": "user",
@@ -290,6 +292,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message.clone(),
         {
           "type": "message",
           "role": "user",
@@ -359,6 +362,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message.clone(),
         {
           "type": "message",
           "role": "user",
@@ -419,6 +423,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message.clone(),
         {
           "type": "message",
           "role": "user",
@@ -499,6 +504,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message.clone(),
         {
           "type": "message",
           "role": "user",
