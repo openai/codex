@@ -2,6 +2,15 @@ common --remote_download_minimal
 common --nobuild_runfile_links
 common --keep_going
 
+# By default runfiles directories are disabled on Windows but we
+# don't read runfiles manifests, so force them on.
+common --enable_runfiles
+
+# Rearrange caches on Windows so they're on the same volume as the checkout.
+common:windows --disk_cache=D:/a/.cache/bazel-disk-cache
+common:windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
+common:windows --repository_cache=D:/a/.cache/bazel-repo-cache
+
 # We prefer to run the build actions entirely remotely so we can dial up the concurrency.
 # We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
 

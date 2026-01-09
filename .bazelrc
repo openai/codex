@@ -21,7 +21,9 @@ common:windows --@rules_rust//rust/settings:experimental_use_sh_toolchain_for_bo
 
 common --incompatible_strict_action_env
 # Not ideal, but We need to allow dotslash to be found
-common --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+common:macos --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+common:windows --test_env=PATH
+#common:windows --test_env=PATH=/mingw64/bin:/usr/bin:/c/Users/runneradmin/bin:/d/a/_temp/install-dotslash/bin:/c/Program\ Files/Git/bin
 
 common --test_output=errors
 common --bes_results_url=https://app.buildbuddy.io/invocation/
@@ -37,7 +39,7 @@ common --grpc_keepalive_time=30s
 # This limits both in-flight executions and concurrent downloads. Even with high number
 # of jobs execution will still be limited by CPU cores, so this just pays a bit of
 # memory in exchange for higher download concurrency.
-common --jobs=30
+common --jobs=100
 
 common:remote --extra_execution_platforms=//:rbe
 common:remote --remote_executor=grpcs://remote.buildbuddy.io
