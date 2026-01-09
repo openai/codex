@@ -219,7 +219,11 @@ fn format_directory_tree(path: &std::path::Path, limit: usize) -> std::io::Resul
 
     for (i, entry) in entries.iter().take(display_count).enumerate() {
         let is_last = !truncated && i == display_count - 1;
-        let prefix = if is_last { "\u{2514}\u{2500}" } else { "\u{251C}\u{2500}" };
+        let prefix = if is_last {
+            "\u{2514}\u{2500}"
+        } else {
+            "\u{251C}\u{2500}"
+        };
         let suffix = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             "/"
         } else {
@@ -234,7 +238,10 @@ fn format_directory_tree(path: &std::path::Path, limit: usize) -> std::io::Resul
     }
 
     if truncated {
-        result.push_str(&format!("...\n\u{2514}\u{2500} ({} more items)\n", total - display_count));
+        result.push_str(&format!(
+            "...\n\u{2514}\u{2500} ({} more items)\n",
+            total - display_count
+        ));
     }
 
     Ok(result)
@@ -368,18 +375,16 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         }
                     },
                     UserInput::Skill { .. } => None, // Skill bodies are injected later in core
-                    UserInput::LocalDirectory { path } => {
-                        match format_directory_tree(&path, 50) {
-                            Ok(listing) => Some(ContentItem::InputText { text: listing }),
-                            Err(err) => Some(ContentItem::InputText {
-                                text: format!(
-                                    "Codex could not read the directory at `{}`: {}",
-                                    path.display(),
-                                    err
-                                ),
-                            }),
-                        }
-                    }
+                    UserInput::LocalDirectory { path } => match format_directory_tree(&path, 50) {
+                        Ok(listing) => Some(ContentItem::InputText { text: listing }),
+                        Err(err) => Some(ContentItem::InputText {
+                            text: format!(
+                                "Codex could not read the directory at `{}`: {}",
+                                path.display(),
+                                err
+                            ),
+                        }),
+                    },
                 })
                 .collect::<Vec<ContentItem>>(),
         }
@@ -551,7 +556,6 @@ fn convert_content_blocks_to_items(
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
     let mut saw_image = false;
     let mut items = Vec::with_capacity(blocks.len());
-    tracing::warn!("Blocks: {:?}", blocks);
     for block in blocks {
         match block {
             ContentBlock::TextContent(text) => {
@@ -933,7 +937,10 @@ mod tests {
                 assert_eq!(content.len(), 1);
                 match &content[0] {
                     ContentItem::InputText { text } => {
-                        assert!(text.contains("file1.txt"), "should contain file1.txt: {text}");
+                        assert!(
+                            text.contains("file1.txt"),
+                            "should contain file1.txt: {text}"
+                        );
                         assert!(text.contains("file2.rs"), "should contain file2.rs: {text}");
                         assert!(text.contains("subdir/"), "should contain subdir/: {text}");
                         assert!(
@@ -961,18 +968,19 @@ mod tests {
         }]);
 
         match item {
-            ResponseInputItem::Message { content, .. } => {
-                match &content[0] {
-                    ContentItem::InputText { text } => {
-                        assert!(text.contains("more items"), "should show truncation: {text}");
-                        assert!(
-                            !text.contains("file054.txt"),
-                            "should not show last items: {text}"
-                        );
-                    }
-                    other => panic!("expected text but found {other:?}"),
+            ResponseInputItem::Message { content, .. } => match &content[0] {
+                ContentItem::InputText { text } => {
+                    assert!(
+                        text.contains("more items"),
+                        "should show truncation: {text}"
+                    );
+                    assert!(
+                        !text.contains("file054.txt"),
+                        "should not show last items: {text}"
+                    );
                 }
-            }
+                other => panic!("expected text but found {other:?}"),
+            },
             other => panic!("expected message but got {other:?}"),
         }
         Ok(())
@@ -987,18 +995,16 @@ mod tests {
         }]);
 
         match item {
-            ResponseInputItem::Message { content, .. } => {
-                match &content[0] {
-                    ContentItem::InputText { text } => {
-                        assert!(text.contains("could not read"), "error text: {text}");
-                        assert!(
-                            text.contains(&missing.display().to_string()),
-                            "should contain path: {text}"
-                        );
-                    }
-                    other => panic!("expected text but found {other:?}"),
+            ResponseInputItem::Message { content, .. } => match &content[0] {
+                ContentItem::InputText { text } => {
+                    assert!(text.contains("could not read"), "error text: {text}");
+                    assert!(
+                        text.contains(&missing.display().to_string()),
+                        "should contain path: {text}"
+                    );
                 }
-            }
+                other => panic!("expected text but found {other:?}"),
+            },
             other => panic!("expected message but got {other:?}"),
         }
         Ok(())
