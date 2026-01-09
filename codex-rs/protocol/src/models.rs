@@ -180,6 +180,28 @@ fn local_image_error_placeholder(
     }
 }
 
+pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
+
+fn local_image_label_suffix() -> String {
+    format!(" follows (you can see it without using the {VIEW_IMAGE_TOOL_NAME} tool):")
+}
+
+pub fn local_image_label_text(path: &std::path::Path) -> String {
+    format!("Image {}{}", path.display(), local_image_label_suffix())
+}
+
+pub fn is_local_image_label_text(text: &str) -> bool {
+    let suffix = local_image_label_suffix();
+    let trimmed = text.trim();
+    trimmed.starts_with("Image ") && trimmed.ends_with(&suffix)
+}
+
+fn local_image_label(path: &std::path::Path) -> ContentItem {
+    ContentItem::InputText {
+        text: local_image_label_text(path),
+    }
+}
+
 fn invalid_image_error_placeholder(
     path: &std::path::Path,
     error: impl std::fmt::Display,
@@ -200,6 +222,43 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
             path.display(),
             mime
         ),
+    }
+}
+
+pub fn local_image_content_items(path: &std::path::Path, include_label: bool) -> Vec<ContentItem> {
+    match load_and_resize_to_fit(path) {
+        Ok(image) => {
+            let mut items = Vec::with_capacity(2);
+            if include_label {
+                items.push(local_image_label(path));
+            }
+            items.push(ContentItem::InputImage {
+                image_url: image.into_data_url(),
+            });
+            items
+        }
+        Err(err) => {
+            if matches!(&err, ImageProcessingError::Read { .. }) {
+                vec![local_image_error_placeholder(path, &err)]
+            } else if err.is_invalid_image() {
+                vec![invalid_image_error_placeholder(path, &err)]
+            } else {
+                let Some(mime_guess) = mime_guess::from_path(path).first() else {
+                    return vec![local_image_error_placeholder(
+                        path,
+                        "unsupported MIME type (unknown)",
+                    )];
+                };
+                let mime = mime_guess.essence_str().to_owned();
+                if !mime.starts_with("image/") {
+                    return vec![local_image_error_placeholder(
+                        path,
+                        format!("unsupported MIME type `{mime}`"),
+                    )];
+                }
+                vec![unsupported_image_error_placeholder(path, &mime)]
+            }
+        }
     }
 }
 
@@ -300,37 +359,11 @@ impl From<Vec<UserInput>> for ResponseInputItem {
             role: "user".to_string(),
             content: items
                 .into_iter()
-                .filter_map(|c| match c {
-                    UserInput::Text { text } => Some(ContentItem::InputText { text }),
-                    UserInput::Image { image_url } => Some(ContentItem::InputImage { image_url }),
-                    UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
-                        Ok(image) => Some(ContentItem::InputImage {
-                            image_url: image.into_data_url(),
-                        }),
-                        Err(err) => {
-                            if matches!(&err, ImageProcessingError::Read { .. }) {
-                                Some(local_image_error_placeholder(&path, &err))
-                            } else if err.is_invalid_image() {
-                                Some(invalid_image_error_placeholder(&path, &err))
-                            } else {
-                                let Some(mime_guess) = mime_guess::from_path(&path).first() else {
-                                    return Some(local_image_error_placeholder(
-                                        &path,
-                                        "unsupported MIME type (unknown)",
-                                    ));
-                                };
-                                let mime = mime_guess.essence_str().to_owned();
-                                if !mime.starts_with("image/") {
-                                    return Some(local_image_error_placeholder(
-                                        &path,
-                                        format!("unsupported MIME type `{mime}`"),
-                                    ));
-                                }
-                                Some(unsupported_image_error_placeholder(&path, &mime))
-                            }
-                        }
-                    },
-                    UserInput::Skill { .. } => None, // Skill bodies are injected later in core
+                .flat_map(|c| match c {
+                    UserInput::Text { text } => vec![ContentItem::InputText { text }],
+                    UserInput::Image { image_url } => vec![ContentItem::InputImage { image_url }],
+                    UserInput::LocalImage { path } => local_image_content_items(&path, true),
+                    UserInput::Skill { .. } => Vec::new(), // Skill bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
         }

@@ -1540,6 +1540,24 @@ impl Session {
         }
     }
 
+    /// Returns the input if there was no task running to inject into
+    pub async fn inject_response_items(
+        &self,
+        input: Vec<ResponseInputItem>,
+    ) -> Result<(), Vec<ResponseInputItem>> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                for item in input {
+                    ts.push_pending_input(item);
+                }
+                Ok(())
+            }
+            None => Err(input),
+        }
+    }
+
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
