@@ -418,11 +418,6 @@ impl OtelManager {
     }
 
     pub fn log_tool_failed(&self, tool_name: &str, error: &str) {
-        self.counter(
-            "codex.tool.call",
-            1,
-            &[("tool", tool_name), ("success", "false")],
-        );
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.tool_result",
