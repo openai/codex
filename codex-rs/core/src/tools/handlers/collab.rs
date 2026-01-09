@@ -253,3 +253,284 @@ fn build_agent_spawn_config(turn: &TurnContext) -> Result<Config, FunctionCallEr
         })?;
     Ok(config)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CodexAuth;
+    use crate::ThreadManager;
+    use crate::built_in_model_providers;
+    use crate::codex::make_session_and_context;
+    use crate::config::types::ShellEnvironmentPolicy;
+    use crate::function_tool::FunctionCallError;
+    use crate::protocol::AskForApproval;
+    use crate::protocol::SandboxPolicy;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_protocol::ThreadId;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn invocation(
+        session: Arc<crate::codex::Session>,
+        turn: Arc<TurnContext>,
+        tool_name: &str,
+        payload: ToolPayload,
+    ) -> ToolInvocation {
+        ToolInvocation {
+            session,
+            turn,
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
+            call_id: "call-1".to_string(),
+            tool_name: tool_name.to_string(),
+            payload,
+        }
+    }
+
+    fn function_payload(args: serde_json::Value) -> ToolPayload {
+        ToolPayload::Function {
+            arguments: args.to_string(),
+        }
+    }
+
+    fn thread_manager() -> ThreadManager {
+        ThreadManager::with_models_provider(
+            CodexAuth::from_api_key("dummy"),
+            built_in_model_providers()["openai"].clone(),
+        )
+    }
+
+    #[tokio::test]
+    async fn handler_rejects_non_function_payloads() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            ToolPayload::Custom {
+                input: "hello".to_string(),
+            },
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("payload should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(
+                "collab handler received unsupported payload".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_rejects_unknown_tool() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "unknown_tool",
+            function_payload(json!({})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("tool should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel("unsupported collab tool unknown_tool".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_empty_message() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({"message": "   "})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("empty message should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(
+                "Empty message can't be send to an agent".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_errors_when_manager_dropped() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({"message": "hello"})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("spawn should fail without a manager");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::Fatal("unsupported operation: thread manager dropped".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn send_input_rejects_empty_message() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "send_input",
+            function_payload(json!({"id": ThreadId::new().to_string(), "message": ""})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("empty message should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(
+                "Empty message can't be send to an agent".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn send_input_rejects_invalid_id() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "send_input",
+            function_payload(json!({"id": "not-a-uuid", "message": "hi"})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("invalid id should be rejected");
+        };
+        let FunctionCallError::RespondToModel(msg) = err else {
+            panic!("expected respond-to-model error");
+        };
+        assert!(msg.starts_with("invalid agent id not-a-uuid:"));
+    }
+
+    #[tokio::test]
+    async fn send_input_reports_missing_agent() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let agent_id = ThreadId::new();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "send_input",
+            function_payload(json!({"id": agent_id.to_string(), "message": "hi"})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("missing agent should be reported");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(format!("agent with id {agent_id} not found"))
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_rejects_non_positive_timeout() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({"id": ThreadId::new().to_string(), "timeout_ms": 0})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("non-positive timeout should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel("timeout_ms must be greater than zero".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_rejects_invalid_id() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({"id": "invalid"})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("invalid id should be rejected");
+        };
+        let FunctionCallError::RespondToModel(msg) = err else {
+            panic!("expected respond-to-model error");
+        };
+        assert!(msg.starts_with("invalid agent id invalid:"));
+    }
+
+    #[tokio::test]
+    async fn close_agent_reports_not_implemented() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "close_agent",
+            function_payload(json!({"id": ThreadId::new().to_string()})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("close_agent should fail");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::Fatal("close_agent not implemented".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_uses_turn_context_values() {
+        let (_session, mut turn) = make_session_and_context().await;
+        turn.developer_instructions = Some("dev".to_string());
+        turn.base_instructions = Some("base".to_string());
+        turn.compact_prompt = Some("compact".to_string());
+        turn.user_instructions = Some("user".to_string());
+        turn.shell_environment_policy = ShellEnvironmentPolicy {
+            use_profile: true,
+            ..ShellEnvironmentPolicy::default()
+        };
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        turn.cwd = temp_dir.path().to_path_buf();
+        turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
+        turn.approval_policy = AskForApproval::Never;
+        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        let config = build_agent_spawn_config(&turn).expect("spawn config");
+        let mut expected = (*turn.client.config()).clone();
+        expected.model = Some(turn.client.get_model());
+        expected.model_provider = turn.client.get_provider();
+        expected.model_reasoning_effort = turn.client.get_reasoning_effort();
+        expected.model_reasoning_summary = turn.client.get_reasoning_summary();
+        expected.developer_instructions = turn.developer_instructions.clone();
+        expected.base_instructions = turn.base_instructions.clone();
+        expected.compact_prompt = turn.compact_prompt.clone();
+        expected.user_instructions = turn.user_instructions.clone();
+        expected.shell_environment_policy = turn.shell_environment_policy.clone();
+        expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
+        expected.cwd = turn.cwd.clone();
+        expected
+            .approval_policy
+            .set(turn.approval_policy)
+            .expect("approval policy set");
+        expected
+            .sandbox_policy
+            .set(turn.sandbox_policy.clone())
+            .expect("sandbox policy set");
+        assert_eq!(config, expected);
+    }
+}

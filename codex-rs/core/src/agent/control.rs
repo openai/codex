@@ -27,7 +27,6 @@ impl AgentControl {
         Self { manager }
     }
 
-    #[allow(dead_code)] // Used by upcoming multi-agent tooling.
     /// Spawn a new agent thread and submit the initial prompt.
     ///
     /// If `headless` is true, a background drain task is spawned to prevent unbounded event growth
@@ -50,7 +49,6 @@ impl AgentControl {
         Ok(new_thread.thread_id)
     }
 
-    #[allow(dead_code)] // Used by upcoming multi-agent tooling.
     /// Send a `user` prompt to an existing agent thread.
     pub(crate) async fn send_prompt(
         &self,
@@ -69,7 +67,7 @@ impl AgentControl {
             .await
     }
 
-    #[allow(dead_code)] // Used by upcoming multi-agent tooling.
+    #[allow(dead_code)] // Will be used for collab tools.
     /// Fetch the last known status for `agent_id`, returning `NotFound` when unavailable.
     pub(crate) async fn get_status(&self, agent_id: ThreadId) -> AgentStatus {
         let Ok(state) = self.upgrade() else {
@@ -114,13 +112,63 @@ fn spawn_headless_drain(thread: Arc<CodexThread>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CodexAuth;
+    use crate::ThreadManager;
     use crate::agent::agent_status_from_event;
+    use crate::config::Config;
+    use crate::config::ConfigBuilder;
+    use assert_matches::assert_matches;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::TaskCompleteEvent;
     use codex_protocol::protocol::TaskStartedEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    async fn test_config() -> (TempDir, Config) {
+        let home = TempDir::new().expect("create temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        (home, config)
+    }
+
+    struct AgentControlHarness {
+        _home: TempDir,
+        config: Config,
+        manager: ThreadManager,
+        control: AgentControl,
+    }
+
+    impl AgentControlHarness {
+        async fn new() -> Self {
+            let (home, config) = test_config().await;
+            let manager = ThreadManager::with_models_provider_and_home(
+                CodexAuth::from_api_key("dummy"),
+                config.model_provider.clone(),
+                config.codex_home.clone(),
+            );
+            let control = manager.agent_control();
+            Self {
+                _home: home,
+                config,
+                manager,
+                control,
+            }
+        }
+
+        async fn start_thread(&self) -> (ThreadId, Arc<CodexThread>) {
+            let new_thread = self
+                .manager
+                .start_thread(self.config.clone())
+                .await
+                .expect("start thread");
+            (new_thread.thread_id, new_thread.thread)
+        }
+    }
 
     #[tokio::test]
     async fn send_prompt_errors_when_manager_dropped() {
@@ -184,5 +232,104 @@ mod tests {
     async fn on_event_updates_status_from_shutdown_complete() {
         let status = agent_status_from_event(&EventMsg::ShutdownComplete);
         assert_eq!(status, Some(AgentStatus::Shutdown));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_errors_when_manager_dropped() {
+        let control = AgentControl::default();
+        let (_home, config) = test_config().await;
+        let err = control
+            .spawn_agent(config, "hello".to_string(), false)
+            .await
+            .expect_err("spawn_agent should fail without a manager");
+        assert_eq!(
+            err.to_string(),
+            "unsupported operation: thread manager dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_prompt_errors_when_thread_missing() {
+        let harness = AgentControlHarness::new().await;
+        let thread_id = ThreadId::new();
+        let err = harness
+            .control
+            .send_prompt(thread_id, "hello".to_string())
+            .await
+            .expect_err("send_prompt should fail for missing thread");
+        assert_matches!(err, CodexErr::ThreadNotFound(id) if id == thread_id);
+    }
+
+    #[tokio::test]
+    async fn get_status_returns_not_found_for_missing_thread() {
+        let harness = AgentControlHarness::new().await;
+        let status = harness.control.get_status(ThreadId::new()).await;
+        assert_eq!(status, AgentStatus::NotFound);
+    }
+
+    #[tokio::test]
+    async fn get_status_returns_pending_init_for_new_thread() {
+        let harness = AgentControlHarness::new().await;
+        let (thread_id, _) = harness.start_thread().await;
+        let status = harness.control.get_status(thread_id).await;
+        assert_eq!(status, AgentStatus::PendingInit);
+    }
+
+    #[tokio::test]
+    async fn send_prompt_submits_user_message() {
+        let harness = AgentControlHarness::new().await;
+        let (thread_id, _thread) = harness.start_thread().await;
+
+        let submission_id = harness
+            .control
+            .send_prompt(thread_id, "hello from tests".to_string())
+            .await
+            .expect("send_prompt should succeed");
+        assert!(!submission_id.is_empty());
+        let expected = (
+            thread_id,
+            Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: "hello from tests".to_string(),
+                }],
+                final_output_json_schema: None,
+            },
+        );
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|entry| *entry == expected);
+        assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_creates_thread_and_sends_prompt() {
+        let harness = AgentControlHarness::new().await;
+        let thread_id = harness
+            .control
+            .spawn_agent(harness.config.clone(), "spawned".to_string(), false)
+            .await
+            .expect("spawn_agent should succeed");
+        let _thread = harness
+            .manager
+            .get_thread(thread_id)
+            .await
+            .expect("thread should be registered");
+        let expected = (
+            thread_id,
+            Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: "spawned".to_string(),
+                }],
+                final_output_json_schema: None,
+            },
+        );
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|entry| *entry == expected);
+        assert_eq!(captured, Some(expected));
     }
 }
