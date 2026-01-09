@@ -388,19 +388,11 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
     });
     let expected_permissions_msg_2 = permissions_message(&new_policy, AskForApproval::Never);
-    let expected_body2 = serde_json::json!(
-        [
-            body1["input"].as_array().unwrap().as_slice(),
-            [
-                expected_env_msg_2,
-                expected_permissions_msg_2,
-                expected_user_message_2
-            ]
-            .as_slice(),
-        ]
-        .concat()
-    );
-    assert_eq!(body2["input"], expected_body2);
+    let mut expected_body2 = body1["input"].as_array().expect("input array").to_vec();
+    expected_body2.push(expected_env_msg_2);
+    expected_body2.push(expected_permissions_msg_2);
+    expected_body2.push(expected_user_message_2);
+    assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
     Ok(())
 }
@@ -599,7 +591,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
 </environment_context>"#,
         new_cwd.path().display(),
         writable.path().display(),
-        shell.name(),
+        shell.name()
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
@@ -607,19 +599,11 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
     });
     let expected_permissions_msg_2 = permissions_message(&new_policy, AskForApproval::Never);
-    let expected_body2 = serde_json::json!(
-        [
-            body1["input"].as_array().unwrap().as_slice(),
-            [
-                expected_env_msg_2,
-                expected_permissions_msg_2,
-                expected_user_message_2
-            ]
-            .as_slice(),
-        ]
-        .concat()
-    );
-    assert_eq!(body2["input"], expected_body2);
+    let mut expected_body2 = body1["input"].as_array().expect("input array").to_vec();
+    expected_body2.push(expected_env_msg_2);
+    expected_body2.push(expected_permissions_msg_2);
+    expected_body2.push(expected_user_message_2);
+    assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
     Ok(())
 }
