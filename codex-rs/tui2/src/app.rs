@@ -227,6 +227,7 @@ async fn handle_model_migration_prompt_if_needed(
         id: target_model,
         reasoning_effort_mapping,
         migration_config_key,
+        migration_markdown,
         ..
     }) = upgrade
     {
@@ -269,6 +270,7 @@ async fn handle_model_migration_prompt_if_needed(
             &target_model,
             heading_label,
             target_description,
+            migration_markdown.clone(),
             can_opt_out,
         );
         match run_model_migration_prompt(tui, prompt_copy).await {
@@ -2207,6 +2209,9 @@ mod tests {
     fn model_migration_copy_to_plain_text(
         copy: &crate::model_migration::ModelMigrationCopy,
     ) -> String {
+        if let Some(markdown) = copy.markdown.as_ref() {
+            return markdown.clone();
+        }
         let mut s = String::new();
         for span in &copy.heading {
             s.push_str(&span.content);
@@ -2301,6 +2306,7 @@ mod tests {
             &upgrade.id,
             target.display_name,
             target_description,
+            upgrade.migration_markdown.clone(),
             can_opt_out,
         );
 

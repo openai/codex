@@ -197,6 +197,7 @@ async fn handle_model_migration_prompt_if_needed(
         migration_config_key,
         model_link,
         upgrade_copy,
+        migration_markdown,
     }) = upgrade
     {
         if migration_prompt_hidden(config, migration_config_key.as_str()) {
@@ -230,6 +231,7 @@ async fn handle_model_migration_prompt_if_needed(
             &target_model,
             model_link.clone(),
             upgrade_copy.clone(),
+            migration_markdown.clone(),
             heading_label,
             target_description,
             can_opt_out,
@@ -1420,6 +1422,9 @@ mod tests {
     fn model_migration_copy_to_plain_text(
         copy: &crate::model_migration::ModelMigrationCopy,
     ) -> String {
+        if let Some(markdown) = copy.markdown.as_ref() {
+            return markdown.clone();
+        }
         let mut s = String::new();
         for span in &copy.heading {
             s.push_str(&span.content);
@@ -1502,6 +1507,7 @@ mod tests {
             migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
             model_link: None,
             upgrade_copy: None,
+            migration_markdown: None,
         });
         available.retain(|preset| preset.model != "gpt-5-codex");
         available.push(current.clone());
@@ -1557,6 +1563,7 @@ mod tests {
             &upgrade.id,
             upgrade.model_link.clone(),
             upgrade.upgrade_copy.clone(),
+            upgrade.migration_markdown.clone(),
             target.display_name.clone(),
             target_description,
             can_opt_out,

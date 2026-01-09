@@ -318,6 +318,7 @@ fn gpt_52_codex_upgrade() -> ModelUpgrade {
             "Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
                 .to_string(),
         ),
+        migration_markdown: None,
     }
 }
 
