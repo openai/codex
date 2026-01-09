@@ -329,10 +329,10 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                 Ok(inline) => inline,
                                 Err(err) => return Some(inline_image_error_placeholder(err)),
                             };
-                            let Some(mime) = inline.mime.as_deref() else {
-                                return Some(unsupported_inline_image_error_placeholder("unknown"));
-                            };
-                            if !mime.starts_with("image/") {
+                            if let Some(mime) = inline.mime.as_deref()
+                                && !mime.starts_with("image/")
+                                && mime != "application/octet-stream"
+                            {
                                 return Some(unsupported_inline_image_error_placeholder(mime));
                             }
                             match load_and_resize_bytes(
@@ -613,6 +613,48 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::Image {
             image_url: data_url,
+        }]);
+
+        let ResponseInputItem::Message { content, .. } = item else {
+            panic!("expected message response input");
+        };
+        match content.as_slice() {
+            [ContentItem::InputImage { image_url }] => {
+                assert!(image_url.starts_with("data:image/"));
+            }
+            [ContentItem::InputText { text }] => {
+                panic!("expected input image, got placeholder: {text}");
+            }
+            _ => panic!("expected single input content item"),
+        }
+    }
+
+    #[test]
+    fn data_url_with_generic_mime_is_processed_locally() {
+        let payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ee9bQAAAABJRU5ErkJggg==";
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: format!("data:application/octet-stream;base64,{}", payload),
+        }]);
+
+        let ResponseInputItem::Message { content, .. } = item else {
+            panic!("expected message response input");
+        };
+        match content.as_slice() {
+            [ContentItem::InputImage { image_url }] => {
+                assert!(image_url.starts_with("data:image/"));
+            }
+            [ContentItem::InputText { text }] => {
+                panic!("expected input image, got placeholder: {text}");
+            }
+            _ => panic!("expected single input content item"),
+        }
+    }
+
+    #[test]
+    fn data_url_with_missing_mime_is_processed_locally() {
+        let payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ee9bQAAAABJRU5ErkJggg==";
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: format!("data:;base64,{}", payload),
         }]);
 
         let ResponseInputItem::Message { content, .. } = item else {
