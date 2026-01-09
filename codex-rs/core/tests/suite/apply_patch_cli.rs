@@ -47,6 +47,9 @@ async fn apply_patch_harness_with(
 ) -> Result<TestCodexHarness> {
     let builder = configure(test_codex()).with_config(|config| {
         config.include_apply_patch_tool = true;
+        if cfg!(windows) {
+            config.features.enable(Feature::PowershellUtf8);
+        }
     });
     TestCodexHarness::with_builder(builder).await
 }

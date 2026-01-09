@@ -1,6 +1,13 @@
 common --remote_download_minimal
-common --nobuild_runfile_links
 common --keep_going
+common --verbose_failures
+
+# Disable disk cache since we have remote one and aren't using persistent workers.
+common --disk_cache=
+
+# Rearrange caches on Windows so they're on the same volume as the checkout.
+common:windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
+common:windows --repository_cache=D:/a/.cache/bazel-repo-cache
 
 # We prefer to run the build actions entirely remotely so we can dial up the concurrency.
 # We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
@@ -16,5 +23,5 @@ common:macos --config=remote
 common:macos --strategy=remote
 common:macos --strategy=TestRunner=darwin-sandbox,local
 
-common:windows --strategy=TestRunner=local
-
+# On windows we can not cross-build the tests but run them locally due to what appears to be a Bazel bug
+# (windows vs unix path confusion)

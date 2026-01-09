@@ -246,6 +246,40 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
         .expect("serialize current shell command without login")
 }
 
+pub fn join_shell_command_args(command: &[String]) -> String {
+    if cfg!(windows) {
+        if command.len() == 1 {
+            return command[0].clone();
+        }
+        return join_cmd_args(command);
+    }
+    shlex::try_join(command.iter().map(String::as_str)).expect("serialize shell_command arguments")
+}
+
+fn join_cmd_args(command: &[String]) -> String {
+    command
+        .iter()
+        .map(|arg| quote_cmd_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_cmd_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "\"\"".to_string();
+    }
+
+    let needs_quotes = arg
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '^' | '&' | '|' | '<' | '>' | '(' | ')'));
+    if !needs_quotes {
+        return arg.to_string();
+    }
+
+    let escaped = arg.replace('"', "\"\"");
+    format!("\"{escaped}\"")
+}
+
 pub fn stdio_server_bin() -> Result<String, CargoBinError> {
     codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
 }
