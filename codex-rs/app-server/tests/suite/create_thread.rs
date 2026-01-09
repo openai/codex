@@ -1,7 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
@@ -12,6 +11,7 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
@@ -23,8 +23,9 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_conversation_create_and_send_message_ok() -> Result<()> {
     // Mock server – we won't strictly rely on it, but provide one to satisfy any model wiring.
-    let responses = vec![create_final_assistant_message_sse_response("Done")?];
-    let server = create_mock_chat_completions_server(responses).await;
+    let response_body = create_final_assistant_message_sse_response("Done")?;
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(&server, vec![response_body]).await;
 
     // Temporary Codex home with config pointing at the mock server.
     let codex_home = TempDir::new()?;
@@ -86,32 +87,30 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
     .await??;
     let _ok: SendUserMessageResponse = to_response::<SendUserMessageResponse>(send_resp)?;
 
-    // avoid race condition by waiting for the mock server to receive the chat.completions request
+    // Avoid race condition by waiting for the mock server to receive the responses request.
     let deadline = std::time::Instant::now() + DEFAULT_READ_TIMEOUT;
     let requests = loop {
-        let requests = server.received_requests().await.unwrap_or_default();
+        let requests = response_mock.requests();
         if !requests.is_empty() {
             break requests;
         }
         if std::time::Instant::now() >= deadline {
-            panic!("mock server did not receive the chat.completions request in time");
+            panic!("mock server did not receive the responses request in time");
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     };
 
-    // Verify the outbound request body matches expectations for Chat Completions.
+    // Verify the outbound request body matches expectations for Responses.
     let request = requests
         .first()
         .expect("mock server should have received at least one request");
-    let body = request.body_json::<serde_json::Value>()?;
+    let body = request.body_json();
     assert_eq!(body["model"], json!("o3"));
-    assert!(body["stream"].as_bool().unwrap_or(false));
-    let messages = body["messages"]
-        .as_array()
-        .expect("messages should be array");
-    let last = messages.last().expect("at least one message");
-    assert_eq!(last["role"], json!("user"));
-    assert_eq!(last["content"], json!("Hello"));
+    let user_texts = request.message_input_texts("user");
+    assert!(
+        user_texts.iter().any(|text| text == "Hello"),
+        "expected user input to include Hello, got {user_texts:?}"
+    );
 
     drop(server);
     Ok(())
@@ -133,7 +132,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "chat"
+wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

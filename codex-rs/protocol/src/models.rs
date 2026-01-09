@@ -397,7 +397,6 @@ pub struct FunctionCallOutputPayload {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
-    // TODO(jif) drop this.
     pub success: Option<bool>,
 }
 

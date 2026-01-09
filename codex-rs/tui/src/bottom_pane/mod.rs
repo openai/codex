@@ -264,6 +264,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn set_composer_input_enabled(
+        &mut self,
+        enabled: bool,
+        placeholder: Option<String>,
+    ) {
+        self.composer.set_input_enabled(enabled, placeholder);
+        self.request_redraw();
+    }
+
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         self.composer.clear_for_ctrl_c();
         self.request_redraw();

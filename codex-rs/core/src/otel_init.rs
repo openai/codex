@@ -6,7 +6,7 @@ use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
 use codex_otel::config::OtelTlsConfig as OtelTlsSettings;
-use codex_otel::otel_provider::OtelProvider;
+use codex_otel::traces::otel_provider::OtelProvider;
 use std::error::Error;
 
 /// Build an OpenTelemetry provider from the app Config.
@@ -18,6 +18,7 @@ pub fn build_provider(
 ) -> Result<Option<OtelProvider>, Box<dyn Error>> {
     let to_otel_exporter = |kind: &Kind| match kind {
         Kind::None => OtelExporter::None,
+        Kind::Statsig => OtelExporter::Statsig,
         Kind::OtlpHttp {
             endpoint,
             headers,
@@ -63,6 +64,11 @@ pub fn build_provider(
 
     let exporter = to_otel_exporter(&config.otel.exporter);
     let trace_exporter = to_otel_exporter(&config.otel.trace_exporter);
+    let metrics_exporter = if config.analytics {
+        to_otel_exporter(&config.otel.metrics_exporter)
+    } else {
+        OtelExporter::None
+    };
 
     OtelProvider::from(&OtelSettings {
         service_name: originator().value.to_owned(),
@@ -71,6 +77,7 @@ pub fn build_provider(
         environment: config.otel.environment.to_string(),
         exporter,
         trace_exporter,
+        metrics_exporter,
     })
 }
 

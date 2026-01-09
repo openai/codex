@@ -98,9 +98,9 @@ impl ModelsManager {
         if !remote_models_feature || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
             return Ok(());
         }
-        let auth = self.auth_manager.auth();
+        let auth = self.auth_manager.auth().await;
         let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 

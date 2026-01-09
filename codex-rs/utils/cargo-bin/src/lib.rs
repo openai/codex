@@ -1,6 +1,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+pub use path_absolutize;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CargoBinError {
     #[error("failed to read current exe")]
@@ -91,19 +93,33 @@ macro_rules! find_resource {
         // included in the compiled binary (even if it is built with Cargo), but
         // we only check it at runtime if `RUNFILES_DIR` is set.
         let resource = std::path::Path::new(&$resource);
-        let manifest_dir = match std::env::var("RUNFILES_DIR") {
+        match std::env::var("RUNFILES_DIR") {
             Ok(bazel_runtime_files) => match option_env!("BAZEL_PACKAGE") {
-                Some(bazel_package) => Ok(std::path::PathBuf::from(bazel_runtime_files)
-                    .join("_main")
-                    .join(bazel_package)),
+                Some(bazel_package) => {
+                    use $crate::path_absolutize::Absolutize;
+
+                    let manifest_dir = std::path::PathBuf::from(bazel_runtime_files)
+                        .join("_main")
+                        .join(bazel_package)
+                        .join(resource);
+                    // Note we also have to normalize (but not canonicalize!)
+                    // the path for _Bazel_ because the original value ends with
+                    // `codex-rs/exec-server/tests/common/../suite/bash`, but
+                    // the `tests/common` folder will not exist at runtime under
+                    // Bazel. As such, we have to normalize it before passing it
+                    // to `dotslash fetch`.
+                    manifest_dir.absolutize().map(|p| p.to_path_buf())
+                }
                 None => Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "BAZEL_PACKAGE not set in Bazel build",
                 )),
             },
-            Err(_) => Ok(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
-        };
-        manifest_dir.map(|dir| dir.join(resource))
+            Err(_) => {
+                let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                Ok(manifest_dir.join(resource))
+            }
+        }
     }};
 }
 
