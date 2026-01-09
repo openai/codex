@@ -6,7 +6,7 @@ use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
 use codex_otel::config::OtelTlsConfig as OtelTlsSettings;
-use codex_otel::traces::otel_provider::OtelProvider;
+use codex_otel::otel_provider::OtelProvider;
 use std::error::Error;
 
 /// Build an OpenTelemetry provider from the app Config.

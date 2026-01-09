@@ -2,21 +2,22 @@
 
 `codex-otel` is the OpenTelemetry integration crate for Codex. It provides:
 
-- Trace/log exporters and tracing subscriber layers (`codex_otel::traces::otel_provider`).
+- Trace/log/metrics exporters and tracing subscriber layers (`codex_otel::otel_provider`).
 - A structured event helper (`codex_otel::OtelManager`).
 - OpenTelemetry metrics support via OTLP exporters (`codex_otel::metrics`).
 - A metrics facade on `OtelManager` so tracing + metrics share metadata.
 
 ## Tracing and logs
 
-Create an OTEL provider from `OtelSettings`, then attach its layers to your
-`tracing_subscriber` registry:
+Create an OTEL provider from `OtelSettings`. The provider also configures
+metrics (when enabled), then attach its layers to your `tracing_subscriber`
+registry:
 
 ```rust
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
-use codex_otel::traces::otel_provider::OtelProvider;
+use codex_otel::otel_provider::OtelProvider;
 use tracing_subscriber::prelude::*;
 
 let settings = OtelSettings {

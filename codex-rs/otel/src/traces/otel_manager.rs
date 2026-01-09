@@ -1,4 +1,4 @@
-use crate::traces::otel_provider::traceparent_context_from_env;
+use crate::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ResponseEvent;
