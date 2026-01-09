@@ -12,3 +12,7 @@ common:macos --strategy=TestRunner=darwin-sandbox,local
 common:linux --strategy=TestRunner=processwrapper-sandbox,local
 common:windows --strategy=TestRunner=local
 
+# rules_rust experiences some confusion around which platform to build cargo build scripts for :( Try to workaround it.
+# Note: linux-sandbox is stronger, but not available in GHA.
+common:linux --strategy=CargoBuildScriptRun=processwrapper-sandbox,local
+
