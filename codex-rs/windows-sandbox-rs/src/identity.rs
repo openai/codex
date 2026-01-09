@@ -30,6 +30,18 @@ pub struct SandboxCreds {
     pub password: String,
 }
 
+/// Returns true when the on-disk setup artifacts exist and match the current
+/// setup version.
+///
+/// This reuses the same marker/users validation used by `require_logon_sandbox_creds`.
+pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
+    let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
+    if !marker_ok {
+        return false;
+    }
+    matches!(load_users(codex_home), Ok(Some(users)) if users.version_matches())
+}
+
 fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
     let path = setup_marker_path(codex_home);
     let marker = match fs::read_to_string(&path) {

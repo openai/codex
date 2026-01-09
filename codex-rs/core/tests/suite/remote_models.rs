@@ -9,6 +9,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::error::CodexErr;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AskForApproval;
@@ -32,6 +33,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
+use core_test_support::responses::mount_models_once_with_delay;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -45,6 +47,7 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
@@ -182,6 +185,95 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     assert_eq!(begin_event.source, ExecCommandSource::UnifiedExecStartup);
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_truncation_policy_without_override_preserves_remote() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    let slug = "codex-test-truncation-policy";
+    let remote_model = test_remote_model_with_policy(
+        slug,
+        ModelVisibility::List,
+        1,
+        TruncationPolicyConfig::bytes(12_000),
+    );
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let harness = build_remote_models_harness(&server, |config| {
+        config.model = Some("gpt-5.1".to_string());
+    })
+    .await?;
+
+    let models_manager = harness.thread_manager.get_models_manager();
+    wait_for_model_available(&models_manager, slug, &harness.config).await;
+
+    let model_info = models_manager
+        .construct_model_info(slug, &harness.config)
+        .await;
+    assert_eq!(
+        model_info.truncation_policy,
+        TruncationPolicyConfig::bytes(12_000)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_truncation_policy_with_tool_output_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    let slug = "codex-test-truncation-override";
+    let remote_model = test_remote_model_with_policy(
+        slug,
+        ModelVisibility::List,
+        1,
+        TruncationPolicyConfig::bytes(10_000),
+    );
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let harness = build_remote_models_harness(&server, |config| {
+        config.model = Some("gpt-5.1".to_string());
+        config.tool_output_token_limit = Some(50);
+    })
+    .await?;
+
+    let models_manager = harness.thread_manager.get_models_manager();
+    wait_for_model_available(&models_manager, slug, &harness.config).await;
+
+    let model_info = models_manager
+        .construct_model_info(slug, &harness.config)
+        .await;
+    assert_eq!(
+        model_info.truncation_policy,
+        TruncationPolicyConfig::bytes(200)
+    );
 
     Ok(())
 }
@@ -354,6 +446,75 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_request_times_out_after_5s() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let remote_model = test_remote_model("remote-timeout", ModelVisibility::List, 0);
+    let models_mock = mount_models_once_with_delay(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+        Duration::from_secs(6),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    let start = Instant::now();
+    let refresh = timeout(
+        Duration::from_secs(7),
+        manager.refresh_available_models_with_cache(&config),
+    )
+    .await;
+    let elapsed = start.elapsed();
+    let err = refresh
+        .expect("refresh should finish")
+        .expect_err("refresh should time out");
+    let request_summaries: Vec<String> = server
+        .received_requests()
+        .await
+        .expect("mock server should capture requests")
+        .iter()
+        .map(|req| format!("{} {}", req.method, req.url.path()))
+        .collect();
+    assert!(
+        elapsed >= Duration::from_millis(4_500),
+        "expected models call to block near the timeout; took {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(5_800),
+        "expected models call to time out before the delayed response; took {elapsed:?}"
+    );
+    match err {
+        CodexErr::Timeout => {}
+        other => panic!("expected timeout error, got {other:?}; requests: {request_summaries:?}"),
+    }
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected a single /models request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_hide_picker_only_models() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -461,6 +622,20 @@ where
 }
 
 fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> ModelInfo {
+    test_remote_model_with_policy(
+        slug,
+        visibility,
+        priority,
+        TruncationPolicyConfig::bytes(10_000),
+    )
+}
+
+fn test_remote_model_with_policy(
+    slug: &str,
+    visibility: ModelVisibility,
+    priority: i32,
+    truncation_policy: TruncationPolicyConfig,
+) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: format!("{slug} display"),
@@ -480,7 +655,7 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        truncation_policy,
         supports_parallel_tool_calls: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,

@@ -58,7 +58,10 @@ pub async fn supports_oauth_login(url: &str) -> Result<bool> {
 
 async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMap) -> Result<bool> {
     let base_url = Url::parse(url)?;
-    let builder = Client::builder().timeout(DISCOVERY_TIMEOUT);
+
+    // Use no_proxy to avoid a bug in the system-configuration crate that
+    // can result in a panic. See #8912.
+    let builder = Client::builder().timeout(DISCOVERY_TIMEOUT).no_proxy();
     let client = apply_default_headers(builder, default_headers).build()?;
 
     let mut last_error: Option<Error> = None;

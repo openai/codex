@@ -203,6 +203,7 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
+    let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
@@ -214,6 +215,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         if let Some(text) = descriptor.overlay_entry(state) {
             match descriptor.id {
                 ShortcutId::Commands => commands = text,
+                ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
@@ -226,6 +228,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
 
     let ordered = vec![
         commands,
+        shell_commands,
         newline,
         file_paths,
         paste_image,
@@ -302,6 +305,7 @@ fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
+    ShellCommands,
     InsertNewline,
     FilePaths,
     PasteImage,
@@ -383,6 +387,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " for commands",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ShellCommands,
+        bindings: &[ShortcutBinding {
+            key: key_hint::plain(KeyCode::Char('!')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " for shell commands",
     },
     ShortcutDescriptor {
         id: ShortcutId::InsertNewline,

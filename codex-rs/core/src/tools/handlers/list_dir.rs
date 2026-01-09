@@ -13,6 +13,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -62,11 +63,7 @@ impl ToolHandler for ListDirHandler {
             }
         };
 
-        let args: ListDirArgs = serde_json::from_str(&arguments).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to parse function arguments: {err:?}"
-            ))
-        })?;
+        let args: ListDirArgs = parse_arguments(&arguments)?;
 
         let ListDirArgs {
             dir_path,
@@ -125,6 +122,8 @@ async fn list_dir_slice(
         return Ok(Vec::new());
     }
 
+    entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+
     let start_index = offset - 1;
     if start_index >= entries.len() {
         return Err(FunctionCallError::RespondToModel(
@@ -135,11 +134,10 @@ async fn list_dir_slice(
     let remaining_entries = entries.len() - start_index;
     let capped_limit = limit.min(remaining_entries);
     let end_index = start_index + capped_limit;
-    let mut selected_entries = entries[start_index..end_index].to_vec();
-    selected_entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    let selected_entries = &entries[start_index..end_index];
     let mut formatted = Vec::with_capacity(selected_entries.len());
 
-    for entry in &selected_entries {
+    for entry in selected_entries {
         formatted.push(format_entry_line(entry));
     }
 
@@ -273,6 +271,7 @@ impl From<&FileType> for DirEntryKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -405,6 +404,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paginates_in_sorted_order() {
+        let temp = tempdir().expect("create tempdir");
+        let dir_path = temp.path();
+
+        let dir_a = dir_path.join("a");
+        let dir_b = dir_path.join("b");
+        tokio::fs::create_dir(&dir_a).await.expect("create a");
+        tokio::fs::create_dir(&dir_b).await.expect("create b");
+
+        tokio::fs::write(dir_a.join("a_child.txt"), b"a")
+            .await
+            .expect("write a child");
+        tokio::fs::write(dir_b.join("b_child.txt"), b"b")
+            .await
+            .expect("write b child");
+
+        let first_page = list_dir_slice(dir_path, 1, 2, 2)
+            .await
+            .expect("list page one");
+        assert_eq!(
+            first_page,
+            vec![
+                "a/".to_string(),
+                "  a_child.txt".to_string(),
+                "More than 2 entries found".to_string()
+            ]
+        );
+
+        let second_page = list_dir_slice(dir_path, 3, 2, 2)
+            .await
+            .expect("list page two");
+        assert_eq!(
+            second_page,
+            vec!["b/".to_string(), "  b_child.txt".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn handles_large_limit_without_overflow() {
         let temp = tempdir().expect("create tempdir");
         let dir_path = temp.path();
@@ -450,7 +487,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bfs_truncation() -> anyhow::Result<()> {
+    async fn truncation_respects_sorted_order() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let dir_path = temp.path();
         let nested = dir_path.join("nested");
@@ -467,7 +504,7 @@ mod tests {
             vec![
                 "nested/".to_string(),
                 "  child.txt".to_string(),
-                "root.txt".to_string(),
+                "  deeper/".to_string(),
                 "More than 3 entries found".to_string()
             ]
         );

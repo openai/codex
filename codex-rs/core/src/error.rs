@@ -22,7 +22,7 @@ use tokio::task::JoinError;
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
 /// Limit UI error messages to a reasonable size while keeping useful context.
-const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 4 KiB
+const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 2 KiB
 
 #[derive(Error, Debug)]
 pub enum SandboxErr {
@@ -178,6 +178,43 @@ pub enum CodexErr {
 impl From<CancelErr> for CodexErr {
     fn from(_: CancelErr) -> Self {
         CodexErr::TurnAborted
+    }
+}
+
+impl CodexErr {
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            CodexErr::TurnAborted
+            | CodexErr::Interrupted
+            | CodexErr::EnvVar(_)
+            | CodexErr::Fatal(_)
+            | CodexErr::UsageNotIncluded
+            | CodexErr::QuotaExceeded
+            | CodexErr::InvalidImageRequest()
+            | CodexErr::InvalidRequest(_)
+            | CodexErr::RefreshTokenFailed(_)
+            | CodexErr::UnsupportedOperation(_)
+            | CodexErr::Sandbox(_)
+            | CodexErr::LandlockSandboxExecutableNotProvided
+            | CodexErr::RetryLimit(_)
+            | CodexErr::ContextWindowExceeded
+            | CodexErr::ThreadNotFound(_)
+            | CodexErr::Spawn
+            | CodexErr::SessionConfiguredNotFirstEvent
+            | CodexErr::UsageLimitReached(_) => false,
+            CodexErr::Stream(..)
+            | CodexErr::Timeout
+            | CodexErr::UnexpectedStatus(_)
+            | CodexErr::ResponseStreamFailed(_)
+            | CodexErr::ConnectionFailed(_)
+            | CodexErr::InternalServerError
+            | CodexErr::InternalAgentDied
+            | CodexErr::Io(_)
+            | CodexErr::Json(_)
+            | CodexErr::TokioJoin(_) => true,
+            #[cfg(target_os = "linux")]
+            CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => false,
+        }
     }
 }
 

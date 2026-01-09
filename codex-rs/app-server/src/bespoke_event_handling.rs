@@ -13,9 +13,9 @@ use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
-use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -26,6 +26,7 @@ use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -1193,6 +1194,21 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
     }
 }
 
+fn map_file_change_approval_decision(
+    decision: FileChangeApprovalDecision,
+) -> (ReviewDecision, Option<PatchApplyStatus>) {
+    match decision {
+        FileChangeApprovalDecision::Accept => (ReviewDecision::Approved, None),
+        FileChangeApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
+        FileChangeApprovalDecision::Decline => {
+            (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
+        }
+        FileChangeApprovalDecision::Cancel => {
+            (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn on_file_change_request_approval_response(
     event_turn_id: String,
@@ -1211,23 +1227,12 @@ async fn on_file_change_request_approval_response(
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
                     FileChangeRequestApprovalResponse {
-                        decision: ApprovalDecision::Decline,
+                        decision: FileChangeApprovalDecision::Decline,
                     }
                 });
 
-            let (decision, completion_status) = match response.decision {
-                ApprovalDecision::Accept
-                | ApprovalDecision::AcceptForSession
-                | ApprovalDecision::AcceptWithExecpolicyAmendment { .. } => {
-                    (ReviewDecision::Approved, None)
-                }
-                ApprovalDecision::Decline => {
-                    (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
-                }
-                ApprovalDecision::Cancel => {
-                    (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
-                }
-            };
+            let (decision, completion_status) =
+                map_file_change_approval_decision(response.decision);
             // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
             // Only short-circuit on declines/cancels/failures.
             (decision, completion_status)
@@ -1281,16 +1286,18 @@ async fn on_command_execution_request_approval_response(
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
                     CommandExecutionRequestApprovalResponse {
-                        decision: ApprovalDecision::Decline,
+                        decision: CommandExecutionApprovalDecision::Decline,
                     }
                 });
 
             let decision = response.decision;
 
             let (decision, completion_status) = match decision {
-                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
-                ApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
-                ApprovalDecision::AcceptWithExecpolicyAmendment {
+                CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                CommandExecutionApprovalDecision::AcceptForSession => {
+                    (ReviewDecision::ApprovedForSession, None)
+                }
+                CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
                     execpolicy_amendment,
                 } => (
                     ReviewDecision::ApprovedExecpolicyAmendment {
@@ -1298,11 +1305,11 @@ async fn on_command_execution_request_approval_response(
                     },
                     None,
                 ),
-                ApprovalDecision::Decline => (
+                CommandExecutionApprovalDecision::Decline => (
                     ReviewDecision::Denied,
                     Some(CommandExecutionStatus::Declined),
                 ),
-                ApprovalDecision::Cancel => (
+                CommandExecutionApprovalDecision::Cancel => (
                     ReviewDecision::Abort,
                     Some(CommandExecutionStatus::Declined),
                 ),
@@ -1440,6 +1447,14 @@ mod tests {
 
     fn new_turn_summary_store() -> TurnSummaryStore {
         Arc::new(Mutex::new(HashMap::new()))
+    }
+
+    #[test]
+    fn file_change_accept_for_session_maps_to_approved_for_session() {
+        let (decision, completion_status) =
+            map_file_change_approval_decision(FileChangeApprovalDecision::AcceptForSession);
+        assert_eq!(decision, ReviewDecision::ApprovedForSession);
+        assert_eq!(completion_status, None);
     }
 
     #[tokio::test]

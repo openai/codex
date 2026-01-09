@@ -1,6 +1,7 @@
 use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
 use codex_core::protocol::SandboxPolicy;
+use codex_utils_cargo_bin::find_resource;
 use rmcp::ClientHandler;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleClient;
@@ -34,16 +35,10 @@ where
 {
     let mcp_executable = codex_utils_cargo_bin::cargo_bin("codex-exec-mcp-server")?;
     let execve_wrapper = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")?;
-    // `bash` requires a special lookup when running under Buck because it is a
-    // _resource_ rather than a binary target.
-    let bash = if let Some(root) = codex_utils_cargo_bin::buck_project_root()? {
-        root.join("codex-rs/exec-server/tests/suite/bash")
-    } else {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("suite")
-            .join("bash")
-    };
+
+    // `bash` is a test resource rather than a binary target, so we must use
+    // `find_resource!` to locate it instead of `cargo_bin()`.
+    let bash = find_resource!("../suite/bash")?;
 
     // Need to ensure the artifact associated with the bash DotSlash file is
     // available before it is run in a read-only sandbox.

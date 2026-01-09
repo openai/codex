@@ -1878,6 +1878,20 @@ pub enum ReviewDecision {
     Abort,
 }
 
+impl ReviewDecision {
+    /// Returns an opaque version of the decision without PII. We can't use an ignored flag
+    /// on `serde` because the serialization is required by some surfaces.
+    pub fn to_opaque_string(&self) -> &'static str {
+        match self {
+            ReviewDecision::Approved => "approved",
+            ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
+            ReviewDecision::ApprovedForSession => "approved_for_session",
+            ReviewDecision::Denied => "denied",
+            ReviewDecision::Abort => "abort",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]

@@ -251,7 +251,7 @@ pub async fn run_main(
     }
 
     #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config).await {
+    if let Err(err) = enforce_login_restrictions(&config) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -314,7 +314,7 @@ pub async fn run_main(
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
-    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None);
 
     #[allow(clippy::print_stderr)]
     let otel = match otel {
