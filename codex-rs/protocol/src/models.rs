@@ -200,28 +200,47 @@ impl DeveloperInstructions {
         Self { text }
     }
 
-    pub fn from_permissions(sandbox_mode: SandboxMode, approval_policy: AskForApproval) -> Self {
-        let network_access = match sandbox_mode {
-            SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
-            SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
+    pub fn from_policy(sandbox_policy: &SandboxPolicy, approval_policy: AskForApproval) -> Self {
+        let network_access = if sandbox_policy.has_full_network_access() {
+            NetworkAccess::Enabled
+        } else {
+            NetworkAccess::Restricted
         };
+
+        let (sandbox_mode, writable_roots) = match sandbox_policy {
+            SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
+            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, None),
+            SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                let roots = if writable_roots.is_empty() {
+                    None
+                } else {
+                    Some(writable_roots.clone())
+                };
+                (SandboxMode::WorkspaceWrite, roots)
+            }
+        };
+
         DeveloperInstructions::from_permissions_with_network(
             sandbox_mode,
             network_access,
             approval_policy,
-            None,
+            writable_roots,
         )
     }
 
-    pub fn from_permissions_with_network(
+    fn from_permissions_with_network(
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
         approval_policy: AskForApproval,
         writable_roots: Option<Vec<AbsolutePathBuf>>,
     ) -> Self {
-        DeveloperInstructions::sandbox_text(sandbox_mode, network_access)
+        let start_tag = DeveloperInstructions::new("<permissions instructions>");
+        let end_tag = DeveloperInstructions::new("</permissions instructions>");
+        start_tag.concat(DeveloperInstructions::sandbox_text(sandbox_mode, network_access))
             .concat(DeveloperInstructions::from(approval_policy))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
+            .concat(end_tag)
     }
 
     fn from_writable_roots(writable_roots: Option<Vec<AbsolutePathBuf>>) -> Self {
@@ -243,42 +262,6 @@ impl DeveloperInstructions {
             format!(" The writable roots are {}.", roots_list.join(", "))
         };
         DeveloperInstructions::new(text)
-    }
-
-    pub fn from_policy(sandbox_policy: &SandboxPolicy, approval_policy: AskForApproval) -> Self {
-        let (sandbox_mode, network_access, writable_roots) = match sandbox_policy {
-            SandboxPolicy::DangerFullAccess => {
-                (SandboxMode::DangerFullAccess, NetworkAccess::Enabled, None)
-            }
-            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, NetworkAccess::Restricted, None),
-            SandboxPolicy::ExternalSandbox { network_access } => {
-                (SandboxMode::DangerFullAccess, *network_access, None)
-            }
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots,
-                network_access,
-                ..
-            } => {
-                let net = if *network_access {
-                    NetworkAccess::Enabled
-                } else {
-                    NetworkAccess::Restricted
-                };
-                let roots = if writable_roots.is_empty() {
-                    None
-                } else {
-                    Some(writable_roots.clone())
-                };
-                (SandboxMode::WorkspaceWrite, net, roots)
-            }
-        };
-
-        DeveloperInstructions::from_permissions_with_network(
-            sandbox_mode,
-            network_access,
-            approval_policy,
-            writable_roots,
-        )
     }
 
     fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
@@ -766,8 +749,8 @@ mod tests {
         );
 
         assert_eq!(
-            DeveloperInstructions::from_permissions(
-                SandboxMode::DangerFullAccess,
+            DeveloperInstructions::from_policy(
+                &SandboxPolicy::DangerFullAccess,
                 AskForApproval::Never
             ),
             combined

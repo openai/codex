@@ -17,6 +17,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::RawResponseItemEvent;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -351,8 +352,8 @@ fn assert_permissions_message(item: &ResponseItem) {
         ResponseItem::Message { role, content, .. } => {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
-            let expected = DeveloperInstructions::from_permissions(
-                SandboxMode::DangerFullAccess,
+            let expected = DeveloperInstructions::from_policy(
+                &SandboxPolicy::DangerFullAccess,
                 AskForApproval::Never,
             )
             .into_text();
