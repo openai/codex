@@ -754,7 +754,7 @@ mod tests {
 
         let from_policy = DeveloperInstructions::from_policy(
             &SandboxPolicy::DangerFullAccess,
-            AskForApproval::Never
+            AskForApproval::Never,
         );
         assert_eq!(
             from_policy,
