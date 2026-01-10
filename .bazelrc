@@ -39,7 +39,10 @@ common --grpc_keepalive_time=30s
 # memory in exchange for higher download concurrency.
 common --jobs=30
 
+# These configs are split so linux CI can configure a custom exec platform.
 common:remote --extra_execution_platforms=//:rbe
-common:remote --remote_executor=grpcs://remote.buildbuddy.io
-common:remote --jobs=800
+common:remote --config=remote-base
+
+common:remote-base --remote_executor=grpcs://remote.buildbuddy.io
+common:remote-base --jobs=800
 
