@@ -46,6 +46,14 @@ fn extract_output_text(item: &Value) -> Option<&str> {
     })
 }
 
+fn exec_command_args(mut args: Value) -> Value {
+    if let Value::Object(map) = &mut args
+        && map.contains_key("cmd") {
+            map.entry("login".to_string()).or_insert(Value::Bool(false));
+        }
+    args
+}
+
 #[derive(Debug)]
 struct ParsedUnifiedExecOutput {
     chunk_id: Option<String>,
@@ -171,10 +179,10 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
         "*** Begin Patch\n*** Add File: uexec_apply.txt\n+hello from unified exec\n*** End Patch";
     let command = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
     let call_id = "uexec-apply-patch";
-    let args = json!({
+    let args = exec_command_args(json!({
         "cmd": command,
         "yield_time_ms": 250,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -299,11 +307,11 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec-begin-event";
-    let args = json!({
+    let args = exec_command_args(json!({
         "shell": "bash".to_string(),
         "cmd": "/bin/echo hello unified exec".to_string(),
         "yield_time_ms": 250,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -342,7 +350,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     })
     .await;
 
-    assert_command(&begin_event.command, "-lc", "/bin/echo hello unified exec");
+    assert_command(&begin_event.command, "-c", "/bin/echo hello unified exec");
 
     assert_eq!(begin_event.cwd, cwd.path());
 
@@ -374,11 +382,11 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
     std::fs::create_dir_all(cwd.path().join(&workdir_rel))?;
 
     let call_id = "uexec-workdir-relative";
-    let args = json!({
+    let args = exec_command_args(json!({
         "cmd": "pwd",
         "yield_time_ms": 250,
         "workdir": workdir_rel.to_string_lossy().to_string(),
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -452,11 +460,11 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     std::fs::create_dir_all(&workdir)?;
 
     let call_id = "uexec-workdir";
-    let args = json!({
+    let args = exec_command_args(json!({
         "cmd": "pwd",
         "yield_time_ms": 250,
         "workdir": workdir.to_string_lossy().to_string(),
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -528,16 +536,16 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec-end-event";
-    let args = json!({
+    let args = exec_command_args(json!({
         "cmd": "/bin/echo END-EVENT".to_string(),
         "yield_time_ms": 250,
-    });
+    }));
     let poll_call_id = "uexec-end-event-poll";
-    let poll_args = json!({
+    let poll_args = exec_command_args(json!({
         "chars": "",
         "session_id": 1000,
         "yield_time_ms": 250,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -615,10 +623,10 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec-delta-1";
-    let args = json!({
+    let args = exec_command_args(json!({
         "cmd": "printf 'HELLO-UEXEC'",
         "yield_time_ms": 1000,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -688,10 +696,10 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 
     let call_id = "uexec-full-lifecycle";
     // This timing force the long-standing PTY
-    let args = json!({
+    let args = exec_command_args(json!({
         "cmd": "sleep 0.5; printf 'HELLO-FULL-LIFECYCLE'",
         "yield_time_ms": 1000,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -794,17 +802,17 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
     } = builder.build(&server).await?;
 
     let open_call_id = "uexec-open";
-    let open_args = json!({
+    let open_args = exec_command_args(json!({
         "cmd": "/bin/bash -i",
         "yield_time_ms": 200,
-    });
+    }));
 
     let stdin_call_id = "uexec-stdin-delta";
-    let stdin_args = json!({
+    let stdin_args = exec_command_args(json!({
         "chars": "echo WSTDIN-MARK\\n",
         "session_id": 1000,
         "yield_time_ms": 800,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -893,33 +901,33 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
     } = builder.build(&server).await?;
 
     let open_call_id = "uexec-delayed-open";
-    let open_args = json!({
+    let open_args = exec_command_args(json!({
         "cmd": "sleep 3 && echo MARKER1 && sleep 3 && echo MARKER2",
         "yield_time_ms": 10,
-    });
+    }));
 
     // Poll stdin three times: first for no output, second after the first marker,
     // and a final long poll to capture the second marker.
     let first_poll_call_id = "uexec-delayed-poll-1";
-    let first_poll_args = json!({
+    let first_poll_args = exec_command_args(json!({
         "chars": "",
         "session_id": 1000,
         "yield_time_ms": 10,
-    });
+    }));
 
     let second_poll_call_id = "uexec-delayed-poll-2";
-    let second_poll_args = json!({
+    let second_poll_args = exec_command_args(json!({
         "chars": "",
         "session_id": 1000,
         "yield_time_ms": 4000,
-    });
+    }));
 
     let third_poll_call_id = "uexec-delayed-poll-3";
-    let third_poll_args = json!({
+    let third_poll_args = exec_command_args(json!({
         "chars": "",
         "session_id": 1000,
         "yield_time_ms": 6000,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -1083,18 +1091,18 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
     } = builder.build(&server).await?;
 
     let open_call_id = "uexec-open-session";
-    let open_args = json!({
+    let open_args = exec_command_args(json!({
         "shell": "bash".to_string(),
         "cmd": "sleep 0.1".to_string(),
         "yield_time_ms": 10,
-    });
+    }));
 
     let poll_call_id = "uexec-poll-empty";
-    let poll_args = json!({
+    let poll_args = exec_command_args(json!({
         "chars": "",
         "session_id": 1000,
         "yield_time_ms": 150,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -1166,7 +1174,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
 
     let open_event = &begin_events[0];
 
-    assert_command(&open_event.command, "-lc", "sleep 0.1");
+    assert_command(&open_event.command, "-c", "sleep 0.1");
 
     assert!(
         open_event.interaction_input.is_none(),
@@ -1199,11 +1207,11 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec-metadata";
-    let args = serde_json::json!({
+    let args = exec_command_args(serde_json::json!({
         "cmd": "printf 'token one token two token three token four token five token six token seven'",
         "yield_time_ms": 500,
         "max_output_tokens": 6,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -1306,10 +1314,10 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec-early-exit";
-    let args = serde_json::json!({
+    let args = exec_command_args(serde_json::json!({
         "cmd": "sleep 0.05",
         "yield_time_ms": 31415,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -1401,20 +1409,20 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     let send_call_id = "uexec-cat-send";
     let exit_call_id = "uexec-cat-exit";
 
-    let start_args = serde_json::json!({
+    let start_args = exec_command_args(serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 500,
-    });
-    let send_args = serde_json::json!({
+    }));
+    let send_args = exec_command_args(serde_json::json!({
         "chars": "hello unified exec\n",
         "session_id": 1000,
         "yield_time_ms": 500,
-    });
-    let exit_args = serde_json::json!({
+    }));
+    let exit_args = exec_command_args(serde_json::json!({
         "chars": "\u{0004}",
         "session_id": 1000,
         "yield_time_ms": 500,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -1560,24 +1568,24 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
     } = builder.build(&server).await?;
 
     let start_call_id = "uexec-end-on-exit-start";
-    let start_args = serde_json::json!({
+    let start_args = exec_command_args(serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 200,
-    });
+    }));
 
     let echo_call_id = "uexec-end-on-exit-echo";
-    let echo_args = serde_json::json!({
+    let echo_args = exec_command_args(serde_json::json!({
         "chars": "bye-END\n",
         "session_id": 1000,
         "yield_time_ms": 300,
-    });
+    }));
 
     let exit_call_id = "uexec-end-on-exit";
-    let exit_args = serde_json::json!({
+    let exit_args = exec_command_args(serde_json::json!({
         "chars": "\u{0004}",
         "session_id": 1000,
         "yield_time_ms": 500,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -1670,10 +1678,10 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
 
     let call_id = "uexec-long-running";
     let command = format!("printf '%s' $$ > '{pid_path_str}' && exec sleep 3000");
-    let args = json!({
+    let args = exec_command_args(json!({
         "cmd": command,
         "yield_time_ms": 250,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -1769,17 +1777,17 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     } = builder.build(&server).await?;
 
     let first_call_id = "uexec-start";
-    let first_args = serde_json::json!({
+    let first_args = exec_command_args(serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 200,
-    });
+    }));
 
     let second_call_id = "uexec-stdin";
-    let second_args = serde_json::json!({
+    let second_args = exec_command_args(serde_json::json!({
         "chars": "hello unified exec\n",
         "session_id": 1000,
         "yield_time_ms": 500,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -1900,17 +1908,17 @@ PY
 "#;
 
     let first_call_id = "uexec-lag-start";
-    let first_args = serde_json::json!({
+    let first_args = exec_command_args(serde_json::json!({
         "cmd": script,
         "yield_time_ms": 25,
-    });
+    }));
 
     let second_call_id = "uexec-lag-poll";
-    let second_args = serde_json::json!({
+    let second_args = exec_command_args(serde_json::json!({
         "chars": "",
         "session_id": 1000,
         "yield_time_ms": 2_000,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -2011,17 +2019,17 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     } = builder.build(&server).await?;
 
     let first_call_id = "uexec-timeout";
-    let first_args = serde_json::json!({
+    let first_args = exec_command_args(serde_json::json!({
         "cmd": "sleep 0.5; echo ready",
         "yield_time_ms": 10,
-    });
+    }));
 
     let second_call_id = "uexec-poll";
-    let second_args = serde_json::json!({
+    let second_args = exec_command_args(serde_json::json!({
         "chars": "",
         "session_id": 1000,
         "yield_time_ms": 800,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -2123,11 +2131,11 @@ PY
 "#;
 
     let call_id = "uexec-large-output";
-    let args = serde_json::json!({
+    let args = exec_command_args(serde_json::json!({
         "cmd": script,
         "max_output_tokens": 100,
         "yield_time_ms": 500,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -2202,10 +2210,10 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec";
-    let args = serde_json::json!({
+    let args = exec_command_args(serde_json::json!({
         "cmd": "echo 'hello'",
         "yield_time_ms": 500,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -2282,17 +2290,17 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     } = builder.build(&server).await?;
 
     let startup_call_id = "uexec-python-seatbelt";
-    let startup_args = serde_json::json!({
+    let startup_args = exec_command_args(serde_json::json!({
         "cmd": format!("{} -i", python.display()),
         "yield_time_ms": 1_500,
-    });
+    }));
 
     let exit_call_id = "uexec-python-exit";
-    let exit_args = serde_json::json!({
+    let exit_args = exec_command_args(serde_json::json!({
         "chars": "exit()\n",
         "session_id": 1000,
         "yield_time_ms": 1_500,
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -2396,9 +2404,9 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec";
-    let args = serde_json::json!({
+    let args = exec_command_args(serde_json::json!({
         "cmd": "echo 'hello crossplat'",
-    });
+    }));
 
     let responses = vec![
         sse(vec![
@@ -2472,17 +2480,17 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     const FILLER_SESSIONS: i32 = MAX_SESSIONS_FOR_TEST - 1;
 
     let keep_call_id = "uexec-prune-keep";
-    let keep_args = serde_json::json!({
+    let keep_args = exec_command_args(serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 250,
-    });
+    }));
 
     let prune_call_id = "uexec-prune-target";
     // Give the sleeper time to exit before the filler sessions trigger pruning.
-    let prune_args = serde_json::json!({
+    let prune_args = exec_command_args(serde_json::json!({
         "cmd": "sleep 1",
         "yield_time_ms": 1_250,
-    });
+    }));
 
     let mut events = vec![ev_response_created("resp-prune-1")];
     events.push(ev_function_call(
@@ -2497,10 +2505,10 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     ));
 
     for idx in 0..FILLER_SESSIONS {
-        let filler_args = serde_json::json!({
+        let filler_args = exec_command_args(serde_json::json!({
             "cmd": format!("echo filler {idx}"),
             "yield_time_ms": 250,
-        });
+        }));
         let call_id = format!("uexec-prune-fill-{idx}");
         events.push(ev_function_call(
             &call_id,
@@ -2510,11 +2518,11 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     }
 
     let keep_write_call_id = "uexec-prune-keep-write";
-    let keep_write_args = serde_json::json!({
+    let keep_write_args = exec_command_args(serde_json::json!({
         "chars": "still alive\n",
         "session_id": 1000,
         "yield_time_ms": 500,
-    });
+    }));
     events.push(ev_function_call(
         keep_write_call_id,
         "write_stdin",
@@ -2522,11 +2530,11 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     ));
 
     let probe_call_id = "uexec-prune-probe";
-    let probe_args = serde_json::json!({
+    let probe_args = exec_command_args(serde_json::json!({
         "chars": "should fail\n",
         "session_id": 1001,
         "yield_time_ms": 500,
-    });
+    }));
     events.push(ev_function_call(
         probe_call_id,
         "write_stdin",
