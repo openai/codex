@@ -176,7 +176,7 @@ fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
         // Handle -Force, -Force:, -Force; (trailing punctuation)
         // We use trim_end_matches for simplicity/performance. If this becomes insufficient
         // (e.g. need to handle complex surrounding punctuation), consider using a Regex.
-        let trimmed = t.trim_end_matches(|c| c == ';' || c == ')' || c == '}' || c == ']');
+        let trimmed = t.trim_end_matches([';', ')', '}', ']']);
         trimmed == "-force" || trimmed.starts_with("-force:")
     });
     has_delete && has_force
