@@ -247,13 +247,12 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
 
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
-    include_label: bool,
-    label_number: usize,
+    label_number: Option<usize>,
 ) -> Vec<ContentItem> {
     match load_and_resize_to_fit(path) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
-            if include_label {
+            if let Some(label_number) = label_number {
                 items.push(ContentItem::InputText {
                     text: local_image_open_tag_text(label_number),
                 });
@@ -261,7 +260,7 @@ pub fn local_image_content_items_with_label_number(
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
             });
-            if include_label {
+            if label_number.is_some() {
                 items.push(ContentItem::InputText {
                     text: LOCAL_IMAGE_CLOSE_TAG.to_string(),
                 });
@@ -404,7 +403,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     ],
                     UserInput::LocalImage { path } => {
                         image_index += 1;
-                        local_image_content_items_with_label_number(&path, true, image_index)
+                        local_image_content_items_with_label_number(&path, Some(image_index))
                     }
                     UserInput::Skill { .. } => Vec::new(), // Skill bodies are injected later in core
                 })
