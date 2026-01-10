@@ -28,7 +28,10 @@ codex_rust_crate(
     #
     # TODO(aibrahim): Update the tests so that `just bazel-remote-test` succeeds
     # without this workaround.
-    test_data_extra = ["//:AGENTS.md"],
+    test_data_extra = [
+        "//:AGENTS.md",
+        "config.schema.json",
+    ],
     integration_deps_extra = ["//codex-rs/core/tests/common:common"],
     test_tags = ["no-sandbox"],
     extra_binaries = [

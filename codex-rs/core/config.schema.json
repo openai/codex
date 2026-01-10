@@ -75,6 +75,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "collab": {
+          "type": "boolean"
+        },
         "elevated_windows_sandbox": {
           "type": "boolean"
         },
@@ -94,6 +97,9 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
+          "type": "boolean"
+        },
+        "hierarchical_agents": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -134,6 +140,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "feedback": {
+      "description": "When `false`, disables feedback collection across Codex product surfaces. Defaults to `true`.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/FeedbackConfigToml"
+        }
+      ]
     },
     "file_opener": {
       "description": "Optional URI-based file opener. If set, citations to files in the model output will be hyperlinked using the specified URI scheme.",
@@ -383,6 +397,32 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AltScreenMode": {
+      "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n**Background:** The alternate screen buffer provides a cleaner fullscreen experience without polluting the terminal's scrollback history. However, it conflicts with terminal multiplexers like Zellij that strictly follow the xterm specification, which defines that alternate screen buffers should not have scrollback.\n\n**Zellij's behavior:** Zellij intentionally disables scrollback in alternate screen mode (see https://github.com/zellij-org/zellij/pull/1032) to comply with the xterm spec. This is by design and not configurable in Zellij—there is no option to enable scrollback in alternate screen mode.\n\n**Solution:** This setting provides a pragmatic workaround: - `auto` (default): Automatically detect the terminal multiplexer. If running in Zellij, disable alternate screen to preserve scrollback. Enable it everywhere else. - `always`: Always use alternate screen mode (original behavior before this fix). - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback in all multiplexers.\n\nThe CLI flag `--no-alt-screen` can override this setting at runtime.",
+      "oneOf": [
+        {
+          "description": "Auto-detect: disable alternate screen in Zellij, enable elsewhere.",
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "description": "Always use alternate screen (original behavior).",
+          "type": "string",
+          "enum": [
+            "always"
+          ]
+        },
+        {
+          "description": "Never use alternate screen (inline mode only).",
+          "type": "string",
+          "enum": [
+            "never"
+          ]
+        }
+      ]
+    },
     "AnalyticsConfigToml": {
       "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "type": "object",
@@ -486,6 +526,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "collab": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -505,6 +548,9 @@
               "type": "boolean"
             },
             "experimental_windows_sandbox": {
+              "type": "boolean"
+            },
+            "hierarchical_agents": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -575,6 +621,16 @@
           "type": "boolean"
         },
         "tools_web_search": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FeedbackConfigToml": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "When `false`, disables the feedback flow across Codex product surfaces.",
           "type": "boolean"
         }
       },
@@ -1236,6 +1292,15 @@
       "description": "Collection of settings that are specific to the TUI.",
       "type": "object",
       "properties": {
+        "alternate_screen": {
+          "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n- `auto` (default): Disable alternate screen in Zellij, enable elsewhere. - `always`: Always use alternate screen (original behavior). - `never`: Never use alternate screen (inline mode only, preserves scrollback).\n\nUsing alternate screen provides a cleaner fullscreen experience but prevents scrollback in terminal multiplexers like Zellij that follow the xterm spec.",
+          "default": "auto",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AltScreenMode"
+            }
+          ]
+        },
         "animations": {
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "default": true,

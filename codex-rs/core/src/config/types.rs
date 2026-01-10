@@ -290,7 +290,8 @@ pub struct AnalyticsConfigToml {
     pub enabled: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct FeedbackConfigToml {
     /// When `false`, disables the feedback flow across Codex product surfaces.
     pub enabled: Option<bool>,
