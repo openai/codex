@@ -27,3 +27,5 @@ platform(
         "OSFamily": "Linux",
     },
 )
+
+exports_files(["AGENTS.md"])
