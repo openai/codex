@@ -1447,7 +1447,8 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            } if modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
                 && c.eq_ignore_ascii_case(&'v') =>
             {
                 match paste_image_to_temp_png() {
