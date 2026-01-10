@@ -18,6 +18,7 @@ use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
+use core_test_support::prepare_test_project_root;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::skip_if_no_network;
@@ -139,9 +140,11 @@ async fn summarize_context_three_requests_and_instructions() {
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
+    let (_project_root, project_cwd) = prepare_test_project_root(&home);
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
+    config.cwd = project_cwd;
     config.model_auto_compact_token_limit = Some(200_000);
     let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
@@ -411,9 +414,11 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
 
     let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
+    let (_project_root, project_cwd) = prepare_test_project_root(&home);
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
+    config.cwd = project_cwd;
 
     let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
@@ -1029,9 +1034,11 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
+    let (_project_root, project_cwd) = prepare_test_project_root(&home);
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
+    config.cwd = project_cwd;
     config.model_auto_compact_token_limit = Some(200_000);
     let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
@@ -1358,9 +1365,11 @@ async fn auto_compact_persists_rollout_entries() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
+    let (_project_root, project_cwd) = prepare_test_project_root(&home);
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
+    config.cwd = project_cwd;
     config.model_auto_compact_token_limit = Some(200_000);
     let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
@@ -1607,9 +1616,11 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
+    let (_project_root, project_cwd) = prepare_test_project_root(&home);
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
+    config.cwd = project_cwd;
     let codex = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),

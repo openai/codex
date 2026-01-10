@@ -5,6 +5,7 @@ use codex_utils_cargo_bin::find_resource;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
+use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -17,6 +18,23 @@ pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
 pub mod test_codex_exec;
+
+pub fn prepare_test_project_root(codex_home: &TempDir) -> (TempDir, PathBuf) {
+    const MARKER: &str = ".codex-test-root";
+    let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let config_contents = format!("project_root_markers = [\"{MARKER}\"]\n");
+    std::fs::write(config_path, config_contents).expect("write config.toml");
+
+    let root = TempDir::new().expect("tempdir");
+    let root_path = root.path().to_path_buf();
+    std::fs::write(root_path.join(MARKER), "").expect("write project root marker");
+    std::fs::write(root_path.join("AGENTS.md"), "Test project instructions.\n")
+        .expect("write AGENTS.md");
+
+    let cwd = root_path.join("workspace");
+    std::fs::create_dir_all(&cwd).expect("create workspace");
+    (root, cwd)
+}
 
 #[track_caller]
 pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {
