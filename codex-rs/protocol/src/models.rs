@@ -237,7 +237,11 @@ impl DeveloperInstructions {
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
         let end_tag = DeveloperInstructions::new("</permissions instructions>");
-        start_tag.concat(DeveloperInstructions::sandbox_text(sandbox_mode, network_access))
+        start_tag
+            .concat(DeveloperInstructions::sandbox_text(
+                sandbox_mode,
+                network_access,
+            ))
             .concat(DeveloperInstructions::from(approval_policy))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)
