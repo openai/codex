@@ -225,6 +225,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let proposed_execpolicy_amendment_v2 =
                     proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
 
+                let item = ThreadItem::CommandExecution {
+                    id: item_id.clone(),
+                    command: command_string.clone(),
+                    cwd: cwd.clone(),
+                    process_id: None,
+                    status: CommandExecutionStatus::InProgress,
+                    command_actions: command_actions.clone(),
+                    aggregated_output: None,
+                    exit_code: None,
+                    duration_ms: None,
+                };
+                let notification = ItemStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemStarted(notification))
+                    .await;
+
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
