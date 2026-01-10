@@ -684,9 +684,6 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-// The JSON Schema in `codex-rs/core/config.schema.json` is generated from this struct.
-// If you add, remove, or rename fields, regenerate the schema via
-// `just write-config-schema` and update the fixture test.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
