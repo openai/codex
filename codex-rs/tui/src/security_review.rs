@@ -15426,10 +15426,10 @@ async fn make_provider_request_builder(
 ) -> Result<CodexRequestBuilder, String> {
     // Base URL: allow provider overrides, otherwise match codex-core defaults (ChatGPT auth uses
     // chatgpt.com backend API).
-    let default_base_url = if auth
+    let is_chatgpt_auth = auth
         .as_ref()
-        .is_some_and(|auth| matches!(auth.mode, codex_app_server_protocol::AuthMode::ChatGPT))
-    {
+        .is_some_and(|auth| matches!(auth.mode, codex_app_server_protocol::AuthMode::ChatGPT));
+    let default_base_url = if is_chatgpt_auth {
         "https://chatgpt.com/backend-api/codex"
     } else {
         "https://api.openai.com/v1"
@@ -15487,6 +15487,18 @@ async fn make_provider_request_builder(
         }
     }
 
+    if is_chatgpt_auth {
+        static SECURITY_REVIEW_SESSION_ID: OnceLock<String> = OnceLock::new();
+        let session_id = SECURITY_REVIEW_SESSION_ID.get_or_init(|| {
+            let rand: u64 = rand::random();
+            let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
+            format!("secreview-{now:x}-{rand:x}")
+        });
+        builder = builder.header("conversation_id", session_id.as_str());
+        builder = builder.header("session_id", session_id.as_str());
+        builder = builder.header("x-openai-subagent", "review");
+    }
+
     // Authorization: prefer provider API key, then experimental token, then user auth.
     match provider.api_key() {
         Ok(Some(api_key)) if !api_key.trim().is_empty() => {
@@ -15512,6 +15524,12 @@ async fn make_provider_request_builder(
         && !token.trim().is_empty()
     {
         builder = builder.bearer_auth(token);
+        if let Some(account_id) = auth.get_account_id()
+            && !account_id.trim().is_empty()
+            && let Ok(header_value) = HeaderValue::try_from(account_id.as_str())
+        {
+            builder = builder.header("ChatGPT-Account-ID", header_value);
+        }
     }
 
     Ok(builder)
