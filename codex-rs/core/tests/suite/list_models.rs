@@ -413,9 +413,7 @@ fn gpt52_codex_upgrade() -> codex_protocol::openai_models::ModelUpgrade {
         migration_markdown: Some(
             r#"**Codex just got an upgrade. Introducing {model_to}.**
 
-Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. 
-
-Learn more about {model_to} at https://openai.com/index/introducing-gpt-5-2-codex
+Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about {model_to} at https://openai.com/index/introducing-gpt-5-2-codex
 
 You can continue using {model_from} if you prefer."#
                 .to_string(),
