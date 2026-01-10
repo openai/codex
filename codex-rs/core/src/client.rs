@@ -533,6 +533,7 @@ async fn handle_unauthorized(
 fn map_unauthorized_status(status: StatusCode) -> CodexErr {
     map_api_error(ApiError::Transport(TransportError::Http {
         status,
+        url: None,
         headers: None,
         body: None,
     }))
