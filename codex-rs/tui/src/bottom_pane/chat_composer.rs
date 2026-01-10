@@ -3507,7 +3507,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_one_of_duplicate_image_placeholders_removes_matching_entry() {
+    fn deleting_one_of_duplicate_image_placeholders_removes_one_entry() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -3538,9 +3538,9 @@ mod tests {
 
         let new_text = composer.textarea.text().to_string();
         assert_eq!(
-            0,
+            1,
             new_text.matches(&placeholder1).count(),
-            "first placeholder removed"
+            "one placeholder remains after deletion"
         );
         assert_eq!(
             0,
