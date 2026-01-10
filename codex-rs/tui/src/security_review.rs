@@ -5226,8 +5226,9 @@ pub async fn run_security_review(
             artifacts.report_path.clone(),
             artifacts.report_html_path.clone(),
             request.provider.clone(),
-            request.auth.clone(),
             request.model.clone(),
+            &request.config,
+            request.auth_manager.clone(),
             progress_sender.clone(),
             metrics.clone(),
         )
@@ -15151,8 +15152,15 @@ fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
         .any(|t| t.eq_ignore_ascii_case(needle))
 }
 
+#[derive(Clone, Debug)]
+struct ValidationFinding {
+    id: BugIdentifier,
+    label: String,
+    context: String,
+}
+
 struct ValidationFindingsContext {
-    text: String,
+    findings: Vec<ValidationFinding>,
     ids: Vec<BugIdentifier>,
 }
 
@@ -15202,9 +15210,14 @@ fn build_validation_findings_context(
         }
     }
 
-    let mut out = String::new();
+    let mut findings: Vec<ValidationFinding> = Vec::new();
     let mut ids: Vec<BugIdentifier> = Vec::new();
     for item in selected {
+        let label = if let Some(rank) = item.bug.risk_rank {
+            format!("#{rank} {}", item.bug.title)
+        } else {
+            format!("[{}] {}", item.bug.summary_id, item.bug.title)
+        };
         let rank = item
             .bug
             .risk_rank
@@ -15234,17 +15247,21 @@ fn build_validation_findings_context(
         };
         ids.push(identifier);
         // Include the original markdown so the model can infer concrete targets
-        let _ = writeln!(
-            &mut out,
+        let context = format!(
             "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}\n  details:\n{details}\n---\n",
             title = item.bug.title,
             severity = item.bug.severity,
             types = types,
             details = indent_block(&item.original_markdown, 2)
         );
+        findings.push(ValidationFinding {
+            id: identifier,
+            label,
+            context,
+        });
     }
 
-    ValidationFindingsContext { text: out, ids }
+    ValidationFindingsContext { findings, ids }
 }
 
 fn indent_block(s: &str, spaces: usize) -> String {
@@ -15255,6 +15272,167 @@ fn indent_block(s: &str, spaces: usize) -> String {
         .join("\n")
 }
 
+fn parse_validation_plan_item(raw: &str) -> Option<ValidationPlanItem> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    for line in trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if let Ok(item) = serde_json::from_str::<ValidationPlanItem>(line) {
+            return Some(item);
+        }
+    }
+
+    for snippet in extract_json_objects(trimmed) {
+        if let Ok(item) = serde_json::from_str::<ValidationPlanItem>(&snippet) {
+            return Some(item);
+        }
+    }
+
+    None
+}
+
+struct ValidationPlanAgentOutput {
+    text: String,
+    logs: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_validation_plan_agent(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    prompt: String,
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+    model: &str,
+    label: &str,
+) -> Result<ValidationPlanAgentOutput, BugVerificationFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    push_progress_log(
+        &progress_sender,
+        &None,
+        &mut logs,
+        format!("Planning ASan crash validation for {label}..."),
+    );
+
+    let mut validation_config = config.clone();
+    validation_config.model = Some(model.to_string());
+    validation_config.model_provider = provider.clone();
+    validation_config.base_instructions = Some(VALIDATION_PLAN_SYSTEM_PROMPT.to_string());
+    validation_config.user_instructions = None;
+    validation_config.developer_instructions = None;
+    validation_config.compact_prompt = None;
+    validation_config.cwd = repo_root.to_path_buf();
+    validation_config
+        .features
+        .disable(Feature::ApplyPatchFreeform)
+        .disable(Feature::ViewImageTool);
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other(
+            "security_review_validation".to_string(),
+        )),
+    );
+
+    let conversation = match manager.new_conversation(validation_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start validation agent for {label}: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        })
+        .await
+    {
+        let message = format!("Failed to submit validation prompt for {label}: {err}");
+        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+        return Err(BugVerificationFailure { message, logs });
+    }
+
+    let mut last_agent_message: Option<String> = None;
+    loop {
+        let event = match conversation.next_event().await {
+            Ok(event) => event,
+            Err(err) => {
+                let message =
+                    format!("Validation agent terminated unexpectedly for {label}: {err}");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+        };
+
+        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+        match event.msg {
+            EventMsg::TaskComplete(done) => {
+                if let Some(msg) = done.last_agent_message {
+                    last_agent_message = Some(msg);
+                }
+                break;
+            }
+            EventMsg::AgentMessage(msg) => {
+                last_agent_message = Some(msg.message.clone());
+            }
+            EventMsg::AgentReasoning(reason) => {
+                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::Warning(warn) => {
+                push_progress_log(&progress_sender, &None, &mut logs, warn.message);
+            }
+            EventMsg::Error(err) => {
+                let message = format!("Validation agent error for {label}: {}", err.message);
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            EventMsg::TurnAborted(aborted) => {
+                let message = format!("Validation agent aborted for {label}: {:?}", aborted.reason);
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            EventMsg::TokenCount(count) => {
+                if let Some(info) = count.info {
+                    metrics.record_model_call();
+                    metrics.record_usage(&info.last_token_usage);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let text = match last_agent_message.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(text) => text,
+        None => {
+            let message = format!("Validation agent produced an empty response for {label}.");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
+
+    let _ = conversation.submit(Op::Shutdown).await;
+
+    Ok(ValidationPlanAgentOutput { text, logs })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_asan_validation(
     repo_path: PathBuf,
@@ -15263,8 +15441,9 @@ async fn run_asan_validation(
     report_path: Option<PathBuf>,
     report_html_path: Option<PathBuf>,
     provider: ModelProviderInfo,
-    auth: Option<CodexAuth>,
     model: String,
+    config: &Config,
+    auth_manager: Arc<AuthManager>,
     progress_sender: Option<AppEventSender>,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<(), BugVerificationFailure> {
@@ -15281,7 +15460,6 @@ async fn run_asan_validation(
             logs: vec![],
         })?;
 
-    let client = create_client();
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(
             "Planning ASan crash validation for high-risk findings...".to_string(),
@@ -15298,98 +15476,126 @@ async fn run_asan_validation(
 
     // Build prompt
     let findings = build_validation_findings_context(&snapshot);
-    let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE.replace("{findings}", &findings.text);
-
-    let response = call_model(
-        &client,
-        &provider,
-        &auth,
-        &model,
-        VALIDATION_PLAN_SYSTEM_PROMPT,
-        &prompt,
-        metrics.clone(),
-        0.0,
-    )
-    .await
-    .map_err(|err| BugVerificationFailure {
-        message: format!("Validation planning failed: {err}"),
-        logs: vec![],
-    })?;
 
     let mut logs: Vec<String> = Vec::new();
-    if let Some(reasoning) = response.reasoning.as_ref() {
-        log_model_reasoning(reasoning, &progress_sender, &None, &mut logs);
-    }
-
     let mut handled: HashSet<BugIdentifier> = HashSet::new();
     let run_at = OffsetDateTime::now_utc();
     let mut requests: Vec<BugVerificationRequest> = Vec::new();
-    for line in response.text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let parsed: ValidationPlanItem = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let Some(id_value) = parsed.id_value else {
-            continue;
-        };
-        let id = match parsed.id_kind.as_str() {
-            "risk_rank" => BugIdentifier::RiskRank(id_value),
-            "summary_id" => BugIdentifier::SummaryId(id_value),
-            _ => continue,
-        };
-        handled.insert(id);
+    if findings.ids.is_empty() {
+        return Ok(());
+    }
 
-        let Some(tool_raw) = parsed.tool.as_ref() else {
-            continue;
-        };
-        match tool_raw.to_ascii_lowercase().as_str() {
-            "none" => {
+    let planning_results = futures::stream::iter(findings.findings.into_iter().map(|finding| {
+        let provider = provider.clone();
+        let auth_manager = auth_manager.clone();
+        let progress_sender = progress_sender.clone();
+        let metrics = metrics.clone();
+        let model = model.clone();
+        let repo_root = repo_path.clone();
+        async move {
+            let ValidationFinding { id, label, context } = finding;
+            let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE.replace("{findings}", &context);
+            let result = run_validation_plan_agent(
+                config,
+                &provider,
+                auth_manager,
+                repo_root.as_path(),
+                prompt,
+                progress_sender,
+                metrics,
+                model.as_str(),
+                label.as_str(),
+            )
+            .await;
+            (id, label, result)
+        }
+    }))
+    .buffer_unordered(4)
+    .collect::<Vec<_>>()
+    .await;
+
+    for (id, label, result) in planning_results {
+        match result {
+            Ok(output) => {
+                logs.extend(output.logs);
+                let parsed = parse_validation_plan_item(output.text.as_str());
+                let Some(index) = find_bug_index(&snapshot, id) else {
+                    continue;
+                };
+                let entry = &mut snapshot.bugs[index];
+
+                let Some(tool_raw) = parsed.as_ref().and_then(|item| item.tool.as_ref()) else {
+                    continue;
+                };
+                handled.insert(id);
+
+                match tool_raw.to_ascii_lowercase().as_str() {
+                    "none" => {
+                        if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                            let reason = parsed
+                                .as_ref()
+                                .and_then(|item| item.reason.as_ref())
+                                .map(|s| s.trim())
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or("No safe validation available in this environment.");
+                            entry.bug.validation.status = BugValidationStatus::UnableToValidate;
+                            entry.bug.validation.tool = Some("none".to_string());
+                            entry.bug.validation.target = None;
+                            entry.bug.validation.summary = Some(reason.to_string());
+                            entry.bug.validation.run_at = Some(run_at);
+                        }
+                    }
+                    "python" => {
+                        requests.push(BugVerificationRequest {
+                            id,
+                            tool: BugVerificationTool::Python,
+                            target: None,
+                            script_path: None,
+                            script_inline: parsed.and_then(|item| item.script),
+                        });
+                    }
+                    "curl" | "playwright" => {
+                        if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                            entry.bug.validation.status = BugValidationStatus::UnableToValidate;
+                            entry.bug.validation.tool = Some(tool_raw.to_string());
+                            entry.bug.validation.target = None;
+                            entry.bug.validation.summary = Some(
+                                "Web/API validation is disabled; only ASan crash validation is supported."
+                                    .to_string(),
+                            );
+                            entry.bug.validation.run_at = Some(run_at);
+                        }
+                    }
+                    other => {
+                        if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                            entry.bug.validation.status = BugValidationStatus::UnableToValidate;
+                            entry.bug.validation.tool = Some(other.to_string());
+                            entry.bug.validation.target = None;
+                            entry.bug.validation.summary = Some(format!(
+                                "Validation planning returned unknown tool: {other}"
+                            ));
+                            entry.bug.validation.run_at = Some(run_at);
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                logs.extend(err.logs);
                 if let Some(index) = find_bug_index(&snapshot, id) {
                     let entry = &mut snapshot.bugs[index];
                     if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                        let reason = parsed
-                            .reason
-                            .as_ref()
-                            .map(|s| s.trim())
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or("No safe validation available in this environment.");
                         entry.bug.validation.status = BugValidationStatus::UnableToValidate;
                         entry.bug.validation.tool = Some("none".to_string());
                         entry.bug.validation.target = None;
-                        entry.bug.validation.summary = Some(reason.to_string());
+                        entry.bug.validation.summary = Some(format!(
+                            "Validation planning failed for {label}: {}",
+                            err.message
+                        ));
                         entry.bug.validation.run_at = Some(run_at);
                     }
                 }
+                handled.insert(id);
             }
-            "python" => {
-                requests.push(BugVerificationRequest {
-                    id,
-                    tool: BugVerificationTool::Python,
-                    target: None,
-                    script_path: None,
-                    script_inline: parsed.script.clone(),
-                });
-            }
-            "curl" | "playwright" => {
-                if let Some(index) = find_bug_index(&snapshot, id) {
-                    let entry = &mut snapshot.bugs[index];
-                    if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                        entry.bug.validation.status = BugValidationStatus::UnableToValidate;
-                        entry.bug.validation.tool = Some(tool_raw.to_string());
-                        entry.bug.validation.target = None;
-                        entry.bug.validation.summary = Some(
-                            "Web/API validation is disabled; only ASan crash validation is supported."
-                                .to_string(),
-                        );
-                        entry.bug.validation.run_at = Some(run_at);
-                    }
-                }
-            }
-            _ => {}
         }
     }
 
