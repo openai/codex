@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use std::sync::OnceLock;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use codex_core::config::Config;
 use codex_core::protocol::Op;
@@ -15,6 +16,11 @@ use serde_json::json;
 use crate::app_event::AppEvent;
 
 static LOGGER: LazyLock<SessionLogger> = LazyLock::new(SessionLogger::new);
+const FLUSH_INTERVAL: Duration = if cfg!(test) {
+    Duration::from_millis(10)
+} else {
+    Duration::from_millis(500)
+};
 
 struct SessionLogger {
     worker: OnceLock<LoggerWorker>,
@@ -47,27 +53,45 @@ impl SessionLogger {
             .name("tui-session-log".to_string())
             .spawn(move || {
                 let mut writer = BufWriter::with_capacity(64 * 1024, file);
-                for entry in rx {
-                    match entry {
-                        LogEntry::Line(serialized) => {
-                            if let Err(e) = writer.write_all(serialized.as_bytes()) {
-                                tracing::warn!("session log write error: {e}");
-                                continue;
+                let mut dirty = false;
+                loop {
+                    match rx.recv_timeout(FLUSH_INTERVAL) {
+                        Ok(entry) => match entry {
+                            LogEntry::Line(serialized) => {
+                                if let Err(e) = writer.write_all(serialized.as_bytes()) {
+                                    tracing::warn!("session log write error: {e}");
+                                    continue;
+                                }
+                                if let Err(e) = writer.write_all(b"\n") {
+                                    tracing::warn!("session log write error: {e}");
+                                    continue;
+                                }
+                                dirty = true;
                             }
-                            if let Err(e) = writer.write_all(b"\n") {
-                                tracing::warn!("session log write error: {e}");
-                                continue;
+                            LogEntry::Flush(done_tx) => {
+                                if let Err(e) = writer.flush() {
+                                    tracing::warn!("session log flush error: {e}");
+                                } else {
+                                    dirty = false;
+                                }
+                                let _ = done_tx.send(());
+                            }
+                        },
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            if dirty {
+                                if let Err(e) = writer.flush() {
+                                    tracing::warn!("session log flush error: {e}");
+                                } else {
+                                    dirty = false;
+                                }
                             }
                         }
-                        LogEntry::Flush(done_tx) => {
-                            if let Err(e) = writer.flush() {
-                                tracing::warn!("session log flush error: {e}");
-                            }
-                            let _ = done_tx.send(());
-                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
-                let _ = writer.flush();
+                if dirty {
+                    let _ = writer.flush();
+                }
             })?;
 
         let _ = self.worker.set(LoggerWorker {
@@ -254,4 +278,59 @@ where
         "payload": obj,
     });
     LOGGER.write_json_line(value);
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    use super::SessionLogger;
+
+    #[test]
+    fn flush_writes_line_before_returning() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        let logger = SessionLogger::new();
+        logger.open(path.clone()).expect("open session log");
+
+        let record = json!({
+            "ts": "T",
+            "dir": "meta",
+            "kind": "session_end",
+        });
+        logger.write_json_line(record.clone());
+        logger.flush();
+
+        let contents = std::fs::read_to_string(path).expect("read log");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let parsed: serde_json::Value = serde_json::from_str(lines[0]).expect("parse json");
+        assert_eq!(parsed, record);
+    }
+
+    #[test]
+    fn periodic_flush_persists_lines() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        let logger = SessionLogger::new();
+        logger.open(path.clone()).expect("open session log");
+
+        let record = json!({
+            "ts": "T2",
+            "dir": "meta",
+            "kind": "session_start",
+        });
+        logger.write_json_line(record.clone());
+        thread::sleep(Duration::from_millis(50));
+
+        let contents = std::fs::read_to_string(path).expect("read log");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let parsed: serde_json::Value = serde_json::from_str(lines[0]).expect("parse json");
+        assert_eq!(parsed, record);
+    }
 }
