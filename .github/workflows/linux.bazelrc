@@ -1,4 +1,0 @@
-common:aarch64 --extra_execution_platforms=//:rbe_arm64
-common:aarch64 --platforms=//:rbe_arm64
-common:x86_64 --extra_execution_platforms=//:rbe
-common:x86_64 --platforms=//:rbe

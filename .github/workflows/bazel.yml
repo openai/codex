@@ -97,22 +97,12 @@ jobs:
           # Use a very short path to reduce argv/path length issues.
           "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Configure Bazel startup args (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          echo "BAZEL_STARTUP_ARGS=--bazelrc=.github/workflows/linux.bazelrc" >> "$GITHUB_ENV"
-
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          target="${{ matrix.target }}"
-          host_arch="${target%%-*}" # e.g. aarch64 / x86_64
-
           bazel $BAZEL_STARTUP_ARGS --bazelrc=.github/workflows/ci.bazelrc test //... \
-            --config="$host_arch" \
             --build_metadata=REPO_URL=https://github.com/openai/codex.git \
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD) \
             --build_metadata=ROLE=CI \
