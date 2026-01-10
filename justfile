@@ -59,4 +59,4 @@ mcp-server-run *args:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cargo test -p codex-core write_config_schema_fixture -- --ignored
+    cargo run -p codex-core --bin codex-write-config-schema

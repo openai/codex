@@ -66,6 +66,10 @@ jobs:
         run: cargo fmt -- --config imports_granularity=Item --check
       - name: Verify codegen for mcp-types
         run: ./mcp-types/check_lib_rs.py
+      - name: Verify config schema fixture
+        run: |
+          cargo run -p codex-core --bin codex-write-config-schema
+          git diff --exit-code core/config.schema.json
 
   cargo_shear:
     name: cargo shear
