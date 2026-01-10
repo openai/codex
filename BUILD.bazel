@@ -28,4 +28,21 @@ platform(
     },
 )
 
+platform(
+    name = "rbe-arm64",
+    constraint_values = [
+        "@platforms//cpu:arm64",
+        "@platforms//os:linux",
+        "@bazel_tools//tools/cpp:clang",
+        "@toolchains_llvm_bootstrapped//constraints/libc:gnu.2.28",
+    ],
+    exec_properties = {
+        # Ubuntu-based image that includes git, python3, dotslash, and other
+        # tools that various integration tests need.
+        # Verify at https://hub.docker.com/layers/mbolin491/codex-bazel/latest/images/sha256:ad9506086215fccfc66ed8d2be87847324be56790ae6a1964c241c28b77ef141
+        "container-image": "docker://docker.io/mbolin491/codex-bazel@sha256:ad9506086215fccfc66ed8d2be87847324be56790ae6a1964c241c28b77ef141",
+        "OSFamily": "Linux",
+    },
+)
+
 exports_files(["AGENTS.md"])
