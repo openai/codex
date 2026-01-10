@@ -216,6 +216,20 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let image_message =
         find_image_message(&body).expect("pending input image message not included in request");
+    let content_items = image_message
+        .get("content")
+        .and_then(Value::as_array)
+        .expect("image message has content array");
+    assert_eq!(
+        content_items.len(),
+        1,
+        "view_image should inject only the image content item (no tag/label text)"
+    );
+    assert_eq!(
+        content_items[0].get("type").and_then(Value::as_str),
+        Some("input_image"),
+        "view_image should inject only an input_image content item"
+    );
     let image_url = image_message
         .get("content")
         .and_then(Value::as_array)
