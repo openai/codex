@@ -702,6 +702,9 @@ impl App {
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
             }
+            AppEvent::AutomationTick => {
+                self.chat_widget.on_automation_tick();
+            }
             AppEvent::CodexEvent(event) => {
                 if self.suppress_shutdown_complete
                     && matches!(event.msg, EventMsg::ShutdownComplete)
