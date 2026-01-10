@@ -182,9 +182,19 @@ fn local_image_error_placeholder(
 
 pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 
+const IMAGE_OPEN_TAG: &str = "<image>";
+const IMAGE_CLOSE_TAG: &str = "</image>";
 const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
-const LOCAL_IMAGE_CLOSE_TAG: &str = "</image>";
+const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
+
+pub fn image_open_tag_text() -> String {
+    IMAGE_OPEN_TAG.to_string()
+}
+
+pub fn image_close_tag_text() -> String {
+    IMAGE_CLOSE_TAG.to_string()
+}
 
 pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
@@ -201,7 +211,15 @@ pub fn is_local_image_open_tag_text(text: &str) -> bool {
 }
 
 pub fn is_local_image_close_tag_text(text: &str) -> bool {
-    text == LOCAL_IMAGE_CLOSE_TAG
+    is_image_close_tag_text(text)
+}
+
+pub fn is_image_open_tag_text(text: &str) -> bool {
+    text == IMAGE_OPEN_TAG
+}
+
+pub fn is_image_close_tag_text(text: &str) -> bool {
+    text == IMAGE_CLOSE_TAG
 }
 
 fn invalid_image_error_placeholder(
@@ -375,7 +393,15 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url } => vec![ContentItem::InputImage { image_url }],
+                    UserInput::Image { image_url } => vec![
+                        ContentItem::InputText {
+                            text: image_open_tag_text(),
+                        },
+                        ContentItem::InputImage { image_url },
+                        ContentItem::InputText {
+                            text: image_close_tag_text(),
+                        },
+                    ],
                     UserInput::LocalImage { path } => {
                         image_index += 1;
                         local_image_content_items_with_label_number(&path, true, image_index)
@@ -817,6 +843,33 @@ mod tests {
             },
             params
         );
+        Ok(())
+    }
+
+    #[test]
+    fn wraps_image_user_input_with_tags() -> Result<()> {
+        let image_url = "data:image/png;base64,abc".to_string();
+
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: image_url.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                let expected = vec![
+                    ContentItem::InputText {
+                        text: image_open_tag_text(),
+                    },
+                    ContentItem::InputImage { image_url },
+                    ContentItem::InputText {
+                        text: image_close_tag_text(),
+                    },
+                ];
+                assert_eq!(content, expected);
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
         Ok(())
     }
 
