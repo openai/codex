@@ -3931,10 +3931,15 @@ function flushPendingAssistantDeltas(sessionId: string, rt: SessionRuntime): voi
     const b = rt.blocks[idx];
     if (!b || b.type !== "assistant") continue;
     b.text += delta;
-    (b as any).streaming = true;
+    // IMPORTANT:
+    // Do not force `streaming=true` here. This function can run after a turn is
+    // completed (timer flush), and re-enabling streaming would keep the webview
+    // in the <pre> fast-path and skip Markdown rendering for the final message.
+    const isStreaming = rt.streamingAssistantItemIds.has(id) || rt.activeTurnId !== null;
+    (b as any).streaming = isStreaming;
     sessionPanels?.appendAssistantDelta(sessionId, delta);
     chatView?.postBlockAppend(sessionId, id, "assistantText", delta, {
-      streaming: true,
+      streaming: isStreaming,
     });
   }
 }

@@ -3539,8 +3539,12 @@ function main(): void {
             `pre[data-k="body"]`,
           ) as HTMLPreElement | null;
           if (pre) {
-            appendDeltaToPre(pre, delta);
-            return;
+            // If streaming has ended, force a full re-render so we switch from
+            // <pre> to Markdown-rendered HTML.
+            if (streaming !== false) {
+              appendDeltaToPre(pre, delta);
+              return;
+            }
           }
         }
 
