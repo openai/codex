@@ -30,9 +30,11 @@ use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
-use std::env;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use tempfile::Builder;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -45,6 +47,52 @@ enum TargetPath {
     OutsideWorkspace(&'static str),
 }
 
+fn candidate_is_outside_tmp(candidate: &Path) -> bool {
+    let temp_dir = std::env::temp_dir();
+    if candidate.starts_with(&temp_dir) {
+        return false;
+    }
+    if cfg!(unix) && candidate.starts_with(Path::new("/tmp")) {
+        return false;
+    }
+    if let Some(tmpdir) = std::env::var_os("TMPDIR") {
+        let tmpdir = PathBuf::from(tmpdir);
+        if candidate.starts_with(&tmpdir) {
+            return false;
+        }
+    }
+    true
+}
+
+fn outside_workspace_root() -> &'static PathBuf {
+    static OUTSIDE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+    OUTSIDE_ROOT.get_or_init(|| {
+        let mut candidates = Vec::new();
+        if cfg!(unix) {
+            candidates.push(PathBuf::from("/var/tmp"));
+        }
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            candidates.push(PathBuf::from(home));
+        }
+        for candidate in candidates {
+            if !candidate.is_dir() || !candidate_is_outside_tmp(&candidate) {
+                continue;
+            }
+            if let Ok(dir) = Builder::new()
+                .prefix("codex-outside-")
+                .tempdir_in(&candidate)
+            {
+                return dir.keep();
+            }
+        }
+        Builder::new()
+            .prefix("codex-outside-")
+            .tempdir()
+            .expect("create outside workspace temp dir")
+            .keep()
+    })
+}
+
 impl TargetPath {
     fn resolve_for_patch(self, test: &TestCodex) -> (PathBuf, String) {
         match self {
@@ -53,9 +101,7 @@ impl TargetPath {
                 (path, name.to_string())
             }
             TargetPath::OutsideWorkspace(name) => {
-                let path = env::current_dir()
-                    .expect("current dir should be available")
-                    .join(name);
+                let path = outside_workspace_root().join(name);
                 (path.clone(), path.display().to_string())
             }
         }
@@ -187,6 +233,7 @@ fn shell_event(
 ) -> Result<Value> {
     let mut args = json!({
         "command": command,
+        "login": false,
         "timeout_ms": timeout_ms,
     });
     if sandbox_permissions.requires_escalated_permissions() {

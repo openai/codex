@@ -49,6 +49,7 @@ fn shell_responses(
             let command = shlex::try_join(command)?;
             let parameters = json!({
                 "command": command,
+                "login": false,
                 "timeout_ms": 2_000,
             });
             Ok(vec![
