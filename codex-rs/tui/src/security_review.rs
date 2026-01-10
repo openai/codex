@@ -3306,9 +3306,44 @@ fn install_hint_for(name: &str) -> String {
     }
 }
 
+fn security_review_session_id() -> &'static str {
+    static SECURITY_REVIEW_SESSION_ID: OnceLock<String> = OnceLock::new();
+    SECURITY_REVIEW_SESSION_ID.get_or_init(|| {
+        let rand: u64 = rand::random();
+        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
+        format!("secreview-{now:x}-{rand:x}")
+    })
+}
+
+fn provider_with_beta_features(provider: &ModelProviderInfo, config: &Config) -> ModelProviderInfo {
+    let enabled = codex_core::features::FEATURES
+        .iter()
+        .filter_map(|spec| {
+            if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
+                Some(spec.key)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    if enabled.is_empty() {
+        return provider.clone();
+    }
+
+    let mut provider = provider.clone();
+    provider
+        .http_headers
+        .get_or_insert_with(HashMap::new)
+        .insert("x-codex-beta-features".to_string(), enabled);
+    provider
+}
+
 pub async fn run_security_review(
-    request: SecurityReviewRequest,
+    mut request: SecurityReviewRequest,
 ) -> Result<SecurityReviewResult, SecurityReviewFailure> {
+    request.provider = provider_with_beta_features(&request.provider, &request.config);
     let mut progress_sender = request.progress_sender.clone();
     let log_sink = request.log_sink.clone();
     let mut logs = Vec::new();
@@ -15487,17 +15522,10 @@ async fn make_provider_request_builder(
         }
     }
 
-    if is_chatgpt_auth {
-        static SECURITY_REVIEW_SESSION_ID: OnceLock<String> = OnceLock::new();
-        let session_id = SECURITY_REVIEW_SESSION_ID.get_or_init(|| {
-            let rand: u64 = rand::random();
-            let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
-            format!("secreview-{now:x}-{rand:x}")
-        });
-        builder = builder.header("conversation_id", session_id.as_str());
-        builder = builder.header("session_id", session_id.as_str());
-        builder = builder.header("x-openai-subagent", "review");
-    }
+    let session_id = security_review_session_id();
+    builder = builder.header("conversation_id", session_id);
+    builder = builder.header("session_id", session_id);
+    builder = builder.header("x-openai-subagent", "review");
 
     // Authorization: prefer provider API key, then experimental token, then user auth.
     match provider.api_key() {
@@ -15645,22 +15673,26 @@ async fn call_model_attempt(
             let builder =
                 make_provider_request_builder(client, provider, auth, "responses").await?;
 
-            let mut payload = json!({
+            let input = vec![codex_protocol::models::ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![codex_protocol::models::ContentItem::InputText {
+                    text: user_prompt.to_string(),
+                }],
+            }];
+
+            let payload = json!({
                 "model": model,
                 "instructions": system_prompt,
-                "input": [
-                    {
-                        "role": "user",
-                        "content": [
-                            { "type": "input_text", "text": user_prompt }
-                        ]
-                    }
-                ]
+                "input": input,
+                "tools": [],
+                "tool_choice": "auto",
+                "parallel_tool_calls": false,
+                "store": false,
+                "stream": true,
+                "include": [],
+                "prompt_cache_key": security_review_session_id(),
             });
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("store".to_string(), json!(false));
-                obj.insert("stream".to_string(), json!(true));
-            }
 
             let response = builder
                 .header(ACCEPT, "text/event-stream")
