@@ -66,7 +66,7 @@ impl ToolHandler for ViewImageHandler {
         let event_path = abs_path.clone();
 
         let content: Vec<ContentItem> =
-            local_image_content_items_with_label_number(&abs_path, false, 1);
+            local_image_content_items_with_label_number(&abs_path, None);
         let input = ResponseInputItem::Message {
             role: "user".to_string(),
             content,
