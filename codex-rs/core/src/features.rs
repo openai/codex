@@ -7,6 +7,7 @@
 
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use codex_otel::OtelManager;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -85,12 +86,16 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Append additional AGENTS.md guidance to user instructions.
+    HierarchicalAgents,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
+    /// Enable collab tools.
+    Collab,
 }
 
 impl Feature {
@@ -191,6 +196,21 @@ impl Features {
         self.legacy_usages
             .iter()
             .map(|usage| (usage.alias.as_str(), usage.feature))
+    }
+
+    pub fn emit_metrics(&self, otel: &OtelManager) {
+        for feature in FEATURES {
+            if self.enabled(feature.id) != feature.default_enabled {
+                otel.counter(
+                    "codex.feature.state",
+                    1,
+                    &[
+                        ("feature", feature.key),
+                        ("value", &self.enabled(feature.id).to_string()),
+                    ],
+                );
+            }
+        }
     }
 
     /// Apply a table of key -> bool toggles (e.g. from TOML).
@@ -335,6 +355,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::HierarchicalAgents,
+        key: "hierarchical_agents",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
         stage: Stage::Experimental,
@@ -379,6 +405,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::EnableRequestCompression,
         key: "enable_request_compression",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Collab,
+        key: "collab",
         stage: Stage::Experimental,
         default_enabled: false,
     },

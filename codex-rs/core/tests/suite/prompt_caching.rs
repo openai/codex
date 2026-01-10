@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_core::features::Feature;
+use codex_core::models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
@@ -44,7 +46,7 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
@@ -104,7 +106,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
@@ -114,7 +116,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let expected_tools_names = vec![
         "shell_command",
@@ -130,11 +132,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
         base_instructions
     } else {
-        [
-            base_instructions,
-            include_str!("../../../apply-patch/apply_patch_tool_instructions.md").to_string(),
-        ]
-        .join("\n")
+        [base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS.to_string()].join("\n")
     };
 
     assert_eq!(
@@ -180,7 +178,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -190,13 +188,9 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let expected_instructions = [
-        include_str!("../../prompt.md"),
-        include_str!("../../../apply-patch/apply_patch_tool_instructions.md"),
-    ]
-    .join("\n");
+    let expected_instructions = [BASE_INSTRUCTIONS, APPLY_PATCH_TOOL_INSTRUCTIONS].join("\n");
 
     let body0 = req1.single_request().body_json();
     let instructions0 = body0["instructions"]
@@ -244,7 +238,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
@@ -254,7 +248,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let body1 = req1.single_request().body_json();
     let input1 = body1["input"].as_array().expect("input array");
@@ -315,7 +309,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let writable = TempDir::new().unwrap();
     codex
@@ -343,7 +337,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let body1 = req1.single_request().body_json();
     let body2 = req2.single_request().body_json();
@@ -423,7 +417,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let body = req.single_request().body_json();
     let input = body["input"]
@@ -515,7 +509,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Second turn using per-turn overrides via UserTurn
     let new_cwd = TempDir::new().unwrap();
@@ -539,7 +533,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let body1 = req1.single_request().body_json();
     let body2 = req2.single_request().body_json();
@@ -633,7 +627,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserTurn {
@@ -649,7 +643,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let body1 = req1.single_request().body_json();
     let body2 = req2.single_request().body_json();
@@ -723,7 +717,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserTurn {
@@ -739,7 +733,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let body1 = req1.single_request().body_json();
     let body2 = req2.single_request().body_json();

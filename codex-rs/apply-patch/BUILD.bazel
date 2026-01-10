@@ -1,0 +1,11 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+exports_files(["apply_patch_tool_instructions.md"])
+
+codex_rust_crate(
+    name = "apply-patch",
+    crate_name = "codex_apply_patch",
+    compile_data = [
+        "apply_patch_tool_instructions.md",
+    ],
+)

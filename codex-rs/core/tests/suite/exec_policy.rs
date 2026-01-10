@@ -91,7 +91,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
         unreachable!()
     };
     wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TaskComplete(_))
+        matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 

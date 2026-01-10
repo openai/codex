@@ -301,7 +301,9 @@ pub async fn process_sse(
                     }
                 }
             }
-            _ => {}
+            _ => {
+                trace!("unhandled SSE event: {:#?}", event.kind);
+            }
         }
     }
 }

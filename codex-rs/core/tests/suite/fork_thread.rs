@@ -22,7 +22,7 @@ use wiremock::matchers::path;
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
-    core_test_support::load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    core_test_support::load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -75,7 +75,7 @@ async fn fork_thread_twice_drops_to_first_message() {
             })
             .await
             .unwrap();
-        let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+        let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
 
     // Request history from the base conversation to obtain rollout path.

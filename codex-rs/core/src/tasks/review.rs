@@ -46,6 +46,12 @@ impl SessionTask for ReviewTask {
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        let _ = session
+            .session
+            .services
+            .otel_manager
+            .counter("codex.task.review", 1, &[]);
+
         // Start sub-codex conversation and get the receiver for events.
         let output = match start_review_conversation(
             session.clone(),
@@ -77,10 +83,6 @@ async fn start_review_conversation(
 ) -> Option<async_channel::Receiver<Event>> {
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
-    // Run with only reviewer rubric — drop outer user_instructions
-    sub_agent_config.user_instructions = None;
-    // Avoid loading project docs; reviewer only needs findings
-    sub_agent_config.project_doc_max_bytes = 0;
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
     sub_agent_config
@@ -132,7 +134,7 @@ async fn process_review_events(
             })
             | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
             | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
-            EventMsg::TaskComplete(task_complete) => {
+            EventMsg::TurnComplete(task_complete) => {
                 // Parse review output from the last agent message (if present).
                 let out = task_complete
                     .last_agent_message
@@ -152,7 +154,7 @@ async fn process_review_events(
             }
         }
     }
-    // Channel closed without TaskComplete: treat as interrupted.
+    // Channel closed without TurnComplete: treat as interrupted.
     None
 }
 
