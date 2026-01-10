@@ -12,8 +12,10 @@
 
 macOS/Linux 向けに GitHub Releases に prebuilt バイナリ（`codex-<target>.tar.gz`）を載せ、`install.sh` でインストールする想定。
 
+- Release ページ:
+  - https://github.com/harukary/codex-mine/releases
 - インストール（最新リリース）:
-  - `curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | sh`
+  - `curl -fsSL https://raw.githubusercontent.com/harukary/codex-mine/main/install.sh | sh`
 - バージョン指定（タグ）:
   - `CODEX_MINE_VERSION=mine-vX.Y.Z sh install.sh`
 
