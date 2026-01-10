@@ -1436,26 +1436,30 @@ impl ChatWidget {
         let title = flow.title();
         let placeholder = question
             .placeholder
-            .clone()
-            .unwrap_or_else(|| "Type your answer…".to_string());
+            .as_deref()
+            .unwrap_or("Type your answer…")
+            .to_string();
         let allow_empty = !question.required.unwrap_or(false);
 
+        let call_id = Arc::<str>::from(call_id);
+        let question_id = Arc::<str>::from(question_id);
+
         let tx = self.app_event_tx.clone();
-        let call_id2 = call_id.clone();
-        let question_id2 = question_id.clone();
+        let submit_call_id = Arc::clone(&call_id);
+        let submit_question_id = Arc::clone(&question_id);
         let on_submit: Box<dyn Fn(String) + Send + Sync> = Box::new(move |text| {
             tx.send(AppEvent::AskUserQuestionText {
-                call_id: call_id2.clone(),
-                question_id: question_id2.clone(),
+                call_id: submit_call_id.to_string(),
+                question_id: submit_question_id.to_string(),
                 text,
             });
         });
 
         let tx = self.app_event_tx.clone();
-        let call_id2 = call_id.clone();
+        let cancel_call_id = Arc::clone(&call_id);
         let on_cancel: Box<dyn Fn() + Send + Sync> = Box::new(move || {
             tx.send(AppEvent::AskUserQuestionCancel {
-                call_id: call_id2.clone(),
+                call_id: cancel_call_id.to_string(),
             });
         });
 
@@ -1543,7 +1547,7 @@ impl ChatWidget {
             .answers
             .get(question_id.as_str())
             .and_then(JsonValue::as_array)
-            .map(|a| a.len())
+            .map(Vec::len)
             .unwrap_or(0);
         if required && selected_len == 0 {
             self.add_info_message("Pick at least one option, or cancel.".to_string(), None);
@@ -1581,7 +1585,9 @@ impl ChatWidget {
             .as_ref()
             .is_some_and(|flow| flow.index >= flow.request.questions.len());
         if is_complete {
-            let flow = self.ask_user_question.take().unwrap();
+            let Some(flow) = self.ask_user_question.take() else {
+                return;
+            };
             self.submit_op(Op::ResolveAskUserQuestion {
                 call_id: flow.call_id,
                 response: AskUserQuestionResponse {
@@ -1620,10 +1626,13 @@ impl ChatWidget {
         let required = question.required.unwrap_or(false);
 
         let cancel_tx = self.app_event_tx.clone();
-        let cancel_call_id = call_id.clone();
+        let call_id = Arc::<str>::from(call_id);
+        let question_id = Arc::<str>::from(question_id);
+        let prompt = Arc::<str>::from(prompt);
+        let cancel_call_id = Arc::clone(&call_id);
         let on_cancel: Box<dyn Fn() + Send + Sync> = Box::new(move || {
             cancel_tx.send(AppEvent::AskUserQuestionCancel {
-                call_id: cancel_call_id.clone(),
+                call_id: cancel_call_id.to_string(),
             });
         });
 
@@ -1631,29 +1640,30 @@ impl ChatWidget {
             AskUserQuestionType::Text => {
                 let placeholder = question
                     .placeholder
-                    .clone()
-                    .unwrap_or_else(|| "Type your answer…".to_string());
+                    .as_deref()
+                    .unwrap_or("Type your answer…")
+                    .to_string();
                 let allow_empty = !required;
 
                 let tx = self.app_event_tx.clone();
-                let call_id2 = call_id.clone();
-                let question_id2 = question_id.clone();
+                let submit_call_id = Arc::clone(&call_id);
+                let submit_question_id = Arc::clone(&question_id);
                 let on_submit: Box<dyn Fn(String) + Send + Sync> = Box::new(move |text| {
                     tx.send(AppEvent::AskUserQuestionText {
-                        call_id: call_id2.clone(),
-                        question_id: question_id2.clone(),
+                        call_id: submit_call_id.to_string(),
+                        question_id: submit_question_id.to_string(),
                         text,
                     });
                 });
 
-                self.bottom_pane
-                    .show_view(Box::new(AskUserQuestionTextView::new(
-                        title,
-                        prompt,
-                        placeholder,
-                        allow_empty,
-                        on_submit,
-                        on_cancel,
+	                self.bottom_pane
+	                    .show_view(Box::new(AskUserQuestionTextView::new(
+	                        title,
+	                        prompt.to_string(),
+	                        placeholder,
+	                        allow_empty,
+	                        on_submit,
+	                        on_cancel,
                     )));
             }
             AskUserQuestionType::SingleSelect => {
@@ -1668,12 +1678,12 @@ impl ChatWidget {
                             name = format!("{name} (Recommended)");
                         }
                         let value = opt.value;
-                        let call_id = call_id.clone();
-                        let question_id = question_id.clone();
+                        let call_id = Arc::clone(&call_id);
+                        let question_id = Arc::clone(&question_id);
                         let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                             tx.send(AppEvent::AskUserQuestionPick {
-                                call_id: call_id.clone(),
-                                question_id: question_id.clone(),
+                                call_id: call_id.to_string(),
+                                question_id: question_id.to_string(),
                                 value: value.clone(),
                             });
                         })];
@@ -1688,14 +1698,14 @@ impl ChatWidget {
                     .collect();
 
                 if question.allow_other.unwrap_or(false) {
-                    let call_id = call_id.clone();
-                    let question_id = question_id.clone();
-                    let prompt = prompt.clone();
+                    let call_id = Arc::clone(&call_id);
+                    let question_id = Arc::clone(&question_id);
+                    let prompt = Arc::clone(&prompt);
                     let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                         tx.send(AppEvent::AskUserQuestionOther {
-                            call_id: call_id.clone(),
-                            question_id: question_id.clone(),
-                            prompt: prompt.clone(),
+                            call_id: call_id.to_string(),
+                            question_id: question_id.to_string(),
+                            prompt: prompt.to_string(),
                         });
                     })];
                     items.push(SelectionItem {
@@ -1709,7 +1719,7 @@ impl ChatWidget {
 
                 let params = SelectionViewParams {
                     title: Some(title),
-                    subtitle: Some(prompt),
+                    subtitle: Some(prompt.to_string()),
                     footer_hint: Some(standard_popup_hint_line()),
                     items,
                     ..Default::default()
@@ -1734,12 +1744,12 @@ impl ChatWidget {
                         }
 
                         let value = opt.value;
-                        let call_id = call_id.clone();
-                        let question_id = question_id.clone();
+                        let call_id = Arc::clone(&call_id);
+                        let question_id = Arc::clone(&question_id);
                         let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                             tx.send(AppEvent::AskUserQuestionPick {
-                                call_id: call_id.clone(),
-                                question_id: question_id.clone(),
+                                call_id: call_id.to_string(),
+                                question_id: question_id.to_string(),
                                 value: value.clone(),
                             });
                         })];
@@ -1754,14 +1764,14 @@ impl ChatWidget {
                     .collect();
 
                 if question.allow_other.unwrap_or(false) {
-                    let call_id = call_id.clone();
-                    let question_id = question_id.clone();
-                    let prompt = prompt.clone();
+                    let call_id = Arc::clone(&call_id);
+                    let question_id = Arc::clone(&question_id);
+                    let prompt = Arc::clone(&prompt);
                     let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                         tx.send(AppEvent::AskUserQuestionOther {
-                            call_id: call_id.clone(),
-                            question_id: question_id.clone(),
-                            prompt: prompt.clone(),
+                            call_id: call_id.to_string(),
+                            question_id: question_id.to_string(),
+                            prompt: prompt.to_string(),
                         });
                     })];
                     items.push(SelectionItem {
@@ -1773,12 +1783,12 @@ impl ChatWidget {
                     });
                 }
 
-                let call_id_done = call_id.clone();
-                let question_id_done = question_id.clone();
+                let call_id_done = Arc::clone(&call_id);
+                let question_id_done = Arc::clone(&question_id);
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::AskUserQuestionDone {
-                        call_id: call_id_done.clone(),
-                        question_id: question_id_done.clone(),
+                        call_id: call_id_done.to_string(),
+                        question_id: question_id_done.to_string(),
                     });
                 })];
                 items.push(SelectionItem {
@@ -1790,7 +1800,7 @@ impl ChatWidget {
                 });
 
                 let subtitle = if selected.is_empty() {
-                    Some(prompt)
+                    Some(prompt.to_string())
                 } else {
                     Some(format!("{prompt} ({})", selected.join(", ")))
                 };

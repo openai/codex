@@ -201,8 +201,8 @@ export class SessionPanel implements vscode.Disposable {
         if (msg.type === "assistantDelta") {
           const delta = typeof msg.delta === "string" ? msg.delta : "";
           if (!delta) return;
-          const pres = logEl.querySelectorAll(".msg.assistant pre");
-          const pre = pres.length > 0 ? pres[pres.length - 1] : null;
+          const preEls = logEl.querySelectorAll(".msg.assistant pre");
+          const pre = preEls.length > 0 ? preEls[preEls.length - 1] : null;
           if (!pre) return;
 
           const last = pre.lastChild;
