@@ -20,4 +20,4 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 ## JSON Schema
 
-The generated JSON Schema for `config.toml` lives at `docs/config.schema.json`.
+The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

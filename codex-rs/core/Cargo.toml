@@ -9,6 +9,10 @@ doctest = false
 name = "codex_core"
 path = "src/lib.rs"
 
+[[bin]]
+name = "codex-write-config-schema"
+path = "src/bin/config_schema.rs"
+
 [lints]
 workspace = true
 
