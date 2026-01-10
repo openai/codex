@@ -5,26 +5,30 @@
 //! We include the concatenation of all files found along the path from the
 //! repository root to the current working directory as follows:
 //!
-//! 1.  Determine the Git repository root by walking upwards from the current
-//!     working directory until a `.git` directory or file is found. If no Git
-//!     root is found, only the current working directory is considered.
+//! 1.  Determine the project root by walking upwards from the current working
+//!     directory until any marker in `project_root_markers` (default: `.git`)
+//!     is found. If no root is found (or markers are empty), only the current
+//!     working directory is considered.
 //! 2.  Collect every `AGENTS.md` found from the repository root down to the
 //!     current working directory (inclusive) and concatenate their contents in
 //!     that order.
-//! 3.  We do **not** walk past the Git root.
+//! 3.  We do **not** walk past the detected project root.
 
 use crate::config::Config;
 use crate::skills::SkillMetadata;
 use crate::skills::render_skills_section;
 use dunce::canonicalize as normalize_path;
+use std::io;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
+use toml::Value as TomlValue;
 use tracing::error;
 
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
 /// Preferred local override for project-level docs.
 pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
+const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
@@ -138,43 +142,20 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
         dir = canon;
     }
 
-    // Build chain from cwd upwards and detect git root.
-    let mut chain: Vec<PathBuf> = vec![dir.clone()];
-    let mut git_root: Option<PathBuf> = None;
-    let mut cursor = dir;
-    while let Some(parent) = cursor.parent() {
-        let git_marker = cursor.join(".git");
-        let git_exists = match std::fs::metadata(&git_marker) {
-            Ok(_) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(e),
-        };
-
-        if git_exists {
-            git_root = Some(cursor.clone());
-            break;
-        }
-
-        chain.push(parent.to_path_buf());
-        cursor = parent.to_path_buf();
-    }
-
-    let search_dirs: Vec<PathBuf> = if let Some(root) = git_root {
-        let mut dirs: Vec<PathBuf> = Vec::new();
-        let mut saw_root = false;
-        for p in chain.iter().rev() {
-            if !saw_root {
-                if p == &root {
-                    saw_root = true;
-                } else {
-                    continue;
+    let markers = project_root_markers_from_config(config)?;
+    let search_dirs = match find_project_root(&dir, &markers)? {
+        Some(root) => {
+            let mut dirs = Vec::new();
+            for ancestor in dir.as_path().ancestors() {
+                dirs.push(ancestor.to_path_buf());
+                if ancestor == root {
+                    break;
                 }
             }
-            dirs.push(p.clone());
+            dirs.reverse();
+            dirs
         }
-        dirs
-    } else {
-        vec![config.cwd.clone()]
+        None => vec![dir.clone()],
     };
 
     let mut found: Vec<PathBuf> = Vec::new();
@@ -198,6 +179,60 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
     }
 
     Ok(found)
+}
+
+fn project_root_markers_from_config(config: &Config) -> io::Result<Vec<String>> {
+    let merged = config.config_layer_stack.effective_config();
+    let Some(table) = merged.as_table() else {
+        return Ok(default_project_root_markers());
+    };
+    let Some(markers_value) = table.get("project_root_markers") else {
+        return Ok(default_project_root_markers());
+    };
+    let TomlValue::Array(entries) = markers_value else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "project_root_markers must be an array of strings",
+        ));
+    };
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut markers = Vec::new();
+    for entry in entries {
+        let Some(marker) = entry.as_str() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "project_root_markers must be an array of strings",
+            ));
+        };
+        markers.push(marker.to_string());
+    }
+    Ok(markers)
+}
+
+fn default_project_root_markers() -> Vec<String> {
+    DEFAULT_PROJECT_ROOT_MARKERS
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn find_project_root(cwd: &std::path::Path, markers: &[String]) -> io::Result<Option<PathBuf>> {
+    if markers.is_empty() {
+        return Ok(None);
+    }
+    for ancestor in cwd.ancestors() {
+        for marker in markers {
+            let marker_path = ancestor.join(marker);
+            match std::fs::metadata(&marker_path) {
+                Ok(_) => return Ok(Some(ancestor.to_path_buf())),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {

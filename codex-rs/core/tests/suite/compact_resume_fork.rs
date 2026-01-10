@@ -24,6 +24,7 @@ use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
+use core_test_support::prepare_test_project_root;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -151,7 +152,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let request_log = mount_initial_flow(&server).await;
     let expected_model = "gpt-5.1-codex";
     // 2. Start a new conversation and drive it through the compact/resume/fork steps.
-    let (_home, config, manager, base) =
+    let (_home, _project_root, config, manager, base) =
         start_test_conversation(&server, Some(expected_model)).await;
 
     user_turn(&base, "hello world").await;
@@ -604,7 +605,8 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     request_log.extend(mount_second_compact_flow(&server).await);
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
-    let (_home, config, manager, base) = start_test_conversation(&server, None).await;
+    let (_home, _project_root, config, manager, base) =
+        start_test_conversation(&server, None).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -863,16 +865,18 @@ async fn mount_second_compact_flow(server: &MockServer) -> Vec<ResponseMock> {
 async fn start_test_conversation(
     server: &MockServer,
     model: Option<&str>,
-) -> (TempDir, Config, ThreadManager, Arc<CodexThread>) {
+) -> (TempDir, TempDir, Config, ThreadManager, Arc<CodexThread>) {
     let model_provider = ModelProviderInfo {
         name: "Non-OpenAI Model provider".into(),
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
     let home = TempDir::new().expect("create temp dir");
+    let (project_root, project_cwd) = prepare_test_project_root(&home);
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+    config.cwd = project_cwd;
     if let Some(model) = model {
         config.model = Some(model.to_string());
     }
@@ -885,7 +889,7 @@ async fn start_test_conversation(
         .await
         .expect("create conversation");
 
-    (home, config, manager, thread)
+    (home, project_root, config, manager, thread)
 }
 
 async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
