@@ -721,14 +721,14 @@ mod tests {
         assert_eq!(
             DeveloperInstructions::from(SandboxMode::WorkspaceWrite),
             DeveloperInstructions::new(
-                "<permissions instructions>Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted.</permissions instructions>"
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
             )
         );
 
         assert_eq!(
             DeveloperInstructions::from(SandboxMode::ReadOnly),
             DeveloperInstructions::new(
-                "<permissions instructions>Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted.</permissions instructions>"
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
             )
         );
     }
