@@ -498,7 +498,7 @@ impl ChatComposer {
         };
         // Persistent ↑/↓ history is text-only (backwards-compatible and avoids persisting
         // attachments), but local in-session ↑/↓ history can rehydrate elements and image paths.
-        self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
+        self.apply_history_entry(entry);
         true
     }
 
@@ -760,19 +760,33 @@ impl ChatComposer {
             .iter()
             .map(|img| img.path.clone())
             .collect();
+        let pending_pastes = std::mem::take(&mut self.pending_pastes);
         self.set_text_content(String::new(), Vec::new(), Vec::new());
         self.history.reset_navigation();
-        self.history.record_local_submission(HistoryEntry {
-            text: previous.clone(),
-            text_elements,
-            local_image_paths,
-        });
+        self.history
+            .record_local_submission(HistoryEntry::with_pending(
+                previous.clone(),
+                text_elements,
+                local_image_paths,
+                pending_pastes,
+            ));
         Some(previous)
     }
 
     /// Get the current composer text.
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
+    }
+
+    fn apply_history_entry(&mut self, entry: HistoryEntry) {
+        let HistoryEntry {
+            text,
+            text_elements,
+            local_image_paths,
+            pending_pastes,
+        } = entry;
+        self.set_text_content(text, text_elements, local_image_paths);
+        self.pending_pastes = pending_pastes;
     }
 
     pub(crate) fn text_elements(&self) -> Vec<TextElement> {
@@ -1902,11 +1916,13 @@ impl ChatComposer {
                 .iter()
                 .map(|img| img.path.clone())
                 .collect();
-            self.history.record_local_submission(HistoryEntry {
-                text: text.clone(),
-                text_elements: text_elements.clone(),
-                local_image_paths,
-            });
+            self.history
+                .record_local_submission(HistoryEntry::with_pending(
+                    text.clone(),
+                    text_elements.clone(),
+                    local_image_paths,
+                    Vec::new(),
+                ));
         }
         self.pending_pastes.clear();
         Some((text, text_elements))
@@ -2112,11 +2128,7 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(entry) = replace_entry {
-                        self.set_text_content(
-                            entry.text,
-                            entry.text_elements,
-                            entry.local_image_paths,
-                        );
+                        self.apply_history_entry(entry);
                         return (InputResult::None, true);
                     }
                 }
@@ -3611,8 +3623,118 @@ mod tests {
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
-            Some(HistoryEntry::from_text("draft text".to_string()))
+            Some(HistoryEntry::new("draft text".to_string()))
         );
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_preserves_pending_paste_history_entry() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large.clone());
+        let char_count = large.chars().count();
+        let placeholder = format!("[Pasted Content {char_count} chars]");
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(
+            composer.pending_pastes,
+            vec![(placeholder.clone(), large.clone())]
+        );
+
+        composer.clear_for_ctrl_c();
+        assert!(composer.is_empty());
+
+        let history_entry = composer
+            .history
+            .navigate_up(&composer.app_event_tx)
+            .expect("expected history entry");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.clone()),
+        )];
+        assert_eq!(
+            history_entry,
+            HistoryEntry::with_pending(
+                placeholder.clone(),
+                text_elements,
+                Vec::new(),
+                vec![(placeholder.clone(), large.clone())]
+            )
+        );
+
+        composer.apply_history_entry(history_entry);
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(composer.pending_pastes, vec![(placeholder.clone(), large)]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder]);
+
+        composer.set_steer_enabled(true);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_preserves_image_draft_state() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let path = PathBuf::from("example.png");
+        composer.attach_image(path.clone());
+        let placeholder = local_image_label_text(1);
+
+        composer.clear_for_ctrl_c();
+        assert!(composer.is_empty());
+
+        let history_entry = composer
+            .history
+            .navigate_up(&composer.app_event_tx)
+            .expect("expected history entry");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.clone()),
+        )];
+        assert_eq!(
+            history_entry,
+            HistoryEntry::with_pending(
+                placeholder.clone(),
+                text_elements,
+                vec![path.clone()],
+                Vec::new()
+            )
+        );
+
+        composer.apply_history_entry(history_entry);
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(composer.local_image_paths(), vec![path]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder]);
     }
 
     /// Behavior: `?` toggles the shortcut overlay only when the composer is otherwise empty. After
@@ -6847,6 +6969,34 @@ mod tests {
 
         assert_eq!(composer.current_text(), "No images here".to_string());
         assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn apply_external_edit_renumbers_image_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let first_path = PathBuf::from("img1.png");
+        let second_path = PathBuf::from("img2.png");
+        composer.attach_image(first_path);
+        composer.attach_image(second_path.clone());
+
+        let placeholder2 = local_image_label_text(2);
+        composer.apply_external_edit(format!("Keep {placeholder2}"));
+
+        let placeholder1 = local_image_label_text(1);
+        assert_eq!(composer.current_text(), format!("Keep {placeholder1}"));
+        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attached_images[0].placeholder, placeholder1);
+        assert_eq!(composer.local_image_paths(), vec![second_path]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder1]);
     }
 
     #[test]
