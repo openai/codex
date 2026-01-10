@@ -1593,12 +1593,13 @@ impl ChatWidget {
             {
                 match paste_image_to_temp_png() {
                     Ok((path, info)) => {
-                        self.attach_image(
-                            path,
+                        tracing::debug!(
+                            "pasted image size={}x{} format={}",
                             info.width,
                             info.height,
-                            info.encoded_format.label(),
+                            info.encoded_format.label()
                         );
+                        self.attach_image(path);
                     }
                     Err(err) => {
                         tracing::warn!("failed to paste image: {err}");
@@ -1651,18 +1652,9 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn attach_image(
-        &mut self,
-        path: PathBuf,
-        width: u32,
-        height: u32,
-        format_label: &str,
-    ) {
-        tracing::info!(
-            "attach_image path={path:?} width={width} height={height} format={format_label}",
-        );
-        self.bottom_pane
-            .attach_image(path, width, height, format_label);
+    pub(crate) fn attach_image(&mut self, path: PathBuf) {
+        tracing::info!("attach_image path={path:?}");
+        self.bottom_pane.attach_image(path);
         self.request_redraw();
     }
 
@@ -2012,12 +2004,12 @@ impl ChatWidget {
             return;
         }
 
-        if !text.is_empty() {
-            items.push(UserInput::Text { text: text.clone() });
-        }
-
         for path in image_paths {
             items.push(UserInput::LocalImage { path });
+        }
+
+        if !text.is_empty() {
+            items.push(UserInput::Text { text: text.clone() });
         }
 
         if let Some(skills) = self.bottom_pane.skills() {

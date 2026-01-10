@@ -17,6 +17,7 @@ use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use url::Url;
 
 use super::account::StatusAccountDisplay;
 use super::format::FieldFormatter;
@@ -62,6 +63,7 @@ struct StatusHistoryCell {
     approval: String,
     sandbox: String,
     agents_summary: String,
+    model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
     token_usage: StatusTokenUsageData,
@@ -129,6 +131,7 @@ impl StatusHistoryCell {
             }
         };
         let agents_summary = compose_agents_summary(config);
+        let model_provider = format_model_provider(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let default_usage = TokenUsage::default();
@@ -157,6 +160,7 @@ impl StatusHistoryCell {
             approval,
             sandbox,
             agents_summary,
+            model_provider,
             account,
             session_id,
             token_usage,
@@ -338,6 +342,9 @@ impl HistoryCell for StatusHistoryCell {
                 .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
 
+        if self.model_provider.is_some() {
+            push_label(&mut labels, &mut seen, "Model provider");
+        }
         if account_value.is_some() {
             push_label(&mut labels, &mut seen, "Account");
         }
@@ -380,6 +387,9 @@ impl HistoryCell for StatusHistoryCell {
         let directory_value = format_directory_display(&self.directory, Some(value_width));
 
         lines.push(formatter.line("Model", model_spans));
+        if let Some(model_provider) = self.model_provider.as_ref() {
+            lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
+        }
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
         lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
@@ -414,4 +424,40 @@ impl HistoryCell for StatusHistoryCell {
 
         with_border_with_inner_width(truncated_lines, inner_width)
     }
+}
+
+fn format_model_provider(config: &Config) -> Option<String> {
+    let provider = &config.model_provider;
+    let name = provider.name.trim();
+    let provider_name = if name.is_empty() {
+        config.model_provider_id.as_str()
+    } else {
+        name
+    };
+    let base_url = provider.base_url.as_deref().and_then(sanitize_base_url);
+    let is_default_openai = provider.is_openai() && base_url.is_none();
+    if is_default_openai {
+        return None;
+    }
+
+    Some(match base_url {
+        Some(base_url) => format!("{provider_name} - {base_url}"),
+        None => provider_name.to_string(),
+    })
+}
+
+fn sanitize_base_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let Ok(mut url) = Url::parse(trimmed) else {
+        return None;
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string().trim_end_matches('/').to_string()).filter(|value| !value.is_empty())
 }
