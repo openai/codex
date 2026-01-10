@@ -31,6 +31,7 @@ mod exec_policy;
 mod fork_thread;
 mod grep_files;
 mod hierarchical_agents;
+mod interrupt_does_not_repeat_aborted_turn;
 mod items;
 mod json_result;
 mod list_dir;

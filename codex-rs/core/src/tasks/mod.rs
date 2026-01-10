@@ -27,6 +27,8 @@ use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 
 pub(crate) use compact::CompactTask;
@@ -234,6 +236,21 @@ impl Session {
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
+
+        if reason == TurnAbortReason::Interrupted {
+            let marker = ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!(
+                        "<turn_aborted>\n  <turn_id>{sub_id}</turn_id>\n  <reason>interrupted</reason>\n  <guidance>The user interrupted the previous turn. Do not continue or repeat work from that turn unless the user explicitly asks. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.</guidance>\n</turn_aborted>"
+                    ),
+                }],
+            };
+            self.record_conversation_items(task.turn_context.as_ref(), &[marker])
+                .await;
+            self.flush_rollout().await;
+        }
 
         let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
         self.send_event(task.turn_context.as_ref(), event).await;

@@ -24,7 +24,7 @@ use crate::user_shell_command::is_user_shell_command_text;
 fn is_session_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
     let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>")
+    lowered.starts_with("<environment_context>") || lowered.starts_with("<turn_aborted>")
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {

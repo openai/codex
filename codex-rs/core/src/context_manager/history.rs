@@ -319,7 +319,7 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
 fn is_session_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
     let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>")
+    lowered.starts_with("<environment_context>") || lowered.starts_with("<turn_aborted>")
 }
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {

@@ -3738,14 +3738,18 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-            .await
-            .expect("timeout waiting for event")
-            .expect("event");
-        match evt.msg {
-            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
-            other => panic!("unexpected event: {other:?}"),
-        }
+        let aborted = loop {
+            let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::RawResponseItem(_) => continue,
+                EventMsg::TurnAborted(e) => break e,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        };
+        assert_eq!(TurnAbortReason::Interrupted, aborted.reason);
         assert!(rx.try_recv().is_err());
     }
 
@@ -3767,11 +3771,18 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        let evt = rx.recv().await.expect("event");
-        match evt.msg {
-            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
-            other => panic!("unexpected event: {other:?}"),
-        }
+        let aborted = loop {
+            let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::RawResponseItem(_) => continue,
+                EventMsg::TurnAborted(e) => break e,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        };
+        assert_eq!(TurnAbortReason::Interrupted, aborted.reason);
         assert!(rx.try_recv().is_err());
     }
 
