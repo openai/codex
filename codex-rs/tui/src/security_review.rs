@@ -5182,9 +5182,9 @@ pub async fn run_security_review(
     } else {
         record(
             &mut logs,
-            "Validating high-risk findings (web + api)...".to_string(),
+            "Validating high-risk findings (ASan crash PoCs)...".to_string(),
         );
-        match run_web_validation(
+        match run_asan_validation(
             repo_path.clone(),
             artifacts.snapshot_path.clone(),
             artifacts.bugs_path.clone(),
@@ -15068,180 +15068,6 @@ pub(crate) async fn verify_bugs(
 }
 
 #[derive(Debug, Deserialize)]
-struct AccountPlanItem {
-    action: String,
-    #[serde(default)]
-    login_url: Option<String>,
-    #[serde(default)]
-    tool: Option<String>,
-    #[serde(default)]
-    script: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AccountsOutputJson {
-    accounts: Vec<AccountPair>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct AccountPair {
-    username: String,
-    password: String,
-}
-
-fn parse_accounts_inline(text: &str) -> Vec<AccountPair> {
-    // Accept formats like: user:pass, user2:pass2
-    let mut out = Vec::new();
-    for chunk in text.split(',') {
-        let part = chunk.trim();
-        if part.is_empty() {
-            continue;
-        }
-        if let Some((u, p)) = part.split_once(':') {
-            let u = u.trim();
-            let p = p.trim();
-            if !u.is_empty() && !p.is_empty() {
-                out.push(AccountPair {
-                    username: u.to_string(),
-                    password: p.to_string(),
-                });
-            }
-        }
-    }
-    out
-}
-
-async fn write_accounts(work_dir: &Path, creds: &[AccountPair]) -> Result<PathBuf, String> {
-    let path = work_dir.join("credentials.json");
-    let json = serde_json::to_vec_pretty(&AccountsOutputJson {
-        accounts: creds.to_vec(),
-    })
-    .map_err(|e| e.to_string())?;
-    tokio_fs::write(&path, json)
-        .await
-        .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
-    Ok(path)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn setup_accounts(
-    client: &CodexHttpClient,
-    provider: &ModelProviderInfo,
-    auth: &Option<CodexAuth>,
-    model: &str,
-    snapshot: &SecurityReviewSnapshot,
-    work_dir: &Path,
-    progress_sender: Option<AppEventSender>,
-    metrics: Arc<ReviewMetrics>,
-) -> Result<Option<Vec<AccountPair>>, String> {
-    if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(
-            "Preparing test accounts for validation...".to_string(),
-        ));
-    }
-
-    let findings = build_validation_findings_context(snapshot).text;
-    let prompt = VALIDATION_ACCOUNTS_PROMPT_TEMPLATE.replace("{findings}", &findings);
-    let response = call_model(
-        client,
-        provider,
-        auth,
-        model,
-        VALIDATION_ACCOUNTS_SYSTEM_PROMPT,
-        &prompt,
-        metrics,
-        0.0,
-    )
-    .await
-    .map_err(|e| format!("Account planning failed: {e}"))?;
-
-    let mut chosen: Option<AccountPlanItem> = None;
-    for line in response.text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(item) = serde_json::from_str::<AccountPlanItem>(trimmed) {
-            chosen = Some(item);
-            break;
-        }
-    }
-
-    let Some(plan) = chosen else {
-        return Ok(None);
-    };
-
-    if plan.action.eq_ignore_ascii_case("register")
-        && plan.tool.as_deref().unwrap_or("") == "python"
-        && plan.script.as_ref().is_some()
-    {
-        // Write and run inline script
-        let _ = tokio_fs::create_dir_all(work_dir).await;
-        let script_path = work_dir.join("register_accounts.py");
-        let Some(code) = plan.script.as_ref() else {
-            return Ok(None);
-        };
-        tokio_fs::write(&script_path, code.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to write {}: {e}", script_path.display()))?;
-
-        let mut cmd = Command::new("python");
-        cmd.arg(&script_path);
-        if let Some(url) = plan.login_url.as_ref() {
-            cmd.arg(url);
-        }
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| format!("Failed to run python: {e}"))?;
-        let success = output.status.success();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout_path = work_dir.join("register_accounts_stdout.txt");
-        let stderr_path = work_dir.join("register_accounts_stderr.txt");
-        let _ = tokio_fs::write(&stdout_path, stdout.as_bytes()).await;
-        let _ = tokio_fs::write(&stderr_path, stderr.as_bytes()).await;
-        if !success {
-            if let Some(tx) = progress_sender.as_ref() {
-                tx.send(AppEvent::SecurityReviewLog(format!(
-                    "Account registration failed: {}",
-                    summarize_process_output(false, &stdout, &stderr)
-                )));
-            }
-            return Ok(None);
-        }
-
-        // Try to parse JSON from stdout
-        let creds = if let Ok(json) = serde_json::from_str::<AccountsOutputJson>(stdout.trim()) {
-            json.accounts
-        } else {
-            // best-effort: parse user:pass lines
-            let pairs = parse_accounts_inline(stdout.trim());
-            if pairs.len() >= 2 { pairs } else { Vec::new() }
-        };
-        if creds.len() < 2 {
-            return Ok(None);
-        }
-        return Ok(Some(creds));
-    }
-
-    // Manual fallback
-    if let Some(tx) = progress_sender.as_ref() {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        tx.send(AppEvent::OpenRegistrationPrompt {
-            url: plan.login_url.clone(),
-            responder: resp_tx,
-        });
-        if let Ok(Some(input)) = resp_rx.await {
-            let creds = parse_accounts_inline(&input);
-            if creds.len() >= 2 {
-                return Ok(Some(creds));
-            }
-        }
-    }
-    Ok(None)
-}
-#[derive(Debug, Deserialize)]
 struct ValidationPlanItem {
     id_kind: String,
     #[serde(default)]
@@ -15395,7 +15221,7 @@ fn indent_block(s: &str, spaces: usize) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_web_validation(
+async fn run_asan_validation(
     repo_path: PathBuf,
     snapshot_path: PathBuf,
     bugs_path: PathBuf,
@@ -15423,56 +15249,17 @@ async fn run_web_validation(
     let client = create_client();
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(
-            "Planning web/API validation for high-risk findings...".to_string(),
+            "Planning ASan crash validation for high-risk findings...".to_string(),
         ));
     }
 
-    // Ensure we have test accounts before validation
     let output_root = snapshot_path
         .parent()
         .and_then(|p| p.parent())
         .map(PathBuf::from)
         .unwrap_or_else(|| repo_path.join(".codex_validation"));
     let work_dir = output_root.join("validation");
-    let shared_dir = work_dir.join("shared");
-    let _ = tokio_fs::create_dir_all(&shared_dir).await;
-    if let Some(creds) = setup_accounts(
-        &client,
-        &provider,
-        &auth,
-        &model,
-        &snapshot,
-        &shared_dir,
-        progress_sender.clone(),
-        metrics.clone(),
-    )
-    .await
-    .map_err(|e| BugVerificationFailure {
-        message: e,
-        logs: vec![],
-    })? {
-        let path =
-            write_accounts(&shared_dir, &creds)
-                .await
-                .map_err(|e| BugVerificationFailure {
-                    message: e,
-                    logs: vec![],
-                })?;
-        if let Some(tx) = progress_sender.as_ref() {
-            let names: Vec<String> = creds.iter().map(|p| p.username.clone()).collect();
-            tx.send(AppEvent::SecurityReviewLog(format!(
-                "Registered {} test accounts: {} (stored in {})",
-                creds.len(),
-                names.join(", "),
-                display_path_for(&path, &repo_path)
-            )));
-        }
-    } else if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(
-            "Proceeding without auto-registered accounts; user may have registered manually."
-                .to_string(),
-        ));
-    }
+    let _ = tokio_fs::create_dir_all(&work_dir).await;
 
     // Build prompt
     let findings = build_validation_findings_context(&snapshot);
@@ -15511,10 +15298,6 @@ async fn run_web_validation(
             Ok(v) => v,
             Err(_) => continue,
         };
-        if parsed.id_kind == "setup" {
-            // Already handled by setup_accounts() pre-step; skip.
-            continue;
-        }
         let Some(id_value) = parsed.id_value else {
             continue;
         };
@@ -15547,20 +15330,29 @@ async fn run_web_validation(
                     }
                 }
             }
-            "playwright" | "curl" | "python" => {
-                let tool = match tool_raw.to_ascii_lowercase().as_str() {
-                    "playwright" => BugVerificationTool::Playwright,
-                    "curl" => BugVerificationTool::Curl,
-                    "python" => BugVerificationTool::Python,
-                    _ => continue,
-                };
+            "python" => {
                 requests.push(BugVerificationRequest {
                     id,
-                    tool,
-                    target: parsed.target.clone(),
+                    tool: BugVerificationTool::Python,
+                    target: None,
                     script_path: None,
                     script_inline: parsed.script.clone(),
                 });
+            }
+            "curl" | "playwright" => {
+                if let Some(index) = find_bug_index(&snapshot, id) {
+                    let entry = &mut snapshot.bugs[index];
+                    if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                        entry.bug.validation.status = BugValidationStatus::UnableToValidate;
+                        entry.bug.validation.tool = Some(tool_raw.to_string());
+                        entry.bug.validation.target = None;
+                        entry.bug.validation.summary = Some(
+                            "Web/API validation is disabled; only ASan crash validation is supported."
+                                .to_string(),
+                        );
+                        entry.bug.validation.run_at = Some(run_at);
+                    }
+                }
             }
             _ => {}
         }
