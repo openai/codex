@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
@@ -68,6 +69,10 @@ pub struct ResponsesRequest(wiremock::Request);
 impl ResponsesRequest {
     pub fn body_json(&self) -> Value {
         self.0.body_json().unwrap()
+    }
+
+    pub fn body_bytes(&self) -> Vec<u8> {
+        self.0.body.clone()
     }
 
     /// Returns all `input_text` spans from `message` inputs for the provided role.
@@ -670,6 +675,24 @@ pub async fn mount_models_once(server: &MockServer, body: ModelsResponse) -> Mod
     models_mock
 }
 
+pub async fn mount_models_once_with_delay(
+    server: &MockServer,
+    body: ModelsResponse,
+    delay: Duration,
+) -> ModelsMock {
+    let (mock, models_mock) = models_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(body.clone())
+            .set_delay(delay),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    models_mock
+}
+
 pub async fn mount_models_once_with_etag(
     server: &MockServer,
     body: ModelsResponse,
@@ -699,33 +722,6 @@ pub async fn start_mock_server() -> MockServer {
     let _ = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
     server
-}
-
-// todo(aibrahim): remove this and use our search matching patterns directly
-/// Get all POST requests to `/responses` endpoints from the mock server.
-/// Filters out GET requests (e.g., `/models`) .
-pub async fn get_responses_requests(server: &MockServer) -> Vec<wiremock::Request> {
-    server
-        .received_requests()
-        .await
-        .expect("mock server should not fail")
-        .into_iter()
-        .filter(|req| req.method == "POST" && req.url.path().ends_with("/responses"))
-        .collect()
-}
-
-// todo(aibrahim): remove this and use our search matching patterns directly
-/// Get request bodies as JSON values from POST requests to `/responses` endpoints.
-/// Filters out GET requests (e.g., `/models`) .
-pub async fn get_responses_request_bodies(server: &MockServer) -> Vec<Value> {
-    get_responses_requests(server)
-        .await
-        .into_iter()
-        .map(|req| {
-            req.body_json::<Value>()
-                .expect("request body to be valid JSON")
-        })
-        .collect()
 }
 
 #[derive(Clone)]

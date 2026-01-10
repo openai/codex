@@ -134,7 +134,7 @@ async fn process_review_events(
             })
             | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
             | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
-            EventMsg::TaskComplete(task_complete) => {
+            EventMsg::TurnComplete(task_complete) => {
                 // Parse review output from the last agent message (if present).
                 let out = task_complete
                     .last_agent_message
@@ -154,7 +154,7 @@ async fn process_review_events(
             }
         }
     }
-    // Channel closed without TaskComplete: treat as interrupted.
+    // Channel closed without TurnComplete: treat as interrupted.
     None
 }
 

@@ -20,7 +20,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
-use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TurnCompleteEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::UserInput;
 use mcp_types::CallToolResult;
@@ -228,7 +228,7 @@ async fn run_codex_tool_session_inner(
                         .await;
                         continue;
                     }
-                    EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                    EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                         let text = match last_agent_message {
                             Some(msg) => msg,
                             None => "".to_string(),
@@ -267,7 +267,7 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::AgentReasoningRawContent(_)
                     | EventMsg::AgentReasoningRawContentDelta(_)
-                    | EventMsg::TaskStarted(_)
+                    | EventMsg::TurnStarted(_)
                     | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::AgentReasoningSectionBreak(_)

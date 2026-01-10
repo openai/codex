@@ -10,7 +10,6 @@ pub use cli::Cli;
 use anyhow::anyhow;
 use chrono::Utc;
 use codex_cloud_tasks_client::TaskStatus;
-use codex_login::AuthManager;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use std::cmp::Ordering;
@@ -65,7 +64,11 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     append_error_log(format!("startup: base_url={base_url} path_style={style}"));
 
     let auth_manager = util::load_auth_manager().await;
-    let auth = match auth_manager.as_ref().and_then(AuthManager::auth) {
+    let auth = match auth_manager.as_ref() {
+        Some(manager) => manager.auth().await,
+        None => None,
+    };
+    let auth = match auth {
         Some(auth) => auth,
         None => {
             eprintln!(
@@ -79,7 +82,7 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
         append_error_log(format!("auth: mode=ChatGPT account_id={acc}"));
     }
 
-    let token = match auth.get_token().await {
+    let token = match auth.get_token() {
         Ok(t) if !t.is_empty() => t,
         _ => {
             eprintln!(

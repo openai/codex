@@ -101,6 +101,6 @@ async fn retries_on_early_close() {
         .await
         .unwrap();
 
-    // Wait until TaskComplete (should succeed after retry).
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    // Wait until TurnComplete (should succeed after retry).
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }

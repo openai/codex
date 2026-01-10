@@ -3,6 +3,7 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
+pub use codex_protocol::config_types::AltScreenMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -282,6 +283,12 @@ pub struct AnalyticsConfigToml {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct FeedbackConfigToml {
+    /// When `false`, disables the feedback flow across Codex product surfaces.
+    pub enabled: Option<bool>,
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -517,6 +524,17 @@ pub struct Tui {
     /// wheel and trackpad input.
     #[serde(default)]
     pub scroll_invert: bool,
+
+    /// Controls whether the TUI uses the terminal's alternate screen buffer.
+    ///
+    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
+    /// - `always`: Always use alternate screen (original behavior).
+    /// - `never`: Never use alternate screen (inline mode only, preserves scrollback).
+    ///
+    /// Using alternate screen provides a cleaner fullscreen experience but prevents
+    /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
+    #[serde(default)]
+    pub alternate_screen: AltScreenMode,
 }
 
 const fn default_true() -> bool {

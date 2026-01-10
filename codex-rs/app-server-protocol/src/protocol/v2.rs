@@ -1080,6 +1080,47 @@ pub struct ThreadResumeResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// There are two ways to fork a thread:
+/// 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread.
+/// 2. By path: load the thread from disk by path and fork it into a new thread.
+///
+/// If using path, the thread_id param will be ignored.
+///
+/// Prefer using thread_id whenever possible.
+pub struct ThreadForkParams {
+    pub thread_id: String,
+
+    /// [UNSTABLE] Specify the rollout path to fork from.
+    /// If specified, the thread_id param will be ignored.
+    pub path: Option<PathBuf>,
+
+    /// Configuration overrides for the forked thread, if any.
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub cwd: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxMode>,
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadForkResponse {
+    pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1275,7 +1316,7 @@ pub struct Thread {
     pub source: SessionSource,
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
-    /// Only populated on `thread/resume` and `thread/rollback` responses.
+    /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork` responses.
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.
     pub turns: Vec<Turn>,
@@ -1351,7 +1392,7 @@ impl From<CoreTokenUsage> for TokenUsageBreakdown {
 #[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
-    /// Only populated on a `thread/resume` response.
+    /// Only populated on a `thread/resume` or `thread/fork` response.
     /// For all other responses and notifications returning a Turn,
     /// the items field will be an empty list.
     pub items: Vec<ThreadItem>,

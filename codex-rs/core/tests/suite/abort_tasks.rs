@@ -124,7 +124,7 @@ async fn interrupt_tool_records_history_entries() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = response_mock.requests();
     assert!(

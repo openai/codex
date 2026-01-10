@@ -79,7 +79,7 @@ async fn emits_warning_when_resumed_model_differs() {
     assert!(message.contains("previous-model"));
     assert!(message.contains("current-model"));
 
-    // Drain the TaskComplete/Shutdown window to avoid leaking tasks between tests.
+    // Drain the TurnComplete/Shutdown window to avoid leaking tasks between tests.
     // The warning is emitted during initialization, so a short sleep is sufficient.
     tokio::time::sleep(Duration::from_millis(50)).await;
 }
