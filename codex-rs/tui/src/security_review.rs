@@ -15424,11 +15424,20 @@ async fn make_provider_request_builder(
     auth: &Option<CodexAuth>,
     path: &str,
 ) -> Result<CodexRequestBuilder, String> {
-    // Base URL: allow provider overrides, otherwise default to the standard OpenAI-style endpoint.
+    // Base URL: allow provider overrides, otherwise match codex-core defaults (ChatGPT auth uses
+    // chatgpt.com backend API).
+    let default_base_url = if auth
+        .as_ref()
+        .is_some_and(|auth| matches!(auth.mode, codex_app_server_protocol::AuthMode::ChatGPT))
+    {
+        "https://chatgpt.com/backend-api/codex"
+    } else {
+        "https://api.openai.com/v1"
+    };
     let mut base_url = provider
         .base_url
         .clone()
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .unwrap_or_else(|| default_base_url.to_string());
     base_url = base_url.trim_end_matches('/').to_string();
 
     let path = path.trim_start_matches('/');
