@@ -83,6 +83,15 @@ pub struct ResumeConversationResponse {
     pub rollout_path: PathBuf,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkConversationResponse {
+    pub conversation_id: ThreadId,
+    pub model: String,
+    pub initial_messages: Option<Vec<EventMsg>>,
+    pub rollout_path: PathBuf,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(untagged)]
 pub enum GetConversationSummaryParams {
@@ -145,6 +154,14 @@ pub struct ResumeConversationParams {
     pub path: Option<PathBuf>,
     pub conversation_id: Option<ThreadId>,
     pub history: Option<Vec<ResponseItem>>,
+    pub overrides: Option<NewConversationParams>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkConversationParams {
+    pub path: Option<PathBuf>,
+    pub conversation_id: Option<ThreadId>,
     pub overrides: Option<NewConversationParams>,
 }
 

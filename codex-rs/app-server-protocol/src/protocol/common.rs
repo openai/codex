@@ -109,6 +109,10 @@ client_request_definitions! {
         params: v2::ThreadResumeParams,
         response: v2::ThreadResumeResponse,
     },
+    ThreadFork => "thread/fork" {
+        params: v2::ThreadForkParams,
+        response: v2::ThreadForkResponse,
+    },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
@@ -229,6 +233,11 @@ client_request_definitions! {
     ResumeConversation {
         params: v1::ResumeConversationParams,
         response: v1::ResumeConversationResponse,
+    },
+    /// Fork a recorded Codex conversation into a new session.
+    ForkConversation {
+        params: v1::ForkConversationParams,
+        response: v1::ForkConversationResponse,
     },
     ArchiveConversation {
         params: v1::ArchiveConversationParams,

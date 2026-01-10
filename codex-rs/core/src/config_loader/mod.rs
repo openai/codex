@@ -574,7 +574,14 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
         }
         if let Some(sandbox_mode) = sandbox_mode {
-            config_requirements_toml.allowed_sandbox_modes = Some(vec![sandbox_mode.into()]);
+            let required_mode: SandboxModeRequirement = sandbox_mode.into();
+            // Allowing read-only is a requirement for Codex to function correctly.
+            // So in this backfill path, we append read-only if it's not already specified.
+            let mut allowed_modes = vec![SandboxModeRequirement::ReadOnly];
+            if required_mode != SandboxModeRequirement::ReadOnly {
+                allowed_modes.push(required_mode);
+            }
+            config_requirements_toml.allowed_sandbox_modes = Some(allowed_modes);
         }
         config_requirements_toml
     }
@@ -621,5 +628,23 @@ foo = "xyzzy"
         expected_toml_value.insert("foo".to_string(), TomlValue::String("xyzzy".to_string()));
         assert_eq!(normalized_toml_value, TomlValue::Table(expected_toml_value));
         Ok(())
+    }
+
+    #[test]
+    fn legacy_managed_config_backfill_includes_read_only_sandbox_mode() {
+        let legacy = LegacyManagedConfigToml {
+            approval_policy: None,
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+        };
+
+        let requirements = ConfigRequirementsToml::from(legacy);
+
+        assert_eq!(
+            requirements.allowed_sandbox_modes,
+            Some(vec![
+                SandboxModeRequirement::ReadOnly,
+                SandboxModeRequirement::WorkspaceWrite
+            ])
+        );
     }
 }

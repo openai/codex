@@ -10,6 +10,8 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
+#[cfg(target_os = "windows")]
+use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -36,11 +38,11 @@ use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TaskCompleteEvent;
-use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
+use codex_core::protocol::TurnCompleteEvent;
+use codex_core::protocol::TurnStartedEvent;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
@@ -60,6 +62,8 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+#[cfg(target_os = "windows")]
+use serial_test::serial;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -70,6 +74,11 @@ use tokio::sync::mpsc::unbounded_channel;
 #[cfg(target_os = "windows")]
 fn set_windows_sandbox_enabled(enabled: bool) {
     codex_core::set_windows_sandbox_enabled(enabled);
+}
+
+#[cfg(target_os = "windows")]
+fn set_windows_elevated_sandbox_enabled(enabled: bool) {
+    codex_core::set_windows_elevated_sandbox_enabled(enabled);
 }
 
 async fn test_config() -> Config {
@@ -1580,7 +1589,7 @@ async fn interrupted_turn_error_message_snapshot() {
     // Simulate an in-progress task so the widget is in a running state.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -1786,6 +1795,35 @@ async fn approvals_selection_popup_snapshot() {
     assert_snapshot!("approvals_selection_popup", popup);
 }
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+#[serial]
+async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let was_sandbox_enabled = codex_core::get_platform_sandbox().is_some();
+    let was_elevated_enabled = codex_core::is_windows_elevated_sandbox_enabled();
+
+    chat.config.notices.hide_full_access_warning = None;
+    chat.config.features.enable(Feature::WindowsSandbox);
+    chat.config
+        .features
+        .disable(Feature::WindowsSandboxElevated);
+    set_windows_sandbox_enabled(true);
+    set_windows_elevated_sandbox_enabled(false);
+
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    insta::with_settings!({ snapshot_suffix => "windows_degraded" }, {
+        assert_snapshot!("approvals_selection_popup", popup);
+    });
+
+    // Avoid leaking sandbox global state into other tests.
+    set_windows_sandbox_enabled(was_sandbox_enabled);
+    set_windows_elevated_sandbox_enabled(was_elevated_enabled);
+}
+
 #[tokio::test]
 async fn preset_matching_ignores_extra_writable_roots() {
     let preset = builtin_approval_presets()
@@ -1836,8 +1874,8 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("Agent mode on Windows uses an experimental sandbox"),
-        "expected auto mode prompt to mention enabling the sandbox feature, popup: {popup}"
+        popup.contains("requires elevation"),
+        "expected auto mode prompt to mention elevation, popup: {popup}"
     );
 }
 
@@ -1853,12 +1891,16 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("Agent mode on Windows uses an experimental sandbox"),
-        "expected startup prompt to explain sandbox: {popup}"
+        popup.contains("requires elevation"),
+        "expected startup prompt to explain elevation: {popup}"
     );
     assert!(
-        popup.contains("Enable experimental sandbox"),
-        "expected startup prompt to offer enabling the sandbox: {popup}"
+        popup.contains("Set up agent sandbox"),
+        "expected startup prompt to offer agent sandbox setup: {popup}"
+    );
+    assert!(
+        popup.contains("Stay in"),
+        "expected startup prompt to offer staying in current mode: {popup}"
     );
 
     set_windows_sandbox_enabled(true);
@@ -2341,7 +2383,7 @@ async fn ui_snapshots_small_heights_task_running() {
     // Activate status line
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -2372,7 +2414,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     // Begin a running task so the status indicator would be active.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -2424,7 +2466,7 @@ async fn status_widget_active_snapshot() {
     // Activate the status indicator by simulating a task start.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -2999,7 +3041,7 @@ async fn stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "task".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3036,7 +3078,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // Begin turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3060,7 +3102,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // End turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
         }),
     });
@@ -3230,7 +3272,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3274,7 +3316,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });
@@ -3345,7 +3387,7 @@ printf 'fenced within fenced\n'
     // Finalize the stream without sending a final AgentMessage, to flush any tail.
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
         }),
     });
@@ -3362,7 +3404,7 @@ async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }),
     });

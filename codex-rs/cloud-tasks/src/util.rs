@@ -85,8 +85,8 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
     if let Some(am) = load_auth_manager().await
-        && let Some(auth) = am.auth()
-        && let Ok(tok) = auth.get_token().await
+        && let Some(auth) = am.auth().await
+        && let Ok(tok) = auth.get_token()
         && !tok.is_empty()
     {
         let v = format!("Bearer {tok}");

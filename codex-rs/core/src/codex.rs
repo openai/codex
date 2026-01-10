@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
+use crate::CodexAuth;
 use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
@@ -43,9 +44,9 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_rmcp_client::ElicitationResponse;
 use futures::future::BoxFuture;
 use futures::prelude::*;
@@ -484,7 +485,7 @@ pub(crate) struct SessionSettingsUpdate {
 
 impl Session {
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
-    fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
+    pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
@@ -633,20 +634,22 @@ impl Session {
         }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
 
+        let auth = auth_manager.auth().await;
+        let auth = auth.as_ref();
         let otel_manager = OtelManager::new(
             conversation_id,
             session_configuration.model.as_str(),
             session_configuration.model.as_str(),
-            auth_manager.auth().and_then(|a| a.get_account_id()),
-            auth_manager.auth().and_then(|a| a.get_account_email()),
-            auth_manager.auth().map(|a| a.mode),
+            auth.and_then(CodexAuth::get_account_id),
+            auth.and_then(CodexAuth::get_account_email),
+            auth.map(|a| a.mode),
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
         );
         config.features.emit_metrics(&otel_manager);
         otel_manager.counter(
-            "codex.session.started",
+            "codex.thread.started",
             1,
             &[(
                 "is_git",
@@ -2321,9 +2324,9 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 /// - If the model requests a function call, we execute it and send the output
 ///   back to the model in the next turn.
 /// - If the model sends only an assistant message, we record it in the
-///   conversation history and consider the task complete.
+///   conversation history and consider the turn complete.
 ///
-pub(crate) async fn run_task(
+pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
@@ -2339,7 +2342,7 @@ pub(crate) async fn run_task(
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
     }
-    let event = EventMsg::TaskStarted(TaskStartedEvent {
+    let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, event).await;
@@ -2404,7 +2407,7 @@ pub(crate) async fn run_task(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
-        match run_turn(
+        match run_model_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
@@ -2481,7 +2484,7 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
         cwd = %turn_context.cwd.display()
     )
 )]
-async fn run_turn(
+async fn run_model_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,

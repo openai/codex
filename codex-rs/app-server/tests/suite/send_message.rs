@@ -1,7 +1,5 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
-use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
@@ -17,6 +15,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RawResponseItemEvent;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -26,13 +25,21 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn test_send_message_success() -> Result<()> {
-    // Spin up a mock completions server that immediately ends the Codex turn.
+    // Spin up a mock responses server that immediately ends the Codex turn.
     // Two Codex turns hit the mock model (session start + send-user-message). Provide two SSE responses.
-    let responses = vec![
-        create_final_assistant_message_sse_response("Done")?,
-        create_final_assistant_message_sse_response("Done")?,
-    ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = responses::start_mock_server().await;
+    let body1 = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let body2 = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let _response_mock1 = responses::mount_sse_once(&server, body1).await;
+    let _response_mock2 = responses::mount_sse_once(&server, body2).await;
 
     // Create a temporary Codex home with config pointing at the mock server.
     let codex_home = TempDir::new()?;
@@ -135,8 +142,13 @@ async fn send_message(
 
 #[tokio::test]
 async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
-    let responses = vec![create_final_assistant_message_sse_response("Done")?];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let _response_mock = responses::mount_sse_once(&server, body).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -259,7 +271,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "chat"
+wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#
@@ -269,6 +281,7 @@ stream_max_retries = 0
 
 #[expect(clippy::expect_used)]
 async fn read_raw_response_item(mcp: &mut McpProcess, conversation_id: ThreadId) -> ResponseItem {
+    // TODO: Switch to rawResponseItem/completed once we migrate to app server v2 in codex web.
     loop {
         let raw_notification: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,

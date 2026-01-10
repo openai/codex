@@ -64,6 +64,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+fn windows_degraded_sandbox_active() -> bool {
+    cfg!(target_os = "windows")
+        && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+        && codex_core::get_platform_sandbox().is_some()
+        && !codex_core::is_windows_elevated_sandbox_enabled()
+}
+
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -1229,6 +1236,10 @@ impl ChatComposer {
                     && rest.is_empty()
                     && let Some((_n, cmd)) = built_in_slash_commands()
                         .into_iter()
+                        .filter(|(_, cmd)| {
+                            windows_degraded_sandbox_active()
+                                || *cmd != SlashCommand::ElevateSandbox
+                        })
                         .find(|(n, _)| *n == name)
                 {
                     self.textarea.set_text("");
@@ -1296,6 +1307,10 @@ impl ChatComposer {
                     if !treat_as_plain_text {
                         let is_builtin = built_in_slash_commands()
                             .into_iter()
+                            .filter(|(_, cmd)| {
+                                windows_degraded_sandbox_active()
+                                    || *cmd != SlashCommand::ElevateSandbox
+                            })
                             .any(|(command_name, _)| command_name == name);
                         let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                         let is_known_prompt = name
@@ -1715,7 +1730,6 @@ impl ChatComposer {
             self.active_popup = ActivePopup::None;
             return;
         }
-
         let skill_token = self.current_skill_token();
 
         let allow_command_popup = file_token.is_none() && skill_token.is_none();
@@ -1785,6 +1799,9 @@ impl ChatComposer {
 
         let builtin_match = built_in_slash_commands()
             .into_iter()
+            .filter(|(_, cmd)| {
+                windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
+            })
             .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
@@ -3050,44 +3067,6 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
-        }
-        assert!(composer.textarea.is_empty(), "composer should be cleared");
-    }
-
-    #[test]
-    fn slash_review_with_args_dispatches_command_with_args() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 'v', 'i', 'e', 'w', ' ']);
-        type_chars_humanlike(&mut composer, &['f', 'i', 'x', ' ', 't', 'h', 'i', 's']);
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        match result {
-            InputResult::CommandWithArgs(cmd, args) => {
-                assert_eq!(cmd, SlashCommand::Review);
-                assert_eq!(args, "fix this");
-            }
-            InputResult::Command(cmd) => {
-                panic!("expected args for '/review', got bare command: {cmd:?}")
-            }
-            InputResult::Submitted(text) => {
-                panic!("expected command dispatch, got literal submit: {text}")
-            }
-            InputResult::None => panic!("expected CommandWithArgs result for '/review'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
@@ -4394,59 +4373,6 @@ mod tests {
     }
 
     #[test]
-    fn history_navigation_takes_priority_over_popups() {
-        use codex_protocol::protocol::SkillScope;
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-        use tokio::sync::mpsc::unbounded_channel;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_skill_mentions(Some(vec![SkillMetadata {
-            name: "codex-cli-release-notes".to_string(),
-            description: "example".to_string(),
-            short_description: None,
-            path: PathBuf::from("skills/codex-cli-release-notes/SKILL.md"),
-            scope: SkillScope::Repo,
-        }]));
-
-        // Seed local history; the newest entry triggers the skills popup.
-        composer.history.record_local_submission("older");
-        composer
-            .history
-            .record_local_submission("$codex-cli-release-notes");
-
-        // First Up recalls "$...", but we should not open the skills popup while browsing history.
-        let (result, _redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(result, InputResult::None);
-        assert_eq!(composer.textarea.text(), "$codex-cli-release-notes");
-        assert!(
-            matches!(composer.active_popup, ActivePopup::None),
-            "expected no skills popup while browsing history"
-        );
-
-        // Second Up should navigate history again (no popup should interfere).
-        let (result, _redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(result, InputResult::None);
-        assert_eq!(composer.textarea.text(), "older");
-        assert!(
-            matches!(composer.active_popup, ActivePopup::None),
-            "expected popup to be dismissed after history navigation"
-        );
-    }
-
-    #[test]
     fn slash_popup_activated_for_bare_slash_and_valid_prefixes() {
         // use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use tokio::sync::mpsc::unbounded_channel;
@@ -4603,6 +4529,7 @@ mod tests {
         );
         assert_eq!(composer.attached_images.len(), 1);
     }
+
     #[test]
     fn input_disabled_ignores_keypresses_and_hides_cursor() {
         use crossterm::event::KeyCode;

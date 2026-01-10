@@ -183,7 +183,7 @@ impl ThreadManager {
     /// Fork an existing thread by taking messages up to the given position (not including
     /// the message at the given position) and starting a new thread with identical
     /// configuration (unless overridden by the caller's `config`). The new thread will have
-    /// a fresh id.
+    /// a fresh id. Pass `usize::MAX` to keep the full rollout history.
     pub async fn fork_thread(
         &self,
         nth_user_message: usize,

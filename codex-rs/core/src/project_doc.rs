@@ -14,12 +14,16 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
+use crate::features::Feature;
 use crate::skills::SkillMetadata;
 use crate::skills::render_skills_section;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
+
+pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
+    include_str!("../hierarchical_agents_message.md");
 
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
@@ -36,35 +40,46 @@ pub(crate) async fn get_user_instructions(
     config: &Config,
     skills: Option<&[SkillMetadata]>,
 ) -> Option<String> {
-    let skills_section = skills.and_then(render_skills_section);
+    let project_docs = read_project_docs(config).await;
 
-    let project_docs = match read_project_docs(config).await {
-        Ok(docs) => docs,
+    let mut output = String::new();
+
+    if let Some(instructions) = config.user_instructions.clone() {
+        output.push_str(&instructions);
+    }
+
+    match project_docs {
+        Ok(Some(docs)) => {
+            if !output.is_empty() {
+                output.push_str(PROJECT_DOC_SEPARATOR);
+            }
+            output.push_str(&docs);
+        }
+        Ok(None) => {}
         Err(e) => {
             error!("error trying to find project doc: {e:#}");
-            return config.user_instructions.clone();
         }
     };
 
-    let combined_project_docs = merge_project_docs_with_skills(project_docs, skills_section);
-
-    let mut parts: Vec<String> = Vec::new();
-
-    if let Some(instructions) = config.user_instructions.clone() {
-        parts.push(instructions);
-    }
-
-    if let Some(project_doc) = combined_project_docs {
-        if !parts.is_empty() {
-            parts.push(PROJECT_DOC_SEPARATOR.to_string());
+    let skills_section = skills.and_then(render_skills_section);
+    if let Some(skills_section) = skills_section {
+        if !output.is_empty() {
+            output.push_str("\n\n");
         }
-        parts.push(project_doc);
+        output.push_str(&skills_section);
     }
 
-    if parts.is_empty() {
-        None
+    if config.features.enabled(Feature::HierarchicalAgents) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(HIERARCHICAL_AGENTS_MESSAGE);
+    }
+
+    if !output.is_empty() {
+        Some(output)
     } else {
-        Some(parts.concat())
+        None
     }
 }
 
@@ -215,18 +230,6 @@ fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
         }
     }
     names
-}
-
-fn merge_project_docs_with_skills(
-    project_doc: Option<String>,
-    skills_section: Option<String>,
-) -> Option<String> {
-    match (project_doc, skills_section) {
-        (Some(doc), Some(skills)) => Some(format!("{doc}\n\n{skills}")),
-        (Some(doc), None) => Some(doc),
-        (None, Some(skills)) => Some(skills),
-        (None, None) => None,
-    }
 }
 
 #[cfg(test)]

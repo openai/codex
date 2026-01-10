@@ -21,9 +21,9 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
-use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
+use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
@@ -180,7 +180,7 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
-        let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
+        let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
     }
 
