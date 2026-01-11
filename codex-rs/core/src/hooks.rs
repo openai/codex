@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -691,7 +692,13 @@ async fn run_hook_command(
     })?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(payload.as_bytes()).await?;
+        // Some hooks may exit immediately without consuming stdin, causing EPIPE/BrokenPipe.
+        // Treat that as a successful write: the hook's exit status is what matters.
+        if let Err(err) = stdin.write_all(payload.as_bytes()).await
+            && err.kind() != io::ErrorKind::BrokenPipe
+        {
+            return Err(err.into());
+        }
     }
 
     let output = if let Some(timeout) = timeout {
@@ -759,7 +766,13 @@ async fn run_hook_command_capture(
     })?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(payload.as_bytes()).await?;
+        // Some hooks may exit immediately without consuming stdin, causing EPIPE/BrokenPipe.
+        // Treat that as a successful write: the hook's exit status is what matters.
+        if let Err(err) = stdin.write_all(payload.as_bytes()).await
+            && err.kind() != io::ErrorKind::BrokenPipe
+        {
+            return Err(err.into());
+        }
     }
 
     let output = if let Some(timeout) = timeout {
