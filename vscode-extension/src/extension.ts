@@ -456,130 +456,32 @@ export function activate(context: vscode.ExtensionContext): void {
       rt.approvalResolvers.set(requestKey, resolve);
     });
   };
-  backendManager.onAskUserQuestionRequest = async (_session, req) => {
-    const params = (req as any).params as any;
-    const request = params?.request as any;
-    const title = typeof request?.title === "string" ? request.title : "Codex question";
-    const questions: any[] = Array.isArray(request?.questions) ? request.questions : [];
-
-    const answers: Record<string, any> = {};
-
-    for (const q of questions) {
-      const id = typeof q?.id === "string" ? q.id : "";
-      const prompt = typeof q?.prompt === "string" ? q.prompt : "";
-      const typRaw = typeof q?.type === "string" ? q.type : q?.question_type;
-      const typ = typeof typRaw === "string" ? typRaw : "text";
-      const allowOther = Boolean(q?.allow_other);
-      const required = Boolean(q?.required);
-      const placeholder =
-        typeof q?.placeholder === "string" ? q.placeholder : undefined;
-
-      if (!id || !prompt) continue;
-
-      if (typ === "text") {
-        for (;;) {
-          const v = await vscode.window.showInputBox({
-            title,
-            prompt,
-            placeHolder: placeholder,
-            ignoreFocusOut: true,
-          });
-          if (v === undefined) return { cancelled: true, answers };
-          if (!required || v.trim().length > 0) {
-            answers[id] = v;
-            break;
-          }
-        }
-        continue;
-      }
-
-      const rawOptions: any[] = Array.isArray(q?.options) ? q.options : [];
-      const items = rawOptions
-        .map((o) => {
-          const label = typeof o?.label === "string" ? o.label : "";
-          const value = typeof o?.value === "string" ? o.value : "";
-          const description =
-            typeof o?.description === "string" ? o.description : undefined;
-          const recommended = Boolean(o?.recommended);
-          if (!label || !value) return null;
-          return {
-            label: recommended ? `${label} (Recommended)` : label,
-            description,
-            value,
-            recommended,
-          };
-        })
-        .filter(Boolean) as Array<{
-        label: string;
-        description?: string;
-        value: string;
-        recommended: boolean;
-      }>;
-      items.sort((a, b) => Number(b.recommended) - Number(a.recommended));
-
-      if (allowOther) {
-        items.push({
-          label: "Other…",
-          description: undefined,
-          value: "__other__",
-          recommended: false,
-        });
-      }
-
-      if (typ === "multi_select") {
-        const picked = await vscode.window.showQuickPick(items as any, {
-          title,
-          placeHolder: prompt,
-          canPickMany: true,
-          ignoreFocusOut: true,
-        });
-        if (!picked) return { cancelled: true, answers };
-        const values = (picked as any[]).map((p) => String((p as any).value));
-        if (allowOther && values.includes("__other__")) {
-          const other = await vscode.window.showInputBox({
-            title,
-            prompt: `${prompt} (Other)`,
-            ignoreFocusOut: true,
-          });
-          if (other === undefined) return { cancelled: true, answers };
-          answers[id] = values
-            .filter((v) => v !== "__other__")
-            .concat(other);
-        } else {
-          if (required && values.length === 0) return { cancelled: true, answers };
-          answers[id] = values;
-        }
-        continue;
-      }
-
-      for (;;) {
-        const picked = await vscode.window.showQuickPick(items as any, {
-          title,
-          placeHolder: prompt,
-          canPickMany: false,
-          ignoreFocusOut: true,
-        });
-        if (!picked) return { cancelled: true, answers };
-        const value = String((picked as any).value);
-        if (value === "__other__") {
-          const other = await vscode.window.showInputBox({
-            title,
-            prompt: `${prompt} (Other)`,
-            ignoreFocusOut: true,
-          });
-          if (other === undefined) return { cancelled: true, answers };
-          if (!required || other.trim().length > 0) {
-            answers[id] = other;
-            break;
-          }
-          continue;
-        }
-        answers[id] = value;
-        break;
-      }
+  backendManager.onAskUserQuestionRequest = async (session, req) => {
+    if (!chatView) throw new Error("chatView is not initialized");
+    if (!session || typeof session.id !== "string") {
+      throw new Error("AskUserQuestion requires a valid session");
     }
 
-    return { cancelled: false, answers };
+    const params = (req as any).params as any;
+    const callId = typeof params?.callId === "string" ? params.callId : null;
+    const request = params?.request;
+    if (!callId) throw new Error("AskUserQuestion missing callId");
+    if (!request || typeof request !== "object") {
+      throw new Error("AskUserQuestion missing request payload");
+    }
+
+    // Switch UI context to the requesting session so the prompt is visible.
+    setActiveSession(session.id, { markRead: false });
+    chatView.refresh();
+    await showCodexMineViewContainer();
+    // Ensure the webview is actually instantiated and visible.
+    await vscode.commands.executeCommand("codexMine.chatView.focus");
+    chatView.reveal();
+
+    return await chatView.promptAskUserQuestion({
+      requestKey: callId,
+      request,
+    });
   };
 
   diffProvider = new DiffDocumentProvider();
@@ -589,35 +491,34 @@ export function activate(context: vscode.ExtensionContext): void {
   // an actual backend request.
   context.subscriptions.push(
     vscode.commands.registerCommand("codexMine._dev.askUserQuestionDemo", async () => {
-      if (!backendManager) throw new Error("backendManager is not initialized");
-      if (!backendManager.onAskUserQuestionRequest) {
-        void vscode.window.showErrorMessage(
-          "AskUserQuestion handler is not available.",
-        );
-        return;
-      }
+      if (!chatView) throw new Error("chatView is not initialized");
+      await showCodexMineViewContainer();
+      await vscode.commands.executeCommand("codexMine.chatView.focus");
+      chatView.reveal();
 
-      await backendManager.onAskUserQuestionRequest({} as any, {
-        params: {
-          request: {
-            title: "Codex question",
-            questions: [
-              {
-                id: "context",
-                prompt: "Which context should I include?",
-                type: "multi_select",
-                allow_other: true,
-                required: false,
-                options: [
-                  { label: "Workspace files", value: "files", recommended: true },
-                  { label: "Open editors", value: "editors" },
-                  { label: "Terminal output", value: "terminal" },
-                ],
-              },
-            ],
-          },
+      const response = await chatView.promptAskUserQuestion({
+        requestKey: `demo:${Date.now()}`,
+        request: {
+          title: "Codex question",
+          questions: [
+            {
+              id: "context",
+              prompt: "Which context should I include?",
+              type: "multi_select",
+              allow_other: true,
+              required: false,
+              options: [
+                { label: "Workspace files", value: "files", recommended: true },
+                { label: "Open editors", value: "editors" },
+                { label: "Terminal output", value: "terminal" },
+              ],
+            },
+          ],
         },
-      } as any);
+      });
+      void vscode.window.showInformationMessage(
+        `AskUserQuestion demo result: ${JSON.stringify(response)}`,
+      );
     }),
   );
   context.subscriptions.push(

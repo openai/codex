@@ -4,6 +4,8 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import type { Session } from "../sessions";
+import type { AskUserQuestionRequest } from "../generated/AskUserQuestionRequest";
+import type { AskUserQuestionResponse } from "../generated/v2/AskUserQuestionResponse";
 
 export type ChatBlock =
   | { id: string; type: "user"; text: string }
@@ -173,6 +175,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "codexMine.chatView";
 
   private view: vscode.WebviewView | null = null;
+  private viewReadyPromise: Promise<void>;
+  private resolveViewReady: (() => void) | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
   private blockAppendFlushTimer: NodeJS.Timeout | null = null;
   private readonly pendingBlockAppends = new Map<
@@ -194,6 +198,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private readonly fileSearchCancellationTokenBySessionId = new Map<
     string,
     string
+  >();
+  private readonly pendingAskUserQuestionsByKey = new Map<
+    string,
+    { resolve: (resp: AskUserQuestionResponse) => void; reject: (err: unknown) => void }
   >();
 
   public insertIntoInput(text: string): void {
@@ -231,10 +239,60 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ) => Promise<{ mimeType: string; base64: string }>,
     private readonly onOpenLatestDiff: () => Promise<void>,
     private readonly onUiError: (message: string) => void,
-  ) {}
+  ) {
+    this.viewReadyPromise = new Promise((resolve) => {
+      this.resolveViewReady = resolve;
+    });
+  }
 
   public reveal(): void {
     this.view?.show?.(true);
+  }
+
+  public async promptAskUserQuestion(args: {
+    requestKey: string;
+    request: AskUserQuestionRequest;
+  }): Promise<AskUserQuestionResponse> {
+    if (this.pendingAskUserQuestionsByKey.has(args.requestKey)) {
+      throw new Error(
+        `AskUserQuestion already pending for requestKey=${args.requestKey}`,
+      );
+    }
+
+    const withTimeout = async <T>(p: Promise<T>, timeoutMs: number): Promise<T> => {
+      if (timeoutMs <= 0) return await p;
+      return await Promise.race([
+        p,
+        new Promise<T>((_, reject) => {
+          setTimeout(() => reject(new Error("Timed out waiting for chat view")), timeoutMs);
+        }),
+      ]);
+    };
+
+    // Ensure the webview is available before prompting.
+    // If the user never opened the view, the provider hasn't been resolved yet.
+    await withTimeout(this.viewReadyPromise, 5000);
+    if (!this.view) {
+      throw new Error("Chat view is not available (webview not initialized)");
+    }
+
+    const p = new Promise<AskUserQuestionResponse>((resolve, reject) => {
+      this.pendingAskUserQuestionsByKey.set(args.requestKey, { resolve, reject });
+    });
+
+    try {
+      await this.view.webview.postMessage({
+        type: "askUserQuestionStart",
+        requestKey: args.requestKey,
+        request: args.request,
+      });
+    } catch (err) {
+      const pending = this.pendingAskUserQuestionsByKey.get(args.requestKey);
+      this.pendingAskUserQuestionsByKey.delete(args.requestKey);
+      pending?.reject(err);
+    }
+
+    return await p;
   }
 
   public refresh(): void {
@@ -322,6 +380,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.onUiError(`Failed to handle webview message: ${String(err)}`);
       });
     });
+    this.resolveViewReady?.();
+    this.resolveViewReady = null;
     view.onDidDispose(() => {
       this.view = null;
       this.statePostInFlight = false;
@@ -332,6 +392,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this.blockAppendFlushTimer) clearTimeout(this.blockAppendFlushTimer);
       this.blockAppendFlushTimer = null;
       this.pendingBlockAppends.clear();
+
+      // Explicitly fail any pending AskUserQuestion prompts; the UI is gone.
+      for (const [requestKey, pending] of this.pendingAskUserQuestionsByKey) {
+        pending.reject(
+          new Error(
+            `Chat view disposed while AskUserQuestion pending (requestKey=${requestKey})`,
+          ),
+        );
+      }
+      this.pendingAskUserQuestionsByKey.clear();
+
+      // Reset the ready barrier so future prompts wait for a new webview.
+      this.viewReadyPromise = new Promise((resolve) => {
+        this.resolveViewReady = resolve;
+      });
     });
     this.statePostDirty = true;
     this.postControlState();
@@ -429,6 +504,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           url: (img as any).url as string,
         }));
       await this.onSend(text, normalized, (rewind as any) ?? null);
+      return;
+    }
+
+    if (type === "askUserQuestionResponse") {
+      const requestKey = anyMsg["requestKey"];
+      const response = anyMsg["response"];
+      if (typeof requestKey !== "string" || !requestKey) return;
+      if (typeof response !== "object" || response === null) return;
+
+      const cancelled = Boolean((response as any)["cancelled"]);
+      const answersRaw = (response as any)["answers"];
+      const answers =
+        typeof answersRaw === "object" && answersRaw !== null ? answersRaw : {};
+
+      const pending = this.pendingAskUserQuestionsByKey.get(requestKey);
+      if (!pending) {
+        this.onUiError(
+          `AskUserQuestion response ignored; no pending request (requestKey=${requestKey})`,
+        );
+        return;
+      }
+      this.pendingAskUserQuestionsByKey.delete(requestKey);
+      pending.resolve({ cancelled, answers });
       return;
     }
 
@@ -1160,10 +1258,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .autoUrlLink.modHover { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; cursor: pointer; }
       .autoUrlLink.modHover:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
 	      .fileDiff { margin-top: 8px; }
-	      .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: min(820px, calc(100vw - 32px)); border-radius: 10px; padding: 10px 12px; border: 1px solid rgba(127,127,127,0.35); box-shadow: 0 10px 30px rgba(0,0,0,0.35); background: var(--vscode-notifications-background, rgba(30,30,30,0.95)); color: var(--vscode-notifications-foreground, inherit); display: none; }
-	      .toast.info { border-color: rgba(127,127,127,0.35); }
-	      .toast.success { border-color: rgba(0,200,120,0.55); }
-	      .toast.error { border-color: rgba(220,60,60,0.60); }
+      .askUserQuestion { padding: 10px 12px; border-top: 1px solid rgba(127,127,127,0.25); border-bottom: 1px solid rgba(127,127,127,0.25); display: none; }
+      .askCard { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 10px 12px; background: rgba(0,0,0,0.03); }
+      .askHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+      .askTitle { font-weight: 600; }
+      .askProgress { opacity: 0.75; font-size: 12px; }
+      .askPrompt { margin-top: 8px; font-weight: 600; }
+      .askDesc { margin-top: 4px; opacity: 0.85; font-size: 12px; white-space: pre-wrap; }
+      .askError { margin-top: 8px; color: var(--vscode-errorForeground, #f14c4c); font-size: 12px; white-space: pre-wrap; }
+      .askControls { margin-top: 10px; display: flex; gap: 8px; justify-content: flex-end; }
+      .askBtn { padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; cursor: pointer; }
+      .askBtn.primary { background: rgba(0, 120, 212, 0.18); border-color: rgba(0,120,212,0.45); }
+      .askInput { width: 100%; box-sizing: border-box; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 8px 10px; background: transparent; color: inherit; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); line-height: 1.2; }
+      .askOptions { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+      .askOption { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(127,127,127,0.2); background: rgba(0,0,0,0.02); }
+      .askOption:hover { border-color: rgba(127,127,127,0.35); }
+      .askOptionLabel { font-weight: 500; }
+      .askOptionMeta { opacity: 0.85; font-size: 12px; }
+      .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: min(820px, calc(100vw - 32px)); border-radius: 10px; padding: 10px 12px; border: 1px solid rgba(127,127,127,0.35); box-shadow: 0 10px 30px rgba(0,0,0,0.35); background: var(--vscode-notifications-background, rgba(30,30,30,0.95)); color: var(--vscode-notifications-foreground, inherit); display: none; }
+      .toast.info { border-color: rgba(127,127,127,0.35); }
+      .toast.success { border-color: rgba(0,200,120,0.55); }
+      .toast.error { border-color: rgba(220,60,60,0.60); }
 	    </style>
 	  </head>
 	  <body>
@@ -1181,11 +1296,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="approvals" class="approvals" style="display:none"></div>
     <div id="log" class="log"></div>
-    <div id="composer" class="composer">
-      <div id="editBanner" class="editBanner" style="display:none"></div>
-      <div id="attachments" class="attachments"></div>
-      <button id="returnToBottom" class="returnToBottomBtn" title="Scroll to bottom">Return to Bottom</button>
-      <div id="inputRow" class="inputRow">
+	    <div id="composer" class="composer">
+	      <div id="editBanner" class="editBanner" style="display:none"></div>
+	      <div id="askUserQuestion" class="askUserQuestion"></div>
+	      <div id="attachments" class="attachments"></div>
+	      <button id="returnToBottom" class="returnToBottomBtn" title="Scroll to bottom">Return to Bottom</button>
+	      <div id="inputRow" class="inputRow">
         <input id="imageInput" type="file" accept="image/*" multiple style="display:none" />
         <button id="attach" class="iconBtn attachBtn" aria-label="Attach image" title="Attach image"></button>
         <textarea id="input" rows="1" placeholder="Type a message"></textarea>
