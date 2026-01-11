@@ -284,7 +284,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let expected_initial_json = json!([]);
     assert_eq!(initial_json, expected_initial_json);
 
-    // 2) Submit new input; the request body must include the prior item followed by the new user input.
+    // 2) Submit new input; the request body must include the prior items, then initial context, then new user input.
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -298,24 +298,50 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
-    let expected_input = json!([
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{ "type": "input_text", "text": "resumed user message" }]
-        },
-        {
-            "type": "message",
-            "role": "assistant",
-            "content": [{ "type": "output_text", "text": "resumed assistant message" }]
-        },
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{ "type": "input_text", "text": "hello" }]
-        }
-    ]);
-    assert_eq!(request_body["input"], expected_input);
+    let input = request_body["input"].as_array().expect("input array");
+    let messages: Vec<(String, String)> = input
+        .iter()
+        .filter_map(|item| {
+            let role = item.get("role")?.as_str()?;
+            let text = item
+                .get("content")?
+                .as_array()?
+                .first()?
+                .get("text")?
+                .as_str()?;
+            Some((role.to_string(), text.to_string()))
+        })
+        .collect();
+    let pos_prior_user = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "resumed user message")
+        .expect("prior user message");
+    let pos_prior_assistant = messages
+        .iter()
+        .position(|(role, text)| role == "assistant" && text == "resumed assistant message")
+        .expect("prior assistant message");
+    let pos_permissions = messages
+        .iter()
+        .position(|(role, text)| role == "developer" && text.contains("`approval_policy`"))
+        .expect("permissions message");
+    let pos_user_instructions = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "be nice")
+        .expect("user instructions");
+    let pos_environment = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text.contains("<environment_context>"))
+        .expect("environment context");
+    let pos_new_user = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "hello")
+        .expect("new user message");
+
+    assert!(pos_prior_user < pos_prior_assistant);
+    assert!(pos_prior_assistant < pos_permissions);
+    assert!(pos_permissions < pos_user_instructions);
+    assert!(pos_user_instructions < pos_environment);
+    assert!(pos_environment < pos_new_user);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

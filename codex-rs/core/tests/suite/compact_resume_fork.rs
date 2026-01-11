@@ -475,6 +475,27 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
+        permissions_message,
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
         {
           "type": "message",
           "role": "user",
@@ -553,6 +574,27 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             {
               "type": "output_text",
               "text": "AFTER_COMPACT_REPLY"
+            }
+          ]
+        },
+        permissions_message,
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
             }
           ]
         },
@@ -728,6 +770,27 @@ async fn compact_resume_after_second_compaction_preserves_history() {
               {
                 "type": "input_text",
                 "text": "AFTER_COMPACT_2"
+              }
+            ]
+          },
+          permissions_message,
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": user_instructions
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": environment_instructions
               }
             ]
           },

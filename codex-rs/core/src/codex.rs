@@ -852,6 +852,11 @@ impl Session {
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
+
+                // Append the current session's initial context after the reconstructed history.
+                let initial_context = self.build_initial_context(&turn_context);
+                self.record_conversation_items(&turn_context, &initial_context)
+                    .await;
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
             }
@@ -2956,7 +2961,7 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context);
 
         session
             .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -2966,6 +2971,7 @@ mod tests {
             }))
             .await;
 
+        expected.extend(session.build_initial_context(&turn_context));
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }
@@ -3050,12 +3056,13 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_reconstructs_forked_transcript() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context);
 
         session
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
+        expected.extend(session.build_initial_context(&turn_context));
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }

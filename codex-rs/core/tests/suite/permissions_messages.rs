@@ -244,9 +244,120 @@ async fn resume_replays_permissions_messages() -> Result<()> {
     let body3 = req3.single_request().body_json();
     let input = body3["input"].as_array().expect("input array");
     let permissions = permissions_texts(input);
-    assert_eq!(permissions.len(), 2);
+    assert_eq!(permissions.len(), 3);
     let unique = permissions.into_iter().collect::<HashSet<String>>();
     assert_eq!(unique.len(), 2);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_and_fork_append_permissions_messages() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req3 = mount_sse_once(&server, sse_completed("resp-3")).await;
+    let req4 = mount_sse_once(&server, sse_completed("resp-4")).await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    });
+    let initial = builder.build(&server).await?;
+    let rollout_path = initial.session_configured.rollout_path.clone();
+    let home = initial.home.clone();
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial
+        .codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+        })
+        .await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let body2 = req2.single_request().body_json();
+    let input2 = body2["input"].as_array().expect("input array");
+    let permissions_base = permissions_texts(input2);
+    assert_eq!(permissions_base.len(), 2);
+
+    builder = builder.with_config(|config| {
+        config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+    });
+    let resumed = builder.resume(&server, home, rollout_path.clone()).await?;
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after resume".into(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let body3 = req3.single_request().body_json();
+    let input3 = body3["input"].as_array().expect("input array");
+    let permissions_resume = permissions_texts(input3);
+    assert_eq!(permissions_resume.len(), permissions_base.len() + 1);
+    assert_eq!(
+        &permissions_resume[..permissions_base.len()],
+        permissions_base.as_slice()
+    );
+    assert!(!permissions_base.contains(permissions_resume.last().expect("new permissions")));
+
+    let mut fork_config = initial.config.clone();
+    fork_config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+    let forked = initial
+        .thread_manager
+        .fork_thread(usize::MAX, fork_config, rollout_path)
+        .await?;
+    forked
+        .thread
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after fork".into(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&forked.thread, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let body4 = req4.single_request().body_json();
+    let input4 = body4["input"].as_array().expect("input array");
+    let permissions_fork = permissions_texts(input4);
+    assert_eq!(permissions_fork.len(), permissions_base.len() + 1);
+    assert_eq!(
+        &permissions_fork[..permissions_base.len()],
+        permissions_base.as_slice()
+    );
+    assert!(!permissions_base.contains(permissions_fork.last().expect("new permissions")));
 
     Ok(())
 }
