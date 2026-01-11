@@ -2350,10 +2350,10 @@ impl CodexMessageProcessor {
             mcp_oauth_credentials_store_mode,
         };
 
+        // Refresh requests are queued per thread; each thread rebuilds MCP connections on its next
+        // active turn to avoid work for threads that never resume.
         let thread_manager = Arc::clone(&self.thread_manager);
-        tokio::spawn(async move {
-            thread_manager.refresh_mcp_servers(refresh_config).await;
-        });
+        thread_manager.refresh_mcp_servers(refresh_config).await;
         let response = McpServerRefreshResponse {};
         self.outgoing.send_response(request_id, response).await;
     }
