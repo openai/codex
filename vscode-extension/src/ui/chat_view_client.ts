@@ -121,6 +121,7 @@ type ChatViewState = {
     agents: boolean;
     cliVariant: "unknown" | "codex" | "codex-mine";
   };
+  workspaceColorOverrides?: Record<string, number>;
   sessions: Session[];
   activeSession: Session | null;
   unreadSessionIds: string[];
@@ -2564,6 +2565,8 @@ function main(): void {
     const unread = new Set<string>(s.unreadSessionIds || []);
     const running = new Set<string>(s.runningSessionIds || []);
     const activeId = s.activeSession ? s.activeSession.id : null;
+    const workspaceColorOverrides = s.workspaceColorOverrides || {};
+    const overridesSig = workspaceOverridesSig(workspaceColorOverrides);
 
     const nextTabsSig = sessionsList
       .map((sess, idx) => {
@@ -2583,16 +2586,56 @@ function main(): void {
       })
       .join("\n");
 
-    if (tabsSig !== nextTabsSig) {
-      tabsSig = nextTabsSig;
+    const sig = `${overridesSig}\n${nextTabsSig}`;
+
+    if (tabsSig !== sig) {
+      tabsSig = sig;
       const frag = document.createDocumentFragment();
       const wanted = new Set<string>();
+      const groupElByWorkspaceUri = new Map<string, HTMLDivElement>();
+      const groupTabsElByWorkspaceUri = new Map<string, HTMLDivElement>();
+      const groupOrder: string[] = [];
+
       sessionsList.forEach((sess, idx) => {
         wanted.add(sess.id);
         const isUnread = unread.has(sess.id);
         const isRunning = running.has(sess.id);
         const isActive = activeId === sess.id;
         const dt = getSessionDisplayTitle(sess, idx);
+
+        const groupKey = sess.workspaceFolderUri;
+        let groupEl = groupElByWorkspaceUri.get(groupKey);
+        if (!groupEl) {
+          groupEl = document.createElement("div") as HTMLDivElement;
+          groupEl.className = "tabGroup";
+
+          const wt = workspaceTagFromUri(groupKey, workspaceColorOverrides);
+          groupEl.style.setProperty("--wt-color", wt.color);
+
+          const labelEl = document.createElement("div") as HTMLDivElement;
+          labelEl.className = "tabGroupLabel";
+          labelEl.textContent = wt.label;
+          labelEl.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            vscode.postMessage({
+              type: "pickWorkspaceColor",
+              workspaceFolderUri: groupKey,
+            });
+          });
+          groupEl.appendChild(labelEl);
+
+          const tabsEl = document.createElement("div") as HTMLDivElement;
+          tabsEl.className = "tabGroupTabs";
+          groupEl.appendChild(tabsEl);
+          groupTabsElByWorkspaceUri.set(groupKey, tabsEl);
+
+          groupElByWorkspaceUri.set(groupKey, groupEl);
+          groupOrder.push(groupKey);
+        }
+
+        const groupTabsEl = groupTabsElByWorkspaceUri.get(groupKey);
+        if (!groupTabsEl)
+          throw new Error(`tab group tabs element missing for ${groupKey}`);
 
         const existing = tabElBySessionId.get(sess.id);
         const div =
@@ -2611,14 +2654,16 @@ function main(): void {
           "tab" +
           (isActive ? " active" : "") +
           (isRunning ? " running" : isUnread ? " unread" : "");
-        const wt = workspaceTagFromUri(sess.workspaceFolderUri);
-        div.dataset.wt = "1";
-        div.dataset.wtLabel = wt.label;
-        div.style.setProperty("--wt-color", wt.color);
         if (div.textContent !== dt.label) div.textContent = dt.label;
         if (div.title !== dt.tooltip) div.title = dt.tooltip;
-        frag.appendChild(div);
+        groupTabsEl.appendChild(div);
       });
+
+      for (const groupKey of groupOrder) {
+        const groupEl = groupElByWorkspaceUri.get(groupKey);
+        if (groupEl) frag.appendChild(groupEl);
+      }
+
       for (const [id, div] of tabElBySessionId.entries()) {
         if (wanted.has(id)) continue;
         if (div.parentElement) div.parentElement.removeChild(div);
@@ -4357,12 +4402,30 @@ function main(): void {
   }, 1000);
 }
 
-function workspaceTagFromUri(workspaceFolderUri: string): {
+function workspaceOverridesSig(overrides: Record<string, number>): string {
+  return Object.entries(overrides)
+    .map(([k, v]) => `${k}\t${v}`)
+    .sort((a, b) => a.localeCompare(b))
+    .join("\n");
+}
+
+function workspaceTagFromUri(
+  workspaceFolderUri: string,
+  overrides: Record<string, number>,
+): {
   label: string;
   color: string;
 } {
-  const hashKey = uriToHashKey(workspaceFolderUri);
-  const idx = fnv1a32(hashKey) % WORKTREE_COLORS.length;
+  const override = overrides[workspaceFolderUri];
+  const idx =
+    typeof override === "number"
+      ? Math.trunc(override)
+      : fnv1a32(workspaceFolderUri) % WORKTREE_COLORS.length;
+
+  if (idx < 0 || idx >= WORKTREE_COLORS.length) {
+    throw new Error(`workspace color index out of range (idx=${idx})`);
+  }
+
   const color = WORKTREE_COLORS[idx];
   if (!color) throw new Error(`workspace color missing (idx=${idx})`);
   const label = uriToBasename(workspaceFolderUri);

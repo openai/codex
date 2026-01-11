@@ -1131,8 +1131,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .statusText { font-size: 12px; opacity: 0.75; white-space: pre-wrap; word-break: break-word; }
       .actions { display: flex; gap: 8px; }
       button { padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; cursor: pointer; }
+      .actions button { font-size: 12px; padding: 4px 8px; }
       button:disabled { opacity: 0.5; cursor: default; }
-      button.iconBtn { width: 30px; min-width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+      button.iconBtn { width: 28px; min-width: 28px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
       button.iconBtn::before { content: "➤"; font-size: 14px; opacity: 0.95; }
       button.iconBtn[data-mode="stop"]::before { content: "■"; font-size: 12px; }
       button.iconBtn.settingsBtn::before { content: "⚙"; font-size: 14px; }
@@ -1144,11 +1145,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .footerStatus { margin-left: auto; font-size: 12px; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .footerStatus.clickable { cursor: pointer; }
       .statusPopover { position: absolute; right: 12px; bottom: calc(100% + 6px); max-width: min(520px, calc(100vw - 24px)); background: var(--vscode-editorHoverWidget-background, var(--vscode-input-background)); border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); padding: 8px 10px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-      .tabs { display: flex; gap: 6px; overflow: auto; padding-bottom: 2px; }
-      .tab { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); cursor: pointer; white-space: nowrap; user-select: none; position: relative; }
-      .tab[data-wt="1"] { outline: 2px solid var(--wt-color); outline-offset: -1px; }
-      .tab[data-wt-label]::before { content: attr(data-wt-label); position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 6px); font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 999px; background: var(--vscode-editorHoverWidget-background, var(--vscode-input-background)); border: 1px solid rgba(127,127,127,0.35); box-shadow: 0 6px 18px rgba(0,0,0,0.20); white-space: nowrap; opacity: 0; pointer-events: none; }
-      .tab.active[data-wt-label]::before, .tab:hover[data-wt-label]::before { opacity: 0.95; }
+      .tabs { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+      .tabGroup { display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 12px; border: 2px solid var(--wt-color); flex: 0 0 auto; }
+      .tabGroupLabel { align-self: flex-start; font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 999px; background: var(--vscode-editorHoverWidget-background, var(--vscode-input-background)); border: 1px solid rgba(127,127,127,0.35); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+      .tabGroupTabs { display: flex; gap: 6px; }
+      .tab { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); cursor: pointer; white-space: nowrap; user-select: none; }
       .tab.active { border-color: rgba(0, 120, 212, 0.9); }
       .tab.unread { background: rgba(255, 185, 0, 0.14); }
       .tab.running { background: rgba(0, 120, 212, 0.12); }
