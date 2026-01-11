@@ -266,6 +266,10 @@ async fn run_codex_tool_session_inner(
                     EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_) => {
                         // Ignored in MCP tool runner.
                     }
+                    EventMsg::AskUserQuestionRequest(_) => {
+                        // TODO: forward ask-user-question requests to the client?
+                        continue;
+                    }
                     EventMsg::AgentMessage(AgentMessageEvent { .. }) => {
                         // TODO: think how we want to support this in the MCP
                     }

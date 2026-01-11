@@ -21,6 +21,7 @@ use std::time::Duration;
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+mod ask_user_question;
 mod at_popup;
 mod bottom_pane_view;
 mod chat_composer;
@@ -57,6 +58,8 @@ use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 use crate::subagent_candidates::SubAgentCandidate;
+pub(crate) use ask_user_question::AskUserQuestionTextView;
+pub(crate) use ask_user_question::CancelableSelectionView;
 pub(crate) use experimental_features_view::BetaFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;

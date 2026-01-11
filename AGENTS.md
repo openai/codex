@@ -1,3 +1,17 @@
+# codex-mine
+
+## Git worktree 運用（`.worktrees/`）
+
+- ワークツリーはリポジトリ直下の `.worktrees/<name>` に作る（誤コミット防止のため `.gitignore` 済み）。
+- 作成:
+  - `git worktree add -b <name> .worktrees/<name> <start-point>`
+- 削除（チェックアウトのみ削除。ブランチは消さない）:
+  - `git worktree remove .worktrees/<name>`
+- 一覧: `git worktree list`
+- 注意:
+  - `git clean -fdx` / `git clean -fdX` は **`.worktrees/` を消し得る**（運用上、基本使わない）。
+  - 破棄済み worktree の参照整理は `git worktree prune`。
+
 # Rust/codex-rs
 
 ## VSCode拡張のバージョン運用

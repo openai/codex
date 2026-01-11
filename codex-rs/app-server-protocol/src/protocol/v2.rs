@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+use codex_protocol::ask_user_question::AskUserQuestionRequest as CoreAskUserQuestionRequest;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
@@ -2002,6 +2003,24 @@ pub struct FileChangeRequestApprovalParams {
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: ApprovalDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AskUserQuestionParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub request: CoreAskUserQuestionRequest,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct AskUserQuestionResponse {
+    pub cancelled: bool,
+    #[serde(default)]
+    pub answers: HashMap<String, JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -456,8 +456,71 @@ export function activate(context: vscode.ExtensionContext): void {
       rt.approvalResolvers.set(requestKey, resolve);
     });
   };
+  backendManager.onAskUserQuestionRequest = async (session, req) => {
+    if (!chatView) throw new Error("chatView is not initialized");
+    if (!session || typeof session.id !== "string") {
+      throw new Error("AskUserQuestion requires a valid session");
+    }
+
+    const params = (req as any).params as any;
+    const callId = typeof params?.callId === "string" ? params.callId : null;
+    const request = params?.request;
+    if (!callId) throw new Error("AskUserQuestion missing callId");
+    if (!request || typeof request !== "object") {
+      throw new Error("AskUserQuestion missing request payload");
+    }
+
+    // Switch UI context to the requesting session so the prompt is visible.
+    setActiveSession(session.id, { markRead: false });
+    chatView.refresh();
+    await showCodexMineViewContainer();
+    // Ensure the webview is actually instantiated and visible.
+    await vscode.commands.executeCommand("codexMine.chatView.focus");
+    chatView.reveal();
+
+    return await chatView.promptAskUserQuestion({
+      requestKey: callId,
+      request,
+    });
+  };
 
   diffProvider = new DiffDocumentProvider();
+
+  // NOTE: This is intentionally not contributed to the command palette in package.json.
+  // It's a helper for local/dev workflows (e.g. taking docs screenshots) without requiring
+  // an actual backend request.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine._dev.askUserQuestionDemo", async () => {
+      if (!chatView) throw new Error("chatView is not initialized");
+      await showCodexMineViewContainer();
+      await vscode.commands.executeCommand("codexMine.chatView.focus");
+      chatView.reveal();
+
+      const response = await chatView.promptAskUserQuestion({
+        requestKey: `demo:${Date.now()}`,
+        request: {
+          title: "Codex question",
+          questions: [
+            {
+              id: "context",
+              prompt: "Which context should I include?",
+              type: "multi_select",
+              allow_other: true,
+              required: false,
+              options: [
+                { label: "Workspace files", value: "files", recommended: true },
+                { label: "Open editors", value: "editors" },
+                { label: "Terminal output", value: "terminal" },
+              ],
+            },
+          ],
+        },
+      });
+      void vscode.window.showInformationMessage(
+        `AskUserQuestion demo result: ${JSON.stringify(response)}`,
+      );
+    }),
+  );
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(
       "codex-mine-diff",

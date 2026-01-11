@@ -23,6 +23,7 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::AskUserQuestionRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::DeprecationNoticeEvent;
@@ -68,6 +69,9 @@ use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::ask_user_question::AskUserQuestion;
+use codex_protocol::ask_user_question::AskUserQuestionResponse;
+use codex_protocol::ask_user_question::AskUserQuestionType;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -82,6 +86,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use serde_json::Value as JsonValue;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -89,9 +94,11 @@ use tracing::debug;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::AskUserQuestionTextView;
 use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
+use crate::bottom_pane::CancelableSelectionView;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
@@ -340,6 +347,7 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
+    ask_user_question: Option<AskUserQuestionFlow>,
     // Accumulates the current reasoning block text to extract a header
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
@@ -372,6 +380,26 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+}
+
+struct AskUserQuestionFlow {
+    call_id: String,
+    request: codex_protocol::ask_user_question::AskUserQuestionRequest,
+    index: usize,
+    answers: HashMap<String, JsonValue>,
+}
+
+impl AskUserQuestionFlow {
+    fn title(&self) -> String {
+        self.request
+            .title
+            .clone()
+            .unwrap_or_else(|| "Additional questions".to_string())
+    }
+
+    fn current_question(&self) -> Option<&AskUserQuestion> {
+        self.request.questions.get(self.index)
+    }
 }
 
 struct UserMessage {
@@ -1315,6 +1343,482 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_ask_user_question_request(&mut self, ev: AskUserQuestionRequestEvent) {
+        self.flush_answer_stream_with_separator();
+
+        if let Some(existing) = self.ask_user_question.take() {
+            self.submit_op(Op::ResolveAskUserQuestion {
+                call_id: existing.call_id,
+                response: AskUserQuestionResponse {
+                    cancelled: true,
+                    answers: existing.answers,
+                },
+            });
+        }
+
+        self.ask_user_question = Some(AskUserQuestionFlow {
+            call_id: ev.call_id,
+            request: ev.request,
+            index: 0,
+            answers: HashMap::new(),
+        });
+        self.open_ask_user_question_current();
+    }
+
+    pub(crate) fn on_ask_user_question_pick(
+        &mut self,
+        call_id: String,
+        question_id: String,
+        value: String,
+    ) {
+        let Some(flow) = self.ask_user_question.as_mut() else {
+            return;
+        };
+        if flow.call_id != call_id {
+            return;
+        }
+        let Some(question) = flow.current_question() else {
+            return;
+        };
+        if question.id != question_id {
+            return;
+        }
+
+        match question.question_type {
+            AskUserQuestionType::MultiSelect => {
+                let entry = flow
+                    .answers
+                    .entry(question_id)
+                    .or_insert_with(|| JsonValue::Array(Vec::new()));
+                let arr = match entry {
+                    JsonValue::Array(arr) => arr,
+                    other => {
+                        *other = JsonValue::Array(Vec::new());
+                        let JsonValue::Array(arr) = other else {
+                            unreachable!("just assigned JsonValue::Array");
+                        };
+                        arr
+                    }
+                };
+                if !arr.iter().any(|v| v.as_str() == Some(value.as_str())) {
+                    arr.push(JsonValue::String(value));
+                }
+            }
+            AskUserQuestionType::SingleSelect | AskUserQuestionType::Text => {
+                flow.answers.insert(question_id, JsonValue::String(value));
+                flow.index = flow.index.saturating_add(1);
+            }
+        }
+
+        let _ = flow;
+        self.open_ask_user_question_current();
+    }
+
+    pub(crate) fn on_ask_user_question_other(
+        &mut self,
+        call_id: String,
+        question_id: String,
+        prompt: String,
+    ) {
+        let Some(flow) = self.ask_user_question.as_ref() else {
+            return;
+        };
+        if flow.call_id != call_id {
+            return;
+        }
+        let Some(question) = flow.current_question() else {
+            return;
+        };
+        if question.id != question_id {
+            return;
+        }
+
+        let title = flow.title();
+        let placeholder = question
+            .placeholder
+            .as_deref()
+            .unwrap_or("Type your answer…")
+            .to_string();
+        let allow_empty = !question.required.unwrap_or(false);
+
+        let call_id = Arc::<str>::from(call_id);
+        let question_id = Arc::<str>::from(question_id);
+
+        let tx = self.app_event_tx.clone();
+        let submit_call_id = Arc::clone(&call_id);
+        let submit_question_id = Arc::clone(&question_id);
+        let on_submit: Box<dyn Fn(String) + Send + Sync> = Box::new(move |text| {
+            tx.send(AppEvent::AskUserQuestionText {
+                call_id: submit_call_id.to_string(),
+                question_id: submit_question_id.to_string(),
+                text,
+            });
+        });
+
+        let tx = self.app_event_tx.clone();
+        let cancel_call_id = Arc::clone(&call_id);
+        let on_cancel: Box<dyn Fn() + Send + Sync> = Box::new(move || {
+            tx.send(AppEvent::AskUserQuestionCancel {
+                call_id: cancel_call_id.to_string(),
+            });
+        });
+
+        self.bottom_pane
+            .show_view(Box::new(AskUserQuestionTextView::new(
+                title,
+                format!("{prompt} (Other)"),
+                placeholder,
+                allow_empty,
+                on_submit,
+                on_cancel,
+            )));
+    }
+
+    pub(crate) fn on_ask_user_question_text(
+        &mut self,
+        call_id: String,
+        question_id: String,
+        text: String,
+    ) {
+        let Some(flow) = self.ask_user_question.as_mut() else {
+            return;
+        };
+        if flow.call_id != call_id {
+            return;
+        }
+        let Some(question) = flow.current_question() else {
+            return;
+        };
+        if question.id != question_id {
+            return;
+        }
+
+        match question.question_type {
+            AskUserQuestionType::MultiSelect => {
+                let entry = flow
+                    .answers
+                    .entry(question_id)
+                    .or_insert_with(|| JsonValue::Array(Vec::new()));
+                let arr = match entry {
+                    JsonValue::Array(arr) => arr,
+                    other => {
+                        *other = JsonValue::Array(Vec::new());
+                        let JsonValue::Array(arr) = other else {
+                            unreachable!("just assigned JsonValue::Array");
+                        };
+                        arr
+                    }
+                };
+                if !text.is_empty() && !arr.iter().any(|v| v.as_str() == Some(text.as_str())) {
+                    arr.push(JsonValue::String(text));
+                }
+            }
+            AskUserQuestionType::Text | AskUserQuestionType::SingleSelect => {
+                if question.required.unwrap_or(false) || !text.is_empty() {
+                    flow.answers.insert(question_id, JsonValue::String(text));
+                }
+                flow.index = flow.index.saturating_add(1);
+            }
+        }
+
+        let _ = flow;
+        self.open_ask_user_question_current();
+    }
+
+    pub(crate) fn on_ask_user_question_done(&mut self, call_id: String, question_id: String) {
+        let Some(flow) = self.ask_user_question.as_mut() else {
+            return;
+        };
+        if flow.call_id != call_id {
+            return;
+        }
+        let Some(question) = flow.current_question() else {
+            return;
+        };
+        if question.id != question_id {
+            return;
+        }
+        if question.question_type != AskUserQuestionType::MultiSelect {
+            return;
+        }
+
+        let required = question.required.unwrap_or(false);
+        let selected_len = flow
+            .answers
+            .get(question_id.as_str())
+            .and_then(JsonValue::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        if required && selected_len == 0 {
+            self.add_info_message("Pick at least one option, or cancel.".to_string(), None);
+            self.open_ask_user_question_current();
+            return;
+        }
+
+        flow.index = flow.index.saturating_add(1);
+        let _ = flow;
+        self.open_ask_user_question_current();
+    }
+
+    pub(crate) fn on_ask_user_question_cancel(&mut self, call_id: String) {
+        let Some(flow) = self.ask_user_question.take() else {
+            return;
+        };
+        if flow.call_id != call_id {
+            self.ask_user_question = Some(flow);
+            return;
+        }
+
+        self.submit_op(Op::ResolveAskUserQuestion {
+            call_id: flow.call_id,
+            response: AskUserQuestionResponse {
+                cancelled: true,
+                answers: flow.answers,
+            },
+        });
+        self.request_redraw();
+    }
+
+    fn open_ask_user_question_current(&mut self) {
+        let is_complete = self
+            .ask_user_question
+            .as_ref()
+            .is_some_and(|flow| flow.index >= flow.request.questions.len());
+        if is_complete {
+            let Some(flow) = self.ask_user_question.take() else {
+                return;
+            };
+            self.submit_op(Op::ResolveAskUserQuestion {
+                call_id: flow.call_id,
+                response: AskUserQuestionResponse {
+                    cancelled: false,
+                    answers: flow.answers,
+                },
+            });
+            self.request_redraw();
+            return;
+        }
+
+        let (title, call_id, question, selected) = {
+            let Some(flow) = self.ask_user_question.as_ref() else {
+                return;
+            };
+            let Some(question) = flow.current_question().cloned() else {
+                return;
+            };
+
+            let selected: Vec<String> = flow
+                .answers
+                .get(question.id.as_str())
+                .and_then(JsonValue::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            (flow.title(), flow.call_id.clone(), question, selected)
+        };
+
+        let question_id = question.id.clone();
+        let prompt = question.prompt.clone();
+        let required = question.required.unwrap_or(false);
+
+        let cancel_tx = self.app_event_tx.clone();
+        let call_id = Arc::<str>::from(call_id);
+        let question_id = Arc::<str>::from(question_id);
+        let prompt = Arc::<str>::from(prompt);
+        let cancel_call_id = Arc::clone(&call_id);
+        let on_cancel: Box<dyn Fn() + Send + Sync> = Box::new(move || {
+            cancel_tx.send(AppEvent::AskUserQuestionCancel {
+                call_id: cancel_call_id.to_string(),
+            });
+        });
+
+        match question.question_type {
+            AskUserQuestionType::Text => {
+                let placeholder = question
+                    .placeholder
+                    .as_deref()
+                    .unwrap_or("Type your answer…")
+                    .to_string();
+                let allow_empty = !required;
+
+                let tx = self.app_event_tx.clone();
+                let submit_call_id = Arc::clone(&call_id);
+                let submit_question_id = Arc::clone(&question_id);
+                let on_submit: Box<dyn Fn(String) + Send + Sync> = Box::new(move |text| {
+                    tx.send(AppEvent::AskUserQuestionText {
+                        call_id: submit_call_id.to_string(),
+                        question_id: submit_question_id.to_string(),
+                        text,
+                    });
+                });
+
+                self.bottom_pane
+                    .show_view(Box::new(AskUserQuestionTextView::new(
+                        title,
+                        prompt.to_string(),
+                        placeholder,
+                        allow_empty,
+                        on_submit,
+                        on_cancel,
+                    )));
+            }
+            AskUserQuestionType::SingleSelect => {
+                let mut items: Vec<SelectionItem> = question
+                    .options
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|opt| {
+                        let mut name = opt.label;
+                        if opt.recommended.unwrap_or(false) {
+                            name = format!("{name} (Recommended)");
+                        }
+                        let value = opt.value;
+                        let call_id = Arc::clone(&call_id);
+                        let question_id = Arc::clone(&question_id);
+                        let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                            tx.send(AppEvent::AskUserQuestionPick {
+                                call_id: call_id.to_string(),
+                                question_id: question_id.to_string(),
+                                value: value.clone(),
+                            });
+                        })];
+                        SelectionItem {
+                            name,
+                            description: opt.description,
+                            actions,
+                            dismiss_on_select: true,
+                            ..Default::default()
+                        }
+                    })
+                    .collect();
+
+                if question.allow_other.unwrap_or(false) {
+                    let call_id = Arc::clone(&call_id);
+                    let question_id = Arc::clone(&question_id);
+                    let prompt = Arc::clone(&prompt);
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::AskUserQuestionOther {
+                            call_id: call_id.to_string(),
+                            question_id: question_id.to_string(),
+                            prompt: prompt.to_string(),
+                        });
+                    })];
+                    items.push(SelectionItem {
+                        name: "Other…".to_string(),
+                        description: None,
+                        actions,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                }
+
+                let params = SelectionViewParams {
+                    title: Some(title),
+                    subtitle: Some(prompt.to_string()),
+                    footer_hint: Some(standard_popup_hint_line()),
+                    items,
+                    ..Default::default()
+                };
+                let view =
+                    CancelableSelectionView::new(params, self.app_event_tx.clone(), on_cancel);
+                self.bottom_pane.show_view(Box::new(view));
+            }
+            AskUserQuestionType::MultiSelect => {
+                let mut items: Vec<SelectionItem> = question
+                    .options
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|opt| {
+                        let mut name = opt.label;
+                        if opt.recommended.unwrap_or(false) {
+                            name = format!("{name} (Recommended)");
+                        }
+                        if selected.iter().any(|v| v == &opt.value) {
+                            name = format!("✓ {name}");
+                        }
+
+                        let value = opt.value;
+                        let call_id = Arc::clone(&call_id);
+                        let question_id = Arc::clone(&question_id);
+                        let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                            tx.send(AppEvent::AskUserQuestionPick {
+                                call_id: call_id.to_string(),
+                                question_id: question_id.to_string(),
+                                value: value.clone(),
+                            });
+                        })];
+                        SelectionItem {
+                            name,
+                            description: opt.description,
+                            actions,
+                            dismiss_on_select: false,
+                            ..Default::default()
+                        }
+                    })
+                    .collect();
+
+                if question.allow_other.unwrap_or(false) {
+                    let call_id = Arc::clone(&call_id);
+                    let question_id = Arc::clone(&question_id);
+                    let prompt = Arc::clone(&prompt);
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::AskUserQuestionOther {
+                            call_id: call_id.to_string(),
+                            question_id: question_id.to_string(),
+                            prompt: prompt.to_string(),
+                        });
+                    })];
+                    items.push(SelectionItem {
+                        name: "Other…".to_string(),
+                        description: None,
+                        actions,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                }
+
+                let call_id_done = Arc::clone(&call_id);
+                let question_id_done = Arc::clone(&question_id);
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::AskUserQuestionDone {
+                        call_id: call_id_done.to_string(),
+                        question_id: question_id_done.to_string(),
+                    });
+                })];
+                items.push(SelectionItem {
+                    name: "Done".to_string(),
+                    description: required.then_some("Finish this question.".to_string()),
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+
+                let subtitle = if selected.is_empty() {
+                    Some(prompt.to_string())
+                } else {
+                    Some(format!("{prompt} ({})", selected.join(", ")))
+                };
+
+                let params = SelectionViewParams {
+                    title: Some(title),
+                    subtitle,
+                    footer_hint: Some(standard_popup_hint_line()),
+                    items,
+                    ..Default::default()
+                };
+                let view =
+                    CancelableSelectionView::new(params, self.app_event_tx.clone(), on_cancel);
+                self.bottom_pane.show_view(Box::new(view));
+            }
+        }
+    }
+
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
@@ -1518,6 +2022,7 @@ impl ChatWidget {
             unified_exec_sessions: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
+            ask_user_question: None,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
@@ -1604,6 +2109,7 @@ impl ChatWidget {
             unified_exec_sessions: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
+            ask_user_question: None,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
@@ -2122,6 +2628,9 @@ impl ChatWidget {
             }
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
+            }
+            EventMsg::AskUserQuestionRequest(ev) => {
+                self.on_ask_user_question_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),

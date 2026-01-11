@@ -153,6 +153,32 @@ type ChatViewState = {
   }>;
 };
 
+type AskUserQuestionType = "text" | "single_select" | "multi_select";
+type AskUserQuestionOption = {
+  label: string;
+  value: string;
+  description?: string;
+  recommended?: boolean;
+};
+type AskUserQuestion = {
+  id: string;
+  prompt: string;
+  type: AskUserQuestionType;
+  description?: string;
+  placeholder?: string;
+  options?: AskUserQuestionOption[];
+  allow_other?: boolean;
+  required?: boolean;
+};
+type AskUserQuestionRequest = {
+  title?: string;
+  questions: AskUserQuestion[];
+};
+type AskUserQuestionResponse = {
+  cancelled: boolean;
+  answers: Record<string, unknown>;
+};
+
 type SuggestItem = {
   insert: string;
   label: string;
@@ -185,6 +211,7 @@ function main(): void {
   const statusTextEl = mustGet("statusText");
   const logEl = mustGet("log");
   const approvalsEl = mustGet("approvals");
+  const askUserQuestionEl = mustGet("askUserQuestion");
   const composerEl = mustGet("composer");
   const editBannerEl = mustGet("editBanner");
   const toastEl = mustGet<HTMLDivElement>("toast");
@@ -245,6 +272,350 @@ function main(): void {
     updateInputPlaceholder(),
   );
   placeholderObserver.observe(inputRowEl);
+
+  let askUserQuestionState:
+    | {
+        requestKey: string;
+        request: AskUserQuestionRequest;
+        index: number;
+        answers: Record<string, unknown>;
+        otherTextById: Record<string, string>;
+      }
+    | null = null;
+  let askUserQuestionError: string | null = null;
+
+  const disableComposer = (disabled: boolean): void => {
+    inputEl.disabled = disabled;
+    imageInput.disabled = disabled;
+    attachBtn.disabled = disabled;
+    sendBtn.disabled = disabled;
+  };
+
+  const clearAskUserQuestion = (): void => {
+    askUserQuestionState = null;
+    askUserQuestionError = null;
+    askUserQuestionEl.style.display = "none";
+    askUserQuestionEl.innerHTML = "";
+    disableComposer(false);
+    inputEl.focus();
+  };
+
+  const postAskUserQuestionResponse = (response: AskUserQuestionResponse): void => {
+    const st = askUserQuestionState;
+    if (!st) return;
+    vscode.postMessage({
+      type: "askUserQuestionResponse",
+      requestKey: st.requestKey,
+      response,
+    });
+  };
+
+  const renderAskUserQuestion = (): void => {
+    const st = askUserQuestionState;
+    if (!st) {
+      askUserQuestionEl.style.display = "none";
+      askUserQuestionEl.innerHTML = "";
+      disableComposer(false);
+      return;
+    }
+
+    const title =
+      typeof st.request.title === "string" && st.request.title.trim().length > 0
+        ? st.request.title.trim()
+        : "Codex question";
+
+    const questions = Array.isArray(st.request.questions) ? st.request.questions : [];
+    const q = questions[st.index] ?? null;
+    if (!q || typeof q.id !== "string" || typeof q.prompt !== "string") {
+      postAskUserQuestionResponse({ cancelled: true, answers: st.answers });
+      clearAskUserQuestion();
+      return;
+    }
+
+    askUserQuestionEl.style.display = "";
+    askUserQuestionEl.innerHTML = "";
+
+    const card = document.createElement("div");
+    card.className = "askCard";
+
+    const header = document.createElement("div");
+    header.className = "askHeader";
+
+    const titleNode = document.createElement("div");
+    titleNode.className = "askTitle";
+    titleNode.textContent = title;
+
+    const progress = document.createElement("div");
+    progress.className = "askProgress";
+    progress.textContent = `${String(st.index + 1)}/${String(questions.length)}`;
+
+    header.appendChild(titleNode);
+    header.appendChild(progress);
+
+    const prompt = document.createElement("div");
+    prompt.className = "askPrompt";
+    prompt.textContent = q.prompt;
+
+    card.appendChild(header);
+    card.appendChild(prompt);
+
+    if (typeof q.description === "string" && q.description) {
+      const desc = document.createElement("div");
+      desc.className = "askDesc";
+      desc.textContent = q.description;
+      card.appendChild(desc);
+    }
+
+    const required = Boolean(q.required);
+    const allowOther = Boolean(q.allow_other);
+    const otherSentinel = "__other__";
+
+    const errorEl = document.createElement("div");
+    errorEl.className = "askError";
+    errorEl.style.display = askUserQuestionError ? "" : "none";
+    errorEl.textContent = askUserQuestionError || "";
+
+    const setError = (msg: string | null): void => {
+      askUserQuestionError = msg;
+      errorEl.textContent = msg || "";
+      errorEl.style.display = msg ? "" : "none";
+    };
+
+    const commitAndAdvance = (answer: unknown | null): void => {
+      setError(null);
+      if (answer === null) delete st.answers[q.id];
+      else st.answers[q.id] = answer;
+
+      st.index += 1;
+      if (st.index >= questions.length) {
+        postAskUserQuestionResponse({ cancelled: false, answers: st.answers });
+        clearAskUserQuestion();
+        return;
+      }
+      renderAskUserQuestion();
+    };
+
+    const controls = document.createElement("div");
+    controls.className = "askControls";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "askBtn";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => {
+      postAskUserQuestionResponse({ cancelled: true, answers: st.answers });
+      clearAskUserQuestion();
+    });
+
+    const nextBtn = document.createElement("button");
+    nextBtn.className = "askBtn primary";
+    nextBtn.textContent = st.index + 1 >= questions.length ? "Submit" : "Next";
+
+    const optionsWrap = document.createElement("div");
+    optionsWrap.className = "askOptions";
+
+    const renderOtherInputIfNeeded = (
+      host: HTMLElement,
+      checked: () => boolean,
+      placeholder: string,
+    ): HTMLInputElement => {
+      const input = document.createElement("input");
+      input.className = "askInput";
+      input.placeholder = placeholder;
+      input.value = st.otherTextById[q.id] ?? "";
+      input.addEventListener("input", () => {
+        st.otherTextById[q.id] = input.value;
+        if (checked()) setError(null);
+      });
+      const wrapper = document.createElement("div");
+      wrapper.style.marginTop = "8px";
+      wrapper.appendChild(input);
+      host.appendChild(wrapper);
+      return input;
+    };
+
+    if (q.type === "text") {
+      const input = document.createElement("textarea");
+      input.className = "askInput";
+      input.rows = 3;
+      input.placeholder = typeof q.placeholder === "string" ? q.placeholder : "";
+      input.value = typeof st.answers[q.id] === "string" ? (st.answers[q.id] as string) : "";
+      input.addEventListener("input", () => setError(null));
+      card.appendChild(input);
+
+      nextBtn.addEventListener("click", () => {
+        const v = input.value.trim();
+        if (required && !v) {
+          setError("This question is required.");
+          input.focus();
+          return;
+        }
+        commitAndAdvance(v ? v : null);
+      });
+    } else if (q.type === "single_select") {
+      const prev = typeof st.answers[q.id] === "string" ? (st.answers[q.id] as string) : null;
+      let selected: string | null = prev;
+
+      const rawOptions = Array.isArray(q.options) ? q.options : [];
+      const options = rawOptions
+        .slice()
+        .sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)));
+
+      const makeOptionRow = (opt: AskUserQuestionOption): HTMLDivElement => {
+        const row = document.createElement("div");
+        row.className = "askOption";
+
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = `ask_${st.requestKey}_${q.id}`;
+        radio.value = opt.value;
+        radio.checked = selected === opt.value;
+        radio.addEventListener("change", () => {
+          selected = opt.value;
+          setError(null);
+          renderAskUserQuestion();
+        });
+
+        const meta = document.createElement("div");
+        const label = document.createElement("div");
+        label.className = "askOptionLabel";
+        label.textContent = opt.recommended ? `${opt.label} (Recommended)` : opt.label;
+        meta.appendChild(label);
+        if (opt.description) {
+          const d = document.createElement("div");
+          d.className = "askOptionMeta";
+          d.textContent = opt.description;
+          meta.appendChild(d);
+        }
+
+        row.appendChild(radio);
+        row.appendChild(meta);
+        return row;
+      };
+
+      for (const opt of options) optionsWrap.appendChild(makeOptionRow(opt));
+      if (allowOther) optionsWrap.appendChild(makeOptionRow({ label: "Other…", value: otherSentinel }));
+      card.appendChild(optionsWrap);
+
+      let otherInput: HTMLInputElement | null = null;
+      if (allowOther && selected === otherSentinel) {
+        otherInput = renderOtherInputIfNeeded(
+          card,
+          () => selected === otherSentinel,
+          typeof q.placeholder === "string" ? q.placeholder : "Type your answer…",
+        );
+      }
+
+      nextBtn.addEventListener("click", () => {
+        if (!selected) {
+          if (required) {
+            setError("Pick an option, or cancel.");
+            return;
+          }
+          commitAndAdvance(null);
+          return;
+        }
+
+        if (selected === otherSentinel) {
+          const v = (otherInput?.value ?? st.otherTextById[q.id] ?? "").trim();
+          if (required && !v) {
+            setError("This question is required.");
+            otherInput?.focus();
+            return;
+          }
+          commitAndAdvance(v ? v : null);
+          return;
+        }
+
+        commitAndAdvance(selected);
+      });
+    } else if (q.type === "multi_select") {
+      const prev = Array.isArray(st.answers[q.id]) ? (st.answers[q.id] as unknown[]) : [];
+      const selected = new Set<string>(prev.map((v) => String(v)));
+
+      const rawOptions = Array.isArray(q.options) ? q.options : [];
+      const options = rawOptions
+        .slice()
+        .sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)));
+
+      const makeOptionRow = (opt: AskUserQuestionOption): HTMLDivElement => {
+        const row = document.createElement("div");
+        row.className = "askOption";
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = opt.value;
+        cb.checked = selected.has(opt.value);
+        cb.addEventListener("change", () => {
+          if (cb.checked) selected.add(opt.value);
+          else selected.delete(opt.value);
+          setError(null);
+          renderAskUserQuestion();
+        });
+
+        const meta = document.createElement("div");
+        const label = document.createElement("div");
+        label.className = "askOptionLabel";
+        label.textContent = opt.recommended ? `${opt.label} (Recommended)` : opt.label;
+        meta.appendChild(label);
+        if (opt.description) {
+          const d = document.createElement("div");
+          d.className = "askOptionMeta";
+          d.textContent = opt.description;
+          meta.appendChild(d);
+        }
+
+        row.appendChild(cb);
+        row.appendChild(meta);
+        return row;
+      };
+
+      for (const opt of options) optionsWrap.appendChild(makeOptionRow(opt));
+      if (allowOther) optionsWrap.appendChild(makeOptionRow({ label: "Other…", value: otherSentinel }));
+      card.appendChild(optionsWrap);
+
+      let otherInput: HTMLInputElement | null = null;
+      if (allowOther && selected.has(otherSentinel)) {
+        otherInput = renderOtherInputIfNeeded(
+          card,
+          () => selected.has(otherSentinel),
+          typeof q.placeholder === "string" ? q.placeholder : "Type your answer…",
+        );
+      }
+
+      nextBtn.addEventListener("click", () => {
+        const out: string[] = [];
+        for (const v of selected) {
+          if (v === otherSentinel) continue;
+          out.push(v);
+        }
+
+        if (allowOther && selected.has(otherSentinel)) {
+          const other = (otherInput?.value ?? st.otherTextById[q.id] ?? "").trim();
+          if (other) out.push(other);
+        }
+
+        if (required && out.length === 0) {
+          setError("Pick at least one option, or cancel.");
+          return;
+        }
+
+        commitAndAdvance(out.length > 0 ? out : null);
+      });
+    } else {
+      setError(`Unsupported question type: ${String((q as any).type)}`);
+      nextBtn.addEventListener("click", () => {
+        postAskUserQuestionResponse({ cancelled: true, answers: st.answers });
+        clearAskUserQuestion();
+      });
+    }
+
+    controls.appendChild(cancelBtn);
+    controls.appendChild(nextBtn);
+    card.appendChild(errorEl);
+    card.appendChild(controls);
+    askUserQuestionEl.appendChild(card);
+    disableComposer(true);
+  };
 
   let statusPopoverOpen = false;
   let statusPopoverDetails = "";
@@ -3490,6 +3861,24 @@ function main(): void {
       state = { ...(state as any), blocks } as ChatViewState;
       pendingBlocksState = state;
       scheduleBlocksRender();
+      return;
+    }
+    if (anyMsg.type === "askUserQuestionStart") {
+      const requestKey =
+        typeof (anyMsg as any).requestKey === "string" ? (anyMsg as any).requestKey : null;
+      if (!requestKey) return;
+      const request = (anyMsg as any).request as AskUserQuestionRequest;
+      if (!request || typeof request !== "object") return;
+
+      askUserQuestionState = {
+        requestKey,
+        request,
+        index: 0,
+        answers: {},
+        otherTextById: {},
+      };
+      askUserQuestionError = null;
+      renderAskUserQuestion();
       return;
     }
     if (anyMsg.type === "blockUpsert") {

@@ -9,6 +9,7 @@ import type { UserInput } from "../generated/v2/UserInput";
 import type { ThreadItem } from "../generated/v2/ThreadItem";
 import type { Session, SessionStore } from "../sessions";
 import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
+import type { AskUserQuestionResponse } from "../generated/v2/AskUserQuestionResponse";
 import type { ServerRequest } from "../generated/ServerRequest";
 import type { ThreadResumeResponse } from "../generated/v2/ThreadResumeResponse";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
@@ -67,6 +68,9 @@ export class BackendManager implements vscode.Disposable {
     | null = null;
   public onApprovalRequest:
     | ((session: Session, req: V2ApprovalRequest) => Promise<ApprovalDecision>)
+    | null = null;
+  public onAskUserQuestionRequest:
+    | ((session: Session, req: V2AskUserQuestionRequest) => Promise<AskUserQuestionResponse>)
     | null = null;
   public onServerEvent:
     | ((session: Session | null, n: AnyServerNotification) => void)
@@ -180,6 +184,8 @@ export class BackendManager implements vscode.Disposable {
       });
       proc.onNotification = (n) => this.onServerNotification(key, n);
       proc.onApprovalRequest = async (req) => this.handleApprovalRequest(req);
+      proc.onAskUserQuestionRequest = async (req) =>
+        this.handleAskUserQuestionRequest(req);
     })();
 
     this.startInFlight.set(
@@ -872,6 +878,21 @@ export class BackendManager implements vscode.Disposable {
     return this.onApprovalRequest(session, req);
   }
 
+  private async handleAskUserQuestionRequest(
+    req: V2AskUserQuestionRequest,
+  ): Promise<AskUserQuestionResponse> {
+    const session = this.sessions.getByThreadId(req.params.threadId);
+    if (!session) {
+      throw new Error(
+        `Session not found for ask-question request: threadId=${req.params.threadId}`,
+      );
+    }
+    if (!this.onAskUserQuestionRequest) {
+      throw new Error("onAskUserQuestionRequest handler is not set");
+    }
+    return this.onAskUserQuestionRequest(session, req);
+  }
+
   private resolveWorkspaceFolder(
     workspaceFolderUri: string,
   ): vscode.WorkspaceFolder | null {
@@ -893,6 +914,13 @@ type V2ApprovalRequest = Extract<
     method:
       | "item/commandExecution/requestApproval"
       | "item/fileChange/requestApproval";
+  }
+>;
+
+type V2AskUserQuestionRequest = Extract<
+  ServerRequest,
+  {
+    method: "user/askQuestion";
   }
 >;
 

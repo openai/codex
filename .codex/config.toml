@@ -199,3 +199,4 @@ inherit = "all"
 [mcp_servers.chrome-devtools]
 args = ["chrome-devtools-mcp@latest"]
 command = "npx"
+env = { DISPLAY = ":99" }

@@ -32,6 +32,7 @@ import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
 import type { CommandExecutionRequestApprovalResponse } from "../generated/v2/CommandExecutionRequestApprovalResponse";
 import type { FileChangeRequestApprovalResponse } from "../generated/v2/FileChangeRequestApprovalResponse";
+import type { AskUserQuestionResponse } from "../generated/v2/AskUserQuestionResponse";
 import type { FuzzyFileSearchParams } from "../generated/FuzzyFileSearchParams";
 import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchResponse";
 import type { ApplyPatchApprovalResponse } from "../generated/ApplyPatchApprovalResponse";
@@ -60,6 +61,9 @@ export class BackendProcess implements vscode.Disposable {
   public onNotification: ((n: AnyServerNotification) => void) | null = null;
   public onApprovalRequest:
     | ((req: V2ApprovalRequest) => Promise<ApprovalDecision>)
+    | null = null;
+  public onAskUserQuestionRequest:
+    | ((req: V2AskUserQuestionRequest) => Promise<AskUserQuestionResponse>)
     | null = null;
 
   private constructor(
@@ -308,6 +312,20 @@ export class BackendProcess implements vscode.Disposable {
       }
     }
 
+    if (isAskUserQuestionRequest(req) && this.onAskUserQuestionRequest) {
+      try {
+        const result = await this.onAskUserQuestionRequest(req);
+        this.respondAskUserQuestion(req.id, result);
+        return;
+      } catch (err) {
+        this.output.appendLine(
+          `Failed to handle ask-question request via UI, cancelling: ${String(err)}`,
+        );
+        this.respondAskUserQuestion(req.id, { cancelled: true, answers: {} });
+        return;
+      }
+    }
+
     if (this.approvalsDefaultDecision !== "prompt") {
       if (isV2ApprovalRequest(req)) {
         const decision =
@@ -319,6 +337,14 @@ export class BackendProcess implements vscode.Disposable {
       const decision =
         this.approvalsDefaultDecision === "decline" ? "denied" : "abort";
       this.respondV1Approval(req.id, decision);
+      return;
+    }
+
+    if (isAskUserQuestionRequest(req)) {
+      void vscode.window.showWarningMessage(
+        "Codex asked a question, but no UI handler is registered. Cancelling.",
+      );
+      this.respondAskUserQuestion(req.id, { cancelled: true, answers: {} });
       return;
     }
 
@@ -363,6 +389,13 @@ export class BackendProcess implements vscode.Disposable {
     this.rpc.respond(id, result);
   }
 
+  public respondAskUserQuestion(
+    id: RequestId,
+    result: AskUserQuestionResponse,
+  ): void {
+    this.rpc.respond(id, result);
+  }
+
   public respondV1Approval(id: RequestId, decision: ReviewDecision): void {
     const result: ApplyPatchApprovalResponse | ExecCommandApprovalResponse = {
       decision,
@@ -380,9 +413,22 @@ type V2ApprovalRequest = Extract<
   }
 >;
 
+type V2AskUserQuestionRequest = Extract<
+  ServerRequest,
+  {
+    method: "user/askQuestion";
+  }
+>;
+
 function isV2ApprovalRequest(req: ServerRequest): req is V2ApprovalRequest {
   return (
     req.method === "item/commandExecution/requestApproval" ||
     req.method === "item/fileChange/requestApproval"
   );
+}
+
+function isAskUserQuestionRequest(
+  req: ServerRequest,
+): req is V2AskUserQuestionRequest {
+  return req.method === "user/askQuestion";
 }

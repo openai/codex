@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use crate::ConversationId;
 use crate::approvals::ElicitationRequestEvent;
+use crate::ask_user_question::AskUserQuestionRequest;
+use crate::ask_user_question::AskUserQuestionResponse;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::items::TurnItem;
@@ -165,6 +167,14 @@ pub enum Op {
         request_id: RequestId,
         /// User's decision for the request.
         decision: ElicitationAction,
+    },
+
+    /// Resolve an AskUserQuestion request from the agent/tooling.
+    ResolveAskUserQuestion {
+        /// Tool call id used to correlate the request/response.
+        call_id: String,
+        /// User-provided answers.
+        response: AskUserQuestionResponse,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -610,6 +620,8 @@ pub enum EventMsg {
 
     ElicitationRequest(ElicitationRequestEvent),
 
+    AskUserQuestionRequest(AskUserQuestionRequestEvent),
+
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
     /// Notification advising the user that something they are using has been
@@ -671,6 +683,16 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct AskUserQuestionRequestEvent {
+    pub call_id: String,
+    /// Turn ID that this question belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
+    pub request: AskUserQuestionRequest,
 }
 
 /// Codex errors that we expose to clients.
