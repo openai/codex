@@ -101,6 +101,7 @@ impl ToolHandler for UnifiedExecHandler {
             call_id,
             tool_name,
             payload,
+            cancellation_token,
             ..
         } = invocation;
 
@@ -114,7 +115,12 @@ impl ToolHandler for UnifiedExecHandler {
         };
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
-        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
+        let context = UnifiedExecContext::new(
+            session.clone(),
+            turn.clone(),
+            call_id.clone(),
+            cancellation_token,
+        );
 
         let response = match tool_name.as_str() {
             "exec_command" => {
@@ -138,9 +144,9 @@ impl ToolHandler for UnifiedExecHandler {
                     )
                 {
                     manager.release_process_id(&process_id).await;
+                    let policy = context.turn.approval_policy;
                     return Err(FunctionCallError::RespondToModel(format!(
-                        "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
-                        policy = context.turn.approval_policy
+                        "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}"
                     )));
                 }
 
@@ -158,6 +164,7 @@ impl ToolHandler for UnifiedExecHandler {
                     Some(&tracker),
                     &context.call_id,
                     tool_name.as_str(),
+                    context.cancellation_token.clone(),
                 )
                 .await?
                 {
@@ -186,12 +193,15 @@ impl ToolHandler for UnifiedExecHandler {
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
                 let response = manager
-                    .write_stdin(WriteStdinRequest {
-                        process_id: &args.session_id.to_string(),
-                        input: &args.chars,
-                        yield_time_ms: args.yield_time_ms,
-                        max_output_tokens: args.max_output_tokens,
-                    })
+                    .write_stdin(
+                        WriteStdinRequest {
+                            process_id: &args.session_id.to_string(),
+                            input: &args.chars,
+                            yield_time_ms: args.yield_time_ms,
+                            max_output_tokens: args.max_output_tokens,
+                        },
+                        &context,
+                    )
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!("write_stdin failed: {err:?}"))

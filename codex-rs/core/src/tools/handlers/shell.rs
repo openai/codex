@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
@@ -101,6 +102,7 @@ impl ToolHandler for ShellHandler {
             call_id,
             tool_name,
             payload,
+            cancellation_token,
         } = invocation;
 
         match payload {
@@ -110,10 +112,7 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
-                    session,
-                    turn,
-                    tracker,
-                    call_id,
+                    ShellExecContext::new(session, turn, tracker, call_id, cancellation_token),
                     false,
                 )
                 .await
@@ -123,10 +122,7 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
-                    session,
-                    turn,
-                    tracker,
-                    call_id,
+                    ShellExecContext::new(session, turn, tracker, call_id, cancellation_token),
                     false,
                 )
                 .await
@@ -170,6 +166,7 @@ impl ToolHandler for ShellCommandHandler {
             call_id,
             tool_name,
             payload,
+            cancellation_token,
         } = invocation;
 
         let ToolPayload::Function { arguments } = payload else {
@@ -183,13 +180,36 @@ impl ToolHandler for ShellCommandHandler {
         ShellHandler::run_exec_like(
             tool_name.as_str(),
             exec_params,
+            ShellExecContext::new(session, turn, tracker, call_id, cancellation_token),
+            true,
+        )
+        .await
+    }
+}
+
+struct ShellExecContext {
+    session: Arc<crate::codex::Session>,
+    turn: Arc<TurnContext>,
+    tracker: crate::tools::context::SharedTurnDiffTracker,
+    call_id: String,
+    cancellation_token: CancellationToken,
+}
+
+impl ShellExecContext {
+    fn new(
+        session: Arc<crate::codex::Session>,
+        turn: Arc<TurnContext>,
+        tracker: crate::tools::context::SharedTurnDiffTracker,
+        call_id: String,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        Self {
             session,
             turn,
             tracker,
             call_id,
-            true,
-        )
-        .await
+            cancellation_token,
+        }
     }
 }
 
@@ -197,12 +217,16 @@ impl ShellHandler {
     async fn run_exec_like(
         tool_name: &str,
         exec_params: ExecParams,
-        session: Arc<crate::codex::Session>,
-        turn: Arc<TurnContext>,
-        tracker: crate::tools::context::SharedTurnDiffTracker,
-        call_id: String,
+        ctx: ShellExecContext,
         freeform: bool,
     ) -> Result<ToolOutput, FunctionCallError> {
+        let ShellExecContext {
+            session,
+            turn,
+            tracker,
+            call_id,
+            cancellation_token,
+        } = ctx;
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
@@ -212,9 +236,9 @@ impl ShellHandler {
                 codex_protocol::protocol::AskForApproval::OnRequest
             )
         {
+            let policy = turn.approval_policy;
             return Err(FunctionCallError::RespondToModel(format!(
-                "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-                policy = turn.approval_policy
+                "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}"
             )));
         }
 
@@ -228,6 +252,7 @@ impl ShellHandler {
             Some(&tracker),
             &call_id,
             tool_name,
+            cancellation_token.clone(),
         )
         .await?
         {
@@ -273,6 +298,7 @@ impl ShellHandler {
             turn: turn.as_ref(),
             call_id: call_id.clone(),
             tool_name: tool_name.to_string(),
+            cancellation_token,
         };
         let out = orchestrator
             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)

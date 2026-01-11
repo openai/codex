@@ -30,6 +30,7 @@ use std::time::Duration;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -58,14 +59,21 @@ pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
     pub call_id: String,
+    pub cancellation_token: CancellationToken,
 }
 
 impl UnifiedExecContext {
-    pub fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
+    pub fn new(
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        call_id: String,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         Self {
             session,
             turn,
             call_id,
+            cancellation_token,
         }
     }
 }
@@ -182,8 +190,12 @@ mod tests {
         cmd: &str,
         yield_time_ms: u64,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
-        let context =
-            UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
+        let context = UnifiedExecContext::new(
+            Arc::clone(session),
+            Arc::clone(turn),
+            "call".to_string(),
+            CancellationToken::new(),
+        );
         let process_id = session
             .services
             .unified_exec_manager
@@ -210,19 +222,29 @@ mod tests {
 
     async fn write_stdin(
         session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
         process_id: &str,
         input: &str,
         yield_time_ms: u64,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+        let context = UnifiedExecContext::new(
+            Arc::clone(session),
+            Arc::clone(turn),
+            "call".to_string(),
+            CancellationToken::new(),
+        );
         session
             .services
             .unified_exec_manager
-            .write_stdin(WriteStdinRequest {
-                process_id,
-                input,
-                yield_time_ms,
-                max_output_tokens: None,
-            })
+            .write_stdin(
+                WriteStdinRequest {
+                    process_id,
+                    input,
+                    yield_time_ms,
+                    max_output_tokens: None,
+                },
+                &context,
+            )
             .await
     }
 
@@ -274,6 +296,7 @@ mod tests {
 
         write_stdin(
             &session,
+            &turn,
             process_id,
             "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
             2_500,
@@ -282,6 +305,7 @@ mod tests {
 
         let out_2 = write_stdin(
             &session,
+            &turn,
             process_id,
             "echo $CODEX_INTERACTIVE_SHELL_VAR\n",
             2_500,
@@ -310,6 +334,7 @@ mod tests {
 
         write_stdin(
             &session,
+            &turn,
             session_a.as_str(),
             "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
             2_500,
@@ -330,6 +355,7 @@ mod tests {
 
         let out_3 = write_stdin(
             &session,
+            &turn,
             shell_a
                 .process_id
                 .as_ref()
@@ -362,6 +388,7 @@ mod tests {
 
         write_stdin(
             &session,
+            &turn,
             process_id,
             "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
             2_500,
@@ -370,6 +397,7 @@ mod tests {
 
         let out_2 = write_stdin(
             &session,
+            &turn,
             process_id,
             "sleep 5 && echo $CODEX_INTERACTIVE_SHELL_VAR\n",
             10,
@@ -382,7 +410,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_secs(7)).await;
 
-        let out_3 = write_stdin(&session, process_id, "", 100).await?;
+        let out_3 = write_stdin(&session, &turn, process_id, "", 100).await?;
 
         assert!(
             out_3.output.contains("codex"),
@@ -444,11 +472,11 @@ mod tests {
             .expect("expected process id")
             .as_str();
 
-        write_stdin(&session, process_id, "exit\n", 2_500).await?;
+        write_stdin(&session, &turn, process_id, "exit\n", 2_500).await?;
 
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let err = write_stdin(&session, process_id, "", 100)
+        let err = write_stdin(&session, &turn, process_id, "", 100)
             .await
             .expect_err("expected unknown process error");
 

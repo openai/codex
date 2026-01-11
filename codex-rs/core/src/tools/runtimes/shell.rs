@@ -4,6 +4,7 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
+use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
 use crate::powershell::prefix_powershell_script_with_utf8;
@@ -155,11 +156,13 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             command
         };
 
+        let expiration =
+            ExecExpiration::from(req.timeout_ms).with_cancellation(ctx.cancellation_token.clone());
         let spec = build_command_spec(
             &command,
             &req.cwd,
             &req.env,
-            req.timeout_ms.into(),
+            expiration,
             req.sandbox_permissions,
             req.justification.clone(),
         )?;

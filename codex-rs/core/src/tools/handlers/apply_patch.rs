@@ -30,6 +30,7 @@ use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use tokio_util::sync::CancellationToken;
 
 pub struct ApplyPatchHandler;
 
@@ -84,6 +85,7 @@ impl ToolHandler for ApplyPatchHandler {
             call_id,
             tool_name,
             payload,
+            cancellation_token,
         } = invocation;
 
         let patch_input = match payload {
@@ -143,6 +145,7 @@ impl ToolHandler for ApplyPatchHandler {
                             turn: turn.as_ref(),
                             call_id: call_id.clone(),
                             tool_name: tool_name.to_string(),
+                            cancellation_token: cancellation_token.clone(),
                         };
                         let out = orchestrator
                             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
@@ -192,6 +195,7 @@ pub(crate) async fn intercept_apply_patch(
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
+    cancellation_token: CancellationToken,
 ) -> Result<Option<ToolOutput>, FunctionCallError> {
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
@@ -234,6 +238,7 @@ pub(crate) async fn intercept_apply_patch(
                         turn,
                         call_id: call_id.to_string(),
                         tool_name: tool_name.to_string(),
+                        cancellation_token,
                     };
                     let out = orchestrator
                         .run(&mut runtime, &req, &tool_ctx, turn, turn.approval_policy)

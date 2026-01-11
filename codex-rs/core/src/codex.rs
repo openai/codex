@@ -2922,6 +2922,7 @@ mod tests {
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
+    use tokio_util::sync::CancellationToken;
 
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -3863,6 +3864,7 @@ mod tests {
                 Arc::clone(&session),
                 Arc::clone(&turn_context),
                 tracker,
+                CancellationToken::new(),
                 call,
             )
             .await
@@ -4052,6 +4054,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 
@@ -4089,6 +4092,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 
@@ -4142,6 +4146,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 

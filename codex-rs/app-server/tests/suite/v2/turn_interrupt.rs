@@ -17,6 +17,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use core_test_support::skip_if_no_network;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -24,6 +25,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn turn_interrupt_aborts_running_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     // Use a portable sleep command to keep the turn running.
     #[cfg(target_os = "windows")]
     let shell_command = vec![

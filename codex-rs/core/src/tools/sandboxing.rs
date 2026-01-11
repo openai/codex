@@ -23,6 +23,7 @@ use std::path::Path;
 use futures::Future;
 use futures::future::BoxFuture;
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ApprovalStore {
@@ -251,6 +252,7 @@ pub(crate) struct ToolCtx<'a> {
     pub turn: &'a TurnContext,
     pub call_id: String,
     pub tool_name: String,
+    pub cancellation_token: CancellationToken,
 }
 
 #[derive(Debug)]

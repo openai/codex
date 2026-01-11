@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::bash::extract_bash_command;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::exec::append_abort_message;
 use crate::exec_env::create_env;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
@@ -78,6 +79,11 @@ struct PreparedProcessHandles {
     turn_ref: Arc<TurnContext>,
     command: Vec<String>,
     process_id: String,
+}
+
+struct CollectedOutput {
+    bytes: Vec<u8>,
+    was_cancelled: bool,
 }
 
 impl UnifiedExecProcessManager {
@@ -177,12 +183,17 @@ impl UnifiedExecProcessManager {
             &output_buffer,
             &output_notify,
             &cancellation_token,
+            &context.cancellation_token,
             deadline,
         )
         .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
-        let text = String::from_utf8_lossy(&collected).to_string();
+        let mut collected_bytes = collected.bytes;
+        if collected.was_cancelled {
+            append_abort_message(&mut collected_bytes);
+        }
+        let text = String::from_utf8_lossy(&collected_bytes).to_string();
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let exit_code = process.exit_code();
         let has_exited = process.has_exited() || exit_code.is_some();
@@ -234,7 +245,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             output,
-            raw_output: collected,
+            raw_output: collected_bytes,
             process_id: if has_exited {
                 None
             } else {
@@ -251,6 +262,7 @@ impl UnifiedExecProcessManager {
     pub(crate) async fn write_stdin(
         &self,
         request: WriteStdinRequest<'_>,
+        context: &UnifiedExecContext,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
         let process_id = request.process_id.to_string();
 
@@ -281,12 +293,17 @@ impl UnifiedExecProcessManager {
             &output_buffer,
             &output_notify,
             &cancellation_token,
+            &context.cancellation_token,
             deadline,
         )
         .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
-        let text = String::from_utf8_lossy(&collected).to_string();
+        let mut collected_bytes = collected.bytes;
+        if collected.was_cancelled {
+            append_abort_message(&mut collected_bytes);
+        }
+        let text = String::from_utf8_lossy(&collected_bytes).to_string();
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
@@ -318,7 +335,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             output,
-            raw_output: collected,
+            raw_output: collected_bytes,
             process_id,
             exit_code,
             original_token_count: Some(original_token_count),
@@ -526,6 +543,7 @@ impl UnifiedExecProcessManager {
             turn: context.turn.as_ref(),
             call_id: context.call_id.clone(),
             tool_name: "exec_command".to_string(),
+            cancellation_token: context.cancellation_token.clone(),
         };
         orchestrator
             .run(
@@ -539,16 +557,18 @@ impl UnifiedExecProcessManager {
             .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))
     }
 
-    pub(super) async fn collect_output_until_deadline(
+    async fn collect_output_until_deadline(
         output_buffer: &OutputBuffer,
         output_notify: &Arc<Notify>,
-        cancellation_token: &CancellationToken,
+        exit_token: &CancellationToken,
+        tool_cancel_token: &CancellationToken,
         deadline: Instant,
-    ) -> Vec<u8> {
+    ) -> CollectedOutput {
         const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(50);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
-        let mut exit_signal_received = cancellation_token.is_cancelled();
+        let mut exit_signal_received = exit_token.is_cancelled();
+        let mut was_cancelled = tool_cancel_token.is_cancelled();
         loop {
             let drained_chunks: Vec<Vec<u8>>;
             let mut wait_for_output = None;
@@ -561,14 +581,15 @@ impl UnifiedExecProcessManager {
             }
 
             if drained_chunks.is_empty() {
-                exit_signal_received |= cancellation_token.is_cancelled();
+                exit_signal_received |= exit_token.is_cancelled();
+                was_cancelled |= tool_cancel_token.is_cancelled();
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining == Duration::ZERO {
                     break;
                 }
 
                 let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
-                if exit_signal_received {
+                if exit_signal_received || was_cancelled {
                     let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
                     if tokio::time::timeout(grace, notified).await.is_err() {
                         break;
@@ -577,11 +598,14 @@ impl UnifiedExecProcessManager {
                 }
 
                 tokio::pin!(notified);
-                let exit_notified = cancellation_token.cancelled();
+                let exit_notified = exit_token.cancelled();
+                let tool_notified = tool_cancel_token.cancelled();
                 tokio::pin!(exit_notified);
+                tokio::pin!(tool_notified);
                 tokio::select! {
                     _ = &mut notified => {}
                     _ = &mut exit_notified => exit_signal_received = true,
+                    _ = &mut tool_notified => was_cancelled = true,
                     _ = tokio::time::sleep(remaining) => break,
                 }
                 continue;
@@ -591,13 +615,17 @@ impl UnifiedExecProcessManager {
                 collected.extend_from_slice(&chunk);
             }
 
-            exit_signal_received |= cancellation_token.is_cancelled();
+            exit_signal_received |= exit_token.is_cancelled();
+            was_cancelled |= tool_cancel_token.is_cancelled();
             if Instant::now() >= deadline {
                 break;
             }
         }
 
-        collected
+        CollectedOutput {
+            bytes: collected,
+            was_cancelled,
+        }
     }
 
     fn prune_processes_if_needed(store: &mut ProcessStore) -> bool {

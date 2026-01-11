@@ -34,6 +34,7 @@ use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
+pub(crate) const EXEC_ABORTED_MESSAGE: &str = "command aborted by user";
 
 // Hardcode these since it does not seem worth including the libc crate just
 // for these.
@@ -67,6 +68,11 @@ pub enum ExecExpiration {
     Timeout(Duration),
     DefaultTimeout,
     Cancellation(CancellationToken),
+    TimeoutOrCancellation {
+        timeout: Duration,
+        cancellation: CancellationToken,
+    },
+    DefaultTimeoutOrCancellation(CancellationToken),
 }
 
 impl From<Option<u64>> for ExecExpiration {
@@ -84,15 +90,31 @@ impl From<u64> for ExecExpiration {
 }
 
 impl ExecExpiration {
-    async fn wait(self) {
+    async fn wait(self) -> ExecExpirationOutcome {
         match self {
-            ExecExpiration::Timeout(duration) => tokio::time::sleep(duration).await,
+            ExecExpiration::Timeout(duration) => {
+                tokio::time::sleep(duration).await;
+                ExecExpirationOutcome::TimedOut
+            }
             ExecExpiration::DefaultTimeout => {
-                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await
+                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await;
+                ExecExpirationOutcome::TimedOut
             }
             ExecExpiration::Cancellation(cancel) => {
                 cancel.cancelled().await;
+                ExecExpirationOutcome::Cancelled
             }
+            ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            } => tokio::select! {
+                _ = tokio::time::sleep(timeout) => ExecExpirationOutcome::TimedOut,
+                _ = cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
+            },
+            ExecExpiration::DefaultTimeoutOrCancellation(cancellation) => tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)) => ExecExpirationOutcome::TimedOut,
+                _ = cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
+            },
         }
     }
 
@@ -102,8 +124,42 @@ impl ExecExpiration {
             ExecExpiration::Timeout(duration) => Some(duration.as_millis() as u64),
             ExecExpiration::DefaultTimeout => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
             ExecExpiration::Cancellation(_) => None,
+            ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
+                Some(timeout.as_millis() as u64)
+            }
+            ExecExpiration::DefaultTimeoutOrCancellation(_) => {
+                Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)
+            }
         }
     }
+
+    pub(crate) fn with_cancellation(self, cancellation: CancellationToken) -> Self {
+        match self {
+            ExecExpiration::Timeout(timeout) => ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            },
+            ExecExpiration::DefaultTimeout => {
+                ExecExpiration::DefaultTimeoutOrCancellation(cancellation)
+            }
+            ExecExpiration::Cancellation(_) => ExecExpiration::Cancellation(cancellation),
+            ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
+                ExecExpiration::TimeoutOrCancellation {
+                    timeout,
+                    cancellation,
+                }
+            }
+            ExecExpiration::DefaultTimeoutOrCancellation(_) => {
+                ExecExpiration::DefaultTimeoutOrCancellation(cancellation)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExecExpirationOutcome {
+    TimedOut,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -493,6 +549,13 @@ fn append_all(dst: &mut Vec<u8>, src: &[u8]) {
     dst.extend_from_slice(src);
 }
 
+pub(crate) fn append_abort_message(output: &mut Vec<u8>) {
+    if !output.is_empty() && !output.ends_with(b"\n") {
+        output.push(b'\n');
+    }
+    output.extend_from_slice(EXEC_ABORTED_MESSAGE.as_bytes());
+}
+
 #[derive(Clone, Debug)]
 pub struct ExecToolCallOutput {
     pub exit_code: i32,
@@ -598,20 +661,27 @@ async fn consume_truncated_output(
         Some(agg_tx.clone()),
     ));
 
-    let (exit_status, timed_out) = tokio::select! {
+    let (exit_status, timed_out, was_cancelled) = tokio::select! {
         status_result = child.wait() => {
             let exit_status = status_result?;
-            (exit_status, false)
+            (exit_status, false, false)
         }
-        _ = expiration.wait() => {
+        outcome = expiration.wait() => {
             kill_child_process_group(&mut child)?;
             child.start_kill()?;
-            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+            match outcome {
+                ExecExpirationOutcome::TimedOut => {
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true, false)
+                }
+                ExecExpirationOutcome::Cancelled => {
+                    (synthetic_exit_status(0), false, true)
+                }
+            }
         }
         _ = tokio::signal::ctrl_c() => {
             kill_child_process_group(&mut child)?;
             child.start_kill()?;
-            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false, false)
         }
     };
 
@@ -668,6 +738,10 @@ async fn consume_truncated_output(
     while let Ok(chunk) = agg_rx.recv().await {
         append_all(&mut combined_buf, &chunk);
     }
+    if was_cancelled {
+        append_abort_message(&mut combined_buf);
+    }
+
     let aggregated_output = StreamOutput {
         text: combined_buf,
         truncated_after_lines: None,
@@ -931,20 +1005,17 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(1_000)).await;
             cancel_tx.cancel();
         });
-        let result = process_exec_tool_call(
+        let output = process_exec_tool_call(
             params,
             &SandboxPolicy::DangerFullAccess,
             cwd.as_path(),
             &None,
             None,
         )
-        .await;
-        let output = match result {
-            Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
-            other => panic!("expected timeout error, got {other:?}"),
-        };
-        assert!(output.timed_out);
-        assert_eq!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
+        .await?;
+        assert!(!output.timed_out);
+        assert_eq!(output.exit_code, 0);
+        assert!(output.aggregated_output.text.contains(EXEC_ABORTED_MESSAGE));
         Ok(())
     }
 
