@@ -332,7 +332,8 @@ function main(): void {
       return;
     }
 
-    askUserQuestionEl.style.display = "";
+    // Override the default `.askUserQuestion { display: none; }` stylesheet rule.
+    askUserQuestionEl.style.display = "block";
     askUserQuestionEl.innerHTML = "";
 
     const card = document.createElement("div");
@@ -452,17 +453,18 @@ function main(): void {
         commitAndAdvance(v ? v : null);
       });
     } else if (q.type === "single_select") {
-      const prev = typeof st.answers[q.id] === "string" ? (st.answers[q.id] as string) : null;
-      let selected: string | null = prev;
+      const selected =
+        typeof st.answers[q.id] === "string" ? (st.answers[q.id] as string) : null;
 
       const rawOptions = Array.isArray(q.options) ? q.options : [];
       const options = rawOptions
         .slice()
         .sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)));
 
-      const makeOptionRow = (opt: AskUserQuestionOption): HTMLDivElement => {
-        const row = document.createElement("div");
+      const makeOptionRow = (opt: AskUserQuestionOption): HTMLLabelElement => {
+        const row = document.createElement("label");
         row.className = "askOption";
+        row.style.cursor = "pointer";
 
         const radio = document.createElement("input");
         radio.type = "radio";
@@ -470,7 +472,7 @@ function main(): void {
         radio.value = opt.value;
         radio.checked = selected === opt.value;
         radio.addEventListener("change", () => {
-          selected = opt.value;
+          st.answers[q.id] = opt.value;
           setError(null);
           renderAskUserQuestion();
         });
@@ -493,7 +495,11 @@ function main(): void {
       };
 
       for (const opt of options) optionsWrap.appendChild(makeOptionRow(opt));
-      if (allowOther) optionsWrap.appendChild(makeOptionRow({ label: "Other…", value: otherSentinel }));
+      if (allowOther) {
+        optionsWrap.appendChild(
+          makeOptionRow({ label: "Other…", value: otherSentinel }),
+        );
+      }
       card.appendChild(optionsWrap);
 
       let otherInput: HTMLInputElement | null = null;
@@ -529,7 +535,9 @@ function main(): void {
         commitAndAdvance(selected);
       });
     } else if (q.type === "multi_select") {
-      const prev = Array.isArray(st.answers[q.id]) ? (st.answers[q.id] as unknown[]) : [];
+      const prev = Array.isArray(st.answers[q.id])
+        ? (st.answers[q.id] as unknown[])
+        : [];
       const selected = new Set<string>(prev.map((v) => String(v)));
 
       const rawOptions = Array.isArray(q.options) ? q.options : [];
@@ -537,9 +545,10 @@ function main(): void {
         .slice()
         .sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)));
 
-      const makeOptionRow = (opt: AskUserQuestionOption): HTMLDivElement => {
-        const row = document.createElement("div");
+      const makeOptionRow = (opt: AskUserQuestionOption): HTMLLabelElement => {
+        const row = document.createElement("label");
         row.className = "askOption";
+        row.style.cursor = "pointer";
 
         const cb = document.createElement("input");
         cb.type = "checkbox";
@@ -548,6 +557,7 @@ function main(): void {
         cb.addEventListener("change", () => {
           if (cb.checked) selected.add(opt.value);
           else selected.delete(opt.value);
+          st.answers[q.id] = Array.from(selected);
           setError(null);
           renderAskUserQuestion();
         });
@@ -570,7 +580,11 @@ function main(): void {
       };
 
       for (const opt of options) optionsWrap.appendChild(makeOptionRow(opt));
-      if (allowOther) optionsWrap.appendChild(makeOptionRow({ label: "Other…", value: otherSentinel }));
+      if (allowOther) {
+        optionsWrap.appendChild(
+          makeOptionRow({ label: "Other…", value: otherSentinel }),
+        );
+      }
       card.appendChild(optionsWrap);
 
       let otherInput: HTMLInputElement | null = null;
@@ -2520,9 +2534,10 @@ function main(): void {
           ? "CLI: codex (Settings)"
           : "Settings";
     if (variant !== "codex-mine" && rewindTurnIndex !== null) setEditMode(null);
-    // Keep input enabled so the user can draft messages even before selecting a session.
+    // Keep input enabled so the user can draft messages even before selecting a session,
+    // but do not override ask_user_question which intentionally locks the composer.
     // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
-    inputEl.disabled = false;
+    if (!askUserQuestionState) inputEl.disabled = false;
     updateInputPlaceholder();
 
     const sessionsList = s.sessions || [];
