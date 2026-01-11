@@ -16,7 +16,12 @@ declare const markdownit:
       renderer: { rules: Record<string, any> };
     });
 
-type Session = { id: string; title: string; customTitle?: boolean };
+type Session = {
+  id: string;
+  title: string;
+  customTitle?: boolean;
+  workspaceFolderUri: string;
+};
 type ModelState = {
   model: string | null;
   provider: string | null;
@@ -185,6 +190,21 @@ type SuggestItem = {
   detail?: string;
   kind: "slash" | "at" | "file" | "dir" | "agent" | "skill";
 };
+
+const WORKTREE_COLORS = [
+  "#1f6feb",
+  "#2ea043",
+  "#d29922",
+  "#db6d28",
+  "#f85149",
+  "#a371f7",
+  "#ff7b72",
+  "#7ee787",
+  "#ffa657",
+  "#79c0ff",
+  "#d2a8ff",
+  "#c9d1d9",
+] as const;
 
 function main(): void {
   let vscode: ReturnType<typeof acquireVsCodeApi>;
@@ -2553,6 +2573,7 @@ function main(): void {
         const dt = getSessionDisplayTitle(sess, idx);
         return [
           sess.id,
+          sess.workspaceFolderUri,
           dt.label,
           dt.tooltip,
           isActive ? "a" : "",
@@ -2590,6 +2611,10 @@ function main(): void {
           "tab" +
           (isActive ? " active" : "") +
           (isRunning ? " running" : isUnread ? " unread" : "");
+        const wt = workspaceTagFromUri(sess.workspaceFolderUri);
+        div.dataset.wt = "1";
+        div.dataset.wtLabel = wt.label;
+        div.style.setProperty("--wt-color", wt.color);
         if (div.textContent !== dt.label) div.textContent = dt.label;
         if (div.title !== dt.tooltip) div.title = dt.tooltip;
         frag.appendChild(div);
@@ -4330,6 +4355,43 @@ function main(): void {
       statusTextEl.style.display = "";
     }
   }, 1000);
+}
+
+function workspaceTagFromUri(workspaceFolderUri: string): {
+  label: string;
+  color: string;
+} {
+  const hashKey = uriToHashKey(workspaceFolderUri);
+  const idx = fnv1a32(hashKey) % WORKTREE_COLORS.length;
+  const color = WORKTREE_COLORS[idx];
+  if (!color) throw new Error(`workspace color missing (idx=${idx})`);
+  const label = uriToBasename(workspaceFolderUri);
+  return { label, color };
+}
+
+function uriToHashKey(uri: string): string {
+  try {
+    const u = new URL(uri);
+    return decodeURIComponent(u.pathname || uri);
+  } catch {
+    return uri;
+  }
+}
+
+function uriToBasename(uri: string): string {
+  const key = uriToHashKey(uri);
+  const parts = key.split("/").filter((p) => p.length > 0);
+  return parts[parts.length - 1] ?? key;
+}
+
+function fnv1a32(input: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+    hash >>>= 0;
+  }
+  return hash >>> 0;
 }
 
 main();

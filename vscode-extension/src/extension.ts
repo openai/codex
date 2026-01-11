@@ -546,7 +546,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(diffProvider);
 
-  sessionTree = new SessionTreeDataProvider(sessions);
+  sessionTree = new SessionTreeDataProvider(context.extensionUri, sessions);
   context.subscriptions.push(sessionTree);
   context.subscriptions.push(
     vscode.window.createTreeView("codexMine.sessionsView", {
