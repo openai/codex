@@ -120,3 +120,9 @@ crate.annotation(
     deps = [":windows_import_lib"],
 )
 use_repo(crate, "crates")
+
+rbe_platform_repository = use_repo_rule("//:rbe.bzl", "rbe_platform_repository")
+
+rbe_platform_repository(
+    name = "rbe_platform",
+)
