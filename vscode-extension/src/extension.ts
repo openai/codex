@@ -13,10 +13,12 @@ import { listAgentsFromDisk } from "./agents_disk";
 import type { AnyServerNotification } from "./backend/types";
 import type { ContentBlock } from "./generated/ContentBlock";
 import type { ImageContent } from "./generated/ImageContent";
+import type { AskUserQuestionRequest } from "./generated/AskUserQuestionRequest";
 import type { CommandAction } from "./generated/v2/CommandAction";
 import type { Model } from "./generated/v2/Model";
 import type { RateLimitSnapshot } from "./generated/v2/RateLimitSnapshot";
 import type { RateLimitWindow } from "./generated/v2/RateLimitWindow";
+import type { AskUserQuestionResponse } from "./generated/v2/AskUserQuestionResponse";
 import type { Thread } from "./generated/v2/Thread";
 import type { ThreadItem } from "./generated/v2/ThreadItem";
 import type { ThreadTokenUsage } from "./generated/v2/ThreadTokenUsage";
@@ -478,10 +480,25 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.commands.executeCommand("codexMine.chatView.focus");
     chatView.reveal();
 
-    return await chatView.promptAskUserQuestion({
+    const response = await chatView.promptAskUserQuestion({
       requestKey: callId,
-      request,
+      request: request as AskUserQuestionRequest,
     });
+
+    // Persist a concise summary in the chat history so the selection isn't lost
+    // after the inline card is dismissed.
+    const summaryText = formatAskUserQuestionSummary(
+      request as AskUserQuestionRequest,
+      response,
+    );
+    upsertBlock(session.id, {
+      id: `askUserQuestion:${callId}`,
+      type: "info",
+      title: "AskUserQuestion",
+      text: summaryText,
+    });
+
+    return response;
   };
 
   diffProvider = new DiffDocumentProvider();
@@ -4323,6 +4340,110 @@ function formatParamsForDisplay(params: unknown): string {
   const limit = 10_000;
   if (json.length <= limit) return json;
   return `${json.slice(0, limit)}\n...(truncated ${json.length - limit} chars)`;
+}
+
+function formatAskUserQuestionSummary(
+  request: AskUserQuestionRequest,
+  response: AskUserQuestionResponse,
+): string {
+  const title =
+    typeof (request as any)?.title === "string" && (request as any).title.trim()
+      ? String((request as any).title).trim()
+      : "Codex question";
+
+  const answers =
+    typeof (response as any)?.answers === "object" && (response as any).answers !== null
+      ? ((response as any).answers as Record<string, unknown>)
+      : {};
+
+  const questions = Array.isArray((request as any)?.questions)
+    ? ((request as any).questions as Array<any>)
+    : [];
+
+  const lines: string[] = [];
+  lines.push(`**${title}**`);
+  if ((response as any)?.cancelled) lines.push("_Cancelled_");
+  lines.push("");
+
+  for (const q of questions) {
+    const id = typeof q?.id === "string" ? q.id : null;
+    const prompt = typeof q?.prompt === "string" ? q.prompt : null;
+    if (!id || !prompt) continue;
+
+    const rawAnswer = answers[id];
+    const optLabelByValue = new Map<string, string>();
+    const rawOptions = Array.isArray(q?.options) ? (q.options as any[]) : [];
+    for (const opt of rawOptions) {
+      const value = typeof opt?.value === "string" ? opt.value : null;
+      const label = typeof opt?.label === "string" ? opt.label : null;
+      if (value && label) optLabelByValue.set(value, label);
+    }
+
+    const allowOther = Boolean(q?.allow_other);
+    const questionType = typeof q?.type === "string" ? q.type : null;
+
+    lines.push(`- **${prompt}**`);
+
+    if (questionType === "single_select" || questionType === "multi_select") {
+      const optionValues = new Set<string>(optLabelByValue.keys());
+
+      const selectedValues: string[] = (() => {
+        if (rawAnswer === null || rawAnswer === undefined) return [];
+        if (Array.isArray(rawAnswer)) return rawAnswer.map((v) => String(v));
+        return [String(rawAnswer)];
+      })();
+
+      const selectedOptionValues = new Set<string>(
+        selectedValues.filter((v) => optionValues.has(v)),
+      );
+      const selectedOtherValues = selectedValues
+        .filter((v) => !optionValues.has(v))
+        .map((v) => v.trim())
+        .filter(Boolean);
+
+      for (const opt of rawOptions) {
+        const value = typeof opt?.value === "string" ? opt.value : null;
+        const label = typeof opt?.label === "string" ? opt.label : null;
+        if (!value || !label) continue;
+        const checked = selectedOptionValues.has(value) ? "x" : " ";
+        lines.push(`  - [${checked}] ${label}`);
+      }
+
+      if (allowOther) {
+        const checked = selectedOtherValues.length > 0 ? "x" : " ";
+        const other =
+          selectedOtherValues.length > 0
+            ? `: ${selectedOtherValues.join(", ")}`
+            : "";
+        lines.push(`  - [${checked}] Other…${other}`);
+      }
+
+      if (
+        rawOptions.length === 0 &&
+        selectedValues.length > 0 &&
+        selectedOtherValues.length > 0
+      ) {
+        lines.push(`  - Answer: ${selectedOtherValues.join(", ")}`);
+      }
+
+      if (selectedValues.length === 0) lines.push("  - _No selection_");
+      continue;
+    }
+
+    const rendered = (() => {
+      if (rawAnswer === null || rawAnswer === undefined) return "—";
+      if (Array.isArray(rawAnswer)) {
+        const parts = rawAnswer.map((v) => String(v)).map((s) => s.trim()).filter(Boolean);
+        return parts.length > 0 ? parts.join(", ") : "—";
+      }
+      const s = String(rawAnswer).trim();
+      return s ? s : "—";
+    })();
+
+    lines.push(`  - Answer: ${rendered}`);
+  }
+
+  return lines.join("\n").trim();
 }
 
 function removeGlobalWhere(pred: (b: ChatBlock) => boolean): void {
