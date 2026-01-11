@@ -1,7 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
-
 use tokio::sync::RwLock;
 use tokio_util::either::Either;
 use tokio_util::sync::CancellationToken;
@@ -13,13 +10,10 @@ use tracing::trace_span;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
-use crate::exec::EXEC_ABORTED_MESSAGE;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 
 #[derive(Clone)]
@@ -54,15 +48,12 @@ impl ToolCallRuntime {
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
         let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
-        let supports_partial_output = Self::supports_partial_output_on_cancel(&call.tool_name);
 
         let router = Arc::clone(&self.router);
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
-        let started = Instant::now();
-
         let dispatch_span = trace_span!(
             "dispatch_tool_call",
             otel.name = call.tool_name.as_str(),
@@ -93,21 +84,16 @@ impl ToolCallRuntime {
                         .await
                 });
 
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        const CANCEL_OUTPUT_GRACE: Duration = Duration::from_millis(2_000);
-                        let secs = started.elapsed().as_secs_f32().max(0.1);
+                let outcome = tokio::select! {
+                    res = &mut dispatch_future => Some(res),
+                    _ = cancellation_token.cancelled() => None,
+                };
+                match outcome {
+                    Some(res) => res,
+                    None => {
                         dispatch_span.record("aborted", true);
-                        if supports_partial_output {
-                            match tokio::time::timeout(CANCEL_OUTPUT_GRACE, &mut dispatch_future).await {
-                                Ok(res) => res,
-                                Err(_) => Ok(Self::aborted_response(&call, secs)),
-                            }
-                        } else {
-                            Ok(Self::aborted_response(&call, secs))
-                        }
-                    },
-                    res = &mut dispatch_future => res,
+                        dispatch_future.await
+                    }
                 }
             }));
 
@@ -125,47 +111,4 @@ impl ToolCallRuntime {
     }
 }
 
-impl ToolCallRuntime {
-    fn aborted_response(call: &ToolCall, secs: f32) -> ResponseInputItem {
-        match &call.payload {
-            ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
-                call_id: call.call_id.clone(),
-                output: Self::abort_message(call, secs),
-            },
-            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
-                call_id: call.call_id.clone(),
-                result: Err(Self::abort_message(call, secs)),
-            },
-            _ => ResponseInputItem::FunctionCallOutput {
-                call_id: call.call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    content: Self::abort_message(call, secs),
-                    ..Default::default()
-                },
-            },
-        }
-    }
-
-    fn abort_message(call: &ToolCall, secs: f32) -> String {
-        match call.tool_name.as_str() {
-            "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec"
-            | "exec_command" | "write_stdin" => {
-                format!("Wall time: {secs:.1} seconds\n{EXEC_ABORTED_MESSAGE}")
-            }
-            _ => format!("aborted by user after {secs:.1}s"),
-        }
-    }
-
-    fn supports_partial_output_on_cancel(tool_name: &str) -> bool {
-        matches!(
-            tool_name,
-            "shell"
-                | "container.exec"
-                | "local_shell"
-                | "shell_command"
-                | "unified_exec"
-                | "exec_command"
-                | "write_stdin"
-        )
-    }
-}
+impl ToolCallRuntime {}

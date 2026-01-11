@@ -64,94 +64,68 @@ pub struct ExecParams {
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
 #[derive(Debug)]
-pub enum ExecExpiration {
-    Timeout(Duration),
-    DefaultTimeout,
-    Cancellation(CancellationToken),
-    TimeoutOrCancellation {
-        timeout: Duration,
-        cancellation: CancellationToken,
-    },
-    DefaultTimeoutOrCancellation(CancellationToken),
+pub struct ExecExpiration {
+    pub timeout: TimeoutSpec,
+    pub cancellation: CancellationToken,
 }
 
-impl From<Option<u64>> for ExecExpiration {
-    fn from(timeout_ms: Option<u64>) -> Self {
-        timeout_ms.map_or(ExecExpiration::DefaultTimeout, |timeout_ms| {
-            ExecExpiration::Timeout(Duration::from_millis(timeout_ms))
-        })
-    }
-}
-
-impl From<u64> for ExecExpiration {
-    fn from(timeout_ms: u64) -> Self {
-        ExecExpiration::Timeout(Duration::from_millis(timeout_ms))
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeoutSpec {
+    Default,
+    Explicit(Duration),
+    None,
 }
 
 impl ExecExpiration {
+    pub fn new(timeout: TimeoutSpec, cancellation: CancellationToken) -> Self {
+        Self {
+            timeout,
+            cancellation,
+        }
+    }
+
+    pub fn default(cancellation: CancellationToken) -> Self {
+        Self::new(TimeoutSpec::Default, cancellation)
+    }
+
+    pub fn from_timeout(timeout: Duration, cancellation: CancellationToken) -> Self {
+        Self::new(TimeoutSpec::Explicit(timeout), cancellation)
+    }
+
+    pub fn from_timeout_ms(timeout_ms: Option<u64>, cancellation: CancellationToken) -> Self {
+        let timeout = timeout_ms.map_or(TimeoutSpec::Default, |timeout_ms| {
+            TimeoutSpec::Explicit(Duration::from_millis(timeout_ms))
+        });
+        Self::new(timeout, cancellation)
+    }
+
+    pub fn cancel_only(cancellation: CancellationToken) -> Self {
+        Self::new(TimeoutSpec::None, cancellation)
+    }
+
     async fn wait(self) -> ExecExpirationOutcome {
-        match self {
-            ExecExpiration::Timeout(duration) => {
-                tokio::time::sleep(duration).await;
-                ExecExpirationOutcome::TimedOut
-            }
-            ExecExpiration::DefaultTimeout => {
-                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await;
-                ExecExpirationOutcome::TimedOut
-            }
-            ExecExpiration::Cancellation(cancel) => {
-                cancel.cancelled().await;
+        match self.timeout {
+            TimeoutSpec::Explicit(duration) => tokio::select! {
+                _ = tokio::time::sleep(duration) => ExecExpirationOutcome::TimedOut,
+                _ = self.cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
+            },
+            TimeoutSpec::Default => tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)) => ExecExpirationOutcome::TimedOut,
+                _ = self.cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
+            },
+            TimeoutSpec::None => {
+                self.cancellation.cancelled().await;
                 ExecExpirationOutcome::Cancelled
             }
-            ExecExpiration::TimeoutOrCancellation {
-                timeout,
-                cancellation,
-            } => tokio::select! {
-                _ = tokio::time::sleep(timeout) => ExecExpirationOutcome::TimedOut,
-                _ = cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
-            },
-            ExecExpiration::DefaultTimeoutOrCancellation(cancellation) => tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)) => ExecExpirationOutcome::TimedOut,
-                _ = cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
-            },
         }
     }
 
     /// If ExecExpiration is a timeout, returns the timeout in milliseconds.
     pub(crate) fn timeout_ms(&self) -> Option<u64> {
-        match self {
-            ExecExpiration::Timeout(duration) => Some(duration.as_millis() as u64),
-            ExecExpiration::DefaultTimeout => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
-            ExecExpiration::Cancellation(_) => None,
-            ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
-                Some(timeout.as_millis() as u64)
-            }
-            ExecExpiration::DefaultTimeoutOrCancellation(_) => {
-                Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)
-            }
-        }
-    }
-
-    pub(crate) fn with_cancellation(self, cancellation: CancellationToken) -> Self {
-        match self {
-            ExecExpiration::Timeout(timeout) => ExecExpiration::TimeoutOrCancellation {
-                timeout,
-                cancellation,
-            },
-            ExecExpiration::DefaultTimeout => {
-                ExecExpiration::DefaultTimeoutOrCancellation(cancellation)
-            }
-            ExecExpiration::Cancellation(_) => ExecExpiration::Cancellation(cancellation),
-            ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
-                ExecExpiration::TimeoutOrCancellation {
-                    timeout,
-                    cancellation,
-                }
-            }
-            ExecExpiration::DefaultTimeoutOrCancellation(_) => {
-                ExecExpiration::DefaultTimeoutOrCancellation(cancellation)
-            }
+        match self.timeout {
+            TimeoutSpec::Explicit(duration) => Some(duration.as_millis() as u64),
+            TimeoutSpec::Default => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
+            TimeoutSpec::None => None,
         }
     }
 }
@@ -289,8 +263,7 @@ async fn exec_windows_sandbox(
         expiration,
         ..
     } = params;
-    // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
-    // variants of ExecExpiration, not just timeout.
+    // TODO(iceweasel-oai): run_windows_sandbox_capture should respect cancellation tokens.
     let timeout_ms = expiration.timeout_ms();
 
     let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
@@ -950,7 +923,7 @@ mod tests {
         let params = ExecParams {
             command,
             cwd: std::env::current_dir()?,
-            expiration: 500.into(),
+            expiration: ExecExpiration::from_timeout_ms(Some(500), CancellationToken::new()),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
@@ -995,7 +968,7 @@ mod tests {
         let params = ExecParams {
             command,
             cwd: cwd.clone(),
-            expiration: ExecExpiration::Cancellation(cancel_token),
+            expiration: ExecExpiration::cancel_only(cancel_token),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,

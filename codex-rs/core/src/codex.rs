@@ -3984,6 +3984,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_escalated_permissions_when_policy_not_on_request() {
+        use crate::exec::ExecExpiration;
         use crate::exec::ExecParams;
         use crate::protocol::AskForApproval;
         use crate::protocol::SandboxPolicy;
@@ -4014,7 +4015,7 @@ mod tests {
                 ]
             },
             cwd: turn_context.cwd.clone(),
-            expiration: timeout_ms.into(),
+            expiration: ExecExpiration::from_timeout_ms(Some(timeout_ms), CancellationToken::new()),
             env: HashMap::new(),
             sandbox_permissions,
             justification: Some("test".to_string()),
@@ -4025,7 +4026,7 @@ mod tests {
             sandbox_permissions: SandboxPermissions::UseDefault,
             command: params.command.clone(),
             cwd: params.cwd.clone(),
-            expiration: timeout_ms.into(),
+            expiration: ExecExpiration::from_timeout_ms(Some(timeout_ms), CancellationToken::new()),
             env: HashMap::new(),
             justification: params.justification.clone(),
             arg0: None,

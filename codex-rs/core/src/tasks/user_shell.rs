@@ -2,14 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use codex_async_utils::CancelErr;
-use codex_async_utils::OrCancelExt;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
 
 use crate::codex::TurnContext;
+use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
@@ -103,9 +102,12 @@ impl SessionTask for UserShellCommandTask {
             command: command.clone(),
             cwd: cwd.clone(),
             env: create_env(&turn_context.shell_environment_policy),
-            // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
-            // should use that instead of an "arbitrarily large" timeout here.
-            expiration: USER_SHELL_TIMEOUT_MS.into(),
+            // TODO(zhao-oai): consider whether the user shell should use a shorter
+            // default timeout now that cancellation is wired through ExecExpiration.
+            expiration: ExecExpiration::from_timeout_ms(
+                Some(USER_SHELL_TIMEOUT_MS),
+                cancellation_token.clone(),
+            ),
             sandbox: SandboxType::None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
@@ -119,52 +121,10 @@ impl SessionTask for UserShellCommandTask {
         });
 
         let sandbox_policy = SandboxPolicy::DangerFullAccess;
-        let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
-            .or_cancel(&cancellation_token)
-            .await;
+        let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream).await;
 
         match exec_result {
-            Err(CancelErr::Cancelled) => {
-                let aborted_message = "command aborted by user".to_string();
-                let exec_output = ExecToolCallOutput {
-                    exit_code: -1,
-                    stdout: StreamOutput::new(String::new()),
-                    stderr: StreamOutput::new(aborted_message.clone()),
-                    aggregated_output: StreamOutput::new(aborted_message.clone()),
-                    duration: Duration::ZERO,
-                    timed_out: false,
-                };
-                let output_items = [user_shell_command_record_item(
-                    &raw_command,
-                    &exec_output,
-                    &turn_context,
-                )];
-                session
-                    .record_conversation_items(turn_context.as_ref(), &output_items)
-                    .await;
-                session
-                    .send_event(
-                        turn_context.as_ref(),
-                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                            call_id,
-                            process_id: None,
-                            turn_id: turn_context.sub_id.clone(),
-                            command: command.clone(),
-                            cwd: cwd.clone(),
-                            parsed_cmd: parsed_cmd.clone(),
-                            source: ExecCommandSource::UserShell,
-                            interaction_input: None,
-                            stdout: String::new(),
-                            stderr: aborted_message.clone(),
-                            aggregated_output: aborted_message.clone(),
-                            exit_code: -1,
-                            duration: Duration::ZERO,
-                            formatted_output: aborted_message,
-                        }),
-                    )
-                    .await;
-            }
-            Ok(Ok(output)) => {
+            Ok(output) => {
                 session
                     .send_event(
                         turn_context.as_ref(),
@@ -199,7 +159,7 @@ impl SessionTask for UserShellCommandTask {
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
             }
-            Ok(Err(err)) => {
+            Err(err) => {
                 error!("user shell command failed: {err:?}");
                 let message = format!("execution error: {err:?}");
                 let exec_output = ExecToolCallOutput {

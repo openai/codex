@@ -5,6 +5,7 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::CODEX_APPLY_PATCH_ARG1;
+use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
@@ -27,6 +28,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -46,7 +48,10 @@ impl ApplyPatchRuntime {
         Self
     }
 
-    fn build_command_spec(req: &ApplyPatchRequest) -> Result<CommandSpec, ToolError> {
+    fn build_command_spec(
+        req: &ApplyPatchRequest,
+        cancellation_token: CancellationToken,
+    ) -> Result<CommandSpec, ToolError> {
         use std::env;
         let exe = if let Some(path) = &req.codex_exe {
             path.clone()
@@ -59,7 +64,7 @@ impl ApplyPatchRuntime {
             program,
             args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.action.patch.clone()],
             cwd: req.action.cwd.clone(),
-            expiration: req.timeout_ms.into(),
+            expiration: ExecExpiration::from_timeout_ms(req.timeout_ms, cancellation_token),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             sandbox_permissions: SandboxPermissions::UseDefault,
@@ -149,7 +154,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = Self::build_command_spec(req)?;
+        let spec = Self::build_command_spec(req, ctx.cancellation_token.clone())?;
         let env = attempt
             .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;

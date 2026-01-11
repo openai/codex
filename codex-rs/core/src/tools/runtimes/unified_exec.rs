@@ -180,7 +180,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             &command,
             &req.cwd,
             &req.env,
-            ExecExpiration::DefaultTimeout,
+            ExecExpiration::default(ctx.cancellation_token.clone()),
             req.sandbox_permissions,
             req.justification.clone(),
         )
