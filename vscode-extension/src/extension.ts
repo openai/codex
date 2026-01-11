@@ -583,6 +583,43 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   diffProvider = new DiffDocumentProvider();
+
+  // NOTE: This is intentionally not contributed to the command palette in package.json.
+  // It's a helper for local/dev workflows (e.g. taking docs screenshots) without requiring
+  // an actual backend request.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine._dev.askUserQuestionDemo", async () => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!backendManager.onAskUserQuestionRequest) {
+        void vscode.window.showErrorMessage(
+          "AskUserQuestion handler is not available.",
+        );
+        return;
+      }
+
+      await backendManager.onAskUserQuestionRequest({} as any, {
+        params: {
+          request: {
+            title: "Codex question",
+            questions: [
+              {
+                id: "context",
+                prompt: "Which context should I include?",
+                type: "multi_select",
+                allow_other: true,
+                required: false,
+                options: [
+                  { label: "Workspace files", value: "files", recommended: true },
+                  { label: "Open editors", value: "editors" },
+                  { label: "Terminal output", value: "terminal" },
+                ],
+              },
+            ],
+          },
+        },
+      } as any);
+    }),
+  );
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(
       "codex-mine-diff",

@@ -37,6 +37,7 @@
     "onCommand:codexMine.reloadSession",
     "onCommand:codexMine.debug.stressUi",
     "onCommand:codexMine.debug.stopStressUi",
+    "onCommand:codexMine._dev.askUserQuestionDemo",
     "onCommand:codexMine.showSkills",
     "onCommand:codexMine.showAgents",
     "onCommand:codexMine.selectCliVariant",
@@ -123,6 +124,10 @@
         "title": "Codex UI: Debug Stop Stress (UI streaming)"
       },
       {
+        "command": "codexMine._dev.askUserQuestionDemo",
+        "title": "Codex UI (Dev): AskUserQuestion Demo"
+      },
+      {
         "command": "codexMine.showSkills",
         "title": "Codex UI: Skills"
       },
@@ -137,6 +142,13 @@
       {
         "command": "codexMine.resumeFromHistory",
         "title": "Codex UI: Resume from History"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codexMine._dev.askUserQuestionDemo",
+        "key": "f8",
+        "when": "true"
       }
     ],
     "menus": {
