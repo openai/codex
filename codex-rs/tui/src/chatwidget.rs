@@ -1347,11 +1347,24 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
 
         if let Some(existing) = self.ask_user_question.take() {
+            let title = existing.title();
+            let AskUserQuestionFlow {
+                call_id,
+                request,
+                index: _,
+                answers,
+            } = existing;
+            self.add_to_history(history_cell::AskUserQuestionSummaryCell::new(
+                title,
+                request,
+                answers.clone(),
+                true,
+            ));
             self.submit_op(Op::ResolveAskUserQuestion {
-                call_id: existing.call_id,
+                call_id,
                 response: AskUserQuestionResponse {
                     cancelled: true,
-                    answers: existing.answers,
+                    answers,
                 },
             });
         }
@@ -1569,11 +1582,26 @@ impl ChatWidget {
             return;
         }
 
+        self.flush_answer_stream_with_separator();
+        let title = flow.title();
+        let AskUserQuestionFlow {
+            call_id: flow_call_id,
+            request,
+            index: _,
+            answers,
+        } = flow;
+        self.add_to_history(history_cell::AskUserQuestionSummaryCell::new(
+            title,
+            request,
+            answers.clone(),
+            true,
+        ));
+
         self.submit_op(Op::ResolveAskUserQuestion {
-            call_id: flow.call_id,
+            call_id: flow_call_id,
             response: AskUserQuestionResponse {
                 cancelled: true,
-                answers: flow.answers,
+                answers,
             },
         });
         self.request_redraw();
@@ -1588,11 +1616,25 @@ impl ChatWidget {
             let Some(flow) = self.ask_user_question.take() else {
                 return;
             };
+            self.flush_answer_stream_with_separator();
+            let title = flow.title();
+            let AskUserQuestionFlow {
+                call_id,
+                request,
+                index: _,
+                answers,
+            } = flow;
+            self.add_to_history(history_cell::AskUserQuestionSummaryCell::new(
+                title,
+                request,
+                answers.clone(),
+                false,
+            ));
             self.submit_op(Op::ResolveAskUserQuestion {
-                call_id: flow.call_id,
+                call_id,
                 response: AskUserQuestionResponse {
                     cancelled: false,
-                    answers: flow.answers,
+                    answers,
                 },
             });
             self.request_redraw();

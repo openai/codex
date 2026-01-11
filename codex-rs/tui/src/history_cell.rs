@@ -32,6 +32,8 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_protocol::ask_user_question::AskUserQuestionRequest;
+use codex_protocol::ask_user_question::AskUserQuestionType;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -1646,6 +1648,154 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     }
     let lines: Vec<Line<'static>> = vec![line.into()];
     PlainHistoryCell { lines }
+}
+
+#[derive(Debug)]
+pub(crate) struct AskUserQuestionSummaryCell {
+    title: String,
+    request: AskUserQuestionRequest,
+    answers: HashMap<String, serde_json::Value>,
+    cancelled: bool,
+}
+
+impl AskUserQuestionSummaryCell {
+    pub(crate) fn new(
+        title: String,
+        request: AskUserQuestionRequest,
+        answers: HashMap<String, serde_json::Value>,
+        cancelled: bool,
+    ) -> Self {
+        Self {
+            title,
+            request,
+            answers,
+            cancelled,
+        }
+    }
+}
+
+impl HistoryCell for AskUserQuestionSummaryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut header: Vec<Span<'static>> = vec![
+            "• ".dim(),
+            "AskUserQuestion".bold(),
+            " ".into(),
+            self.title.clone().into(),
+        ];
+        if self.cancelled {
+            header.push(" (cancelled)".dim().italic());
+        }
+        lines.push(header.into());
+
+        let md = {
+            let mut out = String::new();
+
+            for q in &self.request.questions {
+                let qid = q.id.as_str();
+                out.push_str(&format!("- **{}**\n", q.prompt.trim()));
+
+                let raw_answer = self.answers.get(qid);
+                let selected_values: Vec<String> = match raw_answer {
+                    None => Vec::new(),
+                    Some(serde_json::Value::String(s)) => vec![s.clone()],
+                    Some(serde_json::Value::Array(arr)) => arr
+                        .iter()
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| v.to_string())
+                        })
+                        .collect(),
+                    Some(other) => vec![other.to_string()],
+                };
+
+                match q.question_type {
+                    AskUserQuestionType::Text => {
+                        let text = selected_values.first().map(String::as_str).unwrap_or("");
+                        if text.trim().is_empty() {
+                            out.push_str("  - _No answer_\n");
+                        } else {
+                            out.push_str(&format!("  - Answer: {}\n", text.trim()));
+                        }
+                    }
+                    AskUserQuestionType::SingleSelect | AskUserQuestionType::MultiSelect => {
+                        let options = q.options.as_deref().unwrap_or_default();
+                        let option_values = options
+                            .iter()
+                            .map(|opt| opt.value.as_str())
+                            .collect::<std::collections::HashSet<_>>();
+
+                        let selected_option_values = selected_values
+                            .iter()
+                            .filter_map(|v| {
+                                option_values.contains(v.as_str()).then_some(v.as_str())
+                            })
+                            .collect::<std::collections::HashSet<_>>();
+                        let other_values = selected_values
+                            .iter()
+                            .filter(|v| !option_values.contains(v.as_str()))
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty())
+                            .collect::<Vec<_>>();
+
+                        if options.is_empty() && selected_values.is_empty() {
+                            out.push_str("  - _No selection_\n");
+                            continue;
+                        }
+
+                        for opt in options {
+                            let checked = if selected_option_values.contains(opt.value.as_str()) {
+                                "x"
+                            } else {
+                                " "
+                            };
+                            let rec = if opt.recommended.unwrap_or(false) {
+                                " (Recommended)"
+                            } else {
+                                ""
+                            };
+                            out.push_str(&format!("  - [{checked}] {}{rec}\n", opt.label));
+                        }
+
+                        let allow_other = q.allow_other.unwrap_or(false);
+                        if allow_other {
+                            let checked = if other_values.is_empty() { " " } else { "x" };
+                            let suffix = if other_values.is_empty() {
+                                String::new()
+                            } else {
+                                format!(": {}", other_values.join(", "))
+                            };
+                            out.push_str(&format!("  - [{checked}] Other…{suffix}\n"));
+                        } else if !other_values.is_empty() {
+                            out.push_str(&format!("  - Answer: {}\n", other_values.join(", ")));
+                        }
+
+                        if options.is_empty() && !other_values.is_empty() {
+                            out.push_str(&format!("  - Answer: {}\n", other_values.join(", ")));
+                        }
+
+                        if !options.is_empty() && selected_values.is_empty() {
+                            out.push_str("  - _No selection_\n");
+                        }
+                    }
+                }
+            }
+
+            out.trim().to_string()
+        };
+
+        let mut detail_lines: Vec<Line<'static>> = Vec::new();
+        if md.is_empty() {
+            detail_lines.push(Line::from("(no questions)".dim().italic()));
+        } else {
+            let inner_width = width.saturating_sub(4) as usize;
+            append_markdown(&md, Some(inner_width.max(1)), &mut detail_lines);
+        }
+
+        lines.extend(prefix_lines(detail_lines, "  └ ".dim(), "    ".into()));
+        lines
+    }
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
