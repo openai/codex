@@ -3473,7 +3473,9 @@ function applyServerNotification(
         status: "completed",
         text: `${line}\n• Context compacted`,
       });
-      rt.sending = false;
+      // Auto-compaction can happen mid-turn (the backend continues working).
+      // In that case, do not unlock the input.
+      if (rt.activeTurnId === null) rt.sending = false;
       rt.compactInFlight = false;
       rt.pendingCompactBlockId = null;
       chatView?.refresh();
