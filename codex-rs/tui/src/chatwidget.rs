@@ -1656,14 +1656,14 @@ impl ChatWidget {
                     });
                 });
 
-	                self.bottom_pane
-	                    .show_view(Box::new(AskUserQuestionTextView::new(
-	                        title,
-	                        prompt.to_string(),
-	                        placeholder,
-	                        allow_empty,
-	                        on_submit,
-	                        on_cancel,
+                self.bottom_pane
+                    .show_view(Box::new(AskUserQuestionTextView::new(
+                        title,
+                        prompt.to_string(),
+                        placeholder,
+                        allow_empty,
+                        on_submit,
+                        on_cancel,
                     )));
             }
             AskUserQuestionType::SingleSelect => {
