@@ -326,9 +326,25 @@ async function loadCachedImageBase64(imageKey: string): Promise<{
 }
 
 const HIDDEN_TAB_SESSIONS_KEY = "codexMine.hiddenTabSessions.v1";
+const WORKSPACE_COLOR_OVERRIDES_KEY = "codexMine.workspaceColorOverrides.v1";
 const LEGACY_RUNTIMES_KEY = "codexMine.sessionRuntime.v1";
 const hiddenTabSessionIds = new Set<string>();
 const unreadSessionIds = new Set<string>();
+const WORKSPACE_COLOR_PALETTE = [
+  "#1f6feb", // 青
+  "#2ea043", // 緑
+  "#d29922", // 黄
+  "#db6d28", // オレンジ
+  "#f85149", // 赤
+  "#a371f7", // 紫
+  "#ff7b72", // ピンク
+  "#7ee787", // ミント
+  "#ffa657", // アプリコット
+  "#79c0ff", // 水色
+  "#d2a8ff", // ラベンダー
+  "#c9d1d9", // グレー
+] as const;
+let workspaceColorOverrides: Record<string, number> = {};
 const mcpStatusByServer = new Map<string, string>();
 const cliVariantByBackendKey = new Map<
   string,
@@ -415,6 +431,7 @@ export function activate(context: vscode.ExtensionContext): void {
   loadSessions(context, sessions);
   for (const s of sessions.listAll()) ensureRuntime(s.id);
   loadHiddenTabSessions(context);
+  workspaceColorOverrides = loadWorkspaceColorOverrides(context);
   refreshCustomPromptsFromDisk();
   void cleanupLegacyRuntimeCache(context);
 
@@ -546,7 +563,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(diffProvider);
 
-  sessionTree = new SessionTreeDataProvider(context.extensionUri, sessions);
+  sessionTree = new SessionTreeDataProvider(
+    context.extensionUri,
+    sessions,
+    (workspaceFolderUri) => colorIndexForWorkspaceFolderUri(workspaceFolderUri),
+  );
   context.subscriptions.push(sessionTree);
   context.subscriptions.push(
     vscode.window.createTreeView("codexMine.sessionsView", {
@@ -847,6 +868,87 @@ export function activate(context: vscode.ExtensionContext): void {
         "Cleared Codex UI in-memory runtime cache. Reopen a session to re-hydrate history.",
       );
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "codexMine.pickWorkspaceColor",
+      async (args?: unknown) => {
+        const workspaceFolderUri =
+          typeof (args as any)?.workspaceFolderUri === "string"
+            ? String((args as any).workspaceFolderUri)
+            : "";
+        if (!workspaceFolderUri) {
+          void vscode.window.showErrorMessage("workspaceFolderUri が不正です。");
+          return;
+        }
+
+        let placeHolder = workspaceFolderUri;
+        try {
+          placeHolder = vscode.Uri.parse(workspaceFolderUri).fsPath;
+        } catch {
+          // Keep raw URI string.
+        }
+
+        const items: Array<{
+          label: string;
+          description: string;
+          idx: number | null;
+        }> = [
+          {
+            label: "自動",
+            description: "ハッシュから自動で色を割り当て",
+            idx: null,
+          },
+          ...WORKSPACE_COLOR_PALETTE.map((hex, idx) => {
+            const name =
+              idx === 0
+                ? "青"
+                : idx === 1
+                  ? "緑"
+                  : idx === 2
+                    ? "黄"
+                    : idx === 3
+                      ? "オレンジ"
+                      : idx === 4
+                        ? "赤"
+                        : idx === 5
+                          ? "紫"
+                          : idx === 6
+                            ? "ピンク"
+                            : idx === 7
+                              ? "ミント"
+                              : idx === 8
+                                ? "アプリコット"
+                                : idx === 9
+                                  ? "水色"
+                                  : idx === 10
+                                    ? "ラベンダー"
+                                    : "グレー";
+            return {
+              label: name,
+              description: String(hex),
+              idx,
+            };
+          }),
+        ];
+
+        const picked = await vscode.window.showQuickPick(items, {
+          title: "プロジェクト色を選択",
+          placeHolder,
+        });
+        if (!picked) return;
+
+        const next = { ...workspaceColorOverrides };
+        if (picked.idx === null) delete next[workspaceFolderUri];
+        else next[workspaceFolderUri] = picked.idx;
+
+        workspaceColorOverrides = next;
+        await context.globalState.update(WORKSPACE_COLOR_OVERRIDES_KEY, next);
+        sessionTree?.refresh();
+        chatView?.refresh();
+      },
+    ),
   );
 
   context.subscriptions.push(
@@ -2863,6 +2965,47 @@ function loadHiddenTabSessions(context: vscode.ExtensionContext): void {
   }
 }
 
+function loadWorkspaceColorOverrides(
+  context: vscode.ExtensionContext,
+): Record<string, number> {
+  const raw = context.globalState.get<unknown>(WORKSPACE_COLOR_OVERRIDES_KEY);
+  if (!raw || typeof raw !== "object") return {};
+
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof k !== "string" || !k) continue;
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    const idx = Math.trunc(v);
+    if (idx < 0 || idx >= WORKSPACE_COLOR_PALETTE.length) continue;
+    out[k] = idx;
+  }
+  return out;
+}
+
+function colorIndexForWorkspaceFolderUri(workspaceFolderUri: string): number {
+  const override = workspaceColorOverrides[workspaceFolderUri];
+  if (typeof override === "number") {
+    const idx = Math.trunc(override);
+    if (idx < 0 || idx >= WORKSPACE_COLOR_PALETTE.length) {
+      throw new Error(
+        `Invalid workspace color override: ${workspaceFolderUri}=${idx}`,
+      );
+    }
+    return idx;
+  }
+  return fnv1a32(workspaceFolderUri) % WORKSPACE_COLOR_PALETTE.length;
+}
+
+function fnv1a32(input: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+    hash >>>= 0;
+  }
+  return hash >>> 0;
+}
+
 function saveHiddenTabSessions(context: vscode.ExtensionContext): void {
   void context.workspaceState.update(HIDDEN_TAB_SESSIONS_KEY, [
     ...hiddenTabSessionIds,
@@ -3339,6 +3482,7 @@ function buildChatState(): ChatViewState {
     return {
       globalBlocks: globalRuntime.blocks,
       capabilities: capsForBackendKey(null),
+      workspaceColorOverrides,
       sessions: [],
       activeSession: null,
       unreadSessionIds: [],
@@ -3368,6 +3512,7 @@ function buildChatState(): ChatViewState {
     return {
       globalBlocks: globalRuntime.blocks,
       capabilities: capsForBackendKey(null),
+      workspaceColorOverrides,
       sessions: tabSessionsRaw,
       activeSession: null,
       unreadSessionIds: [...unreadSessionIds],
@@ -3410,6 +3555,7 @@ function buildChatState(): ChatViewState {
   return {
     globalBlocks: globalRuntime.blocks,
     capabilities: capsForBackendKey(activeRaw.backendKey),
+    workspaceColorOverrides,
     sessions: tabSessionsRaw,
     activeSession: activeRaw,
     unreadSessionIds: [...unreadSessionIds],

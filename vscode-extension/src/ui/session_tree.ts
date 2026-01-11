@@ -14,6 +14,7 @@ export class SessionTreeDataProvider
   public constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly sessions: SessionStore,
+    private readonly getWorkspaceColorIndex: (workspaceFolderUri: string) => number,
   ) {}
 
   public dispose(): void {
@@ -30,11 +31,10 @@ export class SessionTreeDataProvider
         element.label,
         vscode.TreeItemCollapsibleState.Expanded,
       );
-      const icon = iconForWorkspaceFolderUri(
-        this.extensionUri,
-        element.workspaceFolderUri,
-      );
-      if (icon) item.iconPath = icon;
+      if (element.workspaceFolderUri) {
+        const idx = this.getWorkspaceColorIndex(element.workspaceFolderUri);
+        item.iconPath = iconForColorIndex(this.extensionUri, idx);
+      }
       item.contextValue = "codexMine.folder";
       return item;
     }
@@ -47,11 +47,8 @@ export class SessionTreeDataProvider
       label,
       vscode.TreeItemCollapsibleState.None,
     );
-    const icon = iconForWorkspaceFolderUri(
-      this.extensionUri,
-      element.session.workspaceFolderUri,
-    );
-    if (icon) item.iconPath = icon;
+    const idx = this.getWorkspaceColorIndex(element.session.workspaceFolderUri);
+    item.iconPath = iconForColorIndex(this.extensionUri, idx);
     // Show full thread id in description for copyability; omit short id in label.
     item.description = element.session.threadId;
     item.contextValue = "codexMine.session";
@@ -126,36 +123,19 @@ function toFolderLabel(session: Session | null): string | null {
 
 const WORKTREE_COLOR_COUNT = 12;
 
-function iconForWorkspaceFolderUri(
+function iconForColorIndex(
   extensionUri: vscode.Uri,
-  workspaceFolderUri: string | null,
-): { light: vscode.Uri; dark: vscode.Uri } | null {
-  if (!workspaceFolderUri) return null;
-
-  let fsPath: string;
-  try {
-    fsPath = vscode.Uri.parse(workspaceFolderUri).fsPath;
-  } catch {
-    return null;
+  idx: number,
+): { light: vscode.Uri; dark: vscode.Uri } {
+  const normalized = Math.trunc(idx);
+  if (normalized < 0 || normalized >= WORKTREE_COLOR_COUNT) {
+    throw new Error(`Invalid worktree color index: ${normalized}`);
   }
-
-  const idx = fnv1a32(fsPath) % WORKTREE_COLOR_COUNT;
   const icon = vscode.Uri.joinPath(
     extensionUri,
     "resources",
     "worktree-colors",
-    `dot-${idx}.svg`,
+    `dot-${normalized}.svg`,
   );
   return { light: icon, dark: icon };
-}
-
-function fnv1a32(input: string): number {
-  // 32-bit FNV-1a hash (deterministic, fast, and stable across runs).
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-    hash >>>= 0;
-  }
-  return hash >>> 0;
 }

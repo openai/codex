@@ -99,6 +99,7 @@ export type ChatViewState = {
     agents: boolean;
     cliVariant: "unknown" | "codex" | "codex-mine";
   };
+  workspaceColorOverrides?: Record<string, number>;
   customPrompts?: Array<{
     name: string;
     description: string | null;
@@ -636,6 +637,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (type === "pickWorkspaceColor") {
+      const workspaceFolderUri = anyMsg["workspaceFolderUri"];
+      if (typeof workspaceFolderUri !== "string" || !workspaceFolderUri) return;
+      await vscode.commands.executeCommand("codexMine.pickWorkspaceColor", {
+        workspaceFolderUri,
+      });
+      return;
+    }
+
     if (type === "setModel") {
       const model = asNullableString(anyMsg["model"]);
       const provider = asNullableString(anyMsg["provider"]);
@@ -1024,6 +1034,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	    const controlState = {
 	      globalBlocks: full.globalBlocks,
 	      capabilities: full.capabilities,
+	      workspaceColorOverrides: full.workspaceColorOverrides,
 	      sessions: full.sessions,
 	      activeSession: full.activeSession,
 	      unreadSessionIds: full.unreadSessionIds,
