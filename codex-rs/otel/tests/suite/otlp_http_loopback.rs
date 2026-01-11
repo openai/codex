@@ -19,89 +19,11 @@ struct CapturedRequest {
     body: Vec<u8>,
 }
 
-fn read_chunked_body(
-    mut body_bytes: Vec<u8>,
-    read_next: &mut impl FnMut(&mut [u8]) -> std::io::Result<usize>,
-) -> std::io::Result<Vec<u8>> {
-    let mut body = Vec::new();
-    let mut cursor = 0;
-    let mut scratch = [0u8; 8192];
-
-    loop {
-        let line_end = loop {
-            if let Some(pos) = body_bytes[cursor..]
-                .windows(2)
-                .position(|window| window == b"\r\n")
-            {
-                break cursor + pos;
-            }
-
-            let n = read_next(&mut scratch)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "EOF while reading chunk size",
-                ));
-            }
-            body_bytes.extend_from_slice(&scratch[..n]);
-        };
-
-        let line = std::str::from_utf8(&body_bytes[cursor..line_end]).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("chunk size not utf-8: {err}"),
-            )
-        })?;
-        let size_str = line.split(';').next().unwrap_or(line).trim();
-        let size = usize::from_str_radix(size_str, 16).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("invalid chunk size: {line}"),
-            )
-        })?;
-        cursor = line_end + 2;
-
-        if size == 0 {
-            loop {
-                if body_bytes[cursor..]
-                    .windows(4)
-                    .any(|window| window == b"\r\n\r\n")
-                {
-                    return Ok(body);
-                }
-
-                let n = read_next(&mut scratch)?;
-                if n == 0 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "EOF while reading chunk trailer",
-                    ));
-                }
-                body_bytes.extend_from_slice(&scratch[..n]);
-            }
-        }
-
-        while body_bytes.len() < cursor + size + 2 {
-            let n = read_next(&mut scratch)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "EOF while reading chunk data",
-                ));
-            }
-            body_bytes.extend_from_slice(&scratch[..n]);
-        }
-
-        body.extend_from_slice(&body_bytes[cursor..cursor + size]);
-        cursor += size + 2;
-    }
-}
-
 fn read_http_request(
     stream: &mut TcpStream,
 ) -> std::io::Result<(String, HashMap<String, String>, Vec<u8>)> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    let deadline = Instant::now() + Duration::from_secs(2);
 
     let mut read_next = |buf: &mut [u8]| -> std::io::Result<usize> {
         loop {
@@ -195,12 +117,6 @@ fn read_http_request(
             }
         }
         body_bytes.truncate(len);
-    } else if headers
-        .get("transfer-encoding")
-        .map(|value| value.to_ascii_lowercase().contains("chunked"))
-        .unwrap_or(false)
-    {
-        body_bytes = read_chunked_body(body_bytes, &mut read_next)?;
     }
 
     Ok((path, headers, body_bytes))
@@ -221,13 +137,13 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(3);
 
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     let result = read_http_request(&mut stream);
-                    let _ = write_http_response(&mut stream, "200 OK");
+                    let _ = write_http_response(&mut stream, "202 Accepted");
                     if let Ok((path, headers, body)) = result {
                         captured.push(CapturedRequest {
                             path,
@@ -259,8 +175,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     ))?;
 
     metrics.counter("codex.turns", 1, &[("source", "test")])?;
-    // Rely on the captured request assertions below even if shutdown reports a flush error.
-    let _ = metrics.shutdown();
+    metrics.shutdown()?;
 
     server.join().expect("server join");
     let captured = rx.recv_timeout(Duration::from_secs(1)).expect("captured");
