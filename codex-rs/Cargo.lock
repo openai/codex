@@ -1523,6 +1523,7 @@ dependencies = [
  "seccompiler",
  "tempfile",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
