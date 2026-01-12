@@ -1,23 +1,28 @@
 use crate::bash::parse_shell_lc_plain_commands;
-use crate::command_safety::windows_safe_commands::is_safe_command_windows;
+use crate::command_safety::windows_safe_commands::is_powershell_executable;
+use crate::command_safety::windows_safe_commands::is_safe_powershell_command;
 
+/// `command` must be the _exact_ proposed list of arguments that will be sent
+/// to `execvp(3)`. That is:
+/// - If the command is to be run via a shell, then the first argument MUST be
+///   the shell executable (e.g. "bash", "zsh", "pwsh", "powershell").
+/// - The first argument will be resolved against the `PATH` environment
+///   variable, so it can be either a bare command name (e.g. "ls") or a full
+///   path.
+/// - If the first argument is NOT a shell executable, then the command MUST be
+///   discoverable in the system `PATH` and MUST NOT rely on shell features
+///   (e.g. shell built-ins, operators, or syntax).
 pub fn is_known_safe_command(command: &[String]) -> bool {
-    let command: Vec<String> = command
-        .iter()
-        .map(|s| {
-            if s == "zsh" {
-                "bash".to_string()
-            } else {
-                s.clone()
-            }
-        })
-        .collect();
-
-    if is_safe_command_windows(&command) {
-        return true;
+    if command.is_empty() {
+        return false;
     }
 
-    if is_safe_to_call_with_exec(&command) {
+    let exe = &command[0];
+    if is_powershell_executable(exe) {
+        return is_safe_powershell_command(command);
+    }
+
+    if is_safe_to_call_with_exec(command) {
         return true;
     }
 
@@ -27,7 +32,7 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
     // introduce side effects ( "&&", "||", ";", and "|" ). If every
     // individual command in the script is itself a known‑safe command, then
     // the composite expression is considered safe.
-    if let Some(all_commands) = parse_shell_lc_plain_commands(&command)
+    if let Some(all_commands) = parse_shell_lc_plain_commands(command)
         && !all_commands.is_empty()
         && all_commands
             .iter()
@@ -420,6 +425,31 @@ mod tests {
         assert!(
             !is_known_safe_command(&vec_str(&["bash", "-lc", "ls > out.txt"])),
             "> redirection should be rejected"
+        );
+    }
+
+    /// This test only works on Windows because it requires access to PowerShell
+    /// to parse the argument to `pwsh -Command`.
+    #[cfg(windows)]
+    #[test]
+    fn ensure_safe_unix_command_that_is_unsafe_powershell_command_is_rejected() {
+        assert!(
+            is_known_safe_command(&vec_str(&["echo", "hi", "@(calc)"])),
+            "Running echo with execvp is safe because there is no shell interpretation."
+        );
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "echo hi @(calc)"])),
+            "This command should not get marked as safe because the Bash script has a parse error."
+        );
+        assert!(
+            is_known_safe_command(&vec_str(&["pwsh", "-Command", "echo hi"])),
+            "Our logic should recognize that `echo hi` is safe to run under PowerShell."
+        );
+        assert!(
+            !is_known_safe_command(&vec_str(&["pwsh", "-Command", "echo hi @(calc)"])),
+            r#"Even though `echo hi @(calc)` would not do anything malicious
+when run under Bash (because it would be rejected with a parse error), it would run
+calc.exec when run under PowerShell and therefore should be rejected."#
         );
     }
 }
