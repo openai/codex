@@ -9,7 +9,11 @@ const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
-pub fn is_safe_command_windows(command: &[String]) -> bool {
+///
+/// `command` must be the _exact_ proposed list of arguments that will be sent
+/// to `execvp(3)`, so `command[0]` must satisfy [`is_powershell_executable`]
+/// for this function to return true.
+pub fn is_safe_powershell_invocation(command: &[String]) -> bool {
     if let Some(commands) = try_parse_powershell_command_sequence(command) {
         commands
             .iter()
@@ -108,7 +112,7 @@ fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<Str
 }
 
 /// Returns true when the executable name is one of the supported PowerShell binaries.
-fn is_powershell_executable(exe: &str) -> bool {
+pub fn is_powershell_executable(exe: &str) -> bool {
     let executable_name = Path::new(exe)
         .file_name()
         .and_then(|osstr| osstr.to_str())
@@ -357,21 +361,21 @@ mod tests {
 
     #[test]
     fn recognizes_safe_powershell_wrappers() {
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-NoLogo",
             "-Command",
             "Get-ChildItem -Path .",
         ])));
 
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-NoProfile",
             "-Command",
             "git status",
         ])));
 
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "Get-Content",
             "Cargo.toml",
@@ -379,7 +383,7 @@ mod tests {
 
         // pwsh parity
         if let Some(pwsh) = try_find_pwsh_executable_blocking() {
-            assert!(is_safe_command_windows(&[
+            assert!(is_safe_powershell_invocation(&[
                 pwsh.as_path().to_str().unwrap().into(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
@@ -396,7 +400,7 @@ mod tests {
         }
 
         if let Some(pwsh) = try_find_pwsh_executable_blocking() {
-            assert!(is_safe_command_windows(&[
+            assert!(is_safe_powershell_invocation(&[
                 pwsh.as_path().to_str().unwrap().into(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
@@ -404,7 +408,7 @@ mod tests {
             ]));
         }
 
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(is_safe_powershell_invocation(&vec_str(&[
             r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
             "-Command",
             "Get-Content Cargo.toml",
@@ -418,7 +422,7 @@ mod tests {
         };
 
         let pwsh: String = pwsh.as_path().to_str().unwrap().into();
-        assert!(is_safe_command_windows(&[
+        assert!(is_safe_powershell_invocation(&[
             pwsh.clone(),
             "-NoLogo".to_string(),
             "-NoProfile".to_string(),
@@ -427,7 +431,7 @@ mod tests {
                 .to_string()
         ]));
 
-        assert!(is_safe_command_windows(&[
+        assert!(is_safe_powershell_invocation(&[
             pwsh.clone(),
             "-NoLogo".to_string(),
             "-NoProfile".to_string(),
@@ -435,7 +439,7 @@ mod tests {
             "Get-Content foo.rs | Select-Object -Skip 200".to_string()
         ]));
 
-        assert!(is_safe_command_windows(&[
+        assert!(is_safe_powershell_invocation(&[
             pwsh.clone(),
             "-NoLogo".to_string(),
             "-NoProfile".to_string(),
@@ -443,19 +447,19 @@ mod tests {
             "git -c core.pager=cat show HEAD:foo.rs".to_string()
         ]));
 
-        assert!(is_safe_command_windows(&[
+        assert!(is_safe_powershell_invocation(&[
             pwsh.clone(),
             "-Command".to_string(),
             "-git cat-file -p HEAD:foo.rs".to_string()
         ]));
 
-        assert!(is_safe_command_windows(&[
+        assert!(is_safe_powershell_invocation(&[
             pwsh.clone(),
             "-Command".to_string(),
             "(Get-Content foo.rs -Raw)".to_string()
         ]));
 
-        assert!(is_safe_command_windows(&[
+        assert!(is_safe_powershell_invocation(&[
             pwsh,
             "-Command".to_string(),
             "Get-Item foo.rs | Select-Object Length".to_string()
@@ -464,97 +468,97 @@ mod tests {
 
     #[test]
     fn rejects_powershell_commands_with_side_effects() {
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-NoLogo",
             "-Command",
             "Remove-Item foo.txt",
         ])));
 
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-NoProfile",
             "-Command",
             "rg --pre cat",
         ])));
 
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Set-Content foo.txt 'hello'",
         ])));
 
         // Redirections are blocked
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "echo hi > out.txt",
         ])));
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Get-Content x | Out-File y",
         ])));
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Write-Output foo 2> err.txt",
         ])));
 
         // Call operator is blocked
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "& Remove-Item foo",
         ])));
 
         // Chained safe + unsafe must fail
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Get-ChildItem; Remove-Item foo",
         ])));
         // Nested unsafe cmdlet inside safe command must fail
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Write-Output (Set-Content foo6.txt 'abc')",
         ])));
         // Additional nested unsafe cmdlet examples must fail
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Write-Host (Remove-Item foo.txt)",
         ])));
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Get-Content (New-Item bar.txt)",
         ])));
 
         // Unsafe @ expansion.
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "ls @(calc.exe)"
         ])));
 
         // Unsupported constructs that the AST parser refuses (no fallback to manual splitting).
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "ls && pwd"
         ])));
 
         // Sub-expressions are rejected even if they contain otherwise safe commands.
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Write-Output $(Get-Content foo)"
         ])));
 
         // Empty words from the parser (e.g. '') are rejected.
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "''"
@@ -563,13 +567,13 @@ mod tests {
 
     #[test]
     fn accepts_constant_expression_arguments() {
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Get-Content 'foo bar'"
         ])));
 
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Get-Content \"foo bar\""
@@ -578,13 +582,13 @@ mod tests {
 
     #[test]
     fn rejects_dynamic_arguments() {
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Get-Content $foo"
         ])));
 
-        assert!(!is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_powershell_invocation(&vec_str(&[
             "powershell.exe",
             "-Command",
             "Write-Output \"foo $bar\""
@@ -599,7 +603,7 @@ mod tests {
 
         let chain = "pwd && ls";
         assert!(
-            !is_safe_command_windows(&vec_str(&[
+            !is_safe_powershell_invocation(&vec_str(&[
                 "powershell.exe",
                 "-NoProfile",
                 "-Command",
@@ -610,7 +614,7 @@ mod tests {
 
         if let Some(pwsh) = try_find_pwsh_executable_blocking() {
             assert!(
-                is_safe_command_windows(&[
+                is_safe_powershell_invocation(&[
                     pwsh.as_path().to_str().unwrap().into(),
                     "-NoProfile".to_string(),
                     "-Command".to_string(),
