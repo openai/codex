@@ -56,7 +56,7 @@ impl ToolHandler for CollabHandler {
             "spawn_agent" => spawn::handle(session, turn, arguments).await,
             "send_input" => send_input::handle(session, arguments).await,
             "wait" => wait::handle(session, arguments).await,
-            "close_agent" => close_agent::handle(arguments).await,
+            "close_agent" => close_agent::handle(session, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
             ))),
@@ -240,14 +240,56 @@ mod wait {
 
 pub mod close_agent {
     use super::*;
+    use crate::codex::Session;
+    use std::sync::Arc;
 
-    pub async fn handle(arguments: String) -> Result<ToolOutput, FunctionCallError> {
+    #[derive(Debug, Deserialize, Serialize)]
+    pub(super) struct CloseAgentResult {
+        pub(super) status: AgentStatus,
+    }
+
+    pub async fn handle(
+        session: Arc<Session>,
+        arguments: String,
+    ) -> Result<ToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
-        let _agent_id = agent_id(&args.id)?;
-        // TODO(jif): implement agent shutdown and return the final status.
-        Err(FunctionCallError::Fatal(
-            "close_agent not implemented".to_string(),
-        ))
+        let agent_id = agent_id(&args.id)?;
+        let mut status_rx = session
+            .services
+            .agent_control
+            .subscribe_status(agent_id)
+            .await
+            .map_err(|err| match err {
+                CodexErr::ThreadNotFound(id) => {
+                    FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
+                }
+                err => FunctionCallError::Fatal(err.to_string()),
+            })?;
+        let status = status_rx.borrow_and_update().clone();
+
+        if !matches!(status, AgentStatus::Shutdown) {
+            let _ = session
+                .services
+                .agent_control
+                .shutdown_agent(agent_id)
+                .await
+                .map_err(|err| match err {
+                    CodexErr::ThreadNotFound(id) => {
+                        FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
+                    }
+                    err => FunctionCallError::Fatal(err.to_string()),
+                })?;
+        }
+
+        let content = serde_json::to_string(&CloseAgentResult { status }).map_err(|err| {
+            FunctionCallError::Fatal(format!("failed to serialize close_agent result: {err}"))
+        })?;
+
+        Ok(ToolOutput::Function {
+            content,
+            success: Some(true),
+            content_items: None,
+        })
     }
 }
 
@@ -587,21 +629,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_agent_reports_not_implemented() {
-        let (session, turn) = make_session_and_context().await;
+    async fn close_agent_submits_shutdown_and_returns_status() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let status_before = manager.agent_control().get_status(agent_id).await;
+
         let invocation = invocation(
             Arc::new(session),
             Arc::new(turn),
             "close_agent",
-            function_payload(json!({"id": ThreadId::new().to_string()})),
+            function_payload(json!({"id": agent_id.to_string()})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
-            panic!("close_agent should fail");
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("close_agent should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
         };
-        assert_eq!(
-            err,
-            FunctionCallError::Fatal("close_agent not implemented".to_string())
-        );
+        let result: close_agent::CloseAgentResult =
+            serde_json::from_str(&content).expect("close_agent result should be json");
+        assert_eq!(result.status, status_before);
+        assert_eq!(success, Some(true));
+
+        let ops = manager.captured_ops();
+        let submitted_shutdown = ops
+            .iter()
+            .any(|(id, op)| *id == agent_id && matches!(op, Op::Shutdown));
+        assert_eq!(submitted_shutdown, true);
     }
 
     #[tokio::test]

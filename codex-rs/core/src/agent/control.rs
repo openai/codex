@@ -68,6 +68,12 @@ impl AgentControl {
             .await
     }
 
+    /// Submit a shutdown request to an existing agent thread.
+    pub(crate) async fn shutdown_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        state.send_op(agent_id, Op::Shutdown {}).await
+    }
+
     #[allow(dead_code)] // Will be used for collab tools.
     /// Fetch the last known status for `agent_id`, returning `NotFound` when unavailable.
     pub(crate) async fn get_status(&self, agent_id: ThreadId) -> AgentStatus {
