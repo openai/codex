@@ -37,16 +37,13 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
         };
         if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
             &rollout.item
+            && role == "user"
+            && content
+                .iter()
+                .any(|span| matches!(span, ContentItem::InputImage { .. }))
+            && let RolloutItem::ResponseItem(item) = rollout.item.clone()
         {
-            if role == "user"
-                && content
-                    .iter()
-                    .any(|span| matches!(span, ContentItem::InputImage { .. }))
-            {
-                if let RolloutItem::ResponseItem(item) = rollout.item.clone() {
-                    return Some(item);
-                }
-            }
+            return Some(item);
         }
     }
     None
@@ -64,12 +61,11 @@ fn extract_image_url(item: &ResponseItem) -> Option<String> {
 
 async fn read_rollout_text(path: &Path) -> anyhow::Result<String> {
     for _ in 0..50 {
-        if path.exists() {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                if !text.trim().is_empty() {
-                    return Ok(text);
-                }
-            }
+        if path.exists()
+            && let Ok(text) = std::fs::read_to_string(path)
+            && !text.trim().is_empty()
+        {
+            return Ok(text);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
