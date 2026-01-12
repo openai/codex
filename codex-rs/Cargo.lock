@@ -7497,9 +7497,9 @@ dependencies = [
 
 [[package]]
 name = "tui-scrollbar"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c42613099915b2e30e9f144670666e858e2538366f77742e1cf1c2f230efcacd"
+checksum = "0e4267311b5c7999a996ea94939b6d2b1b44a9e5cc11e76cbbb6dcca4c281df4"
 dependencies = [
  "document-features",
  "ratatui-core",
