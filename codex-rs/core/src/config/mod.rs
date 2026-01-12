@@ -386,6 +386,11 @@ pub struct ConfigBuilder {
     loader_overrides: Option<LoaderOverrides>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigWarning {
+    pub message: String,
+}
+
 impl ConfigBuilder {
     pub fn codex_home(mut self, codex_home: PathBuf) -> Self {
         self.codex_home = Some(codex_home);
@@ -408,6 +413,11 @@ impl ConfigBuilder {
     }
 
     pub async fn build(self) -> std::io::Result<Config> {
+        let (config, _) = self.build_with_warnings().await?;
+        Ok(config)
+    }
+
+    async fn build_with_warnings(self) -> std::io::Result<(Config, Vec<ConfigWarning>)> {
         let Self {
             codex_home,
             cli_overrides,
@@ -426,6 +436,7 @@ impl ConfigBuilder {
             load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
                 .await?;
         let merged_toml = config_layer_stack.effective_config();
+        let (merged_toml, warnings) = sanitize_config_toml(merged_toml);
 
         // Note that each layer in ConfigLayerStack should have resolved
         // relative paths to absolute paths based on the parent folder of the
@@ -434,13 +445,114 @@ impl ConfigBuilder {
         let config_toml: ConfigToml = merged_toml
             .try_into()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        Config::load_config_with_layer_stack(
+        let config = Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
             codex_home,
             config_layer_stack,
-        )
+        )?;
+        Ok((config, warnings))
     }
+}
+
+fn sanitize_config_toml(mut merged_toml: TomlValue) -> (TomlValue, Vec<ConfigWarning>) {
+    let mut warnings = Vec::new();
+    let allowed = [
+        ReasoningEffort::None,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+    ]
+    .iter()
+    .map(|effort| effort.to_string())
+    .collect::<Vec<_>>();
+
+    if let TomlValue::Table(table) = &mut merged_toml {
+        sanitize_reasoning_effort_table(table, "model_reasoning_effort", &allowed, &mut warnings);
+
+        if let Some(TomlValue::Table(profiles)) = table.get_mut("profiles") {
+            for (profile_name, profile_value) in profiles.iter_mut() {
+                if let TomlValue::Table(profile_table) = profile_value {
+                    let path = format!("profiles.{profile_name}.model_reasoning_effort");
+                    sanitize_reasoning_effort_table(profile_table, &path, &allowed, &mut warnings);
+                }
+            }
+        }
+    }
+
+    (merged_toml, warnings)
+}
+
+fn sanitize_reasoning_effort_table(
+    table: &mut toml::map::Map<String, TomlValue>,
+    path: &str,
+    allowed: &[String],
+    warnings: &mut Vec<ConfigWarning>,
+) {
+    let Some(value) = table.get("model_reasoning_effort") else {
+        return;
+    };
+
+    let raw = match value.as_str() {
+        Some(raw) => raw.to_string(),
+        None => value.to_string(),
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+
+    if allowed.iter().any(|effort| effort == &normalized) {
+        if normalized != raw {
+            table.insert(
+                "model_reasoning_effort".to_string(),
+                TomlValue::String(normalized),
+            );
+        }
+        return;
+    }
+
+    table.remove("model_reasoning_effort");
+
+    let suggestion = closest_value(&normalized, allowed);
+    let suggestion_text = suggestion
+        .as_deref()
+        .map(|value| format!(" Did you mean \"{value}\"?"))
+        .unwrap_or_default();
+    let allowed_text = allowed.join(", ");
+    warnings.push(ConfigWarning {
+        message: format!(
+            "Invalid config value for {path}: \"{raw}\". Allowed values: {allowed_text}.{suggestion_text} Falling back to default."
+        ),
+    });
+}
+
+fn closest_value(input: &str, options: &[String]) -> Option<String> {
+    let mut best: Option<(&String, usize)> = None;
+    for option in options {
+        let distance = edit_distance(input, option);
+        match best {
+            Some((_, best_distance)) if distance >= best_distance => {}
+            _ => best = Some((option, distance)),
+        }
+    }
+    best.map(|(option, _)| option.clone())
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let mut costs = (0..=b.len()).collect::<Vec<_>>();
+    for (i, ca) in a.chars().enumerate() {
+        let mut last = i;
+        costs[0] = i + 1;
+        for (j, cb) in b.chars().enumerate() {
+            let next = costs[j + 1];
+            let replace_cost = if ca == cb { last } else { last + 1 };
+            let insert_cost = costs[j] + 1;
+            let delete_cost = costs[j + 1] + 1;
+            costs[j + 1] = replace_cost.min(insert_cost).min(delete_cost);
+            last = next;
+        }
+    }
+    costs[b.len()]
 }
 
 impl Config {
@@ -490,6 +602,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
+    let (merged_toml, _) = sanitize_config_toml(merged_toml);
     let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
@@ -1638,6 +1751,32 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_reasoning_effort_emits_warning_and_uses_default() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+model_reasoning_effort = "super-high"
+"#,
+        )
+        .await?;
+
+        let (config, warnings) = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build_with_warnings()
+            .await?;
+
+        assert_eq!(config.model_reasoning_effort, None);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("model_reasoning_effort"));
+        assert!(warnings[0].message.contains("Allowed values"));
+
+        Ok(())
     }
 
     #[test]
