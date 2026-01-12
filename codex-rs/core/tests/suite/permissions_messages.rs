@@ -436,7 +436,14 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let expected = format!(
         "<permissions instructions>{sandbox_text}{approval_text}{roots_text}</permissions instructions>"
     );
-    assert_eq!(permissions, vec![expected]);
+    // Normalize line endings to handle Windows vs Unix differences
+    let normalize_line_endings = |s: &str| s.replace("\r\n", "\n");
+    let expected_normalized = normalize_line_endings(&expected);
+    let actual_normalized: Vec<String> = permissions
+        .iter()
+        .map(|s| normalize_line_endings(s))
+        .collect();
+    assert_eq!(actual_normalized, vec![expected_normalized]);
 
     Ok(())
 }
