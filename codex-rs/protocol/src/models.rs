@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use codex_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
