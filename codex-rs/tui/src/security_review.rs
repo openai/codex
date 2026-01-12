@@ -668,6 +668,8 @@ enum SecurityReviewPlanStep {
     AnalyzeBugs,
     PolishFindings,
     AssembleReport,
+    ValidateFindings,
+    PostValidationRefine,
 }
 
 #[derive(Clone)]
@@ -860,6 +862,14 @@ fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> 
         SecurityReviewPlanStep::AssembleReport,
         "Assemble report and artifacts",
     ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::ValidateFindings,
+        "Validate findings",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::PostValidationRefine,
+        "Post-validation PoC refinement",
+    ));
     steps
 }
 
@@ -870,6 +880,8 @@ fn plan_step_slug(step: SecurityReviewPlanStep) -> &'static str {
         SecurityReviewPlanStep::AnalyzeBugs => "analyze_bugs",
         SecurityReviewPlanStep::PolishFindings => "polish_findings",
         SecurityReviewPlanStep::AssembleReport => "assemble_report",
+        SecurityReviewPlanStep::ValidateFindings => "validate_findings",
+        SecurityReviewPlanStep::PostValidationRefine => "post_validation_refine",
     }
 }
 
@@ -880,6 +892,8 @@ fn plan_step_from_slug(slug: &str) -> Option<SecurityReviewPlanStep> {
         "analyze_bugs" => Some(SecurityReviewPlanStep::AnalyzeBugs),
         "polish_findings" => Some(SecurityReviewPlanStep::PolishFindings),
         "assemble_report" => Some(SecurityReviewPlanStep::AssembleReport),
+        "validate_findings" => Some(SecurityReviewPlanStep::ValidateFindings),
+        "post_validation_refine" => Some(SecurityReviewPlanStep::PostValidationRefine),
         _ => None,
     }
 }
@@ -5209,16 +5223,20 @@ pub async fn run_security_review(
     };
 
     let validation_targets = build_validation_findings_context(&snapshot);
+    plan_tracker.complete_and_start_next(
+        SecurityReviewPlanStep::AssembleReport,
+        Some(SecurityReviewPlanStep::ValidateFindings),
+    );
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
+
     if validation_targets.ids.is_empty() {
         record(
             &mut logs,
             "No high-risk findings selected for validation; skipping.".to_string(),
         );
     } else {
-        record(
-            &mut logs,
-            "Validating high-risk findings (ASan crash PoCs)...".to_string(),
-        );
+        record(&mut logs, "Validating high-risk findings...".to_string());
         match run_asan_validation(
             repo_path.clone(),
             artifacts.snapshot_path.clone(),
@@ -5275,7 +5293,11 @@ pub async fn run_security_review(
         }
     }
 
-    plan_tracker.mark_complete(SecurityReviewPlanStep::AssembleReport);
+    plan_tracker.complete_and_start_next(
+        SecurityReviewPlanStep::ValidateFindings,
+        Some(SecurityReviewPlanStep::PostValidationRefine),
+    );
+    plan_tracker.mark_complete(SecurityReviewPlanStep::PostValidationRefine);
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     checkpoint.status = SecurityReviewCheckpointStatus::Complete;
     persist_checkpoint(&mut checkpoint, &mut logs);
