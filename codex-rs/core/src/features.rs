@@ -62,6 +62,8 @@ pub enum Feature {
     GhostCommit,
     /// Include the view_image tool.
     ViewImageTool,
+    /// Include the ask_user_question tool.
+    AskUserQuestionTool,
     /// Send warnings to the model to correct it on the tool usage.
     ModelWarnings,
     /// Enable the default shell tool.
@@ -229,6 +231,7 @@ impl Features {
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
             tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
+            tools_ask_user_question: cfg.tools.as_ref().and_then(|t| t.ask_user_question),
             ..Default::default()
         };
         base_legacy.apply(&mut features);
@@ -245,6 +248,7 @@ impl Features {
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
             tools_web_search: config_profile.tools_web_search,
             tools_view_image: config_profile.tools_view_image,
+            tools_ask_user_question: config_profile.tools_ask_user_question,
         };
         profile_legacy.apply(&mut features);
         if let Some(profile_features) = config_profile.features.as_ref() {
@@ -311,6 +315,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "view_image_tool",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::AskUserQuestionTool,
+        key: "ask_user_question_tool",
+        stage: Stage::Stable,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellTool,

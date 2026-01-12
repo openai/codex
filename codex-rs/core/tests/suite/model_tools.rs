@@ -58,7 +58,6 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
-            "ask_user_question".to_string(),
             "run_subagent".to_string(),
             "view_image".to_string()
         ],
@@ -74,7 +73,6 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
-            "ask_user_question".to_string(),
             "run_subagent".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string()
@@ -91,7 +89,6 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
-            "ask_user_question".to_string(),
             "run_subagent".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string()
@@ -108,7 +105,6 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
-            "ask_user_question".to_string(),
             "run_subagent".to_string(),
             "view_image".to_string()
         ],
@@ -124,7 +120,6 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
-            "ask_user_question".to_string(),
             "run_subagent".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string()
@@ -141,7 +136,6 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
-            "ask_user_question".to_string(),
             "run_subagent".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string()

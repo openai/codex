@@ -49,6 +49,7 @@ exclude_slash_tmp = true
 [tools]
 web_search = false
 view_image = true
+ask_user_question = false
 
 [profiles.test]
 model = "gpt-4o"
@@ -100,6 +101,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
             tools: Some(Tools {
                 web_search: Some(false),
                 view_image: Some(true),
+                ask_user_question: Some(false),
             }),
             profile: Some("test".to_string()),
             profiles: HashMap::from([(

@@ -897,6 +897,10 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Enable the `ask_user_question` tool that lets the agent ask structured questions.
+    #[serde(default)]
+    pub ask_user_question: Option<bool>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -904,6 +908,7 @@ impl From<ToolsToml> for Tools {
         Self {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
+            ask_user_question: tools_toml.ask_user_question,
         }
     }
 }

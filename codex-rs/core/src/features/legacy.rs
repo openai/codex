@@ -48,6 +48,7 @@ pub struct LegacyFeatureToggles {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub tools_web_search: Option<bool>,
     pub tools_view_image: Option<bool>,
+    pub tools_ask_user_question: Option<bool>,
 }
 
 impl LegacyFeatureToggles {
@@ -81,6 +82,12 @@ impl LegacyFeatureToggles {
             Feature::ViewImageTool,
             self.tools_view_image,
             "tools.view_image",
+        );
+        set_if_some(
+            features,
+            Feature::AskUserQuestionTool,
+            self.tools_ask_user_question,
+            "tools.ask_user_question",
         );
     }
 }

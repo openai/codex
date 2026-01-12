@@ -354,6 +354,7 @@ pub struct Profile {
 pub struct Tools {
     pub web_search: Option<bool>,
     pub view_image: Option<bool>,
+    pub ask_user_question: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]

@@ -22,6 +22,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub include_ask_user_question_tool: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -39,6 +40,7 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        let include_ask_user_question_tool = features.enabled(Feature::AskUserQuestionTool);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -70,6 +72,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             include_view_image_tool,
+            include_ask_user_question_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -1166,8 +1169,10 @@ pub(crate) fn build_specs(
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
 
-    builder.push_spec(create_ask_user_question_tool());
-    builder.register_handler("ask_user_question", ask_user_question_handler);
+    if config.include_ask_user_question_tool {
+        builder.push_spec(create_ask_user_question_tool());
+        builder.register_handler("ask_user_question", ask_user_question_handler);
+    }
 
     builder.push_spec(create_run_subagent_tool());
     builder.register_handler("run_subagent", run_subagent_handler);
@@ -1384,6 +1389,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
+        features.enable(Feature::AskUserQuestionTool);
         features.enable(Feature::ViewImageTool);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
@@ -1463,7 +1469,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "apply_patch",
                 "view_image",
@@ -1482,7 +1487,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "apply_patch",
                 "view_image",
@@ -1504,7 +1508,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "apply_patch",
                 "web_search",
@@ -1527,7 +1530,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "apply_patch",
                 "web_search",
@@ -1547,7 +1549,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "view_image",
             ],
@@ -1565,7 +1566,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "apply_patch",
                 "view_image",
@@ -1584,7 +1584,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "view_image",
             ],
@@ -1602,7 +1601,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "apply_patch",
                 "view_image",
@@ -1622,7 +1620,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "apply_patch",
                 "view_image",
@@ -1644,7 +1641,6 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "ask_user_question",
                 "run_subagent",
                 "web_search",
                 "view_image",

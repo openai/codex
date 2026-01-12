@@ -314,6 +314,7 @@ pub struct ToolsV2 {
     #[serde(alias = "web_search_request")]
     pub web_search: Option<bool>,
     pub view_image: Option<bool>,
+    pub ask_user_question: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
