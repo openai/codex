@@ -513,6 +513,8 @@ fn deserialize_config_toml_lenient(
     mut root_value: TomlValue,
     config_base_dir: Option<&Path>,
 ) -> std::io::Result<ConfigToml> {
+    // Config loading should tolerate invalid enum values in on-disk config (drop them), while
+    // interactive edits remain strict so bad values are rejected at write time.
     loop {
         let attempt = match config_base_dir {
             Some(base_dir) => {
