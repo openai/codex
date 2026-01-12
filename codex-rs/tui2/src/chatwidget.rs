@@ -1493,6 +1493,10 @@ impl ChatWidget {
                 match self.bottom_pane.handle_key_event(key_event) {
                     InputResult::Submitted(text) => {
                         // Enter always sends messages immediately (bypasses queue check)
+                        // Clear any reasoning status header when submitting a new message
+                        self.reasoning_buffer.clear();
+                        self.full_reasoning_buffer.clear();
+                        self.set_status_header(String::from("Working"));
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
