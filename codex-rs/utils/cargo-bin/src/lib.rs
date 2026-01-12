@@ -39,23 +39,24 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
         }
     }
 
-    match assert_cmd::Command::cargo_bin(name) {
-        Ok(cmd) => {
-            let abs = absolutize_from_buck_or_cwd(PathBuf::from(cmd.get_program()))?;
-            if abs.exists() {
-                Ok(abs)
-            } else {
-                Err(CargoBinError::ResolvedPathDoesNotExist {
-                    key: "assert_cmd::Command::cargo_bin".to_owned(),
-                    path: abs,
-                })
-            }
-        }
-        Err(err) => Err(CargoBinError::NotFound {
+    // Fallback: derive the binary path from the location of the current test
+    // runner. This mirrors Cargo's default output layout:
+    //   <target>/<profile>/deps/<test-binary>
+    //   <target>/<profile>/<bin-name>
+    //
+    // If tests are running in an environment where Cargo doesn't export
+    // `CARGO_BIN_EXE_*` at runtime, this provides a best-effort escape hatch.
+    let target_dir = cargo_target_dir_from_current_exe()?;
+    let bin = target_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    let abs = absolutize_from_buck_or_cwd(bin)?;
+    if abs.exists() {
+        Ok(abs)
+    } else {
+        Err(CargoBinError::NotFound {
             name: name.to_owned(),
             env_keys,
-            fallback: format!("assert_cmd fallback failed: {err}"),
-        }),
+            fallback: format!("derived fallback resolved to {abs:?}"),
+        })
     }
 }
 
@@ -150,6 +151,17 @@ fn absolutize_from_buck_or_cwd(path: PathBuf) -> Result<PathBuf, CargoBinError> 
     Ok(std::env::current_dir()
         .map_err(|source| CargoBinError::CurrentDir { source })?
         .join(path))
+}
+
+fn cargo_target_dir_from_current_exe() -> Result<PathBuf, CargoBinError> {
+    let mut exe = std::env::current_exe().map_err(|source| CargoBinError::CurrentExe { source })?;
+    exe.pop();
+
+    // Cargo test binaries live in `<target_dir>/<profile>/deps`.
+    if exe.ends_with("deps") {
+        exe.pop();
+    }
+    Ok(exe)
 }
 
 /// Best-effort attempt to find the Buck project root for the currently running

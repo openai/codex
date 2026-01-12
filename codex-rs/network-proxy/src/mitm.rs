@@ -5,10 +5,10 @@ use crate::policy::normalize_host;
 use crate::responses::blocked_text_response;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
-use anyhow::Context;
+use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
-use rama::Context as RamaContext;
+use rama::Context;
 use rama::Layer;
 use rama::Service;
 use rama::bytes::Bytes;
@@ -21,7 +21,7 @@ use rama::http::Request;
 use rama::http::Response;
 use rama::http::StatusCode;
 use rama::http::Uri;
-use rama::http::dep::http::uri::PathAndQuery;
+use rama::http::client::EasyHttpWebClient;
 use rama::http::header::HOST;
 use rama::http::layer::remove_header::RemoveRequestHeaderLayer;
 use rama::http::layer::remove_header::RemoveResponseHeaderLayer;
@@ -30,14 +30,15 @@ use rama::http::server::HttpServer;
 use rama::net::proxy::ProxyTarget;
 use rama::net::stream::SocketInfo;
 use rama::service::service_fn;
-use rama::tls::rustls::dep::pemfile;
+use rama::tls::rustls::dep::pki_types::CertificateDer;
+use rama::tls::rustls::dep::pki_types::PrivateKeyDer;
+use rama::tls::rustls::dep::pki_types::pem::PemObject;
 use rama::tls::rustls::server::TlsAcceptorData;
 use rama::tls::rustls::server::TlsAcceptorDataBuilder;
 use rama::tls::rustls::server::TlsAcceptorLayer;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::BufReader;
 use std::io::Write;
 use std::net::IpAddr;
 use std::pin::Pin;
@@ -62,9 +63,19 @@ use rcgen_rama::SanType;
 
 pub struct MitmState {
     issuer: Issuer<'static, KeyPair>,
-    upstream: rama::service::BoxService<Arc<AppState>, Request, Response, OpaqueError>,
+    upstream: rama::service::BoxService<(), Request, Response, OpaqueError>,
     inspect: bool,
     max_body_bytes: usize,
+}
+
+impl std::fmt::Debug for MitmState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Avoid dumping internal state (CA material, connectors, etc.) to logs.
+        f.debug_struct("MitmState")
+            .field("inspect", &self.inspect)
+            .field("max_body_bytes", &self.max_body_bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MitmState {
@@ -79,14 +90,15 @@ impl MitmState {
 
         let tls_config = rama::tls::rustls::client::TlsConnectorData::new_http_auto()
             .context("create upstream TLS config")?;
-        let upstream = rama::http::client::EasyHttpWebClient::builder()
-            // Use a direct transport connector (no upstream proxy) to avoid proxy loops.
-            .with_default_transport_connector()
-            .without_tls_proxy_support()
-            .without_proxy_support()
-            .with_tls_support_using_rustls(Some(tls_config))
-            .build()
-            .boxed();
+        let upstream: rama::service::BoxService<(), Request, Response, OpaqueError> =
+            EasyHttpWebClient::builder()
+                // Use a direct transport connector (no upstream proxy) to avoid proxy loops.
+                .with_default_transport_connector()
+                .without_tls_proxy_support()
+                .without_proxy_support()
+                .with_tls_support_using_rustls(Some(tls_config))
+                .build()
+                .boxed();
 
         Ok(Self {
             issuer,
@@ -98,16 +110,15 @@ impl MitmState {
 
     fn tls_acceptor_data_for_host(&self, host: &str) -> Result<TlsAcceptorData> {
         let (cert_pem, key_pem) = issue_host_certificate_pem(host, &self.issuer)?;
-        let cert_chain = pemfile::certs(&mut BufReader::new(cert_pem.as_bytes()))
+        let cert_chain = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
             .collect::<Result<Vec<_>, _>>()
             .context("failed to parse host cert PEM")?;
         if cert_chain.is_empty() {
             return Err(anyhow!("no certificates found"));
         }
 
-        let key_der = pemfile::private_key(&mut BufReader::new(key_pem.as_bytes()))
-            .context("failed to parse host key PEM")?
-            .context("no private key found")?;
+        let key_der = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
+            .context("failed to parse host key PEM")?;
 
         Ok(TlsAcceptorDataBuilder::new(cert_chain, key_der)
             .context("failed to build rustls acceptor config")?
@@ -124,20 +135,25 @@ impl MitmState {
     }
 }
 
-pub async fn mitm_tunnel(
-    mut ctx: RamaContext<Arc<AppState>>,
-    upgraded: Upgraded,
-    host: &str,
-    _port: u16,
-    mode: NetworkMode,
-    state: Arc<MitmState>,
-) -> Result<()> {
-    // Ensure the MITM state is available for the per-request handler.
-    ctx.insert(state.clone());
-    ctx.insert(mode);
+pub async fn mitm_tunnel<S>(ctx: Context<S>, upgraded: Upgraded) -> Result<()>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let state = ctx
+        .get::<Arc<MitmState>>()
+        .cloned()
+        .context("missing MITM state")?;
+    let target = ctx
+        .get::<ProxyTarget>()
+        .context("missing proxy target")?
+        .0
+        .clone();
+    let host = normalize_host(&target.host().to_string());
+    let acceptor_data = state.tls_acceptor_data_for_host(&host)?;
 
-    let acceptor_data = state.tls_acceptor_data_for_host(host)?;
-    let http_service = HttpServer::auto(ctx.executor().clone()).service(
+    let executor = ctx.executor().clone();
+
+    let http_service = HttpServer::auto(executor).service(
         (
             RemoveResponseHeaderLayer::hop_by_hop(),
             RemoveRequestHeaderLayer::hop_by_hop(),
@@ -156,10 +172,13 @@ pub async fn mitm_tunnel(
     Ok(())
 }
 
-async fn handle_mitm_request(
-    ctx: RamaContext<Arc<AppState>>,
+async fn handle_mitm_request<S>(
+    ctx: Context<S>,
     req: Request,
-) -> Result<Response, std::convert::Infallible> {
+) -> Result<Response, std::convert::Infallible>
+where
+    S: Clone + Send + Sync + 'static,
+{
     let response = match forward_request(ctx, req).await {
         Ok(resp) => resp,
         Err(err) => {
@@ -170,7 +189,10 @@ async fn handle_mitm_request(
     Ok(response)
 }
 
-async fn forward_request(ctx: RamaContext<Arc<AppState>>, req: Request) -> Result<Response> {
+async fn forward_request<S>(ctx: Context<S>, req: Request) -> Result<Response>
+where
+    S: Clone + Send + Sync + 'static,
+{
     let target = ctx
         .get::<ProxyTarget>()
         .context("missing proxy target")?
@@ -187,6 +209,10 @@ async fn forward_request(ctx: RamaContext<Arc<AppState>>, req: Request) -> Resul
         .get::<Arc<MitmState>>()
         .cloned()
         .context("missing MITM state")?;
+    let app_state = ctx
+        .get::<Arc<AppState>>()
+        .cloned()
+        .context("missing app state")?;
 
     if req.method().as_str() == "CONNECT" {
         return Ok(text_response(
@@ -210,8 +236,7 @@ async fn forward_request(ctx: RamaContext<Arc<AppState>>, req: Request) -> Resul
     }
 
     if !method_allowed(mode, method.as_str()) {
-        let _ = ctx
-            .state()
+        let _ = app_state
             .record_blocked(BlockedRequest::new(
                 target_host.clone(),
                 "method_not_allowed".to_string(),
@@ -251,7 +276,10 @@ async fn forward_request(ctx: RamaContext<Arc<AppState>>, req: Request) -> Resul
     };
 
     let upstream_req = Request::from_parts(parts, body);
-    let upstream_resp = mitm.upstream.serve(ctx, upstream_req).await?;
+    let upstream_resp = mitm
+        .upstream
+        .serve(ctx.map_state(|_| ()), upstream_req)
+        .await?;
     respond_with_inspection(
         upstream_resp,
         inspect,
@@ -400,7 +428,7 @@ fn build_https_uri(authority: &str, path: &str) -> Result<Uri> {
 
 fn path_and_query(uri: &Uri) -> String {
     uri.path_and_query()
-        .map(PathAndQuery::as_str)
+        .map(rama::http::dep::http::uri::PathAndQuery::as_str)
         .unwrap_or("/")
         .to_string()
 }
@@ -519,21 +547,40 @@ fn write_atomic_create_new(path: &std::path::Path, contents: &[u8], mode: u32) -
         .with_context(|| format!("failed to fsync {}", tmp_path.display()))?;
     drop(file);
 
-    if path.exists() {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(anyhow!(
-            "refusing to overwrite existing file {}",
-            path.display()
-        ));
+    // Create the final file using "create-new" semantics (no overwrite). `rename` on Unix can
+    // overwrite existing files, so prefer a hard-link, which fails if the destination exists.
+    match fs::hard_link(&tmp_path, path) {
+        Ok(()) => {
+            fs::remove_file(&tmp_path)
+                .with_context(|| format!("failed to remove {}", tmp_path.display()))?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(anyhow!(
+                "refusing to overwrite existing file {}",
+                path.display()
+            ));
+        }
+        Err(_) => {
+            // Best-effort fallback for environments where hard links are not supported.
+            // This is still subject to a TOCTOU race, but the typical case is a private per-user
+            // config directory, where other users cannot create files anyway.
+            if path.exists() {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(anyhow!(
+                    "refusing to overwrite existing file {}",
+                    path.display()
+                ));
+            }
+            fs::rename(&tmp_path, path).with_context(|| {
+                format!(
+                    "failed to rename {} -> {}",
+                    tmp_path.display(),
+                    path.display()
+                )
+            })?;
+        }
     }
-
-    fs::rename(&tmp_path, path).with_context(|| {
-        format!(
-            "failed to rename {} -> {}",
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
 
     // Best-effort durability: ensure the directory entry is persisted too.
     let dir = File::open(parent).with_context(|| format!("failed to open {}", parent.display()))?;

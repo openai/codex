@@ -12,6 +12,7 @@ use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config_loader::RequirementSource;
 use globset::GlobBuilder;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
@@ -78,6 +79,14 @@ struct ConfigState {
 #[derive(Clone)]
 pub struct AppState {
     state: Arc<RwLock<ConfigState>>,
+}
+
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Avoid logging internal state (config contents, derived globsets, etc.) which can be noisy
+        // and may contain sensitive paths.
+        f.debug_struct("AppState").finish_non_exhaustive()
+    }
 }
 
 impl AppState {
@@ -467,11 +476,25 @@ fn validate_policy_against_constraints(
     config: &Config,
     constraints: &NetworkProxyConstraints,
 ) -> std::result::Result<(), ConstraintError> {
+    fn invalid_value(
+        field_name: &'static str,
+        candidate: impl Into<String>,
+        allowed: impl Into<String>,
+    ) -> ConstraintError {
+        ConstraintError::InvalidValue {
+            field_name,
+            candidate: candidate.into(),
+            allowed: allowed.into(),
+            requirement_source: RequirementSource::Unknown,
+        }
+    }
+
     let enabled = config.network_proxy.enabled;
     if let Some(max_enabled) = constraints.enabled {
         let _ = Constrained::new(enabled, move |candidate| {
             if *candidate && !max_enabled {
-                Err(ConstraintError::invalid_value(
+                Err(invalid_value(
+                    "network_proxy.enabled",
                     "true",
                     "false (disabled by managed config)",
                 ))
@@ -484,7 +507,8 @@ fn validate_policy_against_constraints(
     if let Some(max_mode) = constraints.mode {
         let _ = Constrained::new(config.network_proxy.mode, move |candidate| {
             if network_mode_rank(*candidate) > network_mode_rank(max_mode) {
-                Err(ConstraintError::invalid_value(
+                Err(invalid_value(
+                    "network_proxy.mode",
                     format!("{candidate:?}"),
                     format!("{max_mode:?} or more restrictive"),
                 ))
@@ -501,7 +525,8 @@ fn validate_policy_against_constraints(
             Some(true) | None => Ok(()),
             Some(false) => {
                 if *candidate {
-                    Err(ConstraintError::invalid_value(
+                    Err(invalid_value(
+                        "network_proxy.dangerously_allow_non_loopback_admin",
                         "true",
                         "false (disabled by managed config)",
                     ))
@@ -519,7 +544,8 @@ fn validate_policy_against_constraints(
             Some(true) | None => Ok(()),
             Some(false) => {
                 if *candidate {
-                    Err(ConstraintError::invalid_value(
+                    Err(invalid_value(
+                        "network_proxy.dangerously_allow_non_loopback_proxy",
                         "true",
                         "false (disabled by managed config)",
                     ))
@@ -535,7 +561,8 @@ fn validate_policy_against_constraints(
             config.network_proxy.policy.allow_local_binding,
             move |candidate| {
                 if *candidate && !allow_local_binding {
-                    Err(ConstraintError::invalid_value(
+                    Err(invalid_value(
+                        "network_proxy.policy.allow_local_binding",
                         "true",
                         "false (disabled by managed config)",
                     ))
@@ -563,7 +590,8 @@ fn validate_policy_against_constraints(
                 if invalid.is_empty() {
                     Ok(())
                 } else {
-                    Err(ConstraintError::invalid_value(
+                    Err(invalid_value(
+                        "network_proxy.policy.allowed_domains",
                         format!("{invalid:?}"),
                         "subset of managed allowed_domains",
                     ))
@@ -590,7 +618,8 @@ fn validate_policy_against_constraints(
                 if missing.is_empty() {
                     Ok(())
                 } else {
-                    Err(ConstraintError::invalid_value(
+                    Err(invalid_value(
+                        "network_proxy.policy.denied_domains",
                         "missing managed denied_domains entries",
                         format!("{missing:?}"),
                     ))
@@ -616,7 +645,8 @@ fn validate_policy_against_constraints(
                 if invalid.is_empty() {
                     Ok(())
                 } else {
-                    Err(ConstraintError::invalid_value(
+                    Err(invalid_value(
+                        "network_proxy.policy.allow_unix_sockets",
                         format!("{invalid:?}"),
                         "subset of managed allow_unix_sockets",
                     ))
@@ -766,7 +796,9 @@ mod tests {
             (false, String::new())
         );
         assert_eq!(
-            state.host_blocked("not-example.com", 80).await.unwrap(),
+            // Use a public IP literal to avoid relying on ambient DNS behavior (some networks
+            // resolve unknown hostnames to private IPs, which would trigger `not_allowed_local`).
+            state.host_blocked("8.8.8.8", 80).await.unwrap(),
             (true, "not_allowed".to_string())
         );
     }

@@ -2,8 +2,8 @@ use crate::config::NetworkMode;
 use crate::responses::json_response;
 use crate::responses::text_response;
 use crate::state::AppState;
+use anyhow::Context;
 use anyhow::Result;
-use rama::Context as RamaContext;
 use rama::http::Body;
 use rama::http::Request;
 use rama::http::Response;
@@ -19,28 +19,30 @@ use std::sync::Arc;
 use tracing::error;
 use tracing::info;
 
-type ContextState = Arc<AppState>;
-type AdminContext = RamaContext<ContextState>;
-
 pub async fn run_admin_api(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
     // Debug-only admin API (health/config/patterns/blocked + mode/reload). Policy is config-driven
     // and constraint-enforced; this endpoint should not become a second policy/approval plane.
-    let listener = TcpListener::build_with_state(state)
+    let listener = TcpListener::build()
         .bind(addr)
         .await
-        .map_err(|err| anyhow::anyhow!("bind admin API: {err}"))?;
+        // See `http_proxy.rs` for details on why we wrap `BoxError` before converting to anyhow.
+        .map_err(rama::error::OpaqueError::from)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("bind admin API: {addr}"))?;
 
-    let server =
-        HttpServer::auto(rama::rt::Executor::new()).service(service_fn(handle_admin_request));
+    let server_state = state.clone();
+    let server = HttpServer::auto(rama::rt::Executor::new()).service(service_fn(move |req| {
+        let state = server_state.clone();
+        async move { handle_admin_request(state, req).await }
+    }));
     info!("admin API listening on {addr}");
     listener.serve(server).await;
     Ok(())
 }
 
-async fn handle_admin_request(ctx: AdminContext, req: Request) -> Result<Response, Infallible> {
+async fn handle_admin_request(state: Arc<AppState>, req: Request) -> Result<Response, Infallible> {
     const MODE_BODY_LIMIT: usize = 8 * 1024;
 
-    let state = ctx.state().clone();
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let response = match (method.as_str(), path.as_str()) {

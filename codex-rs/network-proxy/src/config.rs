@@ -341,20 +341,23 @@ mod tests {
     fn resolve_addr_maps_localhost_to_loopback() {
         assert_eq!(
             resolve_addr("localhost", 3128),
-            "127.0.0.1:3128".parse().unwrap()
+            "127.0.0.1:3128".parse::<SocketAddr>().unwrap()
         );
     }
 
     #[test]
     fn resolve_addr_parses_ip_literals() {
-        assert_eq!(resolve_addr("1.2.3.4", 80), "1.2.3.4:80".parse().unwrap());
+        assert_eq!(
+            resolve_addr("1.2.3.4", 80),
+            "1.2.3.4:80".parse::<SocketAddr>().unwrap()
+        );
     }
 
     #[test]
     fn resolve_addr_parses_ipv6_literals() {
         assert_eq!(
             resolve_addr("http://[::1]:8080", 3128),
-            "[::1]:8080".parse().unwrap()
+            "[::1]:8080".parse::<SocketAddr>().unwrap()
         );
     }
 
@@ -362,7 +365,7 @@ mod tests {
     fn resolve_addr_falls_back_to_loopback_for_hostnames() {
         assert_eq!(
             resolve_addr("http://example.com:5555", 3128),
-            "127.0.0.1:5555".parse().unwrap()
+            "127.0.0.1:5555".parse::<SocketAddr>().unwrap()
         );
     }
 }

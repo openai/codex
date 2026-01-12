@@ -4,9 +4,9 @@ use crate::policy::normalize_host;
 use crate::responses::blocked_header_value;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
-use anyhow::Context;
+use anyhow::Context as _;
 use anyhow::Result;
-use rama::Context as RamaContext;
+use rama::Context;
 use rama::Layer;
 use rama::Service;
 use rama::http::Body;
@@ -14,13 +14,13 @@ use rama::http::Request;
 use rama::http::Response;
 use rama::http::StatusCode;
 use rama::http::client::EasyHttpWebClient;
-use rama::http::dep::http::uri::PathAndQuery;
 use rama::http::layer::remove_header::RemoveRequestHeaderLayer;
 use rama::http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama::http::layer::upgrade::UpgradeLayer;
 use rama::http::layer::upgrade::Upgraded;
 use rama::http::matcher::MethodMatcher;
 use rama::http::server::HttpServer;
+use rama::layer::AddExtensionLayer;
 use rama::net::http::RequestContext;
 use rama::net::proxy::ProxyTarget;
 use rama::net::stream::SocketInfo;
@@ -35,14 +35,16 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-type ContextState = Arc<AppState>;
-type ProxyContext = RamaContext<ContextState>;
-
 pub async fn run_http_proxy(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
-    let listener = TcpListener::build_with_state(state)
+    let listener = TcpListener::build()
         .bind(addr)
         .await
-        .map_err(|err| anyhow::anyhow!(err))
+        // Rama's `BoxError` is a `Box<dyn Error + Send + Sync>` without an explicit `'static`
+        // lifetime bound, which means it doesn't satisfy `anyhow::Context`'s `StdError` constraint.
+        // Wrap it in Rama's `OpaqueError` so we can preserve the original error as a source and
+        // still use `anyhow` for chaining.
+        .map_err(rama::error::OpaqueError::from)
+        .map_err(anyhow::Error::from)
         .with_context(|| format!("bind HTTP proxy: {addr}"))?;
 
     let http_service = HttpServer::auto(rama::rt::Executor::new()).service(
@@ -60,14 +62,24 @@ pub async fn run_http_proxy(state: Arc<AppState>, addr: SocketAddr) -> Result<()
 
     info!("HTTP proxy listening on {addr}");
 
-    listener.serve(http_service).await;
+    listener
+        .serve(AddExtensionLayer::new(state).into_layer(http_service))
+        .await;
     Ok(())
 }
 
-async fn http_connect_accept(
-    mut ctx: ProxyContext,
+async fn http_connect_accept<S>(
+    mut ctx: Context<S>,
     req: Request,
-) -> Result<(Response, ProxyContext, Request), Response> {
+) -> Result<(Response, Context<S>, Request), Response>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let app_state = ctx
+        .get::<Arc<AppState>>()
+        .cloned()
+        .ok_or_else(|| text_response(StatusCode::INTERNAL_SERVER_ERROR, "missing state"))?;
+
     let authority = match ctx
         .get_or_try_insert_with_ctx::<RequestContext, _>(|ctx| (ctx, &req).try_into())
         .map(|ctx| ctx.authority.clone())
@@ -84,7 +96,6 @@ async fn http_connect_accept(
         return Err(text_response(StatusCode::BAD_REQUEST, "invalid host"));
     }
 
-    let app_state = ctx.state().clone();
     let client = client_addr(&ctx);
 
     match app_state.host_blocked(&host, authority.port()).await {
@@ -165,33 +176,25 @@ async fn http_connect_accept(
     ))
 }
 
-async fn http_connect_proxy(ctx: ProxyContext, upgraded: Upgraded) -> Result<(), Infallible> {
+async fn http_connect_proxy<S>(ctx: Context<S>, upgraded: Upgraded) -> Result<(), Infallible>
+where
+    S: Clone + Send + Sync + 'static,
+{
     let mode = ctx
         .get::<NetworkMode>()
         .copied()
         .unwrap_or(NetworkMode::Full);
-    let authority = match ctx.get::<ProxyTarget>().map(|target| target.0.clone()) {
-        Some(authority) => authority,
-        None => {
-            warn!("CONNECT missing proxy target");
-            return Ok(());
-        }
-    };
-    let host = normalize_host(&authority.host().to_string());
 
-    if let Some(mitm_state) = ctx.get::<Arc<mitm::MitmState>>().cloned() {
-        let port = authority.port();
+    let Some(target) = ctx.get::<ProxyTarget>().map(|t| t.0.clone()) else {
+        warn!("CONNECT missing proxy target");
+        return Ok(());
+    };
+    let host = normalize_host(&target.host().to_string());
+
+    if ctx.get::<Arc<mitm::MitmState>>().is_some() {
+        let port = target.port();
         info!("CONNECT MITM enabled (host={host}, port={port}, mode={mode:?})");
-        if let Err(err) = mitm::mitm_tunnel(
-            ctx,
-            upgraded,
-            host.as_str(),
-            authority.port(),
-            mode,
-            mitm_state,
-        )
-        .await
-        {
+        if let Err(err) = mitm::mitm_tunnel(ctx, upgraded).await {
             warn!("MITM tunnel error: {err}");
         }
         return Ok(());
@@ -204,8 +207,17 @@ async fn http_connect_proxy(ctx: ProxyContext, upgraded: Upgraded) -> Result<(),
     Ok(())
 }
 
-async fn http_plain_proxy(mut ctx: ProxyContext, req: Request) -> Result<Response, Infallible> {
-    let app_state = ctx.state().clone();
+async fn http_plain_proxy<S>(mut ctx: Context<S>, req: Request) -> Result<Response, Infallible>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let app_state = match ctx.get::<Arc<AppState>>().cloned() {
+        Some(state) => state,
+        None => {
+            error!("missing app state");
+            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+        }
+    };
     let client = client_addr(&ctx);
 
     let method_allowed = match app_state.method_allowed(req.method().as_str()).await {
@@ -216,15 +228,20 @@ async fn http_plain_proxy(mut ctx: ProxyContext, req: Request) -> Result<Respons
         }
     };
 
-    if let Some(socket_path) = req
-        // `x-unix-socket` is an escape hatch for talking to local daemons. We keep it tightly
-        // scoped: macOS-only + explicit allowlist, to avoid turning the proxy into a general local
-        // capability-escalation mechanism.
-        .headers()
-        .get("x-unix-socket")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string)
-    {
+    // `x-unix-socket` is an escape hatch for talking to local daemons. We keep it tightly scoped:
+    // macOS-only + explicit allowlist, to avoid turning the proxy into a general local capability
+    // escalation mechanism.
+    if let Some(unix_socket_header) = req.headers().get("x-unix-socket") {
+        let socket_path = match unix_socket_header.to_str() {
+            Ok(value) => value.to_string(),
+            Err(_) => {
+                warn!("invalid x-unix-socket header value (non-UTF8)");
+                return Ok(text_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid x-unix-socket header",
+                ));
+            }
+        };
         if !method_allowed {
             let client = client.as_deref().unwrap_or_default();
             let method = req.method();
@@ -338,11 +355,14 @@ async fn http_plain_proxy(mut ctx: ProxyContext, req: Request) -> Result<Respons
     }
 }
 
-async fn proxy_via_unix_socket(
-    ctx: ProxyContext,
+async fn proxy_via_unix_socket<S>(
+    ctx: Context<S>,
     req: Request,
     socket_path: &str,
-) -> Result<Response> {
+) -> Result<Response>
+where
+    S: Clone + Send + Sync + 'static,
+{
     #[cfg(target_os = "macos")]
     {
         use rama::unix::client::UnixConnector;
@@ -358,7 +378,7 @@ async fn proxy_via_unix_socket(
         let path = parts
             .uri
             .path_and_query()
-            .map(PathAndQuery::as_str)
+            .map(rama::http::dep::http::uri::PathAndQuery::as_str)
             .unwrap_or("/");
         parts.uri = path
             .parse()
@@ -370,14 +390,14 @@ async fn proxy_via_unix_socket(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = ctx;
         let _ = req;
+        let _ = ctx;
         let _ = socket_path;
         Err(anyhow::anyhow!("unix sockets not supported"))
     }
 }
 
-fn client_addr(ctx: &ProxyContext) -> Option<String> {
+fn client_addr<S>(ctx: &Context<S>) -> Option<String> {
     ctx.get::<SocketInfo>()
         .map(|info| info.peer_addr().to_string())
 }
