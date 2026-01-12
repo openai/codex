@@ -63,13 +63,14 @@ fn assert_aborted_output(output: &str) {
     let normalized_output = output.replace("\r\n", "\n").replace('\r', "\n");
     let normalized_output = normalized_output.trim_end_matches('\n');
     let expected_pattern = r"(?s)^Exit code: [0-9]+\nWall time: ([0-9]+(?:\.[0-9]+)?) seconds\nOutput:\npartial output\ncommand aborted by user$";
-    let captures = assert_regex_match(expected_pattern, &normalized_output);
-    let secs: f32 = captures
-        .get(1)
-        .expect("aborted message with elapsed seconds")
-        .as_str()
-        .parse()
-        .expect("parse wall time seconds");
+    let captures = assert_regex_match(expected_pattern, normalized_output);
+    let secs: f32 = match captures.get(1) {
+        Some(value) => match value.as_str().parse() {
+            Ok(secs) => secs,
+            Err(err) => panic!("failed to parse wall time seconds: {err}"),
+        },
+        None => panic!("aborted message with elapsed seconds"),
+    };
     assert!(secs >= 0.0);
 }
 
@@ -85,13 +86,14 @@ fn assert_unified_exec_aborted_output(output: &str) {
         r#"(?:Original token count: \d+\n)?"#,
         r#"Output:\npartial output\ncommand aborted by user$"#,
     );
-    let captures = assert_regex_match(expected_pattern, &normalized_output);
-    let secs: f64 = captures
-        .get(1)
-        .expect("unified exec aborted message with elapsed seconds")
-        .as_str()
-        .parse()
-        .expect("parse unified exec wall time seconds");
+    let captures = assert_regex_match(expected_pattern, normalized_output);
+    let secs: f64 = match captures.get(1) {
+        Some(value) => match value.as_str().parse() {
+            Ok(secs) => secs,
+            Err(err) => panic!("failed to parse unified exec wall time seconds: {err}"),
+        },
+        None => panic!("unified exec aborted message with elapsed seconds"),
+    };
     assert!(secs >= 0.0);
 }
 
