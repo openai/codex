@@ -1,6 +1,8 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::DefaultOnError;
+use serde_with::serde_as;
 
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningSummary;
@@ -10,16 +12,27 @@ use codex_protocol::openai_models::ReasoningEffort;
 
 /// Collection of common configuration options that a user can define as a unit
 /// in `config.toml`.
+#[serde_as]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConfigProfile {
     pub model: Option<String>,
     /// The key in the `model_providers` map identifying the
     /// [`ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub approval_policy: Option<AskForApproval>,
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub sandbox_mode: Option<SandboxMode>,
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub model_reasoning_summary: Option<ReasoningSummary>,
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<AbsolutePathBuf>,

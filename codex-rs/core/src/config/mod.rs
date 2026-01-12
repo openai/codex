@@ -45,6 +45,8 @@ use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::DefaultOnError;
+use serde_with::serde_as;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -426,7 +428,6 @@ impl ConfigBuilder {
             load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
                 .await?;
         let merged_toml = config_layer_stack.effective_config();
-        let merged_toml = sanitize_config_toml(merged_toml);
 
         // Note that each layer in ConfigLayerStack should have resolved
         // relative paths to absolute paths based on the parent folder of the
@@ -441,37 +442,6 @@ impl ConfigBuilder {
             codex_home,
             config_layer_stack,
         )
-    }
-}
-
-fn sanitize_config_toml(mut merged_toml: TomlValue) -> TomlValue {
-    if let TomlValue::Table(table) = &mut merged_toml {
-        sanitize_reasoning_effort_table(table);
-
-        if let Some(TomlValue::Table(profiles)) = table.get_mut("profiles") {
-            for (_profile_name, profile_value) in profiles.iter_mut() {
-                if let TomlValue::Table(profile_table) = profile_value {
-                    sanitize_reasoning_effort_table(profile_table);
-                }
-            }
-        }
-    }
-
-    merged_toml
-}
-
-fn sanitize_reasoning_effort_table(table: &mut toml::map::Map<String, TomlValue>) {
-    let Some(value) = table.get("model_reasoning_effort") else {
-        return;
-    };
-
-    let Some(raw) = value.as_str() else {
-        table.remove("model_reasoning_effort");
-        return;
-    };
-
-    if serde_json::from_str::<ReasoningEffort>(&format!("\"{raw}\"")).is_err() {
-        table.remove("model_reasoning_effort");
     }
 }
 
@@ -522,7 +492,6 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let merged_toml = sanitize_config_toml(merged_toml);
     let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
@@ -720,6 +689,7 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
+#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
     /// Optional override of model selection.
@@ -737,12 +707,16 @@ pub struct ConfigToml {
     pub model_auto_compact_token_limit: Option<i64>,
 
     /// Default approval policy for executing commands.
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub approval_policy: Option<AskForApproval>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
     /// Sandbox mode to use.
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub sandbox_mode: Option<SandboxMode>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
@@ -768,6 +742,7 @@ pub struct ConfigToml {
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Preferred backend for storing CLI auth credentials.
@@ -775,6 +750,7 @@ pub struct ConfigToml {
     /// keyring: Use an OS-specific keyring service.
     /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
@@ -787,6 +763,7 @@ pub struct ConfigToml {
     /// file: Use a file in the Codex home directory.
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
 
     /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
@@ -819,6 +796,8 @@ pub struct ConfigToml {
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub file_opener: Option<UriBasedFileOpener>,
 
     /// Collection of settings that are specific to the TUI.
@@ -832,9 +811,15 @@ pub struct ConfigToml {
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: Option<bool>,
 
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub model_verbosity: Option<Verbosity>,
 
     /// Override to force-enable reasoning summaries for the configured model.
@@ -923,8 +908,11 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
+    #[serde(default)]
+    #[serde_as(as = "DefaultOnError")]
     pub trust_level: Option<TrustLevel>,
 }
 

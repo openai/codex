@@ -1323,6 +1323,7 @@ dependencies = [
  "seccompiler",
  "serde",
  "serde_json",
+ "serde_with",
  "serde_yaml",
  "serial_test",
  "sha1",

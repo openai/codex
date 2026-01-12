@@ -941,7 +941,7 @@ remote_compaction = true
     }
 
     #[tokio::test]
-    async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
+    async fn invalid_user_value_overridden_by_managed_is_accepted() {
         let tmp = tempdir().expect("tempdir");
         std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
 
@@ -959,7 +959,7 @@ remote_compaction = true
             },
         );
 
-        let error = service
+        let response = service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
                 key_path: "approval_policy".to_string(),
@@ -968,16 +968,13 @@ remote_compaction = true
                 expected_version: None,
             })
             .await
-            .expect_err("should fail validation");
+            .expect("write succeeds");
 
-        assert_eq!(
-            error.write_error_code(),
-            Some(ConfigWriteErrorCode::ConfigValidationError)
-        );
+        assert_eq!(response.status, WriteStatus::OkOverridden);
 
         let contents =
             std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
-        assert_eq!(contents.trim(), "model = \"user\"");
+        assert!(contents.contains("approval_policy = \"bogus\""));
     }
 
     #[tokio::test]
