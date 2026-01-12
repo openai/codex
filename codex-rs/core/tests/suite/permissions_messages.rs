@@ -385,7 +385,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
 
     let mut builder = test_codex().with_config(move |config| {
         config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        config.sandbox_policy = Constrained::allow_any(sandbox_policy.clone());
+        config.sandbox_policy = Constrained::allow_any(sandbox_policy);
     });
     let test = builder.build(&server).await?;
 
