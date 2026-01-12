@@ -12,6 +12,9 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::local_image_content_items_with_label_number;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::user_input::UserInput;
@@ -65,6 +68,24 @@ impl ToolHandler for ViewImageHandler {
             )));
         }
         let event_path = abs_path.clone();
+
+        /// here
+        // let content: Vec<ContentItem> =
+        //     local_image_content_items_with_label_number(&abs_path, None);
+        // let input = ResponseInputItem::Message {
+        //     role: "user".to_string(),
+        //     content,
+        // };
+        //
+        // session
+        //     .inject_response_items(vec![input])
+        //     .await
+        //     .map_err(|_| {
+        //         FunctionCallError::RespondToModel(
+        //             "unable to attach image (no active task)".to_string(),
+        //         )
+        //     })?;
+
 
         session
             .send_event(

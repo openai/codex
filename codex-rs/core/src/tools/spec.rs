@@ -8,6 +8,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -412,10 +413,9 @@ fn create_view_image_tool() -> ToolSpec {
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "view_image".to_string(),
-        description:
-            "Attach a local image (by filesystem path) to the thread context for this turn."
-                .to_string(),
+        name: VIEW_IMAGE_TOOL_NAME.to_string(),
+        description: "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,

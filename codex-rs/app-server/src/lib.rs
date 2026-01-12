@@ -92,13 +92,18 @@ pub async fn run_main(
 
     let feedback = CodexFeedback::new();
 
-    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), false)
-        .map_err(|e| {
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                format!("error loading otel config: {e}"),
-            )
-        })?;
+    let otel = codex_core::otel_init::build_provider(
+        &config,
+        env!("CARGO_PKG_VERSION"),
+        Some("codex_app_server"),
+        false,
+    )
+    .map_err(|e| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("error loading otel config: {e}"),
+        )
+    })?;
 
     // Install a simple subscriber so `tracing` output is visible.  Users can
     // control the log level with `RUST_LOG`.
