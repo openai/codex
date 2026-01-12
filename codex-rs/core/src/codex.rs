@@ -48,6 +48,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
@@ -85,6 +86,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
@@ -108,6 +110,7 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::Op;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
@@ -165,6 +168,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
+use tokio::sync::watch;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -173,7 +177,7 @@ pub struct Codex {
     pub(crate) tx_sub: Sender<Submission>,
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
-    pub(crate) agent_status: Arc<RwLock<AgentStatus>>,
+    pub(crate) agent_status: watch::Receiver<AgentStatus>,
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -276,7 +280,7 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
-        let agent_status = Arc::new(RwLock::new(AgentStatus::PendingInit));
+        let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
         let session = Session::new(
             session_configuration,
@@ -285,7 +289,7 @@ impl Codex {
             models_manager.clone(),
             exec_policy,
             tx_event.clone(),
-            Arc::clone(&agent_status),
+            agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
             skills_manager,
@@ -304,7 +308,7 @@ impl Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
-            agent_status,
+            agent_status: agent_status_rx,
         };
 
         #[allow(deprecated)]
@@ -346,8 +350,7 @@ impl Codex {
     }
 
     pub(crate) async fn agent_status(&self) -> AgentStatus {
-        let status = self.agent_status.read().await;
-        status.clone()
+        self.agent_status.borrow().clone()
     }
 }
 
@@ -357,11 +360,12 @@ impl Codex {
 pub(crate) struct Session {
     conversation_id: ThreadId,
     tx_event: Sender<Event>,
-    agent_status: Arc<RwLock<AgentStatus>>,
+    agent_status: watch::Sender<AgentStatus>,
     state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
+    pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -558,7 +562,7 @@ impl Session {
         models_manager: Arc<ModelsManager>,
         exec_policy: ExecPolicyManager,
         tx_event: Sender<Event>,
-        agent_status: Arc<RwLock<AgentStatus>>,
+        agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
@@ -686,7 +690,7 @@ impl Session {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -704,9 +708,10 @@ impl Session {
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
-            agent_status: Arc::clone(&agent_status),
+            agent_status,
             state: Mutex::new(state),
             features: config.features.clone(),
+            pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -743,6 +748,8 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: session_configuration.cwd.clone(),
         };
+        let cancel_token = sess.mcp_startup_cancellation_token().await;
+
         sess.services
             .mcp_connection_manager
             .write()
@@ -752,7 +759,7 @@ impl Session {
                 config.mcp_oauth_credentials_store_mode,
                 auth_statuses.clone(),
                 tx_event.clone(),
-                sess.services.mcp_startup_cancellation_token.clone(),
+                cancel_token,
                 sandbox_state,
             )
             .await;
@@ -1027,8 +1034,7 @@ impl Session {
     pub(crate) async fn send_event_raw(&self, event: Event) {
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
-            let mut guard = self.agent_status.write().await;
-            *guard = status;
+            self.agent_status.send_replace(status);
         }
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
@@ -1046,8 +1052,7 @@ impl Session {
     pub(crate) async fn send_event_raw_flushed(&self, event: Event) {
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
-            let mut guard = self.agent_status.write().await;
-            *guard = status;
+            self.agent_status.send_replace(status);
         }
         self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
             .await;
@@ -1650,12 +1655,85 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
+    async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
+        let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
+        let Some(refresh_config) = refresh_config else {
+            return;
+        };
+
+        let McpServerRefreshConfig {
+            mcp_servers,
+            mcp_oauth_credentials_store_mode,
+        } = refresh_config;
+
+        let mcp_servers =
+            match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {
+                Ok(servers) => servers,
+                Err(err) => {
+                    warn!("failed to parse MCP server refresh config: {err}");
+                    return;
+                }
+            };
+        let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
+            mcp_oauth_credentials_store_mode,
+        ) {
+            Ok(mode) => mode,
+            Err(err) => {
+                warn!("failed to parse MCP OAuth refresh config: {err}");
+                return;
+            }
+        };
+
+        let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
+        let sandbox_state = SandboxState {
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+            sandbox_cwd: turn_context.cwd.clone(),
+        };
+        let cancel_token = self.reset_mcp_startup_cancellation_token().await;
+
+        let mut refreshed_manager = McpConnectionManager::default();
+        refreshed_manager
+            .initialize(
+                mcp_servers,
+                store_mode,
+                auth_statuses,
+                self.get_tx_event(),
+                cancel_token,
+                sandbox_state,
+            )
+            .await;
+
+        let mut manager = self.services.mcp_connection_manager.write().await;
+        *manager = refreshed_manager;
+    }
+
+    async fn mcp_startup_cancellation_token(&self) -> CancellationToken {
+        self.services
+            .mcp_startup_cancellation_token
+            .lock()
+            .await
+            .clone()
+    }
+
+    async fn reset_mcp_startup_cancellation_token(&self) -> CancellationToken {
+        let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
+        guard.cancel();
+        let cancel_token = CancellationToken::new();
+        *guard = cancel_token.clone();
+        cancel_token
+    }
+
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
 
     async fn cancel_mcp_startup(&self) {
-        self.services.mcp_startup_cancellation_token.cancel();
+        self.services
+            .mcp_startup_cancellation_token
+            .lock()
+            .await
+            .cancel();
     }
 }
 
@@ -1712,6 +1790,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             }
             Op::ListMcpTools => {
                 handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
+            }
+            Op::RefreshMcpServers { config } => {
+                handlers::refresh_mcp_servers(&sess, config).await;
             }
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
@@ -1781,6 +1862,7 @@ mod handlers {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
+    use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
@@ -1879,6 +1961,8 @@ mod handlers {
                     .await;
             }
 
+            sess.refresh_mcp_servers_if_requested(&current_context)
+                .await;
             sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
                 .await;
             *previous_context = Some(current_context);
@@ -2008,6 +2092,11 @@ mod handlers {
 
             sess_clone.send_event_raw(event).await;
         });
+    }
+
+    pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
+        let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
@@ -2194,6 +2283,7 @@ mod handlers {
         review_request: ReviewRequest,
     ) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        sess.refresh_mcp_servers_if_requested(&turn_context).await;
         match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
@@ -3497,7 +3587,7 @@ mod tests {
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
-        let agent_status = Arc::new(RwLock::new(AgentStatus::PendingInit));
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -3531,7 +3621,7 @@ mod tests {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -3560,9 +3650,10 @@ mod tests {
         let session = Session {
             conversation_id,
             tx_event,
-            agent_status: Arc::clone(&agent_status),
+            agent_status: agent_status_tx,
             state: Mutex::new(state),
             features: config.features.clone(),
+            pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -3591,7 +3682,7 @@ mod tests {
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
-        let agent_status = Arc::new(RwLock::new(AgentStatus::PendingInit));
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -3625,7 +3716,7 @@ mod tests {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -3654,15 +3745,58 @@ mod tests {
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
-            agent_status: Arc::clone(&agent_status),
+            agent_status: agent_status_tx,
             state: Mutex::new(state),
             features: config.features.clone(),
+            pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
         (session, turn_context, rx_event)
+    }
+
+    #[tokio::test]
+    async fn refresh_mcp_servers_is_deferred_until_next_turn() {
+        let (session, turn_context) = make_session_and_context().await;
+        let old_token = session.mcp_startup_cancellation_token().await;
+        assert!(!old_token.is_cancelled());
+
+        let mcp_oauth_credentials_store_mode =
+            serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
+        let refresh_config = McpServerRefreshConfig {
+            mcp_servers: json!({}),
+            mcp_oauth_credentials_store_mode,
+        };
+        {
+            let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+            *guard = Some(refresh_config);
+        }
+
+        assert!(!old_token.is_cancelled());
+        assert!(
+            session
+                .pending_mcp_server_refresh_config
+                .lock()
+                .await
+                .is_some()
+        );
+
+        session
+            .refresh_mcp_servers_if_requested(&turn_context)
+            .await;
+
+        assert!(old_token.is_cancelled());
+        assert!(
+            session
+                .pending_mcp_server_refresh_config
+                .lock()
+                .await
+                .is_none()
+        );
+        let new_token = session.mcp_startup_cancellation_token().await;
+        assert!(!new_token.is_cancelled());
     }
 
     #[tokio::test]
