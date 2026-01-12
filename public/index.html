@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SYVAQ — System Entry</title>
+<style>
+  :root { --bg:#0e0f12; --fg:#e9eaee; --muted:#9aa0ad; --line:#2a2d36; --accent:#6ee7ff; }
+  html,body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+  .wrap{max-width:920px;margin:0 auto;padding:72px 24px;}
+  h1{margin:0 0 8px;font-size:clamp(28px,4vw,36px);letter-spacing:.3px;}
+  .k{color:var(--muted);font-size:14px;}
+  .status{margin:20px 0 28px;font-size:14px;color:var(--muted);}
+  .lead{max-width:70ch;line-height:1.6;font-size:16px;margin:0 0 32px;}
+  .grid{display:grid;gap:14px;grid-template-columns:1fr;}
+  @media (min-width:860px){ .grid{grid-template-columns:repeat(3,1fr);} }
+  .btn{display:block;border:1px solid var(--line);border-radius:14px;padding:18px 16px;text-decoration:none;color:var(--fg);}
+  .btn:hover{border-color:var(--accent);}
+  .btn h2{margin:0 0 6px;font-size:16px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
+  .btn p{margin:0;line-height:1.5;font-size:14px;color:var(--fg);}
+  .foot{margin-top:40px;font-size:13px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;}
+  a{color:var(--fg);text-decoration:none;}
+  a:hover{color:var(--accent);}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>SYVAQ</h1>
+  <div class="k">Safety Signal System</div>
+  <div class="status">Version: MVP-0.9 · Status: Governed · Licensed · Bounded</div>
+  <p class="lead">
+    This system transmits user-initiated safety signals.
+    It does not predict risk.
+    It does not automate response.
+  </p>
+
+  <div class="grid">
+    <a class="btn" href="/architecture/">
+      <h2>Architecture</h2>
+      <p>Constraint-driven shape, bounded authority, reversible growth.</p>
+    </a>
+    <a class="btn" href="/operations/">
+      <h2>Operations</h2>
+      <p>How it runs, what breaks first, and how rollback stays possible.</p>
+    </a>
+    <a class="btn" href="/risk/">
+      <h2>Risk</h2>
+      <p>Failure modes, liability surface, and explicit responsibility edges.</p>
+    </a>
+  </div>
+
+  <div class="foot">
+    <div>AVC Systems Studio · Licensed Governance Layer</div>
+    <div>Last Reviewed: 2025-10-01</div>
+  </div>
+</main>
+</body>
+</html>

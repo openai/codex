@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SYVAQ — Risk</title>
+<style>
+  :root { --bg:#0e0f12; --fg:#e9eaee; --muted:#9aa0ad; --line:#2a2d36; --accent:#6ee7ff; }
+  html,body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+  .wrap{max-width:920px;margin:0 auto;padding:64px 24px;}
+  .top{display:flex;gap:16px;align-items:baseline;justify-content:space-between;flex-wrap:wrap;margin-bottom:24px;}
+  h1{margin:0;font-size:clamp(22px,3vw,30px);letter-spacing:.2px;}
+  a{color:var(--fg);text-decoration:none}
+  a:hover{color:var(--accent)}
+  .k{color:var(--muted);font-size:13px}
+  .card{border:1px solid var(--line);border-radius:14px;padding:18px 18px;margin:12px 0;}
+  .card h2{margin:0 0 8px;font-size:15px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .card p{margin:0;line-height:1.55;max-width:75ch}
+  .grid{display:grid;gap:12px;grid-template-columns:1fr;}
+  @media (min-width:860px){ .grid{grid-template-columns:1fr 1fr;} }
+  .btn{display:block;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:12px}
+  .btn:hover{border-color:var(--accent)}
+  .foot{margin-top:32px;color:var(--muted);font-size:13px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:#cdd3df}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="top">
+    <div>
+      <h1>Risk</h1>
+      <div class="k">Failure is assumed. Authority is bounded. Responsibility is named.</div>
+    </div>
+    <div class="k"><a href="/">← System Entry</a></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Failure Modes</h2>
+      <p>How the system breaks, how it is contained, and why failures remain non-catastrophic.</p>
+      <a class="btn" href="/risk/failure_modes.md">Read failure_modes.md</a>
+    </div>
+
+    <div class="card">
+      <h2>Liability Surface</h2>
+      <p>Where responsibility explicitly stops. No implied duty. No delegated authority. No advisory claims.</p>
+      <a class="btn" href="/risk/liability_surface.md">Read liability_surface.md</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Risk Posture Summary</h2>
+    <p><strong>We prefer bounded false positives</strong> over silent failure. <br/>
+       We avoid predictive claims under sparse data. <br/>
+       We keep humans as endpoints and keep logs as records, not judgments.</p>
+  </div>
+
+  <div class="foot">
+    <div>Doc Set: <code>TDC-01</code> · If a system claims it cannot fail, it has failed review.</div>
+  </div>
+</main>
+</body>
+</html>
