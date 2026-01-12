@@ -1489,25 +1489,29 @@ impl ChatWidget {
                     self.request_redraw();
                 }
             }
-            _ => {
-                match self.bottom_pane.handle_key_event(key_event) {
-                    InputResult::Submitted(text) => {
-                        // If a task is running, queue the user input to be sent after the turn completes.
-                        let user_message = UserMessage {
-                            text,
-                            image_paths: self.bottom_pane.take_recent_submission_images(),
-                        };
-                        self.queue_user_message(user_message);
-                    }
-                    InputResult::Command(cmd) => {
-                        self.dispatch_command(cmd);
-                    }
-                    InputResult::CommandWithArgs(cmd, args) => {
-                        self.dispatch_command_with_args(cmd, args);
-                    }
-                    InputResult::None => {}
+            _ => match self.bottom_pane.handle_key_event(key_event) {
+                InputResult::Submitted(text) => {
+                    let user_message = UserMessage {
+                        text,
+                        image_paths: self.bottom_pane.take_recent_submission_images(),
+                    };
+                    self.submit_user_message(user_message);
                 }
-            }
+                InputResult::Queued(text) => {
+                    let user_message = UserMessage {
+                        text,
+                        image_paths: self.bottom_pane.take_recent_submission_images(),
+                    };
+                    self.queue_user_message(user_message);
+                }
+                InputResult::Command(cmd) => {
+                    self.dispatch_command(cmd);
+                }
+                InputResult::CommandWithArgs(cmd, args) => {
+                    self.dispatch_command_with_args(cmd, args);
+                }
+                InputResult::None => {}
+            },
         }
     }
 

@@ -266,6 +266,7 @@ enum ShortcutId {
     Commands,
     ShellCommands,
     InsertNewline,
+    QueueMessage,
     FilePaths,
     PasteImage,
     ExternalEditor,
@@ -371,6 +372,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         ],
         prefix: "",
         label: " for newline",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::QueueMessage,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('k')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to queue message",
     },
     ShortcutDescriptor {
         id: ShortcutId::FilePaths,
