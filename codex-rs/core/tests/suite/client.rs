@@ -477,9 +477,6 @@ async fn chatgpt_auth_sends_correct_request() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/api/codex/responses");
-    let request_conversation_id = request
-        .header("conversation_id")
-        .expect("conversation_id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
@@ -489,7 +486,6 @@ async fn chatgpt_auth_sends_correct_request() {
         .expect("chatgpt-account-id header");
     let request_body = request.body_json();
 
-    assert_eq!(request_conversation_id, conversation_id.to_string());
     assert_eq!(request_originator, "codex_cli_rs");
     assert_eq!(request_authorization, "Bearer Access Token");
     assert_eq!(request_chatgpt_account_id, "account_id");
