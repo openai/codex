@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -15,15 +14,20 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::json;
+use std::sync::Arc;
 
 fn long_running_exec_command_with_output() -> (String, Option<&'static str>) {
     if cfg!(windows) {
         (
-            "Write-Output 'partial output'; Start-Sleep -Seconds 60".to_string(),
+            "Start-Sleep -Milliseconds 200; Write-Output 'partial output'; Start-Sleep -Seconds 60"
+                .to_string(),
             Some("powershell"),
         )
     } else {
-        ("printf 'partial output\\n'; sleep 60".to_string(), None)
+        (
+            "sleep 0.2; printf 'partial output\\n'; sleep 60".to_string(),
+            None,
+        )
     }
 }
 
@@ -33,13 +37,14 @@ fn long_running_shell_command_with_output() -> Vec<String> {
             "powershell.exe".to_string(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
-            "Write-Output 'partial output'; Start-Sleep -Seconds 60".to_string(),
+            "Start-Sleep -Milliseconds 200; Write-Output 'partial output'; Start-Sleep -Seconds 60"
+                .to_string(),
         ]
     } else {
         vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            "printf 'partial output\\n'; sleep 60".to_string(),
+            "sleep 0.2; printf 'partial output\\n'; sleep 60".to_string(),
         ]
     }
 }
@@ -50,10 +55,14 @@ fn long_running_local_shell_call_with_output() -> Vec<&'static str> {
             "powershell.exe",
             "-NoProfile",
             "-Command",
-            "Write-Output 'partial output'; Start-Sleep -Seconds 60",
+            "Start-Sleep -Milliseconds 200; Write-Output 'partial output'; Start-Sleep -Seconds 60",
         ]
     } else {
-        vec!["/bin/sh", "-c", "printf 'partial output\\n'; sleep 60"]
+        vec![
+            "/bin/sh",
+            "-c",
+            "sleep 0.2; printf 'partial output\\n'; sleep 60",
+        ]
     }
 }
 
