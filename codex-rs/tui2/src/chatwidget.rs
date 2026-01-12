@@ -1547,6 +1547,9 @@ impl ChatWidget {
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
+            SlashCommand::Fork => {
+                self.app_event_tx.send(AppEvent::OpenForkPicker);
+            }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
                 if init_target.exists() {

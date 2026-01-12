@@ -2358,6 +2358,7 @@ impl CodexMessageProcessor {
             env_http_headers,
             scopes.as_deref().unwrap_or_default(),
             timeout_secs,
+            config.mcp_oauth_callback_port,
         )
         .await
         {
