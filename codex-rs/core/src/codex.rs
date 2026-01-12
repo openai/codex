@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -373,7 +372,6 @@ pub(crate) struct Session {
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) client: ModelClient,
-    pub(crate) client_session: OnceLock<ModelClientSession>,
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -394,12 +392,6 @@ pub(crate) struct TurnContext {
 }
 
 impl TurnContext {
-    pub(crate) fn client_session(&self) -> ModelClientSession {
-        self.client_session
-            .get_or_init(|| self.client.new_session())
-            .clone()
-    }
-
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
@@ -541,7 +533,6 @@ impl Session {
         TurnContext {
             sub_id,
             client,
-            client_session: OnceLock::new(),
             cwd: session_configuration.cwd.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             base_instructions: session_configuration.base_instructions.clone(),
@@ -2285,7 +2276,6 @@ async fn spawn_review_thread(
     let review_turn_context = TurnContext {
         sub_id: sub_id.to_string(),
         client,
-        client_session: OnceLock::new(),
         tools_config,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
@@ -2551,12 +2541,15 @@ async fn run_model_turn(
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
+    let client_session = turn_context.client.new_session();
+
     let mut retries = 0;
     loop {
         let err = match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
+            &client_session,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -2648,6 +2641,7 @@ async fn try_run_turn(
     router: Arc<ToolRouter>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    client_session: &ModelClientSession,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
@@ -2676,8 +2670,7 @@ async fn try_run_turn(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = turn_context
-        .client_session()
+    let mut stream = client_session
         .stream(prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
