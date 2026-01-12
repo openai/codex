@@ -344,7 +344,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     );
     let NewThread {
         thread: codex,
-        thread_id: conversation_id,
+        thread_id: session_id,
         session_configured: _,
         ..
     } = thread_manager
@@ -366,15 +366,13 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
-    let request_conversation_id = request
-        .header("conversation_id")
-        .expect("conversation_id header");
+    let request_session_id = request.header("session_id").expect("session_id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
     let request_originator = request.header("originator").expect("originator header");
 
-    assert_eq!(request_conversation_id, conversation_id.to_string());
+    assert_eq!(request_session_id, session_id.to_string());
     assert_eq!(request_originator, "codex_cli_rs");
     assert_eq!(request_authorization, "Bearer Test API Key");
 }
