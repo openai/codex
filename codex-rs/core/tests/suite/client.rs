@@ -485,10 +485,8 @@ async fn chatgpt_auth_sends_correct_request() {
         .header("chatgpt-account-id")
         .expect("chatgpt-account-id header");
     let request_body = request.body_json();
-    
-    let session_id = request
-        .header("session_id")
-        .expect("session_id header");
+
+    let session_id = request.header("session_id").expect("session_id header");
     assert_eq!(session_id, thread_id.to_string());
 
     assert_eq!(request_originator, "codex_cli_rs");
