@@ -15129,6 +15129,68 @@ fn is_high_risk(bug: &SecurityReviewBug) -> bool {
     false
 }
 
+fn is_crypto_validation_vuln_tag(tag: &str) -> bool {
+    let tag = tag.trim().to_ascii_lowercase();
+    if tag.is_empty() {
+        return false;
+    }
+
+    matches!(
+        tag.as_str(),
+        "crypto"
+            | "cryptography"
+            | "crypto-misuse"
+            | "weak-crypto"
+            | "sig-bypass"
+            | "signature-bypass"
+            | "jwt-alg-none"
+            | "jwt-alg-downgrade"
+            | "alg-downgrade"
+            | "algo-downgrade"
+            | "aead-misuse"
+            | "mac-misuse"
+            | "nonce-reuse"
+            | "iv-reuse"
+            | "weak-rng"
+            | "insecure-rng"
+    ) || tag.starts_with("crypto-")
+        || tag.starts_with("jwt-")
+        || tag.starts_with("jws-")
+        || tag.starts_with("jwe-")
+        || tag.starts_with("sig-")
+        || tag.starts_with("signature-")
+        || tag.starts_with("mac-")
+        || tag.starts_with("aead-")
+        || tag.starts_with("nonce-")
+        || tag.starts_with("iv-")
+        || tag.starts_with("tls-")
+        || tag.starts_with("x509-")
+        || tag.contains("-crypto-")
+        || tag.contains("-jwt-")
+        || tag.contains("-jws-")
+        || tag.contains("-jwe-")
+        || tag.contains("-sig-")
+        || tag.contains("-signature-")
+        || tag.contains("-mac-")
+        || tag.contains("-aead-")
+        || tag.contains("-nonce-")
+        || tag.contains("-iv-")
+        || tag.contains("-tls-")
+        || tag.contains("-x509-")
+        || tag.ends_with("-crypto")
+        || tag.ends_with("-jwt")
+        || tag.ends_with("-jws")
+        || tag.ends_with("-jwe")
+        || tag.ends_with("-sig")
+        || tag.ends_with("-signature")
+        || tag.ends_with("-mac")
+        || tag.ends_with("-aead")
+        || tag.ends_with("-nonce")
+        || tag.ends_with("-iv")
+        || tag.ends_with("-tls")
+        || tag.ends_with("-x509")
+}
+
 fn is_priority_validation_vuln_tag(tag: &str) -> bool {
     let tag = tag.trim().to_ascii_lowercase();
     if tag.is_empty() {
@@ -15144,6 +15206,7 @@ fn is_priority_validation_vuln_tag(tag: &str) -> bool {
             | "sql-injection"
             | "xxe"
     ) || tag.starts_with("path-traversal")
+        || is_crypto_validation_vuln_tag(tag.as_str())
 }
 
 fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
@@ -15319,7 +15382,7 @@ async fn run_validation_plan_agent(
         &progress_sender,
         &None,
         &mut logs,
-        format!("Planning ASan crash validation for {label}..."),
+        format!("Planning validation for {label}..."),
     );
 
     let mut validation_config = config.clone();
@@ -15334,6 +15397,7 @@ async fn run_validation_plan_agent(
         .features
         .disable(Feature::ApplyPatchFreeform)
         .disable(Feature::ViewImageTool);
+    validation_config.mcp_servers.clear();
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -15433,6 +15497,182 @@ async fn run_validation_plan_agent(
     Ok(ValidationPlanAgentOutput { text, logs })
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ValidationRefineFile {
+    path: String,
+    contents: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ValidationRefineOutput {
+    summary: Option<String>,
+    dockerfile: Option<String>,
+    docker_build: Option<String>,
+    docker_run: Option<String>,
+    #[serde(default)]
+    files: Vec<ValidationRefineFile>,
+}
+
+fn parse_validation_refine_output(raw: &str) -> Option<ValidationRefineOutput> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(item) = serde_json::from_str::<ValidationRefineOutput>(trimmed) {
+        return Some(item);
+    }
+
+    for snippet in extract_json_objects(trimmed) {
+        if let Ok(item) = serde_json::from_str::<ValidationRefineOutput>(&snippet) {
+            return Some(item);
+        }
+    }
+
+    None
+}
+
+struct ValidationRefineAgentOutput {
+    text: String,
+    logs: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_validation_refine_agent(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    prompt: String,
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+    model: &str,
+    label: &str,
+) -> Result<ValidationRefineAgentOutput, BugVerificationFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    push_progress_log(
+        &progress_sender,
+        &None,
+        &mut logs,
+        format!("Refining validation PoC for {label}..."),
+    );
+
+    let mut refine_config = config.clone();
+    refine_config.model = Some(model.to_string());
+    refine_config.model_provider = provider.clone();
+    refine_config.base_instructions = Some(VALIDATION_REFINE_SYSTEM_PROMPT.to_string());
+    refine_config.user_instructions = None;
+    refine_config.developer_instructions = None;
+    refine_config.compact_prompt = None;
+    refine_config.cwd = repo_root.to_path_buf();
+    refine_config
+        .features
+        .disable(Feature::ApplyPatchFreeform)
+        .disable(Feature::ViewImageTool);
+    refine_config.mcp_servers.clear();
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other(
+            "security_review_validation_refine".to_string(),
+        )),
+    );
+
+    let conversation = match manager.new_conversation(refine_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start validation refine agent for {label}: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        })
+        .await
+    {
+        let message = format!("Failed to submit validation refine prompt for {label}: {err}");
+        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+        return Err(BugVerificationFailure { message, logs });
+    }
+
+    let mut last_agent_message: Option<String> = None;
+    loop {
+        let event = match conversation.next_event().await {
+            Ok(event) => event,
+            Err(err) => {
+                let message =
+                    format!("Validation refine agent terminated unexpectedly for {label}: {err}");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+        };
+
+        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+        match event.msg {
+            EventMsg::TaskComplete(done) => {
+                if let Some(msg) = done.last_agent_message {
+                    last_agent_message = Some(msg);
+                }
+                break;
+            }
+            EventMsg::AgentMessage(msg) => {
+                last_agent_message = Some(msg.message.clone());
+            }
+            EventMsg::AgentReasoning(reason) => {
+                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::Warning(warn) => {
+                push_progress_log(&progress_sender, &None, &mut logs, warn.message);
+            }
+            EventMsg::Error(err) => {
+                let message = format!("Validation refine agent error for {label}: {}", err.message);
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            EventMsg::TurnAborted(aborted) => {
+                let message = format!(
+                    "Validation refine agent aborted for {label}: {:?}",
+                    aborted.reason
+                );
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            EventMsg::TokenCount(count) => {
+                if let Some(info) = count.info {
+                    metrics.record_model_call();
+                    metrics.record_usage(&info.last_token_usage);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let text = match last_agent_message.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(text) => text,
+        None => {
+            let message =
+                format!("Validation refine agent produced an empty response for {label}.");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
+
+    let _ = conversation.submit(Op::Shutdown).await;
+
+    Ok(ValidationRefineAgentOutput { text, logs })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_asan_validation(
     repo_path: PathBuf,
@@ -15462,7 +15702,7 @@ async fn run_asan_validation(
 
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(
-            "Planning ASan crash validation for high-risk findings...".to_string(),
+            "Planning validation for high-risk findings...".to_string(),
         ));
     }
 
@@ -15476,6 +15716,12 @@ async fn run_asan_validation(
 
     // Build prompt
     let findings = build_validation_findings_context(&snapshot);
+    let finding_map: HashMap<BugIdentifier, ValidationFinding> = findings
+        .findings
+        .iter()
+        .cloned()
+        .map(|finding| (finding.id, finding))
+        .collect();
 
     let mut logs: Vec<String> = Vec::new();
     let mut handled: HashSet<BugIdentifier> = HashSet::new();
@@ -15484,6 +15730,30 @@ async fn run_asan_validation(
     if findings.ids.is_empty() {
         return Ok(());
     }
+
+    let mark_unable =
+        |entry: &mut BugSnapshot, tool: &str, summary: String, logs: &mut Vec<String>| {
+            if !matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                return;
+            }
+            entry.bug.validation.status = BugValidationStatus::UnableToValidate;
+            entry.bug.validation.tool = Some(tool.to_string());
+            entry.bug.validation.target = None;
+            let cleaned = summary
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+            if cleaned.is_empty() {
+                logs.push("Validation planning produced an empty failure summary.".to_string());
+                entry.bug.validation.summary =
+                    Some("Validation could not be completed in this environment.".to_string());
+            } else {
+                entry.bug.validation.summary = Some(cleaned);
+            }
+            entry.bug.validation.run_at = Some(run_at);
+        };
 
     let planning_results = futures::stream::iter(findings.findings.into_iter().map(|finding| {
         let provider = provider.clone();
@@ -15515,16 +15785,41 @@ async fn run_asan_validation(
     .await;
 
     for (id, label, result) in planning_results {
+        let Some(index) = find_bug_index(&snapshot, id) else {
+            continue;
+        };
+        let entry = &mut snapshot.bugs[index];
+
         match result {
             Ok(output) => {
                 logs.extend(output.logs);
-                let parsed = parse_validation_plan_item(output.text.as_str());
-                let Some(index) = find_bug_index(&snapshot, id) else {
+                let Some(parsed) = parse_validation_plan_item(output.text.as_str()) else {
+                    handled.insert(id);
+                    mark_unable(
+                        entry,
+                        "none",
+                        format!(
+                            "Validation planning produced unparseable output for {label}; no validation was run."
+                        ),
+                        &mut logs,
+                    );
                     continue;
                 };
-                let entry = &mut snapshot.bugs[index];
-
-                let Some(tool_raw) = parsed.as_ref().and_then(|item| item.tool.as_ref()) else {
+                let Some(tool_raw) = parsed
+                    .tool
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                else {
+                    handled.insert(id);
+                    mark_unable(
+                        entry,
+                        "none",
+                        format!(
+                            "Validation planning returned no tool for {label}; no validation was run."
+                        ),
+                        &mut logs,
+                    );
                     continue;
                 };
                 handled.insert(id);
@@ -15533,67 +15828,87 @@ async fn run_asan_validation(
                     "none" => {
                         if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
                             let reason = parsed
-                                .as_ref()
-                                .and_then(|item| item.reason.as_ref())
-                                .map(|s| s.trim())
+                                .reason
+                                .as_deref()
+                                .map(str::trim)
                                 .filter(|s| !s.is_empty())
                                 .unwrap_or("No safe validation available in this environment.");
-                            entry.bug.validation.status = BugValidationStatus::UnableToValidate;
-                            entry.bug.validation.tool = Some("none".to_string());
-                            entry.bug.validation.target = None;
-                            entry.bug.validation.summary = Some(reason.to_string());
-                            entry.bug.validation.run_at = Some(run_at);
+                            mark_unable(
+                                entry,
+                                "none",
+                                format!("Validation planning determined no safe check: {reason}"),
+                                &mut logs,
+                            );
                         }
                     }
                     "python" => {
+                        let Some(script) = parsed
+                            .script
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        else {
+                            let reason = parsed
+                                .reason
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty());
+                            let mut summary = format!(
+                                "Validation planning selected python but provided no script for {label}; no validation was run."
+                            );
+                            if let Some(reason) = reason {
+                                summary.push_str(" Reason: ");
+                                summary.push_str(reason);
+                            }
+                            mark_unable(entry, "python", summary, &mut logs);
+                            continue;
+                        };
+
                         requests.push(BugVerificationRequest {
                             id,
                             tool: BugVerificationTool::Python,
                             target: None,
                             script_path: None,
-                            script_inline: parsed.and_then(|item| item.script),
+                            script_inline: Some(script.to_string()),
                         });
                     }
                     "curl" | "playwright" => {
                         if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                            entry.bug.validation.status = BugValidationStatus::UnableToValidate;
-                            entry.bug.validation.tool = Some(tool_raw.to_string());
-                            entry.bug.validation.target = None;
-                            entry.bug.validation.summary = Some(
-                                "Web/API validation is disabled; only ASan crash validation is supported."
-                                    .to_string(),
+                            mark_unable(
+                                entry,
+                                tool_raw,
+                                format!(
+                                    "Validation planning requested `{tool_raw}`, but web/API validation is disabled in this mode; no validation was run."
+                                ),
+                                &mut logs,
                             );
-                            entry.bug.validation.run_at = Some(run_at);
                         }
                     }
                     other => {
                         if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                            entry.bug.validation.status = BugValidationStatus::UnableToValidate;
-                            entry.bug.validation.tool = Some(other.to_string());
-                            entry.bug.validation.target = None;
-                            entry.bug.validation.summary = Some(format!(
-                                "Validation planning returned unknown tool: {other}"
-                            ));
-                            entry.bug.validation.run_at = Some(run_at);
+                            mark_unable(
+                                entry,
+                                other,
+                                format!(
+                                    "Validation planning returned unsupported tool `{other}`; no validation was run."
+                                ),
+                                &mut logs,
+                            );
                         }
                     }
                 }
             }
             Err(err) => {
                 logs.extend(err.logs);
-                if let Some(index) = find_bug_index(&snapshot, id) {
-                    let entry = &mut snapshot.bugs[index];
-                    if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                        entry.bug.validation.status = BugValidationStatus::UnableToValidate;
-                        entry.bug.validation.tool = Some("none".to_string());
-                        entry.bug.validation.target = None;
-                        entry.bug.validation.summary = Some(format!(
-                            "Validation planning failed for {label}: {}",
-                            err.message
-                        ));
-                        entry.bug.validation.run_at = Some(run_at);
-                    }
-                }
+                mark_unable(
+                    entry,
+                    "none",
+                    format!(
+                        "Validation planning failed for {label}: {}; no validation was run.",
+                        err.message
+                    ),
+                    &mut logs,
+                );
                 handled.insert(id);
             }
         }
@@ -15605,16 +15920,18 @@ async fn run_asan_validation(
         }
         if let Some(index) = find_bug_index(&snapshot, id) {
             let entry = &mut snapshot.bugs[index];
-            if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                entry.bug.validation.status = BugValidationStatus::UnableToValidate;
-                entry.bug.validation.tool = Some("none".to_string());
-                entry.bug.validation.target = None;
-                entry.bug.validation.summary = Some(
-                    "Validation planning did not produce a safe check for this finding."
-                        .to_string(),
-                );
-                entry.bug.validation.run_at = Some(run_at);
-            }
+            let label = finding_map
+                .get(&id)
+                .map(|finding| finding.label.as_str())
+                .unwrap_or("this finding");
+            mark_unable(
+                entry,
+                "none",
+                format!(
+                    "Validation planning did not produce a plan for {label}; no validation was run."
+                ),
+                &mut logs,
+            );
         }
     }
 
@@ -15644,10 +15961,455 @@ async fn run_asan_validation(
             "Executing validation checks...".to_string(),
         ));
     }
-    let outcome = verify_bugs(batch).await?;
+    let outcome = verify_bugs(batch.clone()).await?;
     for line in outcome.logs {
         if let Some(tx) = progress_sender.as_ref() {
             tx.send(AppEvent::SecurityReviewLog(line.clone()));
+        }
+    }
+
+    let snapshot_bytes =
+        tokio_fs::read(&batch.snapshot_path)
+            .await
+            .map_err(|err| BugVerificationFailure {
+                message: format!("Failed to read {}: {err}", batch.snapshot_path.display()),
+                logs: logs.clone(),
+            })?;
+    let mut snapshot: SecurityReviewSnapshot =
+        serde_json::from_slice(&snapshot_bytes).map_err(|err| BugVerificationFailure {
+            message: format!("Failed to parse {}: {err}", batch.snapshot_path.display()),
+            logs: logs.clone(),
+        })?;
+
+    let build_validation_state_prompt = |state: &BugValidationState| -> String {
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(format!("status: {}", validation_status_label(state)));
+        if let Some(tool) = state
+            .tool
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            lines.push(format!("tool: {tool}"));
+        }
+        if let Some(summary) = state
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            lines.push(format!("summary: {summary}"));
+        }
+        if !state.repro_steps.is_empty() {
+            lines.push("repro_steps:".to_string());
+            for step in state.repro_steps.iter().take(8) {
+                let step = step.trim();
+                if !step.is_empty() {
+                    lines.push(format!("- {step}"));
+                }
+            }
+        }
+        if !state.artifacts.is_empty() {
+            lines.push("artifacts:".to_string());
+            for artifact in state.artifacts.iter().take(8) {
+                let artifact = artifact.trim();
+                if !artifact.is_empty() {
+                    lines.push(format!("- {artifact}"));
+                }
+            }
+        }
+        if let Some(snippet) = state
+            .output_snippet
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            lines.push("output_snippet:".to_string());
+            lines.push(truncate_text(snippet, 1_000));
+        }
+        if lines.is_empty() {
+            "(none)".to_string()
+        } else {
+            lines.join("\n")
+        }
+    };
+
+    #[derive(Clone, Debug)]
+    struct ValidationRefineWorkItem {
+        id: BugIdentifier,
+        label: String,
+        context: String,
+        validation_state: String,
+        summary_id: usize,
+        risk_rank: Option<usize>,
+    }
+
+    let refine_items: Vec<ValidationRefineWorkItem> = findings
+        .ids
+        .iter()
+        .copied()
+        .filter_map(|id| {
+            let index = find_bug_index(&snapshot, id)?;
+            let entry = snapshot.bugs.get(index)?;
+            if entry.bug.validation.tool.as_deref() != Some("python") {
+                return None;
+            }
+            let finding = finding_map.get(&id)?;
+            Some(ValidationRefineWorkItem {
+                id,
+                label: finding.label.clone(),
+                context: finding.context.clone(),
+                validation_state: build_validation_state_prompt(&entry.bug.validation),
+                summary_id: entry.bug.summary_id,
+                risk_rank: entry.bug.risk_rank,
+            })
+        })
+        .collect();
+
+    if !refine_items.is_empty() {
+        let refine_results = futures::stream::iter(refine_items.into_iter().map(|item| {
+            let provider = provider.clone();
+            let auth_manager = auth_manager.clone();
+            let progress_sender = progress_sender.clone();
+            let metrics = metrics.clone();
+            let model = model.clone();
+            let repo_root = batch.repo_path.clone();
+            let work_dir = batch.work_dir.clone();
+            async move {
+                let bug_work_dir = work_dir.join(format!("bug{}", item.summary_id));
+                let mut python_script = "(none)".to_string();
+                let candidates: Vec<PathBuf> = if let Some(rank) = item.risk_rank {
+                    vec![
+                        bug_work_dir.join(format!("bug_rank_{rank}.py")),
+                        bug_work_dir.join(format!("bug_{}.py", item.summary_id)),
+                    ]
+                } else {
+                    vec![bug_work_dir.join(format!("bug_{}.py", item.summary_id))]
+                };
+                for path in candidates {
+                    if let Ok(contents) = tokio_fs::read_to_string(&path).await
+                        && !contents.trim().is_empty()
+                    {
+                        python_script = contents;
+                        break;
+                    }
+                }
+
+                let prompt = VALIDATION_REFINE_PROMPT_TEMPLATE
+                    .replace("{finding}", &item.context)
+                    .replace("{validation_state}", &item.validation_state)
+                    .replace("{python_script}", python_script.trim());
+
+                let result = run_validation_refine_agent(
+                    config,
+                    &provider,
+                    auth_manager,
+                    repo_root.as_path(),
+                    prompt,
+                    progress_sender,
+                    metrics,
+                    model.as_str(),
+                    item.label.as_str(),
+                )
+                .await;
+                (item.id, item.label, result)
+            }
+        }))
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+
+        fn safe_rel_path(path: &str) -> bool {
+            let path = path.trim();
+            if path.is_empty() {
+                return false;
+            }
+            let parsed = Path::new(path);
+            if parsed.is_absolute() {
+                return false;
+            }
+            !parsed
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        }
+
+        let mut updated = false;
+        for (id, label, result) in refine_results {
+            match result {
+                Ok(output) => {
+                    logs.extend(output.logs);
+                    let Some(parsed) = parse_validation_refine_output(output.text.as_str()) else {
+                        if let Some(index) = find_bug_index(&snapshot, id) {
+                            let validation = &mut snapshot.bugs[index].bug.validation;
+                            let addition = format!(
+                                "PoC refinement produced unparseable output for {label}; no Dockerfile was created."
+                            );
+                            let cleaned = addition
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                                .trim()
+                                .to_string();
+                            match validation.summary.as_mut() {
+                                Some(existing) if !existing.trim().is_empty() => {
+                                    existing.push_str(" · ");
+                                    existing.push_str(&cleaned);
+                                }
+                                _ => {
+                                    validation.summary = Some(cleaned);
+                                }
+                            }
+                            updated = true;
+                        }
+                        continue;
+                    };
+
+                    let Some(index) = find_bug_index(&snapshot, id) else {
+                        continue;
+                    };
+                    let Some(summary_id) =
+                        snapshot.bugs.get(index).map(|entry| entry.bug.summary_id)
+                    else {
+                        continue;
+                    };
+
+                    let bug_work_dir = batch.work_dir.join(format!("bug{summary_id}"));
+
+                    let mut summary_additions: Vec<String> = Vec::new();
+                    if let Some(summary) = parsed
+                        .summary
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        summary_additions.push(
+                            summary
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+
+                    let mut artifacts_to_add: Vec<String> = Vec::new();
+                    let mut dockerfile_display: Option<String> = None;
+
+                    if let Some(dockerfile) = parsed
+                        .dockerfile
+                        .as_deref()
+                        .map(str::trim_end)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
+                        let path = bug_work_dir.join("Dockerfile");
+                        match tokio_fs::write(&path, dockerfile.as_bytes()).await {
+                            Ok(_) => {
+                                let display = display_path_for(&path, &batch.repo_path);
+                                dockerfile_display = Some(display.clone());
+                                artifacts_to_add.push(display);
+                            }
+                            Err(err) => {
+                                summary_additions.push(
+                                    format!("Failed to write Dockerfile: {err}")
+                                        .split_whitespace()
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                        .trim()
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    }
+
+                    for file in &parsed.files {
+                        if !safe_rel_path(&file.path) {
+                            continue;
+                        }
+                        let path = bug_work_dir.join(file.path.trim());
+                        if let Some(parent) = path.parent() {
+                            let _ = tokio_fs::create_dir_all(parent).await;
+                        }
+                        match tokio_fs::write(&path, file.contents.as_bytes()).await {
+                            Ok(_) => {
+                                artifacts_to_add.push(display_path_for(&path, &batch.repo_path));
+                            }
+                            Err(err) => {
+                                summary_additions.push(
+                                    format!("Failed to write {}: {err}", file.path.trim())
+                                        .split_whitespace()
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                        .trim()
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    }
+
+                    let docker_steps = dockerfile_display.as_deref().map(|display_dockerfile| {
+                        let image_tag = format!("codex-validate-bug{summary_id}");
+                        let build_cmd = parsed
+                            .docker_build
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| {
+                                format!("docker build -f {display_dockerfile} -t {image_tag} .")
+                            });
+                        let run_cmd = parsed
+                            .docker_run
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("docker run --rm {image_tag}"));
+                        (format!("Build: `{build_cmd}`"), format!("Run: `{run_cmd}`"))
+                    });
+
+                    let needs_update = !summary_additions.is_empty()
+                        || !artifacts_to_add.is_empty()
+                        || docker_steps.is_some();
+                    if !needs_update {
+                        continue;
+                    }
+
+                    let Some(entry) = snapshot.bugs.get_mut(index) else {
+                        continue;
+                    };
+                    let validation = &mut entry.bug.validation;
+
+                    for addition in summary_additions {
+                        let cleaned = addition
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .trim()
+                            .to_string();
+                        if cleaned.is_empty() {
+                            continue;
+                        }
+                        match validation.summary.as_mut() {
+                            Some(existing) if !existing.trim().is_empty() => {
+                                if !existing.contains(&cleaned) {
+                                    existing.push_str(" · ");
+                                    existing.push_str(&cleaned);
+                                }
+                            }
+                            _ => {
+                                validation.summary = Some(cleaned);
+                            }
+                        }
+                    }
+
+                    for artifact in artifacts_to_add {
+                        let artifact = artifact.trim();
+                        if artifact.is_empty() {
+                            continue;
+                        }
+                        if !validation.artifacts.iter().any(|a| a == artifact) {
+                            validation.artifacts.push(artifact.to_string());
+                        }
+                    }
+
+                    if let Some((build_step, run_step)) = docker_steps {
+                        if !validation.repro_steps.iter().any(|s| s == &build_step) {
+                            validation.repro_steps.push(build_step);
+                        }
+                        if !validation.repro_steps.iter().any(|s| s == &run_step) {
+                            validation.repro_steps.push(run_step);
+                        }
+                    }
+
+                    updated = true;
+                }
+                Err(err) => {
+                    logs.extend(err.logs);
+                    if let Some(index) = find_bug_index(&snapshot, id) {
+                        let validation = &mut snapshot.bugs[index].bug.validation;
+                        let addition =
+                            format!("PoC refinement failed for {label}: {}", err.message);
+                        let cleaned = addition
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .trim()
+                            .to_string();
+                        match validation.summary.as_mut() {
+                            Some(existing) if !existing.trim().is_empty() => {
+                                existing.push_str(" · ");
+                                existing.push_str(&cleaned);
+                            }
+                            _ => {
+                                validation.summary = Some(cleaned);
+                            }
+                        }
+                        updated = true;
+                    }
+                }
+            }
+        }
+
+        if updated {
+            let snapshot_bytes =
+                serde_json::to_vec_pretty(&snapshot).map_err(|err| BugVerificationFailure {
+                    message: format!("Failed to serialize bug snapshot: {err}"),
+                    logs: logs.clone(),
+                })?;
+            tokio_fs::write(&batch.snapshot_path, snapshot_bytes)
+                .await
+                .map_err(|err| BugVerificationFailure {
+                    message: format!("Failed to write {}: {err}", batch.snapshot_path.display()),
+                    logs: logs.clone(),
+                })?;
+
+            let git_link_info = build_git_link_info(&batch.repo_path).await;
+            let bugs_markdown = build_bugs_markdown(&snapshot, git_link_info.as_ref());
+            tokio_fs::write(&batch.bugs_path, bugs_markdown.as_bytes())
+                .await
+                .map_err(|err| BugVerificationFailure {
+                    message: format!("Failed to write {}: {err}", batch.bugs_path.display()),
+                    logs: logs.clone(),
+                })?;
+
+            let mut sections = snapshot.report_sections_prefix.clone();
+            if !bugs_markdown.trim().is_empty() {
+                sections.push(format!("# Security Findings\n\n{}", bugs_markdown.trim()));
+            }
+
+            let report_markdown = if sections.is_empty() {
+                None
+            } else {
+                Some(fix_mermaid_blocks(&sections.join("\n\n")))
+            };
+
+            if let Some(report_path) = batch.report_path.as_ref()
+                && let Some(ref markdown) = report_markdown
+            {
+                tokio_fs::write(report_path, markdown.as_bytes())
+                    .await
+                    .map_err(|err| BugVerificationFailure {
+                        message: format!("Failed to write {}: {err}", report_path.display()),
+                        logs: logs.clone(),
+                    })?;
+
+                if let Some(html_path) = batch.report_html_path.as_ref() {
+                    let repo_label = batch
+                        .repo_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("Security Review");
+                    let title = format!("{repo_label} Security Report");
+                    let html = build_report_html(&title, markdown);
+                    tokio_fs::write(html_path, html).await.map_err(|err| {
+                        BugVerificationFailure {
+                            message: format!("Failed to write {}: {err}", html_path.display()),
+                            logs: logs.clone(),
+                        }
+                    })?;
+                }
+            }
         }
     }
     Ok(())
