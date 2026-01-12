@@ -629,6 +629,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_times_out_when_status_is_not_final() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({"id": agent_id.to_string(), "timeout_ms": 10})),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(content, r#"{"status":"pending_init","timed_out":true}"#);
+        assert_eq!(success, Some(false));
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn wait_returns_final_status_without_timeout() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let mut status_rx = manager
+            .agent_control()
+            .subscribe_status(agent_id)
+            .await
+            .expect("subscribe should succeed");
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+        let _ = timeout(Duration::from_secs(1), status_rx.changed())
+            .await
+            .expect("shutdown status should arrive");
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({"id": agent_id.to_string(), "timeout_ms": 1000})),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(content, r#"{"status":"shutdown","timed_out":false}"#);
+        assert_eq!(success, Some(true));
+    }
+
+    #[tokio::test]
     async fn close_agent_submits_shutdown_and_returns_status() {
         let (mut session, turn) = make_session_and_context().await;
         let manager = thread_manager();
