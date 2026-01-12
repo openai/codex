@@ -91,6 +91,14 @@ use url::Url;
 
 const VALIDATION_SUMMARY_GRAPHEMES: usize = 96;
 const VALIDATION_OUTPUT_GRAPHEMES: usize = 480;
+const VALIDATION_MAX_FINDINGS: usize = 8;
+const VALIDATION_PLAN_CONCURRENCY: usize = 8;
+const VALIDATION_REFINE_CONCURRENCY: usize = 8;
+const VALIDATION_EXEC_CONCURRENCY: usize = 8;
+const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
+
+const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
+const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles.";
 
 //
 
@@ -2236,10 +2244,12 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
     });
 
     for snapshot in ordered {
-        let base = snapshot.original_markdown.trim();
-        if base.is_empty() {
+        let base_raw = snapshot.original_markdown.trim();
+        if base_raw.is_empty() {
             continue;
         }
+        let base_owned = prune_bug_markdown_file_lines_for_reporting(base_raw);
+        let base = base_owned.trim();
         let mut composed = String::new();
         let anchor_snippet = format!("<a id=\"bug-{}\"", snapshot.bug.summary_id);
         if base.contains(&anchor_snippet) {
@@ -2276,11 +2286,7 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
             }
         }
         composed.push_str("\n\n#### Validation\n");
-        let expects_asan = snapshot
-            .bug
-            .verification_types
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case("crash_poc"));
+        let expects_asan = crash_poc_category(&snapshot.bug).is_some();
         let status_label = validation_status_label(&snapshot.bug.validation);
         composed.push_str(&format!("- **Status:** {status_label}\n"));
         if let Some(tool) = snapshot
@@ -8050,6 +8056,7 @@ mod bug_analysis_progress_tests {
 mod bug_dedupe_tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
 
     fn make_bug_markdown(title: &str, file: &str) -> String {
         format!(
@@ -8077,6 +8084,107 @@ mod bug_dedupe_tests {
             markdown: make_bug_markdown(title, file),
             author_github: None,
         }
+    }
+
+    #[test]
+    fn prunes_file_lines_to_sinks_from_dataflow() {
+        let markdown = r#"
+### Example finding
+- **File & Lines:** `src/source.rs#L1-L2, src/prop.rs#L3-L4, src/sink.rs#L10-L12`
+- **Description:** Vulnerable behavior at `src/sink.rs#L10-L12`.
+- **Dataflow:**
+    - Source: `src/source.rs#L1-L2`
+    - Propagation: `src/prop.rs#L3-L4`
+    - Sink: `src/sink.rs#L10-L12`
+- **Recommendation:** Fix it.
+"#;
+
+        let mut next_id = 1usize;
+        let (summaries, details) = extract_bug_summaries(
+            markdown,
+            "default.rs#L1-L1",
+            Path::new("src/lib.rs"),
+            &mut next_id,
+        );
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(details.len(), 1);
+        assert_eq!(summaries[0].file, "src/sink.rs#L10-L12");
+        assert!(
+            summaries[0]
+                .markdown
+                .contains("- **File & Lines:** `src/sink.rs#L10-L12`")
+        );
+        assert!(
+            details[0]
+                .original_markdown
+                .contains("- **File & Lines:** `src/sink.rs#L10-L12`")
+        );
+    }
+
+    #[test]
+    fn dedupe_uses_sink_locations_for_file_lines() {
+        fn bug_markdown(title: &str, file: &str, sink: &str) -> String {
+            format!(
+                "### {title}\n- **File & Lines:** `{file}`\n- **Severity:** High\n- **Impact:** x\n- **Likelihood:** x\n- **Description:** see `{sink}`\n- **Dataflow:**\n    - Sink: `{sink}`\n- **Recommendation:** x\n"
+            )
+        }
+
+        let summaries = vec![
+            BugSummary {
+                id: 1,
+                title: "Finding A".to_string(),
+                file: "a.rs#L1-L2, a.rs#L10-L12".to_string(),
+                severity: "High".to_string(),
+                impact: "x".to_string(),
+                likelihood: "x".to_string(),
+                recommendation: "x".to_string(),
+                blame: None,
+                risk_score: None,
+                risk_rank: None,
+                risk_reason: None,
+                verification_types: Vec::new(),
+                vulnerability_tag: Some("example-sink".to_string()),
+                validation: BugValidationState::default(),
+                source_path: PathBuf::new(),
+                markdown: bug_markdown("Finding A", "a.rs#L1-L2, a.rs#L10-L12", "a.rs#L10-L12"),
+                author_github: None,
+            },
+            BugSummary {
+                id: 2,
+                title: "Finding B".to_string(),
+                file: "b.rs#L3-L4, b.rs#L30-L34".to_string(),
+                severity: "High".to_string(),
+                impact: "x".to_string(),
+                likelihood: "x".to_string(),
+                recommendation: "x".to_string(),
+                blame: None,
+                risk_score: None,
+                risk_rank: None,
+                risk_reason: None,
+                verification_types: Vec::new(),
+                vulnerability_tag: Some("example-sink".to_string()),
+                validation: BugValidationState::default(),
+                source_path: PathBuf::new(),
+                markdown: bug_markdown("Finding B", "b.rs#L3-L4, b.rs#L30-L34", "b.rs#L30-L34"),
+                author_github: None,
+            },
+        ];
+        let details = summaries
+            .iter()
+            .map(|summary| BugDetail {
+                summary_id: summary.id,
+                original_markdown: summary.markdown.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let (summaries, _details, removed) = dedupe_bug_summaries(summaries, details);
+        assert_eq!(removed, 1);
+        assert_eq!(summaries.len(), 1);
+        let file = summaries[0].file.clone();
+        assert!(file.contains("a.rs#L10-L12"));
+        assert!(file.contains("b.rs#L30-L34"));
+        assert!(!file.contains("a.rs#L1-L2"));
+        assert!(!file.contains("b.rs#L3-L4"));
     }
 
     #[test]
@@ -9572,6 +9680,184 @@ async fn write_testing_instructions(
             display_path_for(&testing_path, repo_root)
         );
         push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), message);
+    }
+}
+
+fn validation_testing_md_dedupe_key(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let normalized = trimmed
+        .trim_start_matches(['-', '*', '•'])
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn merge_validation_testing_md(existing: &str, additions: &[String]) -> Option<String> {
+    let mut addition_lines: Vec<String> = Vec::new();
+    for addition in additions {
+        for line in addition.lines() {
+            let trimmed_end = line.trim_end();
+            if trimmed_end.trim().is_empty() {
+                continue;
+            }
+            if trimmed_end.trim_start().starts_with('#') {
+                continue;
+            }
+            addition_lines.push(trimmed_end.to_string());
+        }
+    }
+    if addition_lines.is_empty() {
+        return None;
+    }
+
+    let mut file_lines: Vec<String> = existing.lines().map(str::to_string).collect();
+    let header_index = file_lines
+        .iter()
+        .position(|line| line.trim() == VALIDATION_TESTING_SECTION_HEADER);
+
+    let mut updated = false;
+
+    match header_index {
+        None => {
+            if !file_lines.is_empty() && !file_lines.last().is_some_and(|l| l.trim().is_empty()) {
+                file_lines.push(String::new());
+            }
+            file_lines.push(VALIDATION_TESTING_SECTION_HEADER.to_string());
+            file_lines.push(VALIDATION_TESTING_SECTION_INTRO.to_string());
+            file_lines.push(String::new());
+            file_lines.extend(addition_lines);
+            updated = true;
+        }
+        Some(header_index) => {
+            let mut section_end = file_lines
+                .iter()
+                .enumerate()
+                .skip(header_index + 1)
+                .find(|(_, line)| line.trim_start().starts_with("## "))
+                .map(|(index, _)| index)
+                .unwrap_or(file_lines.len());
+
+            let has_intro = file_lines
+                .iter()
+                .take(section_end)
+                .skip(header_index + 1)
+                .any(|line| line.trim() == VALIDATION_TESTING_SECTION_INTRO);
+            if !has_intro {
+                file_lines.insert(
+                    header_index + 1,
+                    VALIDATION_TESTING_SECTION_INTRO.to_string(),
+                );
+                file_lines.insert(header_index + 2, String::new());
+                section_end = section_end.saturating_add(2);
+                updated = true;
+            }
+
+            let mut seen: HashSet<String> = file_lines
+                .iter()
+                .take(section_end)
+                .skip(header_index + 1)
+                .filter_map(|line| validation_testing_md_dedupe_key(line))
+                .collect();
+
+            let mut filtered_additions: Vec<String> = Vec::new();
+            for line in addition_lines {
+                let Some(key) = validation_testing_md_dedupe_key(&line) else {
+                    continue;
+                };
+                if seen.insert(key) {
+                    filtered_additions.push(line);
+                }
+            }
+
+            if !filtered_additions.is_empty() {
+                let mut insert_at = section_end;
+                while insert_at > header_index + 1
+                    && file_lines
+                        .get(insert_at.saturating_sub(1))
+                        .is_some_and(|line| line.trim().is_empty())
+                {
+                    insert_at = insert_at.saturating_sub(1);
+                }
+
+                let mut insertion: Vec<String> = Vec::new();
+                if insert_at > 0
+                    && file_lines
+                        .get(insert_at.saturating_sub(1))
+                        .is_some_and(|line| !line.trim().is_empty())
+                {
+                    insertion.push(String::new());
+                }
+                insertion.extend(filtered_additions);
+
+                file_lines.splice(insert_at..insert_at, insertion);
+                updated = true;
+            }
+        }
+    }
+
+    if !updated {
+        return None;
+    }
+
+    let mut out = file_lines.join("\n");
+    out.push('\n');
+    Some(out)
+}
+
+async fn apply_validation_testing_md_additions(
+    testing_path: &Path,
+    repo_root: &Path,
+    additions: &[String],
+    progress_sender: &Option<AppEventSender>,
+    logs: &mut Vec<String>,
+) {
+    let merged = tokio_fs::read_to_string(testing_path)
+        .await
+        .ok()
+        .and_then(|existing| merge_validation_testing_md(&existing, additions));
+
+    let Some(contents) = merged else {
+        return;
+    };
+
+    if let Some(parent) = testing_path.parent() {
+        let _ = tokio_fs::create_dir_all(parent).await;
+    }
+
+    match tokio_fs::write(testing_path, contents.as_bytes()).await {
+        Ok(_) => {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!(
+                    "Updated shared testing instructions at {}.",
+                    display_path_for(testing_path, repo_root)
+                ),
+            );
+        }
+        Err(err) => {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!(
+                    "Failed to update shared testing instructions at {}: {err}",
+                    display_path_for(testing_path, repo_root)
+                ),
+            );
+        }
     }
 }
 
@@ -11162,10 +11448,24 @@ fn extract_bug_summaries(
         if let Some(mut summary) = current.take() {
             let section = lines.join("\n");
             let trimmed = section.trim().to_string();
-            summary.markdown = trimmed.clone();
+            let mut markdown = trimmed;
+            let preferred_locations =
+                preferred_bug_locations_for_reporting(markdown.as_str(), summary.file.as_str());
+            if !preferred_locations.is_empty() {
+                let joined = preferred_locations.join(", ");
+                if !joined.is_empty() && joined != summary.file {
+                    summary.file = joined.clone();
+                    if let Some(updated) =
+                        rewrite_bug_markdown_location(markdown.as_str(), joined.as_str())
+                    {
+                        markdown = updated;
+                    }
+                }
+            }
+            summary.markdown = markdown.clone();
             details.push(BugDetail {
                 summary_id: summary.id,
-                original_markdown: trimmed,
+                original_markdown: markdown,
             });
             summaries.push(summary);
         }
@@ -11277,6 +11577,169 @@ fn normalize_title_key(title: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+fn extract_file_locations_from_markdown(text: &str) -> Vec<String> {
+    static LOCATION_RE: OnceLock<Regex> = OnceLock::new();
+    let re = LOCATION_RE.get_or_init(|| {
+        Regex::new(r"(?P<loc>[^\s,;()\[\]`<>]+#L\d+(?:-L\d+)?)")
+            .unwrap_or_else(|error| panic!("failed to compile file location regex: {error}"))
+    });
+
+    let mut out: Vec<String> = Vec::new();
+    for caps in re.captures_iter(text) {
+        let Some(loc) = caps.name("loc").map(|m| m.as_str().trim()) else {
+            continue;
+        };
+        if loc.is_empty() {
+            continue;
+        }
+        if !out.iter().any(|existing| existing == loc) {
+            out.push(loc.to_string());
+        }
+    }
+    out
+}
+
+fn leading_whitespace_len(text: &str) -> usize {
+    text.bytes()
+        .take_while(|b| matches!(b, b' ' | b'\t'))
+        .count()
+}
+
+fn extract_bug_section_locations(markdown: &str, section: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut section_indent = 0usize;
+    let header = format!("- **{section}:**");
+    let mut out: Vec<String> = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !in_section {
+            if trimmed.starts_with(header.as_str()) {
+                in_section = true;
+                section_indent = leading_whitespace_len(line);
+                for loc in extract_file_locations_from_markdown(trimmed) {
+                    if !out.iter().any(|existing| existing == &loc) {
+                        out.push(loc);
+                    }
+                }
+            }
+            continue;
+        }
+
+        let indent = leading_whitespace_len(line);
+        if indent <= section_indent
+            && trimmed.starts_with("- **")
+            && !trimmed.starts_with(header.as_str())
+        {
+            break;
+        }
+
+        for loc in extract_file_locations_from_markdown(trimmed) {
+            if !out.iter().any(|existing| existing == &loc) {
+                out.push(loc);
+            }
+        }
+    }
+
+    out
+}
+
+fn extract_bug_sink_locations(markdown: &str) -> Vec<String> {
+    let mut in_dataflow = false;
+    let mut dataflow_indent = 0usize;
+    let mut sink_block_indent: Option<usize> = None;
+    let mut out: Vec<String> = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !in_dataflow {
+            if trimmed.starts_with("- **Dataflow:**") {
+                in_dataflow = true;
+                dataflow_indent = leading_whitespace_len(line);
+            }
+            continue;
+        }
+
+        let indent = leading_whitespace_len(line);
+        if indent <= dataflow_indent
+            && trimmed.starts_with("- **")
+            && !trimmed.starts_with("- **Dataflow:**")
+        {
+            break;
+        }
+
+        let lowered = trimmed.to_ascii_lowercase();
+        if lowered.contains("sink") {
+            sink_block_indent = Some(indent);
+        }
+
+        let Some(sink_indent) = sink_block_indent else {
+            continue;
+        };
+
+        if indent <= sink_indent && trimmed.starts_with('-') && !lowered.contains("sink") {
+            sink_block_indent = None;
+            continue;
+        }
+
+        for loc in extract_file_locations_from_markdown(trimmed) {
+            if !out.iter().any(|existing| existing == &loc) {
+                out.push(loc);
+            }
+        }
+    }
+
+    out
+}
+
+fn preferred_bug_locations_for_reporting(markdown: &str, file_field: &str) -> Vec<String> {
+    let sinks = extract_bug_sink_locations(markdown);
+    if !sinks.is_empty() {
+        return sinks;
+    }
+
+    let description_locs = extract_bug_section_locations(markdown, "Description");
+    if !description_locs.is_empty() {
+        return description_locs;
+    }
+
+    let mut fallback = extract_file_locations_for_dedupe(file_field);
+    if fallback.len() > 8 {
+        fallback.truncate(8);
+    }
+    fallback
+}
+
+fn prune_bug_markdown_file_lines_for_reporting(markdown: &str) -> String {
+    let mut file_field = None;
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("- **File & Lines:**") {
+            let value = rest.trim().trim_matches('`');
+            if !value.is_empty() {
+                file_field = Some(value.to_string());
+            }
+            break;
+        }
+    }
+
+    let Some(file_field) = file_field else {
+        return markdown.to_string();
+    };
+
+    let preferred = preferred_bug_locations_for_reporting(markdown, file_field.as_str());
+    if preferred.is_empty() {
+        return markdown.to_string();
+    }
+
+    let joined = preferred.join(", ");
+    if joined.is_empty() || joined == file_field {
+        return markdown.to_string();
+    }
+
+    rewrite_bug_markdown_location(markdown, joined.as_str()).unwrap_or_else(|| markdown.to_string())
 }
 
 fn extract_file_locations_for_dedupe(file_field: &str) -> Vec<String> {
@@ -11635,7 +12098,9 @@ async fn llm_dedupe_bug_summaries(
             entry.rep_index = idx;
         }
 
-        for loc in extract_file_locations_for_dedupe(&summary.file) {
+        for loc in
+            preferred_bug_locations_for_reporting(summary.markdown.as_str(), summary.file.as_str())
+        {
             if !entry.file_set.iter().any(|existing| existing == &loc) {
                 entry.file_set.push(loc);
             }
@@ -11878,7 +12343,7 @@ fn dedupe_bug_summaries(
             entry.rep_index = idx;
         }
 
-        for loc in extract_file_locations_for_dedupe(&s.file) {
+        for loc in preferred_bug_locations_for_reporting(s.markdown.as_str(), s.file.as_str()) {
             if !entry.file_set.iter().any(|existing| existing == &loc) {
                 entry.file_set.push(loc);
             }
@@ -14528,6 +14993,16 @@ async fn execute_bug_command(
         ..BugValidationState::default()
     };
 
+    if let Some(output_root) = work_dir.parent() {
+        let testing_path = output_root.join("specs").join("TESTING.md");
+        if testing_path.exists() {
+            let step = format!("Read: `{}`", display_path_for(&testing_path, &repo_path));
+            if !validation.repro_steps.iter().any(|s| s == &step) {
+                validation.repro_steps.push(step);
+            }
+        }
+    }
+
     let start = Instant::now();
 
     match plan.request.tool {
@@ -15034,7 +15509,7 @@ pub(crate) async fn verify_bugs(
                 request: request.clone(),
                 title: entry.bug.title.clone(),
                 risk_rank: entry.bug.risk_rank,
-                expect_asan: has_verification_type(&entry.bug, "crash_poc"),
+                expect_asan: crash_poc_category(&entry.bug).is_some(),
             });
         }
 
@@ -15047,7 +15522,7 @@ pub(crate) async fn verify_bugs(
             let work_dir = batch.work_dir.clone();
             async move { execute_bug_command(plan, repo_path, work_dir).await }
         }))
-        .buffer_unordered(8)
+        .buffer_unordered(VALIDATION_EXEC_CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
 
@@ -15138,6 +15613,8 @@ struct ValidationPlanItem {
     script: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    testing_md_additions: Option<String>,
 }
 
 fn is_high_risk(bug: &SecurityReviewBug) -> bool {
@@ -15237,6 +15714,16 @@ fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
         .any(|t| t.eq_ignore_ascii_case(needle))
 }
 
+fn crash_poc_category(bug: &SecurityReviewBug) -> Option<&'static str> {
+    if has_verification_type(bug, "crash_poc_release_bin") {
+        Some("crash_poc_release_bin")
+    } else if has_verification_type(bug, "crash_poc_func") {
+        Some("crash_poc_func")
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ValidationFinding {
     id: BugIdentifier,
@@ -15261,7 +15748,7 @@ fn build_validation_findings_context(
             if !is_high {
                 return false;
             }
-            if has_verification_type(&b.bug, "crash_poc") {
+            if crash_poc_category(&b.bug).is_some() {
                 return true;
             }
             let tag = b.bug.vulnerability_tag.clone().or_else(|| {
@@ -15287,7 +15774,7 @@ fn build_validation_findings_context(
         .collect();
     high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
     for item in high_risk {
-        if selected.len() >= 5 {
+        if selected.len() >= VALIDATION_MAX_FINDINGS {
             break;
         }
         if seen.insert(item.bug.summary_id) {
@@ -15321,6 +15808,9 @@ fn build_validation_findings_context(
                 extract_vulnerability_tag_from_bug_markdown(item.original_markdown.as_str())
             })
             .unwrap_or_default();
+        let crash_poc_category_line = crash_poc_category(&item.bug)
+            .map(|category| format!("\n  crash_poc_category: {category}"))
+            .unwrap_or_default();
         let (id_kind, id_value, identifier) = if let Some(risk_rank) = item.bug.risk_rank {
             ("risk_rank", risk_rank, BugIdentifier::RiskRank(risk_rank))
         } else {
@@ -15333,10 +15823,11 @@ fn build_validation_findings_context(
         ids.push(identifier);
         // Include the original markdown so the model can infer concrete targets
         let context = format!(
-            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}\n  details:\n{details}\n---\n",
+            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}{crash_poc_category_line}\n  details:\n{details}\n---\n",
             title = item.bug.title,
             severity = item.bug.severity,
             types = types,
+            crash_poc_category_line = crash_poc_category_line,
             details = indent_block(&item.original_markdown, 2)
         );
         findings.push(ValidationFinding {
@@ -15531,6 +16022,8 @@ struct ValidationRefineOutput {
     dockerfile: Option<String>,
     docker_build: Option<String>,
     docker_run: Option<String>,
+    #[serde(default)]
+    testing_md_additions: Option<String>,
     #[serde(default)]
     files: Vec<ValidationRefineFile>,
 }
@@ -15821,6 +16314,20 @@ async fn run_asan_validation(
     let work_dir = output_root.join("validation");
     let _ = tokio_fs::create_dir_all(&work_dir).await;
 
+    let specs_root = output_root.join("specs");
+    let testing_path = specs_root.join("TESTING.md");
+    let mut testing_md = tokio_fs::read_to_string(&testing_path)
+        .await
+        .unwrap_or_default();
+    if testing_md.trim().is_empty() {
+        write_testing_instructions(&repo_path, &specs_root, progress_sender.clone(), None).await;
+        testing_md = tokio_fs::read_to_string(&testing_path)
+            .await
+            .unwrap_or_default();
+    }
+    let mut testing_md_context =
+        trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
+
     // Build prompt
     let findings = build_validation_findings_context(&snapshot);
     let finding_map: HashMap<BugIdentifier, ValidationFinding> = findings
@@ -15868,9 +16375,12 @@ async fn run_asan_validation(
         let metrics = metrics.clone();
         let model = model.clone();
         let repo_root = repo_path.clone();
+        let testing_md_context = testing_md_context.clone();
         async move {
             let ValidationFinding { id, label, context } = finding;
-            let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE.replace("{findings}", &context);
+            let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE
+                .replace("{findings}", &context)
+                .replace("{testing_md}", &testing_md_context);
             let result = run_validation_plan_agent(
                 config,
                 &provider,
@@ -15886,10 +16396,11 @@ async fn run_asan_validation(
             (id, label, result)
         }
     }))
-    .buffer_unordered(4)
+    .buffer_unordered(VALIDATION_PLAN_CONCURRENCY)
     .collect::<Vec<_>>()
     .await;
 
+    let mut testing_md_additions: Vec<String> = Vec::new();
     for (id, label, result) in planning_results {
         let Some(index) = find_bug_index(&snapshot, id) else {
             continue;
@@ -15911,6 +16422,14 @@ async fn run_asan_validation(
                     );
                     continue;
                 };
+                if let Some(additions) = parsed
+                    .testing_md_additions
+                    .as_deref()
+                    .map(str::trim_end)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    testing_md_additions.push(additions.to_string());
+                }
                 let Some(tool_raw) = parsed
                     .tool
                     .as_deref()
@@ -16040,6 +16559,20 @@ async fn run_asan_validation(
             );
         }
     }
+
+    apply_validation_testing_md_additions(
+        &testing_path,
+        &repo_path,
+        &testing_md_additions,
+        &progress_sender,
+        &mut logs,
+    )
+    .await;
+    let updated_testing_md = tokio_fs::read_to_string(&testing_path)
+        .await
+        .unwrap_or_default();
+    testing_md_context =
+        trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
     let planned_snapshot = snapshot.clone();
     let requested_ids: Vec<BugIdentifier> = requests.iter().map(|req| req.id).collect();
@@ -16234,6 +16767,7 @@ async fn run_asan_validation(
             let model = model.clone();
             let repo_root = batch.repo_path.clone();
             let work_dir = batch.work_dir.clone();
+            let testing_md_context = testing_md_context.clone();
             async move {
                 let bug_work_dir = work_dir.join(format!("bug{}", item.summary_id));
                 let mut python_script = "(none)".to_string();
@@ -16257,7 +16791,8 @@ async fn run_asan_validation(
                 let prompt = VALIDATION_REFINE_PROMPT_TEMPLATE
                     .replace("{finding}", &item.context)
                     .replace("{validation_state}", &item.validation_state)
-                    .replace("{python_script}", python_script.trim());
+                    .replace("{python_script}", python_script.trim())
+                    .replace("{testing_md}", &testing_md_context);
 
                 let result = run_validation_refine_agent(
                     config,
@@ -16274,7 +16809,7 @@ async fn run_asan_validation(
                 (item.id, item.label, result)
             }
         }))
-        .buffer_unordered(4)
+        .buffer_unordered(VALIDATION_REFINE_CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
 
@@ -16293,6 +16828,7 @@ async fn run_asan_validation(
         }
 
         let mut updated = false;
+        let mut refine_testing_md_additions: Vec<String> = Vec::new();
         for (id, label, result) in refine_results {
             match result {
                 Ok(output) => {
@@ -16322,6 +16858,14 @@ async fn run_asan_validation(
                         }
                         continue;
                     };
+                    if let Some(additions) = parsed
+                        .testing_md_additions
+                        .as_deref()
+                        .map(str::trim_end)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        refine_testing_md_additions.push(additions.to_string());
+                    }
 
                     let Some(index) = find_bug_index(&snapshot, id) else {
                         continue;
@@ -16509,6 +17053,15 @@ async fn run_asan_validation(
                 }
             }
         }
+
+        apply_validation_testing_md_additions(
+            &testing_path,
+            &batch.repo_path,
+            &refine_testing_md_additions,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
 
         if updated
             && let Err(err) = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await

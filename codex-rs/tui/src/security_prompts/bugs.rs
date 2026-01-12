@@ -28,6 +28,7 @@ Follow these rules:
 - Read this file in full and review the provided context to understand intended behavior before judging safety.
 {scope_reminder}- Start locally: prefer `READ` to open the current file and its immediate neighbors (imports, same directory/module, referenced configs) before using `GREP_FILES`. Use `GREP_FILES` only when you need to locate unknown files across the repository.
 - When writing findings, prioritize clarity over security jargon. Avoid over-annotating prose with parenthetical code references; cite a few key locations where they provide evidence.
+- In `File & Lines`, list only the sink location(s) where the vulnerable behavior happens (the same location(s) you show in Snippet/Description). Do not list every propagation hop.
 - Use the specification context (if provided) to ground brief explanations of the components involved (what they are, how they fit together, and how this code path is commonly reached) when the context would otherwise be obscure to a reader.
 - When the affected component/interface is obscure (especially third-party libraries, CLIs, or protocols) and web search is enabled, use `web_search` to find public docs/README and GitHub examples of real-world usage; incorporate what you learn into the Context section and make the reproduction scenario / minimal proof-of-issue match those common usage patterns. Keep queries high-level and do not paste repository code, secrets, or private URLs into a search query.
 - When you reference a function, method, or class, look up its definition and usages across files: search by the identifier, then open the definition and a few call sites to verify behavior end-to-end.
@@ -64,7 +65,7 @@ Follow these rules:
 For each vulnerability, emit a markdown block:
 
 ### <short title>
-- **File & Lines:** `<relative path>#Lstart-Lend`
+- **File & Lines:** Sink code location(s) where the vulnerable behavior happens, e.g. `<relative path>#Lstart-Lend` (multiple sinks allowed; comma-separated).
 - **Severity:** <high|medium|low|ignore>
 - **Impact:** <High|Medium|Low> - <1-2 sentences explaining why this impact level applies>
 - **Likelihood:** <High|Medium|Low> - <1-2 sentences explaining why this likelihood level applies>
@@ -75,9 +76,11 @@ For each vulnerability, emit a markdown block:
     - **PoC:** Provide two variants when possible:
       - Provide reproduction steps or test input against the exposed interface (HTTP request, CLI invocation, message body, etc.) using a realistic path (how users/clients would commonly reach this code). Base the scenario on how this code is commonly used in the real world (typical inputs, typical deployment). For networked validations, prefer a local Docker or locally built target (e.g., `http://localhost:<port>/...`) rather than production/staging. When details are missing, add concise questions for product/engineering to confirm requirements instead of fabricating a contrived setup.
       - Include how to run the validation for this finding (high-level steps/commands) and call out any required user inputs or locally generated artifacts (for example: test accounts, captured outputs, screenshots, or scripts) that the validation relies on.
-      - If the `Verification Type` includes `crash_poc`, include the AddressSanitizer trace excerpt that demonstrates the memory corruption (or, if validation was not run yet, specify the expected ASan signature and what part of the stderr output to capture during validation).
+      - If the `Verification Type` includes `crash_poc_release_bin` or `crash_poc_func`, include the AddressSanitizer trace excerpt that demonstrates the memory corruption (or, if validation was not run yet, specify the expected ASan signature and what part of the stderr output to capture during validation).
 - **Recommendation:** Actionable remediation guidance.
-- **Verification Type:** JSON array subset of ["network_api", "crash_poc", "web_browser"].
+- **Verification Type:** JSON array subset of ["network_api", "crash_poc_release_bin", "crash_poc_func", "web_browser"].
+  - Use `crash_poc_release_bin` when the crash is reachable via a standard shipped target/entrypoint (existing binary/service surface).
+  - Use `crash_poc_func` when the crash is in an internal function and is not clearly reachable via standard shipped targets without a synthetic harness.
 - TAXONOMY: {"vuln_class": "...", "cwe_ids": [...], "owasp_categories": [...], "vuln_tag": "..."}
 
 Severity rules (deterministic risk matrix):
