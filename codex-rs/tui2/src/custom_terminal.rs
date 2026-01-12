@@ -144,6 +144,26 @@ where
     B: Backend,
     B: Write,
 {
+    fn apply_fake_cursor(&mut self, cursor_position: Option<Position>) {
+        let Some(position) = cursor_position else {
+            return;
+        };
+        let area = self.current_buffer().area();
+        if position.x < area.x
+            || position.y < area.y
+            || position.x >= area.x.saturating_add(area.width)
+            || position.y >= area.y.saturating_add(area.height)
+        {
+            return;
+        }
+
+        let cell = &mut self.current_buffer_mut()[(position.x, position.y)];
+        if cell.symbol().is_empty() {
+            cell.set_symbol(" ");
+        }
+        cell.modifier |= Modifier::REVERSED;
+    }
+
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
@@ -320,16 +340,17 @@ where
         // Buffer. Thus, we're taking the important data out of the Frame and dropping it.
         let cursor_position = frame.cursor_position;
 
+        // Paint a non-blinking, in-buffer "fake cursor" and keep the terminal cursor hidden.
+        self.apply_fake_cursor(cursor_position);
+        if !self.hidden_cursor {
+            self.hide_cursor()?;
+        }
+
         // Draw to stdout
         self.flush()?;
 
-        match cursor_position {
-            None => self.hide_cursor()?,
-            Some(position) => {
-                self.show_cursor()?;
-                self.set_cursor_position(position)?;
-            }
-        }
+        // Never show the terminal cursor; it causes visible jumping in some terminals.
+        // Cursor position is represented by the in-buffer fake cursor above.
 
         self.swap_buffers();
 
