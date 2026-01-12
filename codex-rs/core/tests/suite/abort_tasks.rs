@@ -16,11 +16,15 @@ use core_test_support::wait_for_event;
 use serde_json::json;
 use std::sync::Arc;
 
+#[cfg(windows)]
+const POWERSHELL_PARTIAL_OUTPUT_SCRIPT: &str = r#"Start-Sleep -Milliseconds 200; [Console]::Out.WriteLine('partial output'); [Console]::Out.Flush(); Start-Sleep -Seconds 60"#;
+#[cfg(not(windows))]
+const POWERSHELL_PARTIAL_OUTPUT_SCRIPT: &str = "";
+
 fn long_running_exec_command_with_output() -> (String, Option<&'static str>) {
     if cfg!(windows) {
         (
-            "Start-Sleep -Milliseconds 200; Write-Output 'partial output'; Start-Sleep -Seconds 60"
-                .to_string(),
+            POWERSHELL_PARTIAL_OUTPUT_SCRIPT.to_string(),
             Some("powershell"),
         )
     } else {
@@ -37,8 +41,7 @@ fn long_running_shell_command_with_output() -> Vec<String> {
             "powershell.exe".to_string(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
-            "Start-Sleep -Milliseconds 200; Write-Output 'partial output'; Start-Sleep -Seconds 60"
-                .to_string(),
+            POWERSHELL_PARTIAL_OUTPUT_SCRIPT.to_string(),
         ]
     } else {
         vec![
@@ -55,7 +58,7 @@ fn long_running_local_shell_call_with_output() -> Vec<&'static str> {
             "powershell.exe",
             "-NoProfile",
             "-Command",
-            "Start-Sleep -Milliseconds 200; Write-Output 'partial output'; Start-Sleep -Seconds 60",
+            POWERSHELL_PARTIAL_OUTPUT_SCRIPT,
         ]
     } else {
         vec![
