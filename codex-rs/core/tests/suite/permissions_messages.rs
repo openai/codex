@@ -352,12 +352,15 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     let body4 = req4.single_request().body_json();
     let input4 = body4["input"].as_array().expect("input array");
     let permissions_fork = permissions_texts(input4);
-    assert_eq!(permissions_fork.len(), permissions_base.len() + 1);
+    assert_eq!(permissions_fork.len(), permissions_base.len() + 2);
     assert_eq!(
         &permissions_fork[..permissions_base.len()],
         permissions_base.as_slice()
     );
-    assert!(!permissions_base.contains(permissions_fork.last().expect("new permissions")));
+    let new_permissions = &permissions_fork[permissions_base.len()..];
+    assert_eq!(new_permissions.len(), 2);
+    assert_eq!(new_permissions[0], new_permissions[1]);
+    assert!(!permissions_base.contains(&new_permissions[0]));
 
     Ok(())
 }

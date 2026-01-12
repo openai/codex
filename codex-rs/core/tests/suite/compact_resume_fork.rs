@@ -598,6 +598,27 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
+        permissions_message,
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
         {
           "type": "message",
           "role": "user",
