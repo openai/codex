@@ -2,7 +2,7 @@
 //!
 //! This exposes a minimal interface suitable for other crates (e.g.,
 //! codex-cloud-tasks) to reuse the mature composer behavior: multi-line input,
-//! paste heuristics, Enter-to-submit, and Shift+Enter for newline.
+//! paste heuristics, Enter-to-submit, and Shift/Alt+Enter to send immediately.
 
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -36,7 +36,7 @@ impl ComposerInput {
     pub fn new() -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = AppEventSender::new(tx.clone());
-        // `enhanced_keys_supported=true` enables Shift+Enter newline hint/behavior.
+        // `enhanced_keys_supported=true` enables Shift+Enter submit behavior.
         let inner = ChatComposer::new(true, sender, true, "Compose new task".to_string(), false);
         Self { inner, _tx: tx, rx }
     }
@@ -55,6 +55,7 @@ impl ComposerInput {
     pub fn input(&mut self, key: KeyEvent) -> ComposerAction {
         let action = match self.inner.handle_key_event(key).0 {
             InputResult::Submitted(text) => ComposerAction::Submitted(text),
+            InputResult::SubmittedImmediate(text) => ComposerAction::Submitted(text),
             _ => ComposerAction::None,
         };
         self.drain_app_events();

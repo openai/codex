@@ -161,6 +161,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
+    let mut send_immediately = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
     let mut external_editor = Line::from("");
@@ -174,6 +175,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::Commands => commands = text,
                 ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
+                ShortcutId::SendImmediate => send_immediately = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::ExternalEditor => external_editor = text,
@@ -188,6 +190,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         commands,
         shell_commands,
         newline,
+        send_immediately,
         file_paths,
         paste_image,
         external_editor,
@@ -266,6 +269,7 @@ enum ShortcutId {
     Commands,
     ShellCommands,
     InsertNewline,
+    SendImmediate,
     FilePaths,
     PasteImage,
     ExternalEditor,
@@ -290,7 +294,6 @@ impl ShortcutBinding {
 enum DisplayCondition {
     Always,
     WhenShiftEnterHint,
-    WhenNotShiftEnterHint,
     WhenUnderWSL,
 }
 
@@ -299,7 +302,6 @@ impl DisplayCondition {
         match self {
             DisplayCondition::Always => true,
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
-            DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
             DisplayCondition::WhenUnderWSL => state.is_wsl,
         }
     }
@@ -359,18 +361,27 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     },
     ShortcutDescriptor {
         id: ShortcutId::InsertNewline,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('j')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " for newline",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::SendImmediate,
         bindings: &[
+            ShortcutBinding {
+                key: key_hint::alt(KeyCode::Enter),
+                condition: DisplayCondition::Always,
+            },
             ShortcutBinding {
                 key: key_hint::shift(KeyCode::Enter),
                 condition: DisplayCondition::WhenShiftEnterHint,
             },
-            ShortcutBinding {
-                key: key_hint::ctrl(KeyCode::Char('j')),
-                condition: DisplayCondition::WhenNotShiftEnterHint,
-            },
         ],
         prefix: "",
-        label: " for newline",
+        label: " to send immediately",
     },
     ShortcutDescriptor {
         id: ShortcutId::FilePaths,

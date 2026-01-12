@@ -83,6 +83,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
+    SubmittedImmediate(String),
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String),
     None,
@@ -539,9 +540,15 @@ impl ChatComposer {
             }
             KeyEvent {
                 code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
+                modifiers,
                 ..
-            } => {
+            } if matches!(
+                modifiers,
+                KeyModifiers::NONE | KeyModifiers::SHIFT | KeyModifiers::ALT
+            ) || modifiers == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+            {
+                let submit_immediately =
+                    modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
                 // If the current line starts with a custom prompt name and includes
                 // positional args for a numeric-style template, expand and submit
                 // immediately regardless of the popup selection.
@@ -553,7 +560,7 @@ impl ChatComposer {
                         expand_if_numeric_with_positional_args(prompt, first_line)
                 {
                     self.textarea.set_text("");
-                    return (InputResult::Submitted(expanded), true);
+                    return (Self::submitted_result(expanded, submit_immediately), true);
                 }
 
                 if let Some(sel) = popup.selected_item() {
@@ -571,7 +578,10 @@ impl ChatComposer {
                                 ) {
                                     PromptSelectionAction::Submit { text } => {
                                         self.textarea.set_text("");
-                                        return (InputResult::Submitted(text), true);
+                                        return (
+                                            Self::submitted_result(text, submit_immediately),
+                                            true,
+                                        );
                                     }
                                     PromptSelectionAction::Insert { text, cursor } => {
                                         let target = cursor.unwrap_or(text.len());
@@ -1074,6 +1084,14 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
+    fn submitted_result(text: String, submit_immediately: bool) -> InputResult {
+        if submit_immediately {
+            InputResult::SubmittedImmediate(text)
+        } else {
+            InputResult::Submitted(text)
+        }
+    }
+
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
@@ -1134,9 +1152,15 @@ impl ChatComposer {
             }
             KeyEvent {
                 code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
+                modifiers,
                 ..
-            } => {
+            } if matches!(
+                modifiers,
+                KeyModifiers::NONE | KeyModifiers::SHIFT | KeyModifiers::ALT
+            ) || modifiers == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+            {
+                let submit_immediately =
+                    modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
                 // If the first line is a bare built-in slash command (no args),
                 // dispatch it even when the slash popup isn't visible. This preserves
                 // the workflow: type a prefix ("/di"), press Tab to complete to
@@ -1281,7 +1305,7 @@ impl ChatComposer {
                     self.history.record_local_submission(&text);
                 }
                 // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
-                (InputResult::Submitted(text), true)
+                (Self::submitted_result(text, submit_immediately), true)
             }
             input => self.handle_input_basic(input),
         }
@@ -2891,7 +2915,7 @@ mod tests {
             InputResult::CommandWithArgs(_, _) => {
                 panic!("expected command dispatch without args for '/init'")
             }
-            InputResult::Submitted(text) => {
+            InputResult::Submitted(text) | InputResult::SubmittedImmediate(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
@@ -2967,7 +2991,7 @@ mod tests {
             InputResult::CommandWithArgs(_, _) => {
                 panic!("expected command dispatch without args for '/diff'")
             }
-            InputResult::Submitted(text) => {
+            InputResult::Submitted(text) | InputResult::SubmittedImmediate(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
             InputResult::None => panic!("expected Command result for '/diff'"),
@@ -3003,7 +3027,7 @@ mod tests {
             InputResult::CommandWithArgs(_, _) => {
                 panic!("expected command dispatch without args for '/mention'")
             }
-            InputResult::Submitted(text) => {
+            InputResult::Submitted(text) | InputResult::SubmittedImmediate(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),

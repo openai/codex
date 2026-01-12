@@ -1499,6 +1499,13 @@ impl ChatWidget {
                         };
                         self.queue_user_message(user_message);
                     }
+                    InputResult::SubmittedImmediate(text) => {
+                        let user_message = UserMessage {
+                            text,
+                            image_paths: self.bottom_pane.take_recent_submission_images(),
+                        };
+                        self.submit_user_message(user_message);
+                    }
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
                     }
