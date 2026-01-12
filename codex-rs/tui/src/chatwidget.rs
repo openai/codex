@@ -1633,12 +1633,21 @@ impl ChatWidget {
             _ => {
                 match self.bottom_pane.handle_key_event(key_event) {
                     InputResult::Submitted(text) => {
-                        // If a task is running, queue the user input to be sent after the turn completes.
+                        // Enter always sends messages immediately (bypasses queue check)
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
-                        self.queue_user_message(user_message);
+                        self.submit_user_message(user_message);
+                    }
+                    InputResult::Queued(text) => {
+                        // Ctrl+K always queues the message
+                        let user_message = UserMessage {
+                            text,
+                            image_paths: self.bottom_pane.take_recent_submission_images(),
+                        };
+                        self.queued_user_messages.push_back(user_message);
+                        self.refresh_queued_user_messages();
                     }
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
@@ -1969,6 +1978,7 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
+    #[allow(dead_code)] // Used in tests
     fn queue_user_message(&mut self, user_message: UserMessage) {
         if self.bottom_pane.is_task_running() {
             self.queued_user_messages.push_back(user_message);
