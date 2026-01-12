@@ -29,7 +29,7 @@ fn long_running_exec_command_with_output() -> (String, Option<&'static str>) {
         )
     } else {
         (
-            "sleep 0.2; printf 'partial output\\n'; sleep 60".to_string(),
+            "sleep 0.2; printf 'partial output\\n' >&2; sleep 60".to_string(),
             None,
         )
     }
@@ -47,7 +47,7 @@ fn long_running_shell_command_with_output() -> Vec<String> {
         vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            "sleep 0.2; printf 'partial output\\n'; sleep 60".to_string(),
+            "sleep 0.2; printf 'partial output\\n' >&2; sleep 60".to_string(),
         ]
     }
 }
@@ -64,7 +64,7 @@ fn long_running_local_shell_call_with_output() -> Vec<&'static str> {
         vec![
             "/bin/sh",
             "-c",
-            "sleep 0.2; printf 'partial output\\n'; sleep 60",
+            "sleep 0.2; printf 'partial output\\n' >&2; sleep 60",
         ]
     }
 }

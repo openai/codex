@@ -64,7 +64,7 @@ impl ToolCallRuntime {
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
-                let dispatch_cancellation = cancellation_token.clone();
+                let dispatch_cancellation = cancellation_token.child_token();
                 let mut dispatch_future = Box::pin(async {
                     let _guard = if supports_parallel {
                         Either::Left(lock.read().await)

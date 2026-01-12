@@ -543,7 +543,7 @@ impl UnifiedExecProcessManager {
             turn: context.turn.as_ref(),
             call_id: context.call_id.clone(),
             tool_name: "exec_command".to_string(),
-            cancellation_token: context.cancellation_token.clone(),
+            cancellation_token: context.cancellation_token.child_token(),
         };
         orchestrator
             .run(

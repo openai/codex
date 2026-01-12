@@ -154,7 +154,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = Self::build_command_spec(req, ctx.cancellation_token.clone())?;
+        let spec = Self::build_command_spec(req, ctx.cancellation_token.child_token())?;
         let env = attempt
             .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;

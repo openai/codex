@@ -106,7 +106,7 @@ impl SessionTask for UserShellCommandTask {
             // default timeout now that cancellation is wired through ExecExpiration.
             expiration: ExecExpiration::from_timeout_ms(
                 Some(USER_SHELL_TIMEOUT_MS),
-                cancellation_token.clone(),
+                cancellation_token.child_token(),
             ),
             sandbox: SandboxType::None,
             sandbox_permissions: SandboxPermissions::UseDefault,

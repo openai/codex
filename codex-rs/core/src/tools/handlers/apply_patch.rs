@@ -145,7 +145,7 @@ impl ToolHandler for ApplyPatchHandler {
                             turn: turn.as_ref(),
                             call_id: call_id.clone(),
                             tool_name: tool_name.to_string(),
-                            cancellation_token: cancellation_token.clone(),
+                            cancellation_token: cancellation_token.child_token(),
                         };
                         let out = orchestrator
                             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)

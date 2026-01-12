@@ -115,7 +115,7 @@ impl ToolHandler for ShellHandler {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let exec_params =
-                    Self::to_exec_params(params, turn.as_ref(), cancellation_token.clone());
+                    Self::to_exec_params(params, turn.as_ref(), cancellation_token.child_token());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
@@ -126,7 +126,7 @@ impl ToolHandler for ShellHandler {
             }
             ToolPayload::LocalShell { params } => {
                 let exec_params =
-                    Self::to_exec_params(params, turn.as_ref(), cancellation_token.clone());
+                    Self::to_exec_params(params, turn.as_ref(), cancellation_token.child_token());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
@@ -188,7 +188,7 @@ impl ToolHandler for ShellCommandHandler {
             params,
             session.as_ref(),
             turn.as_ref(),
-            cancellation_token.clone(),
+            cancellation_token.child_token(),
         );
         ShellHandler::run_exec_like(
             tool_name.as_str(),
@@ -265,7 +265,7 @@ impl ShellHandler {
             Some(&tracker),
             &call_id,
             tool_name,
-            cancellation_token.clone(),
+            cancellation_token.child_token(),
         )
         .await?
         {

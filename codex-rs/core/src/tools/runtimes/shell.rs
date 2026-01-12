@@ -157,7 +157,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         };
 
         let expiration =
-            ExecExpiration::from_timeout_ms(req.timeout_ms, ctx.cancellation_token.clone());
+            ExecExpiration::from_timeout_ms(req.timeout_ms, ctx.cancellation_token.child_token());
         let spec = build_command_spec(
             &command,
             &req.cwd,

@@ -164,7 +164,7 @@ impl ToolHandler for UnifiedExecHandler {
                     Some(&tracker),
                     &context.call_id,
                     tool_name.as_str(),
-                    context.cancellation_token.clone(),
+                    context.cancellation_token.child_token(),
                 )
                 .await?
                 {
