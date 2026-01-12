@@ -1057,7 +1057,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
         assert_eq!(chat.bottom_pane.composer_text(), "repeat me");
 
         // Queue the prompt while the task is running.
-        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     }
 
     assert_eq!(chat.queued_user_messages.len(), 3);
@@ -1079,7 +1079,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     chat.bottom_pane
         .set_composer_text("queued submission".to_string());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
 
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
