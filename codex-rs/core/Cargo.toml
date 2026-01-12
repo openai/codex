@@ -57,7 +57,7 @@ regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_with = { workspace = true }
+serde_path_to_error = { workspace = true }
 serde_yaml = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }

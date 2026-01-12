@@ -45,8 +45,6 @@ use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_with::DefaultOnError;
-use serde_with::serde_as;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -433,9 +431,7 @@ impl ConfigBuilder {
         // relative paths to absolute paths based on the parent folder of the
         // respective config file, so we should be safe to deserialize without
         // AbsolutePathBufGuard here.
-        let config_toml: ConfigToml = merged_toml
-            .try_into()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let config_toml = deserialize_config_toml_lenient(merged_toml, None)?;
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
@@ -492,7 +488,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
+    let cfg = deserialize_config_toml_lenient(merged_toml, Some(codex_home)).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
     })?;
@@ -500,6 +496,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
+#[cfg(test)]
 fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
@@ -510,6 +507,97 @@ fn deserialize_config_toml_with_base(
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+fn deserialize_config_toml_lenient(
+    mut root_value: TomlValue,
+    config_base_dir: Option<&Path>,
+) -> std::io::Result<ConfigToml> {
+    loop {
+        let attempt = match config_base_dir {
+            Some(base_dir) => {
+                let _guard = AbsolutePathBufGuard::new(base_dir);
+                deserialize_config_toml_with_path(&root_value)
+            }
+            None => deserialize_config_toml_with_path(&root_value),
+        };
+
+        match attempt {
+            Ok(config) => return Ok(config),
+            Err(err) => {
+                let path = err.path().clone();
+                let inner = err.into_inner();
+                if !is_unknown_enum_error(&inner) {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, inner));
+                }
+                if path.to_string().is_empty() || !remove_toml_path(&mut root_value, &path) {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, inner));
+                }
+            }
+        }
+    }
+}
+
+fn deserialize_config_toml_with_path(
+    value: &TomlValue,
+) -> Result<ConfigToml, serde_path_to_error::Error<toml::de::Error>> {
+    serde_path_to_error::deserialize(value.clone())
+}
+
+fn is_unknown_enum_error(error: &toml::de::Error) -> bool {
+    error.to_string().contains("unknown variant")
+}
+
+#[derive(Debug)]
+enum TomlPathSegment {
+    Key(String),
+    Index(usize),
+}
+
+fn remove_toml_path(root: &mut TomlValue, path: &serde_path_to_error::Path) -> bool {
+    let segments: Vec<TomlPathSegment> = path
+        .iter()
+        .filter_map(|segment| match segment {
+            serde_path_to_error::Segment::Seq { index } => Some(TomlPathSegment::Index(*index)),
+            serde_path_to_error::Segment::Map { key } => Some(TomlPathSegment::Key(key.clone())),
+            serde_path_to_error::Segment::Enum { .. } => None,
+            serde_path_to_error::Segment::Unknown => None,
+        })
+        .collect();
+
+    if segments.is_empty() {
+        return false;
+    }
+
+    let mut current = root;
+    for segment in &segments[..segments.len() - 1] {
+        current = match (current, segment) {
+            (TomlValue::Table(table), TomlPathSegment::Key(key)) => match table.get_mut(key) {
+                Some(value) => value,
+                None => return false,
+            },
+            (TomlValue::Array(items), TomlPathSegment::Index(index)) => {
+                match items.get_mut(*index) {
+                    Some(value) => value,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        };
+    }
+
+    match (current, segments.last()) {
+        (TomlValue::Table(table), Some(TomlPathSegment::Key(key))) => table.remove(key).is_some(),
+        (TomlValue::Array(items), Some(TomlPathSegment::Index(index))) => {
+            if *index < items.len() {
+                items.remove(*index);
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
 }
 
 pub async fn load_global_mcp_servers(
@@ -689,7 +777,6 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
     /// Optional override of model selection.
@@ -708,7 +795,6 @@ pub struct ConfigToml {
 
     /// Default approval policy for executing commands.
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub approval_policy: Option<AskForApproval>,
 
     #[serde(default)]
@@ -716,7 +802,6 @@ pub struct ConfigToml {
 
     /// Sandbox mode to use.
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub sandbox_mode: Option<SandboxMode>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
@@ -742,7 +827,6 @@ pub struct ConfigToml {
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Preferred backend for storing CLI auth credentials.
@@ -750,7 +834,6 @@ pub struct ConfigToml {
     /// keyring: Use an OS-specific keyring service.
     /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
@@ -763,7 +846,6 @@ pub struct ConfigToml {
     /// file: Use a file in the Codex home directory.
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
 
     /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
@@ -797,7 +879,6 @@ pub struct ConfigToml {
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub file_opener: Option<UriBasedFileOpener>,
 
     /// Collection of settings that are specific to the TUI.
@@ -812,14 +893,11 @@ pub struct ConfigToml {
     pub show_raw_agent_reasoning: Option<bool>,
 
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub model_reasoning_effort: Option<ReasoningEffort>,
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub model_verbosity: Option<Verbosity>,
 
     /// Override to force-enable reasoning summaries for the configured model.
@@ -908,11 +986,9 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
-#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub trust_level: Option<TrustLevel>,
 }
 

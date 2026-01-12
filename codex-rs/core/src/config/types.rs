@@ -15,8 +15,6 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
-use serde_with::DefaultOnError;
-use serde_with::serde_as;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
@@ -256,11 +254,9 @@ impl UriBasedFileOpener {
 }
 
 /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
-#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct History {
     /// If true, history entries will not be written to disk.
-    #[serde_as(as = "DefaultOnError")]
     pub persistence: HistoryPersistence,
 
     /// If set, the maximum size of the history file in bytes. The oldest entries
@@ -336,7 +332,6 @@ pub enum OtelExporterKind {
 }
 
 /// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct OtelConfigToml {
     /// Log user prompt in traces
@@ -347,12 +342,10 @@ pub struct OtelConfigToml {
 
     /// Optional log exporter
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub exporter: Option<OtelExporterKind>,
 
     /// Optional trace exporter
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub trace_exporter: Option<OtelExporterKind>,
 }
 
@@ -414,13 +407,11 @@ impl Default for ScrollInputMode {
 }
 
 /// Collection of settings that are specific to the TUI.
-#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `true`.
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub notifications: Notifications,
 
     /// Enable animations (welcome screen, shimmer effects, spinners).
@@ -510,7 +501,6 @@ pub struct Tui {
     /// - `wheel`: always use wheel behavior (fixed lines per wheel notch).
     /// - `trackpad`: always use trackpad behavior (fractional accumulation; wheel may feel slow).
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub scroll_mode: ScrollInputMode,
 
     /// Auto-mode threshold: maximum time (ms) for the first tick-worth of events to arrive.
@@ -546,7 +536,6 @@ pub struct Tui {
     /// Using alternate screen provides a cleaner fullscreen experience but prevents
     /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub alternate_screen: AltScreenMode,
 }
 
@@ -620,11 +609,9 @@ pub enum ShellEnvironmentPolicyInherit {
 
 /// Policy for building the `env` when spawning a process via either the
 /// `shell` or `local_shell` tool.
-#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct ShellEnvironmentPolicyToml {
     #[serde(default)]
-    #[serde_as(as = "DefaultOnError")]
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
 
     pub ignore_default_excludes: Option<bool>,
