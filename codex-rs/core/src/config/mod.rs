@@ -466,7 +466,7 @@ fn sanitize_config_toml(mut merged_toml: TomlValue) -> (TomlValue, Vec<ConfigWar
         ReasoningEffort::XHigh,
     ]
     .iter()
-    .map(|effort| effort.to_string())
+    .map(ReasoningEffort::to_string)
     .collect::<Vec<_>>();
 
     if let TomlValue::Table(table) = &mut merged_toml {
