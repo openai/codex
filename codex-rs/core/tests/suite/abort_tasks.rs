@@ -1,6 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
-
 use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -57,6 +55,13 @@ fn long_running_local_shell_call_with_output() -> Vec<&'static str> {
     } else {
         vec!["/bin/sh", "-c", "printf 'partial output\\n'; sleep 60"]
     }
+}
+
+fn saw_partial_output(call_id: &str, event: &EventMsg) -> bool {
+    let EventMsg::ExecCommandOutputDelta(delta) = event else {
+        return false;
+    };
+    delta.call_id == call_id && String::from_utf8_lossy(&delta.chunk).contains("partial output")
 }
 
 fn assert_aborted_output(output: &str) {
@@ -188,8 +193,7 @@ async fn interrupt_tool_records_history_entries() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
-
-    tokio::time::sleep(Duration::from_secs_f32(0.1)).await;
+    wait_for_event(&codex, |ev| saw_partial_output(call_id, ev)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
@@ -264,7 +268,7 @@ async fn interrupt_shell_records_partial_output() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_event(&codex, |ev| saw_partial_output(call_id, ev)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
@@ -323,7 +327,7 @@ async fn interrupt_local_shell_records_partial_output() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_event(&codex, |ev| saw_partial_output(call_id, ev)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
@@ -398,7 +402,7 @@ async fn interrupt_unified_exec_records_partial_output() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_event(&codex, |ev| saw_partial_output(call_id, ev)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
