@@ -1,3 +1,4 @@
+use anyhow::Context;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -22,6 +23,7 @@ use image::ImageBuffer;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use std::path::Path;
+use std::time::Duration;
 
 fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
     for line in text.lines() {
@@ -35,13 +37,16 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
         };
         if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
             &rollout.item
-            && role == "user"
-            && content
-                .iter()
-                .any(|span| matches!(span, ContentItem::InputImage { .. }))
-            && let RolloutItem::ResponseItem(item) = rollout.item.clone()
         {
-            return Some(item);
+            if role == "user"
+                && content
+                    .iter()
+                    .any(|span| matches!(span, ContentItem::InputImage { .. }))
+            {
+                if let RolloutItem::ResponseItem(item) = rollout.item.clone() {
+                    return Some(item);
+                }
+            }
         }
     }
     None
@@ -55,6 +60,21 @@ fn extract_image_url(item: &ResponseItem) -> Option<String> {
         }),
         _ => None,
     }
+}
+
+async fn read_rollout_text(path: &Path) -> anyhow::Result<String> {
+    for _ in 0..50 {
+        if path.exists() {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if !text.trim().is_empty() {
+                    return Ok(text);
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    std::fs::read_to_string(path)
+        .with_context(|| format!("read rollout file at {}", path.display()))
 }
 
 fn write_test_png(path: &Path, color: [u8; 4]) -> anyhow::Result<()> {
@@ -76,6 +96,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         codex,
         cwd,
         session_configured,
+        home: _home,
         ..
     } = test_codex().build(&server).await?;
 
@@ -116,7 +137,8 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
     codex.submit(Op::Shutdown).await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::ShutdownComplete)).await;
 
-    let rollout_text = std::fs::read_to_string(codex.rollout_path())?;
+    let rollout_path = codex.rollout_path();
+    let rollout_text = read_rollout_text(&rollout_path).await?;
     let actual = find_user_message_with_image(&rollout_text)
         .expect("expected user message with input image in rollout");
 
@@ -153,6 +175,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         codex,
         cwd,
         session_configured,
+        home: _home,
         ..
     } = test_codex().build(&server).await?;
 
@@ -191,7 +214,8 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
     codex.submit(Op::Shutdown).await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::ShutdownComplete)).await;
 
-    let rollout_text = std::fs::read_to_string(codex.rollout_path())?;
+    let rollout_path = codex.rollout_path();
+    let rollout_text = read_rollout_text(&rollout_path).await?;
     let actual = find_user_message_with_image(&rollout_text)
         .expect("expected user message with input image in rollout");
 
