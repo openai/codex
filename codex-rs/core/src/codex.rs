@@ -3872,6 +3872,8 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
+        // Interrupts persist a model-visible `<turn_aborted>` marker into history, but there is no
+        // separate client-visible event for that marker (only `EventMsg::TurnAborted`).
         let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
             .await
             .expect("timeout waiting for event")
@@ -3880,6 +3882,7 @@ mod tests {
             EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
             other => panic!("unexpected event: {other:?}"),
         }
+        // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
     }
 
@@ -3901,6 +3904,8 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
+        // Even if tasks handle cancellation gracefully, interrupts still result in `TurnAborted`
+        // being the only client-visible signal.
         let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
             .await
             .expect("timeout waiting for event")
@@ -3909,6 +3914,7 @@ mod tests {
             EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
             other => panic!("unexpected event: {other:?}"),
         }
+        // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
     }
 
@@ -3923,6 +3929,9 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
+        // Aborting a review task should exit review mode before surfacing the abort to the client.
+        // We scan for these events (rather than relying on fixed ordering) since unrelated events
+        // may interleave.
         let mut exited_review_mode_idx = None;
         let mut turn_aborted_idx = None;
         let mut idx = 0usize;
@@ -3962,6 +3971,8 @@ mod tests {
         );
 
         let history = sess.clone_history().await;
+        // The `<turn_aborted>` marker is silent in the event stream, so verify it is still
+        // recorded in history for the model.
         assert!(
             history.raw_items().iter().any(|item| {
                 let ResponseItem::Message { role, content, .. } = item else {
