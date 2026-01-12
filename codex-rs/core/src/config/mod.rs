@@ -261,8 +261,7 @@ pub struct Config {
 
     /// Optional fixed port to use for the local HTTP callback server used during MCP OAuth login.
     ///
-    /// When unset, Codex will bind to an ephemeral port chosen by the OS. The environment
-    /// variable `CODEX_MCP_OAUTH_CALLBACK_PORT` takes precedence over this value if set.
+    /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
     /// Combined provider map (defaults merged with user-defined overrides).
@@ -745,8 +744,7 @@ pub struct ConfigToml {
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
 
     /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
-    /// When unset, Codex will bind to an ephemeral port chosen by the OS. The environment
-    /// variable `CODEX_MCP_OAUTH_CALLBACK_PORT` takes precedence over this value if set.
+    /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
     /// User-defined provider entries that extend/override the built-in list.
