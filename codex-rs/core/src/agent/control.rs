@@ -9,6 +9,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
 use std::sync::Weak;
+use tokio::sync::watch;
 
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
@@ -78,6 +79,16 @@ impl AgentControl {
             return AgentStatus::NotFound;
         };
         thread.agent_status().await
+    }
+
+    /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
+    pub(crate) async fn subscribe_status(
+        &self,
+        agent_id: ThreadId,
+    ) -> CodexResult<watch::Receiver<AgentStatus>> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        Ok(thread.subscribe_status())
     }
 
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {

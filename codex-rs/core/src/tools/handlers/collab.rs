@@ -55,7 +55,7 @@ impl ToolHandler for CollabHandler {
         match tool_name.as_str() {
             "spawn_agent" => spawn::handle(session, turn, arguments).await,
             "send_input" => send_input::handle(session, arguments).await,
-            "wait" => wait::handle(session, arguments).await,
+            "wait" => wait::handle(session, arguments).await
             "close_agent" => close_agent::handle(arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
@@ -143,11 +143,14 @@ mod send_input {
     }
 }
 
-#[allow(unused_variables)]
 mod wait {
     use super::*;
+    use crate::agent::status::is_final;
     use crate::codex::Session;
     use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::time::Instant;
+    use tokio::time::timeout_at;
 
     #[derive(Debug, Deserialize)]
     struct WaitArgs {
@@ -168,40 +171,63 @@ mod wait {
         let args: WaitArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
 
+        // Validate timeout.
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
-        if timeout_ms <= 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "timeout_ms must be greater than zero".to_string(),
-            ));
-        }
-        let timeout_ms = timeout_ms.min(MAX_WAIT_TIMEOUT_MS);
-        // TODO(jif) actual implementation
-        let outcome = WaitResult {
-            status: Default::default(),
-            timed_out: false,
+        let timeout_ms = match timeout_ms {
+            ms if ms <= 0 => {
+                return Err(FunctionCallError::RespondToModel(
+                    "timeout_ms must be greater than zero".to_owned(),
+                ));
+            }
+            ms => ms.min(MAX_WAIT_TIMEOUT_MS),
         };
 
-        if matches!(outcome.status, AgentStatus::NotFound) {
+        let mut status_rx = session
+            .services
+            .agent_control
+            .subscribe_status(agent_id)
+            .await
+            .map_err(|err| match err {
+                CodexErr::ThreadNotFound(id) => {
+                    FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
+                }
+                err => FunctionCallError::Fatal(err.to_string()),
+            })?;
+
+        // Get last known status.
+        let mut status = status_rx.borrow_and_update().clone();
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+
+        let timed_out = loop {
+            if is_final(&status) {
+                break false;
+            }
+
+            match timeout_at(deadline, status_rx.changed()).await {
+                Ok(Ok(())) => status = status_rx.borrow().clone(),
+                Ok(Err(_)) => {
+                    status = session.services.agent_control.get_status(agent_id).await;
+                    break false;
+                }
+                Err(_) => break true,
+            }
+        };
+
+        if matches!(status, AgentStatus::NotFound) {
             return Err(FunctionCallError::RespondToModel(format!(
                 "agent with id {agent_id} not found"
             )));
         }
 
-        let message = outcome.timed_out.then(|| {
-            format!(
-                "Timed out after {timeout_ms}ms waiting for agent {agent_id}. The agent may still be running."
-            )
-        });
-        let result = WaitResult {
-            status: outcome.status,
-            timed_out: outcome.timed_out,
-        };
+        let result = WaitResult { status, timed_out };
+
         let content = serde_json::to_string(&result).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
         })?;
+
         Ok(ToolOutput::Function {
             content,
-            success: Some(!outcome.timed_out),
+            success: Some(!result.timed_out),
             content_items: None,
         })
     }
