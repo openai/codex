@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::env;
 use std::string::String;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,8 +22,6 @@ use crate::oauth::compute_expires_at_millis;
 use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
-
-const CODEX_MCP_OAUTH_CALLBACK_PORT_ENV: &str = "CODEX_MCP_OAUTH_CALLBACK_PORT";
 
 struct OauthHeaders {
     http_headers: Option<HashMap<String, String>>,
@@ -197,30 +194,7 @@ struct OauthLoginFlow {
     timeout: Duration,
 }
 
-fn load_callback_port_from_env() -> Result<Option<u16>> {
-    let port = match env::var(CODEX_MCP_OAUTH_CALLBACK_PORT_ENV) {
-        Ok(value) => value,
-        Err(env::VarError::NotPresent) => return Ok(None),
-        Err(err) => bail!("invalid {CODEX_MCP_OAUTH_CALLBACK_PORT_ENV} value: {err}"),
-    };
-
-    let parsed: u16 = port
-        .parse()
-        .with_context(|| format!("invalid {CODEX_MCP_OAUTH_CALLBACK_PORT_ENV} `{port}`"))?;
-    if parsed == 0 {
-        bail!(
-            "invalid {CODEX_MCP_OAUTH_CALLBACK_PORT_ENV} `{port}`: port must be between 1 and 65535"
-        );
-    }
-
-    Ok(Some(parsed))
-}
-
 fn resolve_callback_port(callback_port: Option<u16>) -> Result<Option<u16>> {
-    if let Some(env_port) = load_callback_port_from_env()? {
-        return Ok(Some(env_port));
-    }
-
     if let Some(config_port) = callback_port {
         if config_port == 0 {
             bail!(
