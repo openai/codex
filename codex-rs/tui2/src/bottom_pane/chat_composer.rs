@@ -1106,15 +1106,14 @@ impl ChatComposer {
         // If there is neither text nor attachments, suppress submission entirely.
         let has_attachments = !self.attached_images.is_empty();
         text = text.trim().to_string();
-        
+
         if let Some((name, _rest)) = parse_slash_name(&text) {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
                 let is_builtin = built_in_slash_commands()
                     .into_iter()
                     .filter(|(_, cmd)| {
-                        windows_degraded_sandbox_active()
-                            || *cmd != SlashCommand::ElevateSandbox
+                        windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
                     })
                     .any(|(command_name, _)| command_name == name);
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
@@ -1242,10 +1241,10 @@ impl ChatComposer {
                     self.textarea.set_text("");
                     return (InputResult::Command(cmd), true);
                 }
-                
+
                 let original_input = self.textarea.text().to_string();
                 let input_starts_with_space = original_input.starts_with(' ');
-                
+
                 // Handle slash command with args (e.g., /review args)
                 if !input_starts_with_space {
                     let text = self.textarea.text().to_string();
@@ -1261,7 +1260,7 @@ impl ChatComposer {
                         return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
                     }
                 }
-                
+
                 if let Some(text) = self.prepare_submission_text() {
                     (InputResult::Queued(text), true)
                 } else {
@@ -1297,7 +1296,7 @@ impl ChatComposer {
                     self.textarea.set_text("");
                     return (InputResult::Command(cmd), true);
                 }
-                
+
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
                 // Do not treat Enter as paste inside a slash-command context.
@@ -1327,10 +1326,10 @@ impl ChatComposer {
                     self.paste_burst.extend_window(now);
                     return (InputResult::None, true);
                 }
-                
+
                 let original_input = self.textarea.text().to_string();
                 let input_starts_with_space = original_input.starts_with(' ');
-                
+
                 // Handle slash command with args (e.g., /review args)
                 if !input_starts_with_space {
                     let text = self.textarea.text().to_string();
@@ -1346,7 +1345,7 @@ impl ChatComposer {
                         return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
                     }
                 }
-                
+
                 if let Some(text) = self.prepare_submission_text() {
                     // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
                     (InputResult::Submitted(text), true)
