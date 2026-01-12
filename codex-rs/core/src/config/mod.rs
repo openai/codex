@@ -33,6 +33,7 @@ use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -237,6 +238,14 @@ pub struct Config {
     /// consistently to both mouse wheels and trackpads.
     pub tui_scroll_invert: bool,
 
+    /// Controls whether the TUI uses the terminal's alternate screen buffer.
+    ///
+    /// This is the same `tui.alternate_screen` value from `config.toml` (see [`Tui`]).
+    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
+    /// - `always`: Always use alternate screen (original behavior).
+    /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
+    pub tui_alternate_screen: AltScreenMode,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -259,6 +268,11 @@ pub struct Config {
     ///       This file will be readable to Codex and other applications running as the same user.
     /// auto (default): keyring if available, otherwise file.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
+
+    /// Optional fixed port to use for the local HTTP callback server used during MCP OAuth login.
+    ///
+    /// When unset, Codex will bind to an ephemeral port chosen by the OS.
+    pub mcp_oauth_callback_port: Option<u16>,
 
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
@@ -742,6 +756,10 @@ pub struct ConfigToml {
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
+
+    /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
+    /// When unset, Codex will bind to an ephemeral port chosen by the OS.
+    pub mcp_oauth_callback_port: Option<u16>,
 
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
@@ -1353,6 +1371,7 @@ impl Config {
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
+            mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
@@ -1444,6 +1463,11 @@ impl Config {
                 .as_ref()
                 .and_then(|t| t.scroll_wheel_like_max_duration_ms),
             tui_scroll_invert: cfg.tui.as_ref().map(|t| t.scroll_invert).unwrap_or(false),
+            tui_alternate_screen: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.alternate_screen)
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1642,6 +1666,7 @@ persistence = "none"
                 scroll_wheel_tick_detect_max_ms: None,
                 scroll_wheel_like_max_duration_ms: None,
                 scroll_invert: false,
+                alternate_screen: AltScreenMode::Auto,
             }
         );
     }
@@ -3231,6 +3256,7 @@ model_verbosity = "high"
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
                 mcp_oauth_credentials_store_mode: Default::default(),
+                mcp_oauth_callback_port: None,
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
@@ -3277,6 +3303,7 @@ model_verbosity = "high"
                 tui_scroll_wheel_tick_detect_max_ms: None,
                 tui_scroll_wheel_like_max_duration_ms: None,
                 tui_scroll_invert: false,
+                tui_alternate_screen: AltScreenMode::Auto,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3316,6 +3343,7 @@ model_verbosity = "high"
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
+            mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -3362,6 +3390,7 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
 
@@ -3416,6 +3445,7 @@ model_verbosity = "high"
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
+            mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -3462,6 +3492,7 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
 
@@ -3502,6 +3533,7 @@ model_verbosity = "high"
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
+            mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -3548,6 +3580,7 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
 
@@ -3812,6 +3845,34 @@ trust_level = "untrusted"
             Some("test-profile".to_string()),
         );
         assert_eq!(result, Some("explicit-provider".to_string()));
+    }
+
+    #[test]
+    fn config_toml_deserializes_mcp_oauth_callback_port() {
+        let toml = r#"mcp_oauth_callback_port = 4321"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for callback port");
+        assert_eq!(cfg.mcp_oauth_callback_port, Some(4321));
+    }
+
+    #[test]
+    fn config_loads_mcp_oauth_callback_port_from_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let toml = r#"
+model = "gpt-5.1"
+mcp_oauth_callback_port = 5678
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for callback port");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.mcp_oauth_callback_port, Some(5678));
+        Ok(())
     }
 
     #[test]

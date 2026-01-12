@@ -1,5 +1,6 @@
 mod account;
 mod config_rpc;
+mod initialize;
 mod model_list;
 mod output_schema;
 mod rate_limits;

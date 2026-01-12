@@ -86,6 +86,8 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Append additional AGENTS.md guidance to user instructions.
+    HierarchicalAgents,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
     /// Enforce UTF8 output in Powershell.
@@ -350,6 +352,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
             announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::HierarchicalAgents,
+        key: "hierarchical_agents",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {

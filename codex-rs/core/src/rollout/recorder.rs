@@ -143,7 +143,7 @@ impl RolloutRecorder {
                         id: session_id,
                         timestamp,
                         cwd: config.cwd.clone(),
-                        originator: originator().value.clone(),
+                        originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
                         source,

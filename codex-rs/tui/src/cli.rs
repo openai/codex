@@ -85,6 +85,14 @@ pub struct Cli {
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
 
+    /// Disable alternate screen mode
+    ///
+    /// Runs the TUI in inline mode, preserving terminal scrollback history. This is useful
+    /// in terminal multiplexers like Zellij that follow the xterm spec strictly and disable
+    /// scrollback in alternate screen buffers.
+    #[arg(long = "no-alt-screen", default_value_t = false)]
+    pub no_alt_screen: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
