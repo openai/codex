@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use crate::is_dangerous_command::command_might_be_dangerous;
+use crate::is_safe_command::is_known_safe_command;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -116,14 +117,15 @@ impl ExecPolicyManager {
         let exec_policy = self.current();
         let commands =
             parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
-        let heuristics_fallback = |cmd: &[String]| {
-            if requires_initial_appoval(approval_policy, sandbox_policy, cmd, sandbox_permissions) {
-                Decision::Prompt
-            } else {
-                Decision::Allow
-            }
+        let exec_policy_fallback = |cmd: &[String]| {
+            render_decision_for_unmatched_command(
+                approval_policy,
+                sandbox_policy,
+                cmd,
+                sandbox_permissions,
+            )
         };
-        let evaluation = exec_policy.check_multiple(commands.iter(), &heuristics_fallback);
+        let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {
@@ -240,6 +242,70 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     tracing::debug!("loaded execpolicy from {} files", policy_paths.len());
 
     Ok(policy)
+}
+
+/// If a command is not matched by any execpolicy rule, derive a [`Decision`].
+pub fn render_decision_for_unmatched_command(
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    command: &[String],
+    sandbox_permissions: SandboxPermissions,
+) -> Decision {
+    if is_known_safe_command(command) {
+        return Decision::Allow;
+    }
+
+    // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
+    // here.
+    let runtime_sandbox_provides_safety =
+        cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly);
+
+    // If the command is flagged as dangerous or we have no sandbox protection,
+    // we should never allow it to run without user approval.
+    //
+    // We prefer to prompt the user rather than outright forbid the command,
+    // but if the user has explicitly disabled prompts, we must
+    // forbid the command.
+    if command_might_be_dangerous(command) || runtime_sandbox_provides_safety {
+        return if matches!(approval_policy, AskForApproval::Never) {
+            Decision::Forbidden
+        } else {
+            Decision::Prompt
+        };
+    }
+
+    match approval_policy {
+        AskForApproval::Never | AskForApproval::OnFailure => {
+            // We allow the command to run, relying on the sandbox for
+            // protection.
+            Decision::Allow
+        }
+        AskForApproval::UnlessTrusted => {
+            // We already checked `is_known_safe_command(command)` and it
+            // returned false, so we must prompt.
+            Decision::Prompt
+        }
+        AskForApproval::OnRequest => {
+            match sandbox_policy {
+                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                    // The user has indicated we should "just run" commands
+                    // in their unrestricted environment, so we do so since the
+                    // command has not been flagged as dangerous.
+                    Decision::Allow
+                }
+                SandboxPolicy::ReadOnly | SandboxPolicy::WorkspaceWrite { .. } => {
+                    // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
+                    // non‑escalated, non‑dangerous commands — let the sandbox enforce
+                    // restrictions (e.g., block network/write) without a user prompt.
+                    if sandbox_permissions.requires_escalated_permissions() {
+                        Decision::Prompt
+                    } else {
+                        Decision::Allow
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
@@ -426,6 +492,7 @@ mod tests {
     use crate::features::Features;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::NetworkAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -1049,6 +1116,35 @@ prefix_rule(
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
             }
+        );
+    }
+
+    #[test]
+    fn decide_how_to_deal_with_for_unmatched_command() {
+        fn vec_str(items: &[&str]) -> Vec<String> {
+            items.iter().map(std::string::ToString::to_string).collect()
+        }
+
+        let external_policy = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Restricted,
+        };
+        assert_eq!(
+            Decision::Allow,
+            render_decision_for_unmatched_command(
+                AskForApproval::OnRequest,
+                &external_policy,
+                &vec_str(&["ls"]),
+                SandboxPermissions::UseDefault,
+            )
+        );
+        assert_eq!(
+            Decision::Prompt,
+            render_decision_for_unmatched_command(
+                AskForApproval::OnRequest,
+                &external_policy,
+                &vec_str(&["rm", "-rf", "/"]),
+                SandboxPermissions::UseDefault,
+            )
         );
     }
 }
