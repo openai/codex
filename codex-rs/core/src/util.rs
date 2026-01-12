@@ -88,7 +88,7 @@ pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) ->
 }
 
 fn needs_shell_escaping(value: &str) -> bool {
-    value.starts_with('-') || value.chars().any(|ch| ch.is_whitespace()) || value.contains('\'')
+    value.starts_with('-') || value.chars().any(char::is_whitespace) || value.contains('\'')
 }
 
 fn shell_escape(value: &str) -> String {

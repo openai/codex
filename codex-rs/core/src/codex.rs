@@ -23,6 +23,7 @@ use crate::features::Features;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -681,10 +682,19 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let thread_name = Self::thread_name_from_rollout(&initial_history.get_rollout_items());
+        let thread_name =
+            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
+            {
+                Ok(name) => name,
+                Err(err) => {
+                    warn!("Failed to read session index for thread name: {err}");
+                    None
+                }
+            };
         let state = SessionState::new(session_configuration.clone(), thread_name.clone());
 
         let services = SessionServices {
+            codex_home: config.codex_home.clone(),
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecProcessManager::default(),
@@ -863,13 +873,6 @@ impl Session {
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
         rollout_items.iter().rev().find_map(|item| match item {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
-            _ => None,
-        })
-    }
-
-    fn thread_name_from_rollout(rollout_items: &[RolloutItem]) -> Option<String> {
-        rollout_items.iter().find_map(|item| match item {
-            RolloutItem::SessionMeta(meta_line) => meta_line.meta.name.clone(),
             _ => None,
         })
     }
@@ -2135,6 +2138,7 @@ mod handlers {
     }
 
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
+        use crate::rollout::session_index;
         let name = name.trim().to_string();
         if name.is_empty() {
             let event = Event {
@@ -2148,15 +2152,12 @@ mod handlers {
             return;
         }
 
-        let recorder = {
-            let guard = sess.services.rollout.lock().await;
-            guard.clone()
-        };
-        let Some(recorder) = recorder else {
+        let persistence_enabled = sess.services.rollout.lock().await.is_some();
+        if !persistence_enabled {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Session persistence is disabled; cannot rename session.".to_string(),
+                    message: "Session persistence is disabled; cannot rename thread.".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
@@ -2164,8 +2165,13 @@ mod handlers {
             return;
         };
 
-        let name_for_recorder = name.clone();
-        if let Err(e) = recorder.set_thread_name(name_for_recorder).await {
+        if let Err(e) = session_index::append_thread_name(
+            &sess.services.codex_home,
+            sess.conversation_id,
+            &name,
+        )
+        .await
+        {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
@@ -3580,6 +3586,7 @@ mod tests {
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
+            codex_home: config.codex_home.clone(),
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecProcessManager::default(),
@@ -3674,6 +3681,7 @@ mod tests {
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
+            codex_home: config.codex_home.clone(),
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecProcessManager::default(),

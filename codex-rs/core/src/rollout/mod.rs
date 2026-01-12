@@ -11,6 +11,7 @@ pub(crate) mod error;
 pub mod list;
 pub(crate) mod policy;
 pub mod recorder;
+pub(crate) mod session_index;
 pub(crate) mod truncation;
 
 pub use codex_protocol::protocol::SessionMeta;

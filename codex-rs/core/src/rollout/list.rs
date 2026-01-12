@@ -14,6 +14,7 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
+use super::session_index::find_thread_id_by_name;
 use crate::protocol::EventMsg;
 use codex_file_search as file_search;
 use codex_protocol::protocol::RolloutItem;
@@ -478,59 +479,16 @@ async fn file_modified_rfc3339(path: &Path) -> io::Result<Option<String>> {
     Ok(dt.format(&Rfc3339).ok())
 }
 
-async fn read_first_session_meta_name(path: &Path) -> io::Result<Option<String>> {
-    use tokio::io::AsyncBufReadExt;
-
-    let file = tokio::fs::File::open(path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
-
-    while let Some(line) = lines.next_line().await? {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
-        let Ok(rollout_line) = parsed else {
-            return Ok(None);
-        };
-
-        return Ok(match rollout_line.item {
-            RolloutItem::SessionMeta(meta_line) => meta_line.meta.name,
-            _ => None,
-        });
-    }
-
-    Ok(None)
-}
-
 /// Locate a recorded thread rollout file by thread name using newest-first ordering.
 /// Returns `Ok(Some(path))` if found, `Ok(None)` if not present.
 pub async fn find_thread_path_by_name_str(
     codex_home: &Path,
     name: &str,
 ) -> io::Result<Option<PathBuf>> {
-    if name.trim().is_empty() {
+    let Some(thread_id) = find_thread_id_by_name(codex_home, name).await? else {
         return Ok(None);
-    }
-
-    let mut root = codex_home.to_path_buf();
-    root.push(SESSIONS_SUBDIR);
-    if !root.exists() {
-        return Ok(None);
-    }
-
-    let (files, _reached_scan_cap) = newest_rollout_files(&root).await?;
-    for (_ts, _sid, path) in files.into_iter() {
-        if let Some(candidate) = read_first_session_meta_name(&path).await?
-            && candidate == name
-        {
-            return Ok(Some(path));
-        }
-    }
-
-    Ok(None)
+    };
+    find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing
