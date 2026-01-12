@@ -3,6 +3,7 @@ packages:
   - sdk/typescript
   - shell-tool-mcp
   - vscode-extension
+  - web
 
 ignoredBuiltDependencies:
   - esbuild

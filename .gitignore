@@ -67,6 +67,7 @@ coverage/
 # local scratch
 dev/
 /.worktrees/
+web/.data/
 
 # personal files
 personal/

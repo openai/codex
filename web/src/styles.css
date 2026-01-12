@@ -1,0 +1,349 @@
+:root {
+  --bg: #1e1e1e;
+  --panel: #252526;
+  --panel2: #2d2d2d;
+  --border: #3c3c3c;
+  --text: #d4d4d4;
+  --muted: #9da5b4;
+  --accent: #0e639c;
+  --danger: #f14c4c;
+  --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
+    Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: 32px 1fr 22px;
+}
+
+.titlebar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 10px;
+}
+
+.title {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.workbench {
+  min-height: 0;
+}
+
+.statusbar {
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sidebar {
+  height: 100%;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 260px;
+}
+
+.sidebarHeader {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebarHeaderTitle {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.4px;
+}
+
+.btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: #5a5a5a;
+}
+
+.btnDanger {
+  border-color: rgba(241, 76, 76, 0.6);
+  color: var(--danger);
+}
+
+.list {
+  overflow: auto;
+  padding: 6px 6px 12px;
+}
+
+.rootRow {
+  padding: 6px 6px 4px;
+  border-bottom: 1px solid rgba(60, 60, 60, 0.5);
+  margin-bottom: 6px;
+}
+
+.rootTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rootTitle {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rootPath {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
+  word-break: break-all;
+}
+
+.tree {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.node:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.nodeActive {
+  background: rgba(14, 99, 156, 0.25);
+}
+
+.nodeIcon {
+  width: 14px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.tabs {
+  height: 34px;
+  display: flex;
+  align-items: stretch;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.tabActive {
+  color: var(--text);
+  background: var(--panel2);
+}
+
+.tabClose {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.editorWrap {
+  height: calc(100% - 34px);
+  min-height: 0;
+}
+
+.empty {
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: grid;
+  place-items: center;
+}
+
+.modal {
+  width: min(860px, calc(100vw - 24px));
+  height: min(560px, calc(100vh - 24px));
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+}
+
+.modalHeader {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modalTitle {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.modalPath {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.modalPathText {
+  font-family: var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modalBody {
+  overflow: auto;
+  padding: 8px;
+}
+
+.dirRow {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dirRow:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.modalFooter {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.input {
+  background: #1b1b1b;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  width: 320px;
+}
+
+.mobileDrawerBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: stretch;
+}
+
+.mobileDrawer {
+  width: min(420px, 92vw);
+  height: 100%;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.mobileDrawer .sidebar {
+  border-right: none;
+}
+
+@media (max-width: 820px) {
+  .titlebar {
+    gap: 6px;
+  }
+
+  .btn {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .node {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .tab {
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .statusbar {
+    display: none;
+  }
+}

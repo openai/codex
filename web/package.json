@@ -1,0 +1,30 @@
+{
+  "name": "codex-mine-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"pnpm:dev:server\" \"pnpm:dev:client\"",
+    "dev:client": "vite",
+    "dev:server": "node --watch server/index.mjs",
+    "build": "vite build",
+    "start": "node server/index.mjs"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.6.0",
+    "allotment": "^1.20.2",
+    "clsx": "^2.1.1",
+    "express": "^4.19.2",
+    "mime": "^4.0.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11"
+  }
+}
