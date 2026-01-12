@@ -91,7 +91,8 @@ async fn responses_stream_includes_subagent_header_on_review() {
         summary,
         conversation_id,
         session_source,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -186,7 +187,8 @@ async fn responses_stream_includes_subagent_header_on_other() {
         summary,
         conversation_id,
         session_source,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -279,7 +281,8 @@ async fn responses_respects_model_info_overrides_from_config() {
         summary,
         conversation_id,
         session_source,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
