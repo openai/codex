@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use codex_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
@@ -13,9 +14,9 @@ use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
+use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_git::GhostCommit;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
@@ -200,7 +201,11 @@ impl DeveloperInstructions {
         Self { text }
     }
 
-    pub fn from_policy(sandbox_policy: &SandboxPolicy, approval_policy: AskForApproval) -> Self {
+    pub fn from_policy(
+        sandbox_policy: &SandboxPolicy,
+        approval_policy: AskForApproval,
+        cwd: &PathBuf,
+    ) -> Self {
         let network_access = if sandbox_policy.has_full_network_access() {
             NetworkAccess::Enabled
         } else {
@@ -211,13 +216,9 @@ impl DeveloperInstructions {
             SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
             SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, None),
             SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                let roots = if writable_roots.is_empty() {
-                    None
-                } else {
-                    Some(writable_roots.clone())
-                };
-                (SandboxMode::WorkspaceWrite, roots)
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+                (SandboxMode::WorkspaceWrite, Some(roots))
             }
         };
 
@@ -233,7 +234,7 @@ impl DeveloperInstructions {
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
         approval_policy: AskForApproval,
-        writable_roots: Option<Vec<AbsolutePathBuf>>,
+        writable_roots: Option<Vec<WritableRoot>>,
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
         let end_tag = DeveloperInstructions::new("</permissions instructions>");
@@ -247,7 +248,7 @@ impl DeveloperInstructions {
             .concat(end_tag)
     }
 
-    fn from_writable_roots(writable_roots: Option<Vec<AbsolutePathBuf>>) -> Self {
+    fn from_writable_roots(writable_roots: Option<Vec<WritableRoot>>) -> Self {
         let Some(roots) = writable_roots else {
             return DeveloperInstructions::new("");
         };
@@ -258,7 +259,7 @@ impl DeveloperInstructions {
 
         let roots_list: Vec<String> = roots
             .iter()
-            .map(|r| format!("`{}`", r.to_string_lossy()))
+            .map(|r| format!("`{}`", r.root.to_string_lossy()))
             .collect();
         let text = if roots_list.len() == 1 {
             format!(" The writable root is {}.", roots_list[0])
@@ -762,8 +763,11 @@ mod tests {
             exclude_slash_tmp: false,
         };
 
-        let instructions =
-            DeveloperInstructions::from_policy(&policy, AskForApproval::UnlessTrusted);
+        let instructions = DeveloperInstructions::from_policy(
+            &policy,
+            AskForApproval::UnlessTrusted,
+            &PathBuf::from("/tmp"),
+        );
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
         assert!(text.contains("`approval_policy` is `unless-trusted`"));

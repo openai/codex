@@ -1021,7 +1021,14 @@ impl Session {
             return None;
         }
 
-        Some(DeveloperInstructions::from_policy(&next.sandbox_policy, next.approval_policy).into())
+        Some(
+            DeveloperInstructions::from_policy(
+                &next.sandbox_policy,
+                next.approval_policy,
+                &next.cwd,
+            )
+            .into(),
+        )
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -1361,6 +1368,7 @@ impl Session {
             DeveloperInstructions::from_policy(
                 &turn_context.sandbox_policy,
                 turn_context.approval_policy,
+                &turn_context.cwd,
             )
             .into(),
         );
