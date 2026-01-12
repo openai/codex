@@ -274,6 +274,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                     http_headers.clone(),
                     env_http_headers.clone(),
                     &Vec::new(),
+                    config.mcp_oauth_callback_port,
                 )
                 .await?;
                 println!("Successfully logged in.");
@@ -352,6 +353,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         http_headers,
         env_http_headers,
         &scopes,
+        config.mcp_oauth_callback_port,
     )
     .await?;
     println!("Successfully logged in to MCP server '{name}'.");
