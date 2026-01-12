@@ -190,6 +190,7 @@ streamable_shell = true
 unified_exec = true
 view_image_tool = true
 web_search_request = true
+ask_user_question_tool = true
 
 [shell_environment_policy]
 ignore_default_excludes = false
