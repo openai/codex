@@ -80,6 +80,42 @@ pub use codex_git::GhostSnapshotConfig;
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+fn validate_model_reasoning_effort_toml(root: &TomlValue) -> std::io::Result<()> {
+    let Some(raw) = root.get("model_reasoning_effort") else {
+        return Ok(());
+    };
+
+    let Some(s) = raw.as_str() else {
+        return Ok(());
+    };
+
+    let s_lc = s.to_ascii_lowercase();
+    let allowed = ["none", "minimal", "low", "medium", "high", "xhigh"];
+
+    if allowed.contains(&s_lc.as_str()) {
+        return Ok(());
+    }
+
+    // Small "did you mean" for common typos.
+    let suggestion = match s_lc.as_str() {
+        "x-high" | "x_high" | "xhighh" => Some("xhigh"),
+        _ if s_lc.ends_with("high") => Some("high"),
+        _ => None,
+    };
+
+    let mut msg = format!(
+        "Invalid config value: model_reasoning_effort = {s:?}. Allowed values: {}.",
+        allowed.join(", ")
+    );
+
+    if let Some(sugg) = suggestion {
+        msg.push_str(&format!(" Did you mean {sugg:?}?"));
+    }
+
+    msg.push_str(" Fix ~/.codex/config.toml and try again.");
+
+    Err(std::io::Error::new(std::io::ErrorKind::InvalidData, msg))
+}
 
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
@@ -421,6 +457,8 @@ impl ConfigBuilder {
             load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
                 .await?;
         let merged_toml = config_layer_stack.effective_config();
+        validate_model_reasoning_effort_toml(&merged_toml)?;
+
 
         // Note that each layer in ConfigLayerStack should have resolved
         // relative paths to absolute paths based on the parent folder of the
@@ -2108,6 +2146,33 @@ trust_level = "trusted"
     }
 
     #[tokio::test]
+    
+    async fn invalid_model_reasoning_effort_is_user_friendly_error() {
+    let codex_home = tempdir().expect("temp dir");
+
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+model_reasoning_effort = "xhighh"
+"#,
+    )
+    .expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+
+        .build()
+        .await
+        .unwrap_err();
+
+    let msg = err.to_string();
+    assert!(msg.contains("Invalid config value"));
+    assert!(msg.contains("model_reasoning_effort"));
+}
+
+   
+    #[tokio::test]
+
     async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let managed_path = codex_home.path().join("managed_config.toml");
