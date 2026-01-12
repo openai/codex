@@ -63,7 +63,7 @@ struct StatusHistoryCell {
     sandbox: String,
     agents_summary: String,
     account: Option<StatusAccountDisplay>,
-    session_name: Option<String>,
+    thread_name: Option<String>,
     session_id: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
@@ -76,7 +76,7 @@ pub(crate) fn new_status_output(
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
-    session_name: Option<String>,
+    thread_name: Option<String>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -89,7 +89,7 @@ pub(crate) fn new_status_output(
         token_info,
         total_usage,
         session_id,
-        session_name,
+        thread_name,
         rate_limits,
         plan_type,
         now,
@@ -107,7 +107,7 @@ impl StatusHistoryCell {
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
         session_id: &Option<ThreadId>,
-        session_name: Option<String>,
+        thread_name: Option<String>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
         plan_type: Option<PlanType>,
         now: DateTime<Local>,
@@ -162,7 +162,7 @@ impl StatusHistoryCell {
             sandbox,
             agents_summary,
             account,
-            session_name,
+            thread_name,
             session_id,
             token_usage,
             rate_limits,
@@ -346,7 +346,7 @@ impl HistoryCell for StatusHistoryCell {
         if account_value.is_some() {
             push_label(&mut labels, &mut seen, "Account");
         }
-        push_label(&mut labels, &mut seen, "Session name");
+        push_label(&mut labels, &mut seen, "Thread name");
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
@@ -396,8 +396,8 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
         }
 
-        let session_name = self.session_name.as_deref().unwrap_or("<none>");
-        lines.push(formatter.line("Session name", vec![Span::from(session_name.to_string())]));
+        let thread_name = self.thread_name.as_deref().unwrap_or("<none>");
+        lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
         if let Some(session) = self.session_id.as_ref() {
             lines.push(formatter.line("Session", vec![Span::from(session.clone())]));
         }

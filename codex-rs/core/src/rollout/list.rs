@@ -505,7 +505,7 @@ async fn read_first_session_meta_name(path: &Path) -> io::Result<Option<String>>
     Ok(None)
 }
 
-/// Locate a recorded thread rollout file by session name using newest-first ordering.
+/// Locate a recorded thread rollout file by thread name using newest-first ordering.
 /// Returns `Ok(Some(path))` if found, `Ok(None)` if not present.
 pub async fn find_thread_path_by_name_str(
     codex_home: &Path,

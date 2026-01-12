@@ -73,8 +73,8 @@ pub fn resolve_path(base: &Path, path: &PathBuf) -> PathBuf {
     }
 }
 
-pub fn resume_command(session_name: Option<&str>, thread_id: Option<ThreadId>) -> Option<String> {
-    let resume_target = session_name
+pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> Option<String> {
+    let resume_target = thread_name
         .filter(|name| !name.is_empty())
         .map(str::to_string)
         .or_else(|| thread_id.map(|thread_id| thread_id.to_string()));
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn resume_command_prefers_name_over_id() {
         let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
-        let command = resume_command(Some("my-session"), Some(thread_id));
-        assert_eq!(command, Some("codex resume my-session".to_string()));
+        let command = resume_command(Some("my-thread"), Some(thread_id));
+        assert_eq!(command, Some("codex resume my-thread".to_string()));
     }
 }

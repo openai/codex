@@ -681,8 +681,8 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let session_name = Self::session_name_from_rollout(&initial_history.get_rollout_items());
-        let state = SessionState::new(session_configuration.clone(), session_name.clone());
+        let thread_name = Self::thread_name_from_rollout(&initial_history.get_rollout_items());
+        let state = SessionState::new(session_configuration.clone(), thread_name.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -719,7 +719,7 @@ impl Session {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
-                session_name,
+                thread_name,
                 model: session_configuration.model.clone(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
@@ -867,7 +867,7 @@ impl Session {
         })
     }
 
-    fn session_name_from_rollout(rollout_items: &[RolloutItem]) -> Option<String> {
+    fn thread_name_from_rollout(rollout_items: &[RolloutItem]) -> Option<String> {
         rollout_items.iter().find_map(|item| match item {
             RolloutItem::SessionMeta(meta_line) => meta_line.meta.name.clone(),
             _ => None,
@@ -1718,8 +1718,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
-            Op::SetSessionName { name } => {
-                handlers::set_session_name(&sess, sub.id.clone(), name).await;
+            Op::SetThreadName { name } => {
+                handlers::set_thread_name(&sess, sub.id.clone(), name).await;
             }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
@@ -2134,13 +2134,13 @@ mod handlers {
         .await;
     }
 
-    pub async fn set_session_name(sess: &Arc<Session>, sub_id: String, name: String) {
+    pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
         let name = name.trim().to_string();
         if name.is_empty() {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Session name cannot be empty.".to_string(),
+                    message: "Thread name cannot be empty.".to_string(),
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
                 }),
             };
@@ -2148,11 +2148,11 @@ mod handlers {
             return;
         }
 
-        if !is_valid_session_name(&name) {
+        if !is_valid_thread_name(&name) {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Session name must use only letters, numbers, '.', '_' or '-', and cannot start with '-'."
+                    message: "Thread name must use only letters, numbers, '.', '_' or '-', and cannot start with '-'."
                         .to_string(),
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
                 }),
@@ -2178,11 +2178,11 @@ mod handlers {
         };
 
         let name_for_recorder = name.clone();
-        if let Err(e) = recorder.set_session_name(name_for_recorder).await {
+        if let Err(e) = recorder.set_thread_name(name_for_recorder).await {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: format!("Failed to set session name: {e}"),
+                    message: format!("Failed to set thread name: {e}"),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
@@ -2192,33 +2192,33 @@ mod handlers {
 
         {
             let mut state = sess.state.lock().await;
-            state.session_name = Some(name.clone());
+            state.thread_name = Some(name.clone());
         }
 
         sess.send_event_raw(Event {
             id: sub_id,
             msg: EventMsg::SessionMetaUpdated(SessionMetaUpdatedEvent {
                 session_id: sess.conversation_id,
-                session_name: Some(name),
+                thread_name: Some(name),
             }),
         })
         .await;
     }
 
-    fn is_valid_session_name(name: &str) -> bool {
+    fn is_valid_thread_name(name: &str) -> bool {
         let mut chars = name.chars();
         let Some(first) = chars.next() else {
             return false;
         };
 
-        if first == '-' || !is_valid_session_name_char(first) {
+        if first == '-' || !is_valid_thread_name_char(first) {
             return false;
         }
 
-        chars.all(is_valid_session_name_char)
+        chars.all(is_valid_thread_name_char)
     }
 
-    fn is_valid_session_name_char(ch: char) -> bool {
+    fn is_valid_thread_name_char(ch: char) -> bool {
         matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-')
     }
 
@@ -2228,13 +2228,13 @@ mod handlers {
         use pretty_assertions::assert_eq;
 
         #[test]
-        fn validates_session_name_tokens() {
-            assert_eq!(is_valid_session_name("my-session"), true);
-            assert_eq!(is_valid_session_name("Alpha_1.2"), true);
-            assert_eq!(is_valid_session_name("-starts-with-dash"), false);
-            assert_eq!(is_valid_session_name("has space"), false);
-            assert_eq!(is_valid_session_name("slash/name"), false);
-            assert_eq!(is_valid_session_name(""), false);
+        fn validates_thread_name_tokens() {
+            assert_eq!(is_valid_thread_name("my-thread"), true);
+            assert_eq!(is_valid_thread_name("Alpha_1.2"), true);
+            assert_eq!(is_valid_thread_name("-starts-with-dash"), false);
+            assert_eq!(is_valid_thread_name("has space"), false);
+            assert_eq!(is_valid_thread_name("slash/name"), false);
+            assert_eq!(is_valid_thread_name(""), false);
         }
     }
 

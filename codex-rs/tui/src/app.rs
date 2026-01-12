@@ -75,21 +75,21 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
-    pub session_name: Option<String>,
+    pub thread_name: Option<String>,
     pub update_action: Option<UpdateAction>,
 }
 
 fn session_summary(
     token_usage: TokenUsage,
     thread_id: Option<ThreadId>,
-    session_name: Option<String>,
+    thread_name: Option<String>,
 ) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = codex_core::util::resume_command(session_name.as_deref(), thread_id);
+    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -281,7 +281,7 @@ async fn handle_model_migration_prompt_if_needed(
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
                     thread_id: None,
-                    session_name: None,
+                    thread_name: None,
                     update_action: None,
                 });
             }
@@ -501,7 +501,7 @@ impl App {
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: app.chat_widget.thread_id(),
-            session_name: app.chat_widget.session_name(),
+            thread_name: app.chat_widget.thread_name(),
             update_action: app.pending_update_action,
         })
     }
@@ -565,7 +565,7 @@ impl App {
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.thread_id(),
-                    self.chat_widget.session_name(),
+                    self.chat_widget.thread_name(),
                 );
                 self.shutdown_current_thread().await;
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -606,7 +606,7 @@ impl App {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.thread_id(),
-                            self.chat_widget.session_name(),
+                            self.chat_widget.thread_name(),
                         );
                         match self
                             .server
@@ -1701,7 +1701,7 @@ mod tests {
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
-                session_name: None,
+                thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -1757,7 +1757,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let event = SessionConfiguredEvent {
             session_id: thread_id,
-            session_name: None,
+            thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,

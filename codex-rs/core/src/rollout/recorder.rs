@@ -68,7 +68,7 @@ enum RolloutCmd {
         ack: oneshot::Sender<()>,
     },
     /// Rewrite the first SessionMeta line in the rollout file to include a name.
-    SetSessionName {
+    SetThreadName {
         name: String,
         ack: oneshot::Sender<std::io::Result<()>>,
     },
@@ -213,14 +213,14 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
     }
 
-    pub async fn set_session_name(&self, name: String) -> std::io::Result<()> {
+    pub async fn set_thread_name(&self, name: String) -> std::io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.tx
-            .send(RolloutCmd::SetSessionName { name, ack: tx })
+            .send(RolloutCmd::SetThreadName { name, ack: tx })
             .await
-            .map_err(|e| IoError::other(format!("failed to queue session name update: {e}")))?;
+            .map_err(|e| IoError::other(format!("failed to queue thread name update: {e}")))?;
         rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for session name update: {e}")))?
+            .map_err(|e| IoError::other(format!("failed waiting for thread name update: {e}")))?
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -400,8 +400,8 @@ async fn rollout_writer(
                 }
                 let _ = ack.send(());
             }
-            RolloutCmd::SetSessionName { name, ack } => {
-                let result = rewrite_session_name(&mut writer, &rollout_path, &name).await;
+            RolloutCmd::SetThreadName { name, ack } => {
+                let result = rewrite_thread_name(&mut writer, &rollout_path, &name).await;
                 let _ = ack.send(result);
             }
             RolloutCmd::Shutdown { ack } => {
@@ -413,7 +413,7 @@ async fn rollout_writer(
     Ok(())
 }
 
-async fn rewrite_session_name(
+async fn rewrite_thread_name(
     writer: &mut JsonlWriter,
     rollout_path: &Path,
     name: &str,
@@ -479,7 +479,7 @@ async fn rewrite_first_session_meta_line_name(
 
     if !rewritten {
         return Err(IoError::other(
-            "failed to set session name: rollout has no SessionMeta line",
+            "failed to set thread name: rollout has no SessionMeta line",
         ));
     }
 
@@ -490,7 +490,7 @@ fn rewrite_session_meta_line_name(line: &str, name: &str) -> std::io::Result<Str
     let mut rollout_line = serde_json::from_str::<RolloutLine>(line).map_err(IoError::other)?;
     let RolloutItem::SessionMeta(meta_line) = &mut rollout_line.item else {
         return Err(IoError::other(
-            "failed to set session name: rollout has no SessionMeta line",
+            "failed to set thread name: rollout has no SessionMeta line",
         ));
     };
 
@@ -561,7 +561,7 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
-    async fn set_session_name_rewrites_first_session_meta_line() -> std::io::Result<()> {
+    async fn set_thread_name_rewrites_first_session_meta_line() -> std::io::Result<()> {
         let config = crate::config::test_config();
 
         let conversation_id = ThreadId::new();
@@ -571,7 +571,7 @@ mod tests {
         )
         .await?;
 
-        recorder.set_session_name("my-session".to_string()).await?;
+        recorder.set_thread_name("my-thread".to_string()).await?;
 
         let text = tokio::fs::read_to_string(&recorder.rollout_path).await?;
         let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
@@ -579,12 +579,12 @@ mod tests {
         let RolloutItem::SessionMeta(meta_line) = rollout_line.item else {
             panic!("expected SessionMeta as first rollout line");
         };
-        assert_eq!(meta_line.meta.name.as_deref(), Some("my-session"));
+        assert_eq!(meta_line.meta.name.as_deref(), Some("my-thread"));
         Ok(())
     }
 
     #[tokio::test]
-    async fn set_session_name_failure_does_not_redirect_future_writes() -> std::io::Result<()> {
+    async fn set_thread_name_failure_does_not_redirect_future_writes() -> std::io::Result<()> {
         let dir = tempfile::tempdir()?;
         let rollout_path = dir.path().join("rollout.jsonl");
 
@@ -598,7 +598,7 @@ mod tests {
         let mut writer = JsonlWriter { file };
 
         assert!(
-            rewrite_session_name(&mut writer, &rollout_path, "name")
+            rewrite_thread_name(&mut writer, &rollout_path, "name")
                 .await
                 .is_err()
         );
