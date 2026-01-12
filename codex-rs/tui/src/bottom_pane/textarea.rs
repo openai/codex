@@ -715,6 +715,88 @@ impl TextArea {
 
     // ===== Text elements support =====
 
+    pub fn element_payloads(&self) -> Vec<String> {
+        self.elements
+            .iter()
+            .filter_map(|e| self.text.get(e.range.clone()).map(str::to_string))
+            .collect()
+    }
+
+    pub fn element_payload_starting_at(&self, pos: usize) -> Option<String> {
+        let pos = pos.min(self.text.len());
+        let elem = self.elements.iter().find(|e| e.range.start == pos)?;
+        self.text.get(elem.range.clone()).map(str::to_string)
+    }
+
+    /// Renames a single text element in-place, keeping it atomic.
+    ///
+    /// This is intended for cases where the element payload is an identifier (e.g. a placeholder)
+    /// that must be updated without converting the element back into normal text.
+    pub fn replace_element_payload(&mut self, old: &str, new: &str) -> bool {
+        let Some(idx) = self
+            .elements
+            .iter()
+            .position(|e| self.text.get(e.range.clone()) == Some(old))
+        else {
+            return false;
+        };
+
+        let range = self.elements[idx].range.clone();
+        let start = range.start;
+        let end = range.end;
+        if start > end || end > self.text.len() {
+            return false;
+        }
+
+        let removed_len = end - start;
+        let inserted_len = new.len();
+        let diff = inserted_len as isize - removed_len as isize;
+
+        self.text.replace_range(range, new);
+        self.wrap_cache.replace(None);
+        self.preferred_col = None;
+
+        // Update the modified element's range.
+        self.elements[idx].range = start..(start + inserted_len);
+
+        // Shift element ranges that occur after the replaced element.
+        if diff != 0 {
+            for (j, e) in self.elements.iter_mut().enumerate() {
+                if j == idx {
+                    continue;
+                }
+                if e.range.end <= start {
+                    continue;
+                }
+                if e.range.start >= end {
+                    e.range.start = ((e.range.start as isize) + diff) as usize;
+                    e.range.end = ((e.range.end as isize) + diff) as usize;
+                    continue;
+                }
+
+                // Elements should not partially overlap each other; degrade gracefully by
+                // snapping anything intersecting the replaced range to the new bounds.
+                e.range.start = start.min(e.range.start);
+                e.range.end = (start + inserted_len).max(e.range.end.saturating_add_signed(diff));
+            }
+        }
+
+        // Update the cursor position to account for the edit.
+        self.cursor_pos = if self.cursor_pos < start {
+            self.cursor_pos
+        } else if self.cursor_pos <= end {
+            start + inserted_len
+        } else {
+            ((self.cursor_pos as isize) + diff) as usize
+        };
+        self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
+
+        // Keep element ordering deterministic.
+        self.elements.sort_by_key(|e| e.range.start);
+
+        true
+    }
+
     pub fn insert_element(&mut self, text: &str) {
         let start = self.clamp_pos_for_insertion(self.cursor_pos);
         self.insert_str_at(start, text);

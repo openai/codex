@@ -145,11 +145,41 @@ where
 /// that `apply_patch` can be on the PATH without requiring the user to
 /// install a separate `apply_patch` executable, simplifying the deployment of
 /// Codex CLI.
+/// Note: In debug builds the temp-dir guard is disabled to ease local testing.
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
 pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
-    let temp_dir = TempDir::new()?;
+    let codex_home = codex_core::config::find_codex_home()?;
+    #[cfg(not(debug_assertions))]
+    {
+        // Guard against placing helpers in system temp directories outside debug builds.
+        let temp_root = std::env::temp_dir();
+        if codex_home.starts_with(&temp_root) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Refusing to create helper binaries under temporary dir {temp_root:?} (codex_home: {codex_home:?})"
+                ),
+            ));
+        }
+    }
+
+    std::fs::create_dir_all(&codex_home)?;
+    // Use a CODEX_HOME-scoped temp root to avoid cluttering the top-level directory.
+    let temp_root = codex_home.join("tmp").join("path");
+    std::fs::create_dir_all(&temp_root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Ensure only the current user can access the temp directory.
+        std::fs::set_permissions(&temp_root, std::fs::Permissions::from_mode(0o700))?;
+    }
+
+    let temp_dir = tempfile::Builder::new()
+        .prefix("codex-arg0")
+        .tempdir_in(&temp_root)?;
     let path = temp_dir.path();
 
     for filename in &[

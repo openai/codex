@@ -119,10 +119,10 @@ mod tests {
     use crate::config::ConfigBuilder;
     use assert_matches::assert_matches;
     use codex_protocol::protocol::ErrorEvent;
-    use codex_protocol::protocol::TaskCompleteEvent;
-    use codex_protocol::protocol::TaskStartedEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
+    use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -192,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_event_updates_status_from_task_started() {
-        let status = agent_status_from_event(&EventMsg::TaskStarted(TaskStartedEvent {
+        let status = agent_status_from_event(&EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
         }));
         assert_eq!(status, Some(AgentStatus::Running));
@@ -200,7 +200,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_event_updates_status_from_task_complete() {
-        let status = agent_status_from_event(&EventMsg::TaskComplete(TaskCompleteEvent {
+        let status = agent_status_from_event(&EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: Some("done".to_string()),
         }));
         let expected = AgentStatus::Completed(Some("done".to_string()));

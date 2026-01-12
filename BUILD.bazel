@@ -1,0 +1,19 @@
+# We mark the local platform as glibc-compatible so that rust can grab a toolchain for us.
+# TODO(zbarsky): Upstream a better libc constraint into rules_rust.
+# We only enable this on linux though for sanity, and because it breaks remote execution.
+platform(
+    name = "local",
+    constraint_values = [
+        "@toolchains_llvm_bootstrapped//constraints/libc:gnu.2.28",
+    ],
+    parents = [
+        "@platforms//host",
+    ],
+)
+
+alias(
+    name = "rbe",
+    actual = "@rbe_platform",
+)
+
+exports_files(["AGENTS.md"])

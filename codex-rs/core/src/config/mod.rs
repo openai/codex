@@ -32,6 +32,7 @@ use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -236,6 +237,14 @@ pub struct Config {
     /// consistently to both mouse wheels and trackpads.
     pub tui_scroll_invert: bool,
 
+    /// Controls whether the TUI uses the terminal's alternate screen buffer.
+    ///
+    /// This is the same `tui.alternate_screen` value from `config.toml` (see [`Tui`]).
+    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
+    /// - `always`: Always use alternate screen (original behavior).
+    /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
+    pub tui_alternate_screen: AltScreenMode,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -353,8 +362,8 @@ pub struct Config {
     pub disable_paste_burst: bool,
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
-    /// Defaults to `true`.
-    pub analytics: bool,
+    /// Voluntarily left as Optional because the default value might depend on the client.
+    pub analytics_enabled: Option<bool>,
 
     /// When `false`, disables feedback collection across Codex product surfaces.
     /// Defaults to `true`.
@@ -1405,12 +1414,11 @@ impl Config {
             notices: cfg.notice.unwrap_or_default(),
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
-            analytics: config_profile
+            analytics_enabled: config_profile
                 .analytics
                 .as_ref()
                 .and_then(|a| a.enabled)
-                .or(cfg.analytics.as_ref().and_then(|a| a.enabled))
-                .unwrap_or(true),
+                .or(cfg.analytics.as_ref().and_then(|a| a.enabled)),
             feedback_enabled: cfg
                 .feedback
                 .as_ref()
@@ -1444,6 +1452,11 @@ impl Config {
                 .as_ref()
                 .and_then(|t| t.scroll_wheel_like_max_duration_ms),
             tui_scroll_invert: cfg.tui.as_ref().map(|t| t.scroll_invert).unwrap_or(false),
+            tui_alternate_screen: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.alternate_screen)
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1642,6 +1655,7 @@ persistence = "none"
                 scroll_wheel_tick_detect_max_ms: None,
                 scroll_wheel_like_max_duration_ms: None,
                 scroll_invert: false,
+                alternate_screen: AltScreenMode::Auto,
             }
         );
     }
@@ -3266,7 +3280,7 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
-                analytics: true,
+                analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
@@ -3277,6 +3291,7 @@ model_verbosity = "high"
                 tui_scroll_wheel_tick_detect_max_ms: None,
                 tui_scroll_wheel_like_max_duration_ms: None,
                 tui_scroll_invert: false,
+                tui_alternate_screen: AltScreenMode::Auto,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3351,7 +3366,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: true,
+            analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
@@ -3362,6 +3377,7 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
 
@@ -3451,7 +3467,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: false,
+            analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
@@ -3462,6 +3478,7 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
 
@@ -3537,7 +3554,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            analytics: true,
+            analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
@@ -3548,6 +3565,7 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
 

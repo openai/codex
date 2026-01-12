@@ -283,7 +283,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     )
     .await?;
 
-    // Wait for first TaskComplete
+    // Wait for first TurnComplete
     let _ = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
