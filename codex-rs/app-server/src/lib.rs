@@ -6,6 +6,7 @@ use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
@@ -39,6 +40,8 @@ mod outgoing_message;
 /// is a balance between throughput and memory usage – 128 messages should be
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
+// Poll for agent-spawned threads that need listeners.
+const LISTENER_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -140,13 +143,25 @@ pub async fn run_main(
             loader_overrides,
             feedback.clone(),
         );
+        let mut refresh_interval = tokio::time::interval(LISTENER_REFRESH_INTERVAL);
+        refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         async move {
-            while let Some(msg) = incoming_rx.recv().await {
-                match msg {
-                    JSONRPCMessage::Request(r) => processor.process_request(r).await,
-                    JSONRPCMessage::Response(r) => processor.process_response(r).await,
-                    JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                    JSONRPCMessage::Error(e) => processor.process_error(e),
+            loop {
+                tokio::select! {
+                    msg = incoming_rx.recv() => {
+                        let Some(msg) = msg else {
+                            break;
+                        };
+                        match msg {
+                            JSONRPCMessage::Request(r) => processor.process_request(r).await,
+                            JSONRPCMessage::Response(r) => processor.process_response(r).await,
+                            JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
+                            JSONRPCMessage::Error(e) => processor.process_error(e),
+                        }
+                    }
+                    _ = refresh_interval.tick() => {
+                        processor.refresh_thread_listeners().await;
+                    }
                 }
             }
 

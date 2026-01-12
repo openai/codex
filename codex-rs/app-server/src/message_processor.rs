@@ -154,6 +154,9 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     self.initialized = true;
+                    self.codex_message_processor
+                        .refresh_thread_listeners()
+                        .await;
 
                     return;
                 }
@@ -197,6 +200,15 @@ impl MessageProcessor {
         // Currently, we do not expect to receive any notifications from the
         // client, so we just log them.
         tracing::info!("<- notification: {:?}", notification);
+    }
+
+    pub(crate) async fn refresh_thread_listeners(&mut self) {
+        if !self.initialized {
+            return;
+        }
+        self.codex_message_processor
+            .refresh_thread_listeners()
+            .await;
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.
