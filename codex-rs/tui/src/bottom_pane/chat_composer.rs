@@ -2781,6 +2781,18 @@ mod tests {
     }
 
     #[test]
+    fn image_placeholder_snapshots() {
+        snapshot_composer_state("image_placeholder_single", false, |composer| {
+            composer.attach_image(PathBuf::from("/tmp/image1.png"));
+        });
+
+        snapshot_composer_state("image_placeholder_multiple", false, |composer| {
+            composer.attach_image(PathBuf::from("/tmp/image1.png"));
+            composer.attach_image(PathBuf::from("/tmp/image2.png"));
+        });
+    }
+
+    #[test]
     fn slash_popup_model_first_for_mo_ui() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
