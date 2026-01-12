@@ -15748,8 +15748,10 @@ fn build_validation_findings_context(
             if !is_high {
                 return false;
             }
-            if crash_poc_category(&b.bug).is_some() {
-                return true;
+            match crash_poc_category(&b.bug) {
+                Some("crash_poc_func") => return false,
+                Some("crash_poc_release_bin") => return true,
+                _ => {}
             }
             let tag = b.bug.vulnerability_tag.clone().or_else(|| {
                 extract_vulnerability_tag_from_bug_markdown(b.original_markdown.as_str())
@@ -15770,7 +15772,7 @@ fn build_validation_findings_context(
     let mut high_risk: Vec<&BugSnapshot> = snapshot
         .bugs
         .iter()
-        .filter(|b| is_high_risk(&b.bug))
+        .filter(|b| is_high_risk(&b.bug) && crash_poc_category(&b.bug) != Some("crash_poc_func"))
         .collect();
     high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
     for item in high_risk {
