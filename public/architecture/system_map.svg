@@ -1,0 +1,23 @@
+<svg width="960" height="320" viewBox="0 0 960 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="960" height="320" fill="#0e0f12"/>
+  <g font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" fill="#e9eaee">
+    <rect x="60" y="120" width="200" height="80" rx="12" stroke="#2a2d36" fill="none"/>
+    <text x="160" y="160" text-anchor="middle">User Session</text>
+
+    <rect x="300" y="120" width="200" height="80" rx="12" stroke="#2a2d36" fill="none"/>
+    <text x="400" y="150" text-anchor="middle">Time Window</text>
+    <text x="400" y="172" text-anchor="middle" font-size="12" fill="#9aa0ad">Check-ins + expiry</text>
+
+    <rect x="540" y="120" width="200" height="80" rx="12" stroke="#2a2d36" fill="none"/>
+    <text x="640" y="150" text-anchor="middle">Escalation</text>
+    <text x="640" y="172" text-anchor="middle" font-size="12" fill="#9aa0ad">Trusted contacts</text>
+
+    <rect x="780" y="120" width="140" height="80" rx="12" stroke="#2a2d36" fill="none"/>
+    <text x="850" y="150" text-anchor="middle">Event Log</text>
+    <text x="850" y="172" text-anchor="middle" font-size="12" fill="#9aa0ad">Minimal + auditable</text>
+
+    <line x1="260" y1="160" x2="300" y2="160" stroke="#6ee7ff" stroke-width="2"/>
+    <line x1="500" y1="160" x2="540" y2="160" stroke="#6ee7ff" stroke-width="2"/>
+    <line x1="740" y1="160" x2="780" y2="160" stroke="#6ee7ff" stroke-width="2"/>
+  </g>
+</svg>

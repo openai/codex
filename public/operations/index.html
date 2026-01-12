@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SYVAQ — Operations</title>
+<style>
+  :root { --bg:#0e0f12; --fg:#e9eaee; --muted:#9aa0ad; --line:#2a2d36; --accent:#6ee7ff; }
+  html,body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+  .wrap{max-width:920px;margin:0 auto;padding:64px 24px;}
+  .top{display:flex;gap:16px;align-items:baseline;justify-content:space-between;flex-wrap:wrap;margin-bottom:24px;}
+  h1{margin:0;font-size:clamp(22px,3vw,30px);letter-spacing:.2px;}
+  a{color:var(--fg);text-decoration:none}
+  a:hover{color:var(--accent)}
+  .k{color:var(--muted);font-size:13px}
+  .card{border:1px solid var(--line);border-radius:14px;padding:18px 18px;margin:12px 0;}
+  .card h2{margin:0 0 8px;font-size:15px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .card p{margin:0;line-height:1.55;max-width:75ch}
+  .btn{display:block;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:12px}
+  .btn:hover{border-color:var(--accent)}
+  .foot{margin-top:32px;color:var(--muted);font-size:13px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:#cdd3df}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="top">
+    <div>
+      <h1>Operations</h1>
+      <div class="k">How it runs. What breaks first. How rollback stays possible.</div>
+    </div>
+    <div class="k"><a href="/">← System Entry</a></div>
+  </div>
+
+  <div class="card">
+    <h2>Deployment Modes</h2>
+    <p><strong>Demo:</strong> proof surfaces only. <br/>
+       <strong>Pilot:</strong> controlled users + audit posture. <br/>
+       <strong>Scale:</strong> deferred until reliability + governance gates are satisfied.</p>
+    <a class="btn" href="/operations/deployment_modes.md">Read deployment_modes.md</a>
+  </div>
+
+  <div class="card">
+    <h2>Activation Thresholds</h2>
+    <p>Financial threshold translated into engineering reality: what becomes permissible, and why liability changes.</p>
+    <a class="btn" href="/operations/activation_thresholds.md">Read activation_thresholds.md</a>
+  </div>
+
+  <div class="card">
+    <h2>Proof Surfaces</h2>
+    <p>Live artifacts are included to demonstrate execution competence, not product scope.</p>
+    <a class="btn" href="/proof/">Open /proof/</a>
+  </div>
+
+  <div class="foot">
+    <div>Doc Set: <code>TDC-01</code> · Operations are bounded by reversibility.</div>
+  </div>
+</main>
+</body>
+</html>
