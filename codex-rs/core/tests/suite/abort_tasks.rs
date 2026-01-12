@@ -5,6 +5,7 @@ use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_local_shell_call;
@@ -56,6 +57,20 @@ fn long_running_local_shell_call_with_output() -> Vec<&'static str> {
     } else {
         vec!["/bin/sh", "-c", "printf 'partial output\\n'; sleep 60"]
     }
+}
+
+fn assert_aborted_output(output: &str) {
+    let normalized_output = output.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized_output = normalized_output.trim_end_matches('\n');
+    let expected_pattern = r"(?s)^Exit code: [0-9]+\nWall time: ([0-9]+(?:\.[0-9]+)?) seconds\nOutput:\npartial output\ncommand aborted by user$";
+    let captures = assert_regex_match(expected_pattern, &normalized_output);
+    let secs: f32 = captures
+        .get(1)
+        .expect("aborted message with elapsed seconds")
+        .as_str()
+        .parse()
+        .expect("parse wall time seconds");
+    assert!(secs >= 0.0);
 }
 
 /// Integration test: spawn a long‑running shell_command tool via a mocked Responses SSE
@@ -181,8 +196,7 @@ async fn interrupt_tool_records_history_entries() {
     let output = response_mock
         .function_call_output_text(call_id)
         .expect("missing function_call_output text");
-    assert!(output.contains("partial output"));
-    assert!(output.contains("command aborted by user"));
+    assert_aborted_output(&output);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -246,8 +260,7 @@ async fn interrupt_shell_records_partial_output() {
     let output = response_mock
         .function_call_output_text(call_id)
         .expect("missing shell output");
-    assert!(output.contains("partial output"));
-    assert!(output.contains("command aborted by user"));
+    assert_aborted_output(&output);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -306,8 +319,7 @@ async fn interrupt_local_shell_records_partial_output() {
     let output = response_mock
         .function_call_output_text(call_id)
         .expect("missing local shell output");
-    assert!(output.contains("partial output"));
-    assert!(output.contains("command aborted by user"));
+    assert_aborted_output(&output);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -382,6 +394,5 @@ async fn interrupt_unified_exec_records_partial_output() {
     let output = response_mock
         .function_call_output_text(call_id)
         .expect("missing exec_command output");
-    assert!(output.contains("partial output"));
-    assert!(output.contains("command aborted by user"));
+    assert_aborted_output(&output);
 }
