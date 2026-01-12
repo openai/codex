@@ -1,0 +1,22 @@
+{
+  "type": "message",
+  "role": "user",
+  "content": [
+    {
+      "type": "input_text",
+      "text": "<image name=[Image #1]>"
+    },
+    {
+      "type": "input_image",
+      "image_url": "__IMAGE_URL__"
+    },
+    {
+      "type": "input_text",
+      "text": "</image>"
+    },
+    {
+      "type": "input_text",
+      "text": "pasted image"
+    }
+  ]
+}
