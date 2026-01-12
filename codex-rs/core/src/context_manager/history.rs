@@ -169,7 +169,7 @@ impl ContextManager {
                     }
                 }
                 ResponseItem::FunctionCallOutput { output, .. } => {
-                    if output.content_items.as_ref().map_or(false, |items| {
+                    if output.content_items.as_ref().is_some_and(|items| {
                         items.iter().any(|item| {
                             matches!(item, FunctionCallOutputContentItem::InputImage { .. })
                         })

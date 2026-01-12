@@ -12,9 +12,6 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::local_image_content_items_with_label_number;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::user_input::UserInput;
@@ -69,24 +66,6 @@ impl ToolHandler for ViewImageHandler {
         }
         let event_path = abs_path.clone();
 
-        /// here
-        // let content: Vec<ContentItem> =
-        //     local_image_content_items_with_label_number(&abs_path, None);
-        // let input = ResponseInputItem::Message {
-        //     role: "user".to_string(),
-        //     content,
-        // };
-        //
-        // session
-        //     .inject_response_items(vec![input])
-        //     .await
-        //     .map_err(|_| {
-        //         FunctionCallError::RespondToModel(
-        //             "unable to attach image (no active task)".to_string(),
-        //         )
-        //     })?;
-
-
         session
             .send_event(
                 turn.as_ref(),
@@ -102,17 +81,31 @@ impl ToolHandler for ViewImageHandler {
         }]
         .into();
         let image_url = match response_input {
-            ResponseInputItem::Message { content, .. } => match content.into_iter().next() {
-                Some(ContentItem::InputImage { image_url }) => image_url,
-                Some(ContentItem::InputText { text }) => {
-                    return Err(FunctionCallError::RespondToModel(text));
+            ResponseInputItem::Message { content, .. } => {
+                let mut image_url = None;
+                let mut text_fallback = None;
+                for item in content {
+                    match item {
+                        ContentItem::InputImage { image_url: url } => {
+                            image_url = Some(url);
+                            break;
+                        }
+                        ContentItem::InputText { text } => {
+                            text_fallback.get_or_insert(text);
+                        }
+                        _ => {}
+                    }
                 }
-                _ => {
+                if let Some(url) = image_url {
+                    url
+                } else if let Some(text) = text_fallback {
+                    return Err(FunctionCallError::RespondToModel(text));
+                } else {
                     return Err(FunctionCallError::RespondToModel(
                         "unexpected image input payload".to_string(),
                     ));
                 }
-            },
+            }
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "unexpected image input payload".to_string(),
