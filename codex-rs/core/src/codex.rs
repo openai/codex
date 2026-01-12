@@ -151,7 +151,6 @@ use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::user_instructions::DeveloperInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
@@ -159,6 +158,7 @@ use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -859,6 +859,11 @@ impl Session {
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
+
+                // Append the current session's initial context after the reconstructed history.
+                let initial_context = self.build_initial_context(&turn_context);
+                self.record_conversation_items(&turn_context, &initial_context)
+                    .await;
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
             }
@@ -1009,6 +1014,28 @@ impl Session {
             next,
             shell.as_ref(),
         )))
+    }
+
+    fn build_permissions_update_item(
+        &self,
+        previous: Option<&Arc<TurnContext>>,
+        next: &TurnContext,
+    ) -> Option<ResponseItem> {
+        let prev = previous?;
+        if prev.sandbox_policy == next.sandbox_policy
+            && prev.approval_policy == next.approval_policy
+        {
+            return None;
+        }
+
+        Some(
+            DeveloperInstructions::from_policy(
+                &next.sandbox_policy,
+                next.approval_policy,
+                &next.cwd,
+            )
+            .into(),
+        )
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -1340,8 +1367,16 @@ impl Session {
     }
 
     pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
-        let mut items = Vec::<ResponseItem>::with_capacity(3);
+        let mut items = Vec::<ResponseItem>::with_capacity(4);
         let shell = self.user_shell();
+        items.push(
+            DeveloperInstructions::from_policy(
+                &turn_context.sandbox_policy,
+                turn_context.approval_policy,
+                &turn_context.cwd,
+            )
+            .into(),
+        );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
@@ -1356,8 +1391,6 @@ impl Session {
         }
         items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
-            Some(turn_context.approval_policy),
-            Some(turn_context.sandbox_policy.clone()),
             shell.as_ref().clone(),
         )));
         items
@@ -1953,10 +1986,19 @@ mod handlers {
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
+            let mut update_items = Vec::new();
             if let Some(env_item) =
                 sess.build_environment_update_item(previous_context.as_ref(), &current_context)
             {
-                sess.record_conversation_items(&current_context, std::slice::from_ref(&env_item))
+                update_items.push(env_item);
+            }
+            if let Some(permissions_item) =
+                sess.build_permissions_update_item(previous_context.as_ref(), &current_context)
+            {
+                update_items.push(permissions_item);
+            }
+            if !update_items.is_empty() {
+                sess.record_conversation_items(&current_context, &update_items)
                     .await;
             }
 
@@ -3035,7 +3077,7 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context);
 
         session
             .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -3045,6 +3087,7 @@ mod tests {
             }))
             .await;
 
+        expected.extend(session.build_initial_context(&turn_context));
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }
@@ -3129,12 +3172,13 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_reconstructs_forked_transcript() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context);
 
         session
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
+        expected.extend(session.build_initial_context(&turn_context));
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }
