@@ -56,6 +56,10 @@ pub(crate) struct ThreadManagerState {
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
     session_source: SessionSource,
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
+    // Captures submitted ops for testing purpose.
+    ops_log: Arc<std::sync::Mutex<Vec<(ThreadId, Op)>>>,
 }
 
 impl ThreadManager {
@@ -74,6 +78,8 @@ impl ThreadManager {
                 skills_manager: Arc::new(SkillsManager::new(codex_home)),
                 auth_manager,
                 session_source,
+                #[cfg(any(test, feature = "test-support"))]
+                ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
             #[cfg(any(test, feature = "test-support"))]
             _test_codex_home_guard: None,
@@ -111,6 +117,8 @@ impl ThreadManager {
                 skills_manager: Arc::new(SkillsManager::new(codex_home)),
                 auth_manager,
                 session_source: SessionSource::Exec,
+                #[cfg(any(test, feature = "test-support"))]
+                ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
             _test_codex_home_guard: None,
         }
@@ -202,8 +210,18 @@ impl ThreadManager {
             .await
     }
 
-    fn agent_control(&self) -> AgentControl {
+    pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
+    pub(crate) fn captured_ops(&self) -> Vec<(ThreadId, Op)> {
+        self.state
+            .ops_log
+            .lock()
+            .map(|log| log.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -217,7 +235,14 @@ impl ThreadManagerState {
     }
 
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
-        self.get_thread(thread_id).await?.submit(op).await
+        let thread = self.get_thread(thread_id).await?;
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            if let Ok(mut log) = self.ops_log.lock() {
+                log.push((thread_id, op.clone()));
+            }
+        }
+        thread.submit(op).await
     }
 
     #[allow(dead_code)] // Used by upcoming multi-agent tooling.
