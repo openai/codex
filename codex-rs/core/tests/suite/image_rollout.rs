@@ -1,3 +1,4 @@
+use anyhow::Context;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -24,11 +25,15 @@ use image::Rgba;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 
-fn load_expected_response_item(path: &str, image_url: &str) -> ResponseItem {
-    let full_path = find_resource!(path).expect("fixture path should resolve");
-    let raw = std::fs::read_to_string(full_path).expect("read fixture");
+fn load_expected_response_item(path: &str, image_url: &str) -> anyhow::Result<ResponseItem> {
+    let full_path =
+        find_resource!(path).with_context(|| format!("fixture path should resolve: {path}"))?;
+    let raw = std::fs::read_to_string(&full_path)
+        .with_context(|| format!("read fixture at {}", full_path.display()))?;
     let replaced = raw.replace("__IMAGE_URL__", image_url);
-    serde_json::from_str(&replaced).expect("parse response item fixture")
+    let item = serde_json::from_str(&replaced)
+        .with_context(|| format!("parse response item fixture: {path}"))?;
+    Ok(item)
 }
 
 fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
@@ -43,13 +48,15 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
         };
         if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
             &rollout.item
-            && role == "user"
-            && content
-                .iter()
-                .any(|span| matches!(span, ContentItem::InputImage { .. }))
         {
-            if let RolloutItem::ResponseItem(item) = rollout.item.clone() {
-                return Some(item);
+            if role == "user"
+                && content
+                    .iter()
+                    .any(|span| matches!(span, ContentItem::InputImage { .. }))
+            {
+                if let RolloutItem::ResponseItem(item) = rollout.item.clone() {
+                    return Some(item);
+                }
             }
         }
     }
@@ -131,7 +138,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
     let expected = load_expected_response_item(
         "tests/fixtures/rollout_copy_paste_local_image.json",
         &image_url,
-    );
+    )?;
 
     assert_eq!(actual, expected);
 
@@ -190,7 +197,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
 
     let image_url = extract_image_url(&actual).expect("expected image url in rollout");
     let expected =
-        load_expected_response_item("tests/fixtures/rollout_drag_drop_image.json", &image_url);
+        load_expected_response_item("tests/fixtures/rollout_drag_drop_image.json", &image_url)?;
 
     assert_eq!(actual, expected);
 
