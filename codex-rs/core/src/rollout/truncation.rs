@@ -206,6 +206,7 @@ mod tests {
             RolloutItem::ResponseItem(items[0].clone()),
             RolloutItem::ResponseItem(items[1].clone()),
             RolloutItem::ResponseItem(items[2].clone()),
+            RolloutItem::ResponseItem(items[3].clone()),
         ];
 
         assert_eq!(

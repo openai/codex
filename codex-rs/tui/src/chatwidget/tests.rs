@@ -1477,6 +1477,15 @@ async fn slash_resume_opens_picker() {
 }
 
 #[tokio::test]
+async fn slash_fork_opens_picker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Fork);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenForkPicker));
+}
+
+#[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
