@@ -1077,7 +1077,7 @@ impl ChatComposer {
     }
 
     fn is_send_immediately_key(&self, key_event: &KeyEvent) -> bool {
-        if key_event.kind != KeyEventKind::Press {
+        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return false;
         }
         let is_enter = matches!(
