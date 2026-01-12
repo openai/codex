@@ -28,12 +28,12 @@ use crate::error::CodexErr;
 use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
 
-/// Start an interactive sub-Codex conversation and return IO channels.
+/// Start an interactive sub-Codex thread and return IO channels.
 ///
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
-pub(crate) async fn run_codex_conversation_interactive(
+pub(crate) async fn run_codex_thread_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -52,6 +52,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         Arc::clone(&parent_session.services.skills_manager),
         initial_history.unwrap_or(InitialHistory::New),
         SessionSource::SubAgent(SubAgentSource::Review),
+        parent_session.services.agent_control.clone(),
     )
     .await?;
     let codex = Arc::new(codex);
@@ -86,6 +87,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         next_id: AtomicU64::new(0),
         tx_sub: tx_ops,
         rx_event: rx_sub,
+        agent_status: codex.agent_status.clone(),
     })
 }
 
@@ -93,7 +95,7 @@ pub(crate) async fn run_codex_conversation_interactive(
 ///
 /// Internally calls the interactive variant, then immediately submits the provided input.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_codex_conversation_one_shot(
+pub(crate) async fn run_codex_thread_one_shot(
     config: Config,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -106,7 +108,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
-    let io = run_codex_conversation_interactive(
+    let io = run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
@@ -118,17 +120,22 @@ pub(crate) async fn run_codex_conversation_one_shot(
     .await?;
 
     // Send the initial input to kick off the one-shot turn.
-    io.submit(Op::UserInput { items: input }).await?;
+    io.submit(Op::UserInput {
+        items: input,
+        final_output_json_schema: None,
+    })
+    .await?;
 
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
+    let agent_status = io.agent_status.clone();
     let io_for_bridge = io;
     tokio::spawn(async move {
         while let Ok(event) = io_for_bridge.next_event().await {
             let should_shutdown = matches!(
                 event.msg,
-                EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_)
+                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
             );
             let _ = tx_bridge.send(event).await;
             if should_shutdown {
@@ -154,6 +161,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
         next_id: AtomicU64::new(0),
         rx_event: rx_bridge,
         tx_sub: tx_closed,
+        agent_status,
     })
 }
 
@@ -183,6 +191,10 @@ async fn forward_events(
                     Event {
                         id: _,
                         msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
+                    } => {}
+                    Event {
+                        id: _,
+                        msg: EventMsg::TokenCount(_),
                     } => {}
                     Event {
                         id: _,
@@ -241,7 +253,7 @@ async fn shutdown_delegate(codex: &Codex) {
         while let Ok(event) = codex.next_event().await {
             if matches!(
                 event.msg,
-                EventMsg::TurnAborted(_) | EventMsg::TaskComplete(_)
+                EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_)
             ) {
                 break;
             }
@@ -351,19 +363,23 @@ mod tests {
     use super::*;
     use async_channel::bounded;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AgentStatus;
     use codex_protocol::protocol::RawResponseItemEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
+    use tokio::sync::watch;
 
     #[tokio::test]
     async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
         let (tx_events, rx_events) = bounded(1);
         let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
         let codex = Arc::new(Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event: rx_events,
+            agent_status,
         });
 
         let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;

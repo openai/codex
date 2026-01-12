@@ -4,6 +4,7 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
+use crate::transcript_copy_action::TranscriptCopyFeedback;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
@@ -26,6 +27,7 @@ pub(crate) struct FooterProps {
     pub(crate) transcript_selection_active: bool,
     pub(crate) transcript_scroll_position: Option<(usize, usize)>,
     pub(crate) transcript_copy_selection_key: KeyBinding,
+    pub(crate) transcript_copy_feedback: Option<TranscriptCopyFeedback>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,11 +82,26 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+    fn apply_copy_feedback(lines: &mut [Line<'static>], feedback: Option<TranscriptCopyFeedback>) {
+        let Some(line) = lines.first_mut() else {
+            return;
+        };
+        let Some(feedback) = feedback else {
+            return;
+        };
+
+        line.push_span(" · ".dim());
+        match feedback {
+            TranscriptCopyFeedback::Copied => line.push_span("Copied".green().bold()),
+            TranscriptCopyFeedback::Failed => line.push_span("Copy failed".red().bold()),
+        }
+    }
+
     // Show the context indicator on the left, appended after the primary hint
     // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
     // the shortcut hint is hidden). Hide it only for the multi-line
     // ShortcutOverlay.
-    match props.mode {
+    let mut lines = match props.mode {
         FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
             is_task_running: props.is_task_running,
         })],
@@ -139,7 +156,9 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             props.context_window_percent,
             props.context_window_used_tokens,
         )],
-    }
+    };
+    apply_copy_feedback(&mut lines, props.transcript_copy_feedback);
+    lines
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -184,6 +203,7 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
+    let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
@@ -195,6 +215,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         if let Some(text) = descriptor.overlay_entry(state) {
             match descriptor.id {
                 ShortcutId::Commands => commands = text,
+                ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
@@ -207,6 +228,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
 
     let ordered = vec![
         commands,
+        shell_commands,
         newline,
         file_paths,
         paste_image,
@@ -283,6 +305,7 @@ fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
+    ShellCommands,
     InsertNewline,
     FilePaths,
     PasteImage,
@@ -364,6 +387,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " for commands",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ShellCommands,
+        bindings: &[ShortcutBinding {
+            key: key_hint::plain(KeyCode::Char('!')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " for shell commands",
     },
     ShortcutDescriptor {
         id: ShortcutId::InsertNewline,
@@ -469,6 +501,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
             },
         );
 
@@ -485,6 +518,7 @@ mod tests {
                 transcript_selection_active: true,
                 transcript_scroll_position: Some((3, 42)),
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
             },
         );
 
@@ -501,6 +535,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
             },
         );
 
@@ -517,6 +552,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
             },
         );
 
@@ -533,6 +569,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
             },
         );
 
@@ -549,6 +586,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
             },
         );
 
@@ -565,6 +603,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
             },
         );
 
@@ -581,6 +620,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
             },
         );
 
@@ -597,6 +637,24 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_copy_feedback_copied",
+            FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: None,
+                context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
+                transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: Some(TranscriptCopyFeedback::Copied),
             },
         );
     }

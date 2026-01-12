@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::ConversationItem;
-use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::ThreadItem;
+use codex_core::ThreadsPage;
 use codex_core::path_utils;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
@@ -40,10 +40,40 @@ const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
 
 #[derive(Debug, Clone)]
-pub enum ResumeSelection {
+pub enum SessionSelection {
     StartFresh,
     Resume(PathBuf),
+    Fork(PathBuf),
     Exit,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SessionPickerAction {
+    Resume,
+    Fork,
+}
+
+impl SessionPickerAction {
+    fn title(self) -> &'static str {
+        match self {
+            SessionPickerAction::Resume => "Resume a previous session",
+            SessionPickerAction::Fork => "Fork a previous session",
+        }
+    }
+
+    fn action_label(self) -> &'static str {
+        match self {
+            SessionPickerAction::Resume => "resume",
+            SessionPickerAction::Fork => "fork",
+        }
+    }
+
+    fn selection(self, path: PathBuf) -> SessionSelection {
+        match self {
+            SessionPickerAction::Resume => SessionSelection::Resume(path),
+            SessionPickerAction::Fork => SessionSelection::Fork(path),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -61,7 +91,7 @@ enum BackgroundEvent {
     PageLoaded {
         request_token: usize,
         search_token: Option<usize>,
-        page: std::io::Result<ConversationsPage>,
+        page: std::io::Result<ThreadsPage>,
     },
 }
 
@@ -73,7 +103,40 @@ pub async fn run_resume_picker(
     codex_home: &Path,
     default_provider: &str,
     show_all: bool,
-) -> Result<ResumeSelection> {
+) -> Result<SessionSelection> {
+    run_session_picker(
+        tui,
+        codex_home,
+        default_provider,
+        show_all,
+        SessionPickerAction::Resume,
+    )
+    .await
+}
+
+pub async fn run_fork_picker(
+    tui: &mut Tui,
+    codex_home: &Path,
+    default_provider: &str,
+    show_all: bool,
+) -> Result<SessionSelection> {
+    run_session_picker(
+        tui,
+        codex_home,
+        default_provider,
+        show_all,
+        SessionPickerAction::Fork,
+    )
+    .await
+}
+
+async fn run_session_picker(
+    tui: &mut Tui,
+    codex_home: &Path,
+    default_provider: &str,
+    show_all: bool,
+    action: SessionPickerAction,
+) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
@@ -89,7 +152,7 @@ pub async fn run_resume_picker(
         let tx = loader_tx.clone();
         tokio::spawn(async move {
             let provider_filter = vec![request.default_provider.clone()];
-            let page = RolloutRecorder::list_conversations(
+            let page = RolloutRecorder::list_threads(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
@@ -113,6 +176,7 @@ pub async fn run_resume_picker(
         default_provider.clone(),
         show_all,
         filter_cwd,
+        action,
     );
     state.start_initial_load();
     state.request_frame();
@@ -151,7 +215,7 @@ pub async fn run_resume_picker(
     }
 
     // Fallback – treat as cancel/new
-    Ok(ResumeSelection::StartFresh)
+    Ok(SessionSelection::StartFresh)
 }
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
@@ -190,6 +254,7 @@ struct PickerState {
     default_provider: String,
     show_all: bool,
     filter_cwd: Option<PathBuf>,
+    action: SessionPickerAction,
 }
 
 struct PaginationState {
@@ -259,6 +324,7 @@ impl PickerState {
         default_provider: String,
         show_all: bool,
         filter_cwd: Option<PathBuf>,
+        action: SessionPickerAction,
     ) -> Self {
         Self {
             codex_home,
@@ -283,6 +349,7 @@ impl PickerState {
             default_provider,
             show_all,
             filter_cwd,
+            action,
         }
     }
 
@@ -290,19 +357,19 @@ impl PickerState {
         self.requester.schedule_frame();
     }
 
-    async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<ResumeSelection>> {
+    async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
         match key.code {
-            KeyCode::Esc => return Ok(Some(ResumeSelection::StartFresh)),
+            KeyCode::Esc => return Ok(Some(SessionSelection::StartFresh)),
             KeyCode::Char('c')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
-                return Ok(Some(ResumeSelection::Exit));
+                return Ok(Some(SessionSelection::Exit));
             }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
-                    return Ok(Some(ResumeSelection::Resume(row.path.clone())));
+                    return Ok(Some(self.action.selection(row.path.clone())));
                 }
             }
             KeyCode::Up => {
@@ -415,7 +482,7 @@ impl PickerState {
         self.pagination.loading = LoadingState::Idle;
     }
 
-    fn ingest_page(&mut self, page: ConversationsPage) {
+    fn ingest_page(&mut self, page: ThreadsPage) {
         if let Some(cursor) = page.next_cursor.clone() {
             self.pagination.next_cursor = Some(cursor);
         } else {
@@ -627,11 +694,11 @@ impl PickerState {
     }
 }
 
-fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
+fn rows_from_items(items: Vec<ThreadItem>) -> Vec<Row> {
     items.into_iter().map(|item| head_to_row(&item)).collect()
 }
 
-fn head_to_row(item: &ConversationItem) -> Row {
+fn head_to_row(item: &ThreadItem) -> Row {
     let created_at = item
         .created_at
         .as_deref()
@@ -718,10 +785,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .areas(area);
 
         // Header
-        frame.render_widget_ref(
-            Line::from(vec!["Resume a previous session".bold().cyan()]),
-            header,
-        );
+        frame.render_widget_ref(Line::from(vec![state.action.title().bold().cyan()]), header);
 
         // Search line
         let q = if state.query.is_empty() {
@@ -738,9 +802,10 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         render_list(frame, list, state, &metrics);
 
         // Hint line
+        let action_label = state.action.action_label();
         let hint_line: Line = vec![
             key_hint::plain(KeyCode::Enter).into(),
-            " to resume ".dim(),
+            format!(" to {action_label} ").dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Esc).into(),
             " to start new ".dim(),
@@ -1077,8 +1142,8 @@ mod tests {
         ]
     }
 
-    fn make_item(path: &str, ts: &str, preview: &str) -> ConversationItem {
-        ConversationItem {
+    fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
+        ThreadItem {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
             created_at: Some(ts.to_string()),
@@ -1092,12 +1157,12 @@ mod tests {
     }
 
     fn page(
-        items: Vec<ConversationItem>,
+        items: Vec<ThreadItem>,
         next_cursor: Option<Cursor>,
         num_scanned_files: usize,
         reached_scan_cap: bool,
-    ) -> ConversationsPage {
-        ConversationsPage {
+    ) -> ThreadsPage {
+        ThreadsPage {
             items,
             next_cursor,
             num_scanned_files,
@@ -1144,13 +1209,13 @@ mod tests {
     #[test]
     fn rows_from_items_preserves_backend_order() {
         // Construct two items with different timestamps and real user text.
-        let a = ConversationItem {
+        let a = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
-        let b = ConversationItem {
+        let b = ThreadItem {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
             created_at: Some("2025-01-02T00:00:00Z".into()),
@@ -1166,7 +1231,7 @@ mod tests {
     #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
         let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
-        let item = ConversationItem {
+        let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head,
             created_at: Some("2025-01-01T00:00:00Z".into()),
@@ -1200,6 +1265,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         let now = Utc::now();
@@ -1349,9 +1415,10 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
-        let page = RolloutRecorder::list_conversations(
+        let page = RolloutRecorder::list_threads(
             &state.codex_home,
             PAGE_SIZE,
             None,
@@ -1429,6 +1496,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         state.reset_pagination();
@@ -1497,6 +1565,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1528,6 +1597,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         let mut items = Vec::new();
@@ -1572,6 +1642,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         let mut items = Vec::new();
@@ -1616,6 +1687,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
         state.reset_pagination();
         state.ingest_page(page(

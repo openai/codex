@@ -2,13 +2,16 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::models_manager::model_family::ModelFamily;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
+use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -21,24 +24,26 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
-    pub include_view_image_tool: bool,
+    pub web_search_cached: bool,
+    pub collab_tools: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
-    pub(crate) model_family: &'a ModelFamily,
+    pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
 }
 
 impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
-            model_family,
+            model_info,
             features,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
-        let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        let include_web_search_cached = features.enabled(Feature::WebSearchCached);
+        let include_collab_tools = features.enabled(Feature::Collab);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -50,10 +55,10 @@ impl ToolsConfig {
                 ConfigShellToolType::ShellCommand
             }
         } else {
-            model_family.shell_type
+            model_info.shell_type
         };
 
-        let apply_patch_tool_type = match model_family.apply_patch_tool_type {
+        let apply_patch_tool_type = match model_info.apply_patch_tool_type {
             Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
             Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
             None => {
@@ -69,8 +74,9 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
-            include_view_image_tool,
-            experimental_supported_tools: model_family.experimental_supported_tools.clone(),
+            web_search_cached: include_web_search_cached,
+            collab_tools: include_collab_tools,
+            experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
 }
@@ -132,70 +138,72 @@ impl From<JsonSchema> for AdditionalProperties {
 }
 
 fn create_exec_command_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "cmd".to_string(),
-        JsonSchema::String {
-            description: Some("Shell command to execute.".to_string()),
-        },
-    );
-    properties.insert(
-        "workdir".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional working directory to run the command in; defaults to the turn cwd."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "shell".to_string(),
-        JsonSchema::String {
-            description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),
-        },
-    );
-    properties.insert(
-        "login".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "yield_time_ms".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "How long to wait (in milliseconds) for output before yielding.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "max_output_tokens".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "sandbox_permissions".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "justification".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command."
-                    .to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "cmd".to_string(),
+            JsonSchema::String {
+                description: Some("Shell command to execute.".to_string()),
+            },
+        ),
+        (
+            "workdir".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional working directory to run the command in; defaults to the turn cwd."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "shell".to_string(),
+            JsonSchema::String {
+                description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),
+            },
+        ),
+        (
+            "login".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
+                ),
+            },
+        ),
+        (
+            "yield_time_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "How long to wait (in milliseconds) for output before yielding.".to_string(),
+                ),
+            },
+        ),
+        (
+            "max_output_tokens".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Maximum number of tokens to return. Excess output will be truncated."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "sandbox_permissions".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "justification".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -212,35 +220,37 @@ fn create_exec_command_tool() -> ToolSpec {
 }
 
 fn create_write_stdin_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "session_id".to_string(),
-        JsonSchema::Number {
-            description: Some("Identifier of the running unified exec session.".to_string()),
-        },
-    );
-    properties.insert(
-        "chars".to_string(),
-        JsonSchema::String {
-            description: Some("Bytes to write to stdin (may be empty to poll).".to_string()),
-        },
-    );
-    properties.insert(
-        "yield_time_ms".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "How long to wait (in milliseconds) for output before yielding.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "max_output_tokens".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "session_id".to_string(),
+            JsonSchema::Number {
+                description: Some("Identifier of the running unified exec session.".to_string()),
+            },
+        ),
+        (
+            "chars".to_string(),
+            JsonSchema::String {
+                description: Some("Bytes to write to stdin (may be empty to poll).".to_string()),
+            },
+        ),
+        (
+            "yield_time_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "How long to wait (in milliseconds) for output before yielding.".to_string(),
+                ),
+            },
+        ),
+        (
+            "max_output_tokens".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Maximum number of tokens to return. Excess output will be truncated."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "write_stdin".to_string(),
@@ -257,39 +267,39 @@ fn create_write_stdin_tool() -> ToolSpec {
 }
 
 fn create_shell_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "command".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
-            description: Some("The command to execute".to_string()),
-        },
-    );
-    properties.insert(
-        "workdir".to_string(),
-        JsonSchema::String {
-            description: Some("The working directory to execute the command in".to_string()),
-        },
-    );
-    properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
-            description: Some("The timeout for the command in milliseconds".to_string()),
-        },
-    );
-
-    properties.insert(
-        "sandbox_permissions".to_string(),
-        JsonSchema::String {
-            description: Some("Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\".".to_string()),
-        },
-    );
-    properties.insert(
-        "justification".to_string(),
-        JsonSchema::String {
-            description: Some("Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command.".to_string()),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "command".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::String { description: None }),
+                description: Some("The command to execute".to_string()),
+            },
+        ),
+        (
+            "workdir".to_string(),
+            JsonSchema::String {
+                description: Some("The working directory to execute the command in".to_string()),
+            },
+        ),
+        (
+            "timeout_ms".to_string(),
+            JsonSchema::Number {
+                description: Some("The timeout for the command in milliseconds".to_string()),
+            },
+        ),
+        (
+            "sandbox_permissions".to_string(),
+            JsonSchema::String {
+                description: Some("Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\".".to_string()),
+            },
+        ),
+        (
+            "justification".to_string(),
+            JsonSchema::String {
+                description: Some("Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command.".to_string()),
+            },
+        ),
+    ]);
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
@@ -321,48 +331,49 @@ Examples of valid command strings:
 }
 
 fn create_shell_command_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "command".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "The shell script to execute in the user's default shell".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "workdir".to_string(),
-        JsonSchema::String {
-            description: Some("The working directory to execute the command in".to_string()),
-        },
-    );
-    properties.insert(
-        "login".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Whether to run the shell with login shell semantics. Defaults to true."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
-            description: Some("The timeout for the command in milliseconds".to_string()),
-        },
-    );
-    properties.insert(
-        "sandbox_permissions".to_string(),
-        JsonSchema::String {
-            description: Some("Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\".".to_string()),
-        },
-    );
-    properties.insert(
-        "justification".to_string(),
-        JsonSchema::String {
-            description: Some("Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command.".to_string()),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "command".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "The shell script to execute in the user's default shell".to_string(),
+                ),
+            },
+        ),
+        (
+            "workdir".to_string(),
+            JsonSchema::String {
+                description: Some("The working directory to execute the command in".to_string()),
+            },
+        ),
+        (
+            "login".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to run the shell with login shell semantics. Defaults to true."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "timeout_ms".to_string(),
+            JsonSchema::Number {
+                description: Some("The timeout for the command in milliseconds".to_string()),
+            },
+        ),
+        (
+            "sandbox_permissions".to_string(),
+            JsonSchema::String {
+                description: Some("Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\".".to_string()),
+            },
+        ),
+        (
+            "justification".to_string(),
+            JsonSchema::String {
+                description: Some("Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command.".to_string()),
+            },
+        ),
+    ]);
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
@@ -394,19 +405,17 @@ Examples of valid command strings:
 
 fn create_view_image_tool() -> ToolSpec {
     // Support only local filesystem path.
-    let mut properties = BTreeMap::new();
-    properties.insert(
+    let properties = BTreeMap::from([(
         "path".to_string(),
         JsonSchema::String {
             description: Some("Local filesystem path to an image file".to_string()),
         },
-    );
+    )]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "view_image".to_string(),
-        description:
-            "Attach a local image (by filesystem path) to the conversation context for this turn."
-                .to_string(),
+        name: VIEW_IMAGE_TOOL_NAME.to_string(),
+        description: "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -416,55 +425,158 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
-fn create_test_sync_tool() -> ToolSpec {
+fn create_spawn_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
-        "sleep_before_ms".to_string(),
-        JsonSchema::Number {
-            description: Some("Optional delay in milliseconds before any other action".to_string()),
-        },
-    );
-    properties.insert(
-        "sleep_after_ms".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Optional delay in milliseconds after completing the barrier".to_string(),
-            ),
-        },
-    );
-
-    let mut barrier_properties = BTreeMap::new();
-    barrier_properties.insert(
-        "id".to_string(),
+        "message".to_string(),
         JsonSchema::String {
-            description: Some(
-                "Identifier shared by concurrent calls that should rendezvous".to_string(),
-            ),
-        },
-    );
-    barrier_properties.insert(
-        "participants".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Number of tool calls that must arrive before the barrier opens".to_string(),
-            ),
-        },
-    );
-    barrier_properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
-            description: Some("Maximum time in milliseconds to wait at the barrier".to_string()),
+            description: Some("Initial message to send to the new agent.".to_string()),
         },
     );
 
-    properties.insert(
-        "barrier".to_string(),
-        JsonSchema::Object {
-            properties: barrier_properties,
-            required: Some(vec!["id".to_string(), "participants".to_string()]),
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agent".to_string(),
+        description: "Spawn a new agent and return its id.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["message".to_string()]),
             additional_properties: Some(false.into()),
         },
+    })
+}
+
+fn create_send_input_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier of the agent to message.".to_string()),
+        },
     );
+    properties.insert(
+        "message".to_string(),
+        JsonSchema::String {
+            description: Some("Message to send to the agent.".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "send_input".to_string(),
+        description: "Send a message to an existing agent.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["id".to_string(), "message".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_wait_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier of the agent to wait on.".to_string()),
+        },
+    );
+    properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(format!(
+                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS} and max {MAX_WAIT_TIMEOUT_MS}."
+            )),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "wait".to_string(),
+        description: "Wait for an agent and return its status.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_close_agent_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier of the agent to close.".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "close_agent".to_string(),
+        description: "Close an agent and return its last known status.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_test_sync_tool() -> ToolSpec {
+    let barrier_properties = BTreeMap::from([
+        (
+            "id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Identifier shared by concurrent calls that should rendezvous".to_string(),
+                ),
+            },
+        ),
+        (
+            "participants".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Number of tool calls that must arrive before the barrier opens".to_string(),
+                ),
+            },
+        ),
+        (
+            "timeout_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Maximum time in milliseconds to wait at the barrier".to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    let properties = BTreeMap::from([
+        (
+            "sleep_before_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Optional delay in milliseconds before any other action".to_string(),
+                ),
+            },
+        ),
+        (
+            "sleep_after_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Optional delay in milliseconds after completing the barrier".to_string(),
+                ),
+            },
+        ),
+        (
+            "barrier".to_string(),
+            JsonSchema::Object {
+                properties: barrier_properties,
+                required: Some(vec!["id".to_string(), "participants".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "test_sync_tool".to_string(),
@@ -479,40 +591,41 @@ fn create_test_sync_tool() -> ToolSpec {
 }
 
 fn create_grep_files_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "pattern".to_string(),
-        JsonSchema::String {
-            description: Some("Regular expression pattern to search for.".to_string()),
-        },
-    );
-    properties.insert(
-        "include".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
-                 \"*.{ts,tsx}\")."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "path".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Directory or file path to search. Defaults to the session's working directory."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "limit".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum number of file paths to return (defaults to 100).".to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "pattern".to_string(),
+            JsonSchema::String {
+                description: Some("Regular expression pattern to search for.".to_string()),
+            },
+        ),
+        (
+            "include".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
+                     \"*.{ts,tsx}\")."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "path".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Directory or file path to search. Defaults to the session's working directory."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "limit".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Maximum number of file paths to return (defaults to 100).".to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "grep_files".to_string(),
@@ -529,88 +642,93 @@ fn create_grep_files_tool() -> ToolSpec {
 }
 
 fn create_read_file_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "file_path".to_string(),
-        JsonSchema::String {
-            description: Some("Absolute path to the file".to_string()),
-        },
-    );
-    properties.insert(
-        "offset".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "The line number to start reading from. Must be 1 or greater.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "limit".to_string(),
-        JsonSchema::Number {
-            description: Some("The maximum number of lines to return.".to_string()),
-        },
-    );
-    properties.insert(
-        "mode".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" \
-                 to expand around an anchor line."
-                    .to_string(),
-            ),
-        },
-    );
+    let indentation_properties = BTreeMap::from([
+        (
+            "anchor_line".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Anchor line to center the indentation lookup on (defaults to offset)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "max_levels".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "How many parent indentation levels (smaller indents) to include.".to_string(),
+                ),
+            },
+        ),
+        (
+            "include_siblings".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, include additional blocks that share the anchor indentation."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "include_header".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Include doc comments or attributes directly above the selected block."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "max_lines".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Hard cap on the number of lines returned when using indentation mode."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
-    let mut indentation_properties = BTreeMap::new();
-    indentation_properties.insert(
-        "anchor_line".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Anchor line to center the indentation lookup on (defaults to offset).".to_string(),
-            ),
-        },
-    );
-    indentation_properties.insert(
-        "max_levels".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "How many parent indentation levels (smaller indents) to include.".to_string(),
-            ),
-        },
-    );
-    indentation_properties.insert(
-        "include_siblings".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "When true, include additional blocks that share the anchor indentation."
-                    .to_string(),
-            ),
-        },
-    );
-    indentation_properties.insert(
-        "include_header".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Include doc comments or attributes directly above the selected block.".to_string(),
-            ),
-        },
-    );
-    indentation_properties.insert(
-        "max_lines".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Hard cap on the number of lines returned when using indentation mode.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "indentation".to_string(),
-        JsonSchema::Object {
-            properties: indentation_properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "file_path".to_string(),
+            JsonSchema::String {
+                description: Some("Absolute path to the file".to_string()),
+            },
+        ),
+        (
+            "offset".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "The line number to start reading from. Must be 1 or greater.".to_string(),
+                ),
+            },
+        ),
+        (
+            "limit".to_string(),
+            JsonSchema::Number {
+                description: Some("The maximum number of lines to return.".to_string()),
+            },
+        ),
+        (
+            "mode".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" \
+                     to expand around an anchor line."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "indentation".to_string(),
+            JsonSchema::Object {
+                properties: indentation_properties,
+                required: None,
+                additional_properties: Some(false.into()),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "read_file".to_string(),
@@ -627,35 +745,36 @@ fn create_read_file_tool() -> ToolSpec {
 }
 
 fn create_list_dir_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "dir_path".to_string(),
-        JsonSchema::String {
-            description: Some("Absolute path to the directory to list.".to_string()),
-        },
-    );
-    properties.insert(
-        "offset".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "The entry number to start listing from. Must be 1 or greater.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "limit".to_string(),
-        JsonSchema::Number {
-            description: Some("The maximum number of entries to return.".to_string()),
-        },
-    );
-    properties.insert(
-        "depth".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "The maximum directory depth to traverse. Must be 1 or greater.".to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "dir_path".to_string(),
+            JsonSchema::String {
+                description: Some("Absolute path to the directory to list.".to_string()),
+            },
+        ),
+        (
+            "offset".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "The entry number to start listing from. Must be 1 or greater.".to_string(),
+                ),
+            },
+        ),
+        (
+            "limit".to_string(),
+            JsonSchema::Number {
+                description: Some("The maximum number of entries to return.".to_string()),
+            },
+        ),
+        (
+            "depth".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "The maximum directory depth to traverse. Must be 1 or greater.".to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_dir".to_string(),
@@ -672,25 +791,26 @@ fn create_list_dir_tool() -> ToolSpec {
 }
 
 fn create_list_mcp_resources_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "server".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional MCP server name. When omitted, lists resources from every configured server."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "cursor".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Opaque cursor returned by a previous list_mcp_resources call for the same server."
-                    .to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "server".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional MCP server name. When omitted, lists resources from every configured server."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "cursor".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Opaque cursor returned by a previous list_mcp_resources call for the same server."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_mcp_resources".to_string(),
@@ -705,25 +825,26 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
 }
 
 fn create_list_mcp_resource_templates_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "server".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional MCP server name. When omitted, lists resource templates from all configured servers."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "cursor".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
-                    .to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "server".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional MCP server name. When omitted, lists resource templates from all configured servers."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "cursor".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_mcp_resource_templates".to_string(),
@@ -738,25 +859,26 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
 }
 
 fn create_read_mcp_resource_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "server".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "uri".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
-                    .to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "server".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "uri".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "read_mcp_resource".to_string(),
@@ -981,6 +1103,7 @@ pub(crate) fn build_specs(
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -1093,13 +1216,30 @@ pub(crate) fn build_specs(
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
-    if config.web_search_request {
-        builder.push_spec(ToolSpec::WebSearch {});
+    // Prefer web_search_cached flag over web_search_request
+    if config.web_search_cached {
+        builder.push_spec(ToolSpec::WebSearch {
+            external_web_access: Some(false),
+        });
+    } else if config.web_search_request {
+        builder.push_spec(ToolSpec::WebSearch {
+            external_web_access: Some(true),
+        });
     }
 
-    if config.include_view_image_tool {
-        builder.push_spec_with_parallel_support(create_view_image_tool(), true);
-        builder.register_handler("view_image", view_image_handler);
+    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+    builder.register_handler("view_image", view_image_handler);
+
+    if config.collab_tools {
+        let collab_handler = Arc::new(CollabHandler);
+        builder.push_spec(create_spawn_agent_tool());
+        builder.push_spec(create_send_input_tool());
+        builder.push_spec(create_wait_tool());
+        builder.push_spec(create_close_agent_tool());
+        builder.register_handler("spawn_agent", collab_handler.clone());
+        builder.register_handler("send_input", collab_handler.clone());
+        builder.register_handler("wait", collab_handler.clone());
+        builder.register_handler("close_agent", collab_handler);
     }
 
     if let Some(mcp_tools) = mcp_tools {
@@ -1137,7 +1277,7 @@ mod tests {
         match tool {
             ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
             ToolSpec::LocalShell {} => "local_shell",
-            ToolSpec::WebSearch {} => "web_search",
+            ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(FreeformTool { name, .. }) => name,
         }
     }
@@ -1215,20 +1355,19 @@ mod tests {
             ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
                 strip_descriptions_schema(parameters);
             }
-            ToolSpec::Freeform(_) | ToolSpec::LocalShell {} | ToolSpec::WebSearch {} => {}
+            ToolSpec::Freeform(_) | ToolSpec::LocalShell {} | ToolSpec::WebSearch { .. } => {}
         }
     }
 
     #[test]
     fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
-        features.enable(Feature::ViewImageTool);
         let config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
         let (tools, _) = build_specs(&config, None).build();
@@ -1236,7 +1375,7 @@ mod tests {
         // Build actual map name -> spec
         use std::collections::BTreeMap;
         use std::collections::HashSet;
-        let mut actual: BTreeMap<String, ToolSpec> = BTreeMap::new();
+        let mut actual: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         let mut duplicate_names = Vec::new();
         for t in &tools {
             let name = tool_name(&t.spec).to_string();
@@ -1250,7 +1389,7 @@ mod tests {
         );
 
         // Build expected from the same helpers used by the builder.
-        let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::new();
+        let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
             create_exec_command_tool(),
             create_write_stdin_tool(),
@@ -1259,7 +1398,9 @@ mod tests {
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_apply_patch_freeform_tool(),
-            ToolSpec::WebSearch {},
+            ToolSpec::WebSearch {
+                external_web_access: Some(true),
+            },
             create_view_image_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
@@ -1280,16 +1421,78 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_build_specs_collab_tools_enabled() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Collab);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+        assert_contains_tool_names(
+            &tools,
+            &["spawn_agent", "send_input", "wait", "close_agent"],
+        );
+    }
+
     fn assert_model_tools(model_slug: &str, features: &Features, expected_tools: &[&str]) {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline(model_slug, &config);
+        let model_info = ModelsManager::construct_model_info_offline(model_slug, &config);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
         assert_eq!(&tool_names, &expected_tools,);
+    }
+
+    #[test]
+    fn web_search_cached_sets_external_web_access_false() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchCached);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+
+        let tool = find_tool(&tools, "web_search");
+        assert_eq!(
+            tool.spec,
+            ToolSpec::WebSearch {
+                external_web_access: Some(false),
+            }
+        );
+    }
+
+    #[test]
+    fn web_search_cached_takes_precedence_over_web_search_request() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchCached);
+        features.enable(Feature::WebSearchRequest);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+
+        let tool = find_tool(&tools, "web_search");
+        assert_eq!(
+            tool.spec,
+            ToolSpec::WebSearch {
+                external_web_access: Some(false),
+            }
+        );
     }
 
     #[test]
@@ -1475,12 +1678,12 @@ mod tests {
     #[test]
     fn test_build_specs_default_shell_present() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::WebSearchRequest);
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
@@ -1497,12 +1700,11 @@ mod tests {
     #[ignore]
     fn test_parallel_support_flags() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
-        features.disable(Feature::ViewImageTool);
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
@@ -1515,14 +1717,12 @@ mod tests {
     }
 
     #[test]
-    fn test_test_model_family_includes_sync_tool() {
+    fn test_test_model_info_includes_sync_tool() {
         let config = test_config();
-        let model_family =
-            ModelsManager::construct_model_family_offline("test-gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.disable(Feature::ViewImageTool);
+        let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
@@ -1548,12 +1748,12 @@ mod tests {
     #[test]
     fn test_build_specs_mcp_tools_converted() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
         let (tools, _) = build_specs(
@@ -1643,11 +1843,11 @@ mod tests {
     #[test]
     fn test_build_specs_mcp_tools_sorted_by_name() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
 
@@ -1719,12 +1919,12 @@ mod tests {
     #[test]
     fn test_mcp_tool_property_missing_type_defaults_to_string() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
 
@@ -1776,12 +1976,12 @@ mod tests {
     #[test]
     fn test_mcp_tool_integer_normalized_to_number() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
 
@@ -1829,13 +2029,13 @@ mod tests {
     #[test]
     fn test_mcp_tool_array_without_items_gets_default_string_items() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         features.enable(Feature::ApplyPatchFreeform);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
 
@@ -1886,12 +2086,12 @@ mod tests {
     #[test]
     fn test_mcp_tool_anyof_defaults_to_string() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
 
@@ -1998,12 +2198,12 @@ Examples of valid command strings:
     #[test]
     fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         let config = test_config();
-        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
+            model_info: &model_info,
             features: &features,
         });
         let (tools, _) = build_specs(
@@ -2111,8 +2311,8 @@ Examples of valid command strings:
 
     #[test]
     fn chat_tools_include_top_level_name() {
-        let mut properties = BTreeMap::new();
-        properties.insert("foo".to_string(), JsonSchema::String { description: None });
+        let properties =
+            BTreeMap::from([("foo".to_string(), JsonSchema::String { description: None })]);
         let tools = vec![ToolSpec::Function(ResponsesApiTool {
             name: "demo".to_string(),
             description: "A demo tool".to_string(),

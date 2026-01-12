@@ -7,7 +7,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[allow(clippy::expect_used)]

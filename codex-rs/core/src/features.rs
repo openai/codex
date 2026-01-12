@@ -7,6 +7,7 @@
 
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use codex_otel::OtelManager;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -60,10 +61,6 @@ pub enum Feature {
     // Stable.
     /// Create a ghost commit at each turn.
     GhostCommit,
-    /// Include the view_image tool.
-    ViewImageTool,
-    /// Send warnings to the model to correct it on the tool usage.
-    ModelWarnings,
     /// Enable the default shell tool.
     ShellTool,
 
@@ -72,8 +69,11 @@ pub enum Feature {
     UnifiedExec,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
-    /// Allow the model to request web searches.
+    /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
+    /// Allow the model to request web searches that fetch cached content.
+    /// Takes precedence over `WebSearchRequest`.
+    WebSearchCached,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -84,16 +84,18 @@ pub enum Feature {
     RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
-    /// Allow model to call multiple tools in parallel (only for models supporting it).
-    ParallelToolCalls,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Append additional AGENTS.md guidance to user instructions.
+    HierarchicalAgents,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
-    /// Enable discovery and injection of skills.
-    Skills,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
+    /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
+    EnableRequestCompression,
+    /// Enable collab tools.
+    Collab,
 }
 
 impl Feature {
@@ -196,6 +198,21 @@ impl Features {
             .map(|usage| (usage.alias.as_str(), usage.feature))
     }
 
+    pub fn emit_metrics(&self, otel: &OtelManager) {
+        for feature in FEATURES {
+            if self.enabled(feature.id) != feature.default_enabled {
+                otel.counter(
+                    "codex.feature.state",
+                    1,
+                    &[
+                        ("feature", feature.key),
+                        ("value", &self.enabled(feature.id).to_string()),
+                    ],
+                );
+            }
+        }
+    }
+
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
@@ -228,7 +245,6 @@ impl Features {
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
-            tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
             ..Default::default()
         };
         base_legacy.apply(&mut features);
@@ -244,7 +260,6 @@ impl Features {
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
             tools_web_search: config_profile.tools_web_search,
-            tools_view_image: config_profile.tools_view_image,
         };
         profile_legacy.apply(&mut features);
         if let Some(profile_features) = config_profile.features.as_ref() {
@@ -254,6 +269,10 @@ impl Features {
         overrides.apply(&mut features);
 
         features
+    }
+
+    pub fn enabled_features(&self) -> Vec<Feature> {
+        self.enabled.iter().copied().collect()
     }
 }
 
@@ -297,26 +316,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ParallelToolCalls,
-        key: "parallel",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::ViewImageTool,
-        key: "view_image_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::ShellTool,
         key: "shell_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::ModelWarnings,
-        key: "warnings",
         stage: Stage::Stable,
         default_enabled: true,
     },
@@ -326,6 +327,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: false,
     },
+    FeatureSpec {
+        id: Feature::WebSearchCached,
+        key: "web_search_cached",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
     // Beta program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::UnifiedExec,
@@ -333,7 +340,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Beta {
             name: "Background terminal",
             menu_description: "Run long-running terminal commands in the background.",
-            announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
+            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
         },
         default_enabled: false,
     },
@@ -345,6 +352,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
             announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::HierarchicalAgents,
+        key: "hierarchical_agents",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
@@ -384,14 +397,20 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Skills,
-        key: "skills",
-        stage: Stage::Experimental,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::EnableRequestCompression,
+        key: "enable_request_compression",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Collab,
+        key: "collab",
         stage: Stage::Experimental,
         default_enabled: false,
     },

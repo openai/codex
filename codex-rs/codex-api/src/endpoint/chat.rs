@@ -10,6 +10,7 @@ use crate::provider::WireApi;
 use crate::sse::chat::spawn_chat_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::HttpTransport;
+use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
@@ -80,7 +81,13 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         extra_headers: HeaderMap,
     ) -> Result<ResponseStream, ApiError> {
         self.streaming
-            .stream(self.path(), body, extra_headers, spawn_chat_stream)
+            .stream(
+                self.path(),
+                body,
+                extra_headers,
+                RequestCompression::None,
+                spawn_chat_stream,
+            )
             .await
     }
 }
@@ -151,6 +158,9 @@ impl Stream for AggregatedStream {
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
                     return Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot))));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::ModelsEtag(etag)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::ModelsEtag(etag))));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::Completed {
                     response_id,

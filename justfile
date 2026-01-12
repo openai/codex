@@ -14,10 +14,6 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
-# `codex tui`
-tui *args:
-    cargo run --bin codex -- tui "$@"
-
 # Run the CLI version of the file-search crate.
 file-search *args:
     cargo run --bin codex-file-search -- "$@"
@@ -29,7 +25,7 @@ app-server-test-client *args:
 
 # format code
 fmt:
-    cargo fmt -- --config imports_granularity=Item
+    cargo fmt -- --config imports_granularity=Item 2>/dev/null
 
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
@@ -47,6 +43,15 @@ install:
 # Run `cargo install cargo-nextest` if you don't have it installed.
 test:
     cargo nextest run --no-fail-fast
+
+bazel-test:
+    bazel test //... --keep_going
+
+bazel-remote-test:
+    bazel test //... --config=remote --platforms=//:rbe --keep_going
+
+build-for-release:
+    bazel build //codex-rs/cli:release_binaries --config=remote
 
 # Run the MCP server
 mcp-server-run *args:

@@ -1,18 +1,21 @@
 #![allow(clippy::expect_used)]
 use codex_core::CodexAuth;
-use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
+use codex_core::NewThread;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WarningEvent;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_local_shell_call;
@@ -28,7 +31,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
-use core_test_support::responses::get_responses_requests;
 use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -59,7 +61,7 @@ const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 
-pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
+pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
 fn auto_summary(summary: &str) -> String {
     summary.to_string()
@@ -141,15 +143,15 @@ async fn summarize_context_three_requests_and_instructions() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let NewConversation {
-        conversation: codex,
+    let NewThread {
+        thread: codex,
         session_configured,
         ..
-    } = conversation_manager.new_conversation(config).await.unwrap();
+    } = thread_manager.start_thread(config).await.unwrap();
     let rollout_path = session_configured.rollout_path;
 
     // 1) Normal user input – should hit server once.
@@ -158,10 +160,11 @@ async fn summarize_context_three_requests_and_instructions() {
             items: vec![UserInput::Text {
                 text: "hello world".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // 2) Summarize – second hit should include the summarization prompt.
     codex.submit(Op::Compact).await.unwrap();
@@ -170,7 +173,7 @@ async fn summarize_context_three_requests_and_instructions() {
         panic!("expected warning event after compact");
     };
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // 3) Next user input – third hit; history should include only the summary.
     codex
@@ -178,10 +181,11 @@ async fn summarize_context_three_requests_and_instructions() {
             items: vec![UserInput::Text {
                 text: THIRD_USER_MSG.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Inspect the three captured requests.
     let requests = request_log.requests();
@@ -325,7 +329,7 @@ async fn manual_compact_uses_custom_prompt() {
 
     let server = start_mock_server().await;
     let sse_stream = sse(vec![ev_completed("r1")]);
-    mount_sse_once(&server, sse_stream).await;
+    let response_mock = mount_sse_once(&server, sse_stream).await;
 
     let custom_prompt = "Use this compact prompt instead";
 
@@ -335,15 +339,15 @@ async fn manual_compact_uses_custom_prompt() {
     config.model_provider = model_provider;
     config.compact_prompt = Some(custom_prompt.to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create conversation")
-        .conversation;
+        .thread;
 
     codex.submit(Op::Compact).await.expect("trigger compact");
     let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
@@ -351,13 +355,9 @@ async fn manual_compact_uses_custom_prompt() {
         panic!("expected warning event after compact");
     };
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
-    let body = requests
-        .iter()
-        .find_map(|req| req.body_json::<serde_json::Value>().ok())
-        .expect("summary request body");
+    let body = response_mock.single_request().body_json();
 
     let input = body
         .get("input")
@@ -415,14 +415,11 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager.new_conversation(config).await.unwrap();
+    let NewThread { thread: codex, .. } = thread_manager.start_thread(config).await.unwrap();
 
     // Trigger manual compact and collect TokenCount events for the compact turn.
     codex.submit(Op::Compact).await.unwrap();
@@ -448,7 +445,7 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     .await;
 
     // Ensure the compact task itself completes.
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(
         first, 0,
@@ -569,7 +566,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         model_compact_response_3_sse,
         model_final_response_sse,
     ];
-    mount_sse_sequence(&server, bodies).await;
+    let request_log = mount_sse_sequence(&server, bodies).await;
 
     // Start the conversation with the user message
     codex
@@ -577,17 +574,15 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
             items: vec![UserInput::Text {
                 text: user_message.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .expect("submit user input");
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // collect the requests payloads from the model
-    let requests_payloads = get_responses_requests(&server).await;
-
-    let body = requests_payloads[0]
-        .body_json::<serde_json::Value>()
-        .unwrap();
+    let requests_payloads = request_log.requests();
+    let body = requests_payloads[0].body_json();
     let input = body.get("input").and_then(|v| v.as_array()).unwrap();
 
     fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -628,9 +623,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         prefixed_third_summary.as_str(),
     ];
     for (i, expected_summary) in compaction_indices.into_iter().zip(expected_summaries) {
-        let body = requests_payloads.clone()[i]
-            .body_json::<serde_json::Value>()
-            .unwrap();
+        let body = requests_payloads.clone()[i].body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let input = normalize_inputs(input);
         assert_eq!(input.len(), 3);
@@ -993,7 +986,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]);
 
     for (i, request) in requests_payloads.iter().enumerate() {
-        let body = request.body_json::<serde_json::Value>().unwrap();
+        let body = request.body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let expected_input = expected_requests_inputs[i].as_array().unwrap();
         assert_eq!(normalize_inputs(input), normalize_inputs(expected_input));
@@ -1031,33 +1024,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     ]);
     let prefixed_auto_summary = AUTO_SUMMARY_TEXT;
 
-    let first_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(FIRST_AUTO_MSG)
-            && !body.contains(SECOND_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, first_matcher, sse1).await;
-
-    let second_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SECOND_AUTO_MSG)
-            && body.contains(FIRST_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, second_matcher, sse2).await;
-
-    let third_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, third_matcher, sse3).await;
-
-    let fourth_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, fourth_matcher, sse4).await;
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
     let model_provider = non_openai_model_provider(&server);
 
@@ -1066,96 +1033,91 @@ async fn auto_compact_runs_after_token_limit_hit() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let codex = thread_manager.start_thread(config).await.unwrap().thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let requests = get_responses_requests(&server).await;
+    let requests = request_log.requests();
+    let request_bodies: Vec<String> = requests
+        .iter()
+        .map(|request| request.body_json().to_string())
+        .collect();
     assert_eq!(
-        requests.len(),
+        request_bodies.len(),
         4,
         "expected user turns, a compaction request, and the follow-up turn; got {}",
-        requests.len()
+        request_bodies.len()
     );
-    let is_auto_compact = |req: &wiremock::Request| {
-        body_contains_text(
-            std::str::from_utf8(&req.body).unwrap_or(""),
-            SUMMARIZATION_PROMPT,
-        )
-    };
-    let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
+    let auto_compact_count = request_bodies
+        .iter()
+        .filter(|body| body_contains_text(body, SUMMARIZATION_PROMPT))
+        .count();
     assert_eq!(
         auto_compact_count, 1,
         "expected exactly one auto compact request"
     );
-    let auto_compact_index = requests
+    let auto_compact_index = request_bodies
         .iter()
         .enumerate()
-        .find_map(|(idx, req)| is_auto_compact(req).then_some(idx))
+        .find_map(|(idx, body)| body_contains_text(body, SUMMARIZATION_PROMPT).then_some(idx))
         .expect("auto compact request missing");
     assert_eq!(
         auto_compact_index, 2,
         "auto compact should add a third request"
     );
 
-    let follow_up_index = requests
+    let follow_up_index = request_bodies
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(idx, req)| {
-            let body = std::str::from_utf8(&req.body).unwrap_or("");
+        .find_map(|(idx, body)| {
             (body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT))
                 .then_some(idx)
         })
         .expect("follow-up request missing");
     assert_eq!(follow_up_index, 3, "follow-up request should be last");
 
-    let body_first = requests[0].body_json::<serde_json::Value>().unwrap();
-    let body_auto = requests[auto_compact_index]
-        .body_json::<serde_json::Value>()
-        .unwrap();
-    let body_follow_up = requests[follow_up_index]
-        .body_json::<serde_json::Value>()
-        .unwrap();
+    let body_first = requests[0].body_json();
+    let body_auto = requests[auto_compact_index].body_json();
+    let body_follow_up = requests[follow_up_index].body_json();
     let instructions = body_auto
         .get("instructions")
         .and_then(|v| v.as_str())
@@ -1229,6 +1191,117 @@ async fn auto_compact_runs_after_token_limit_hit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let limit = 200_000;
+    let over_limit_tokens = 250_000;
+    let remote_summary = "REMOTE_COMPACT_SUMMARY";
+
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: remote_summary.to_string(),
+            }],
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    let mut builder = test_codex().with_config(move |config| {
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(limit);
+        config.features.enable(Feature::RemoteCompaction);
+    });
+    let initial = builder.build(&server).await.unwrap();
+    let home = initial.home.clone();
+    let rollout_path = initial.session_configured.rollout_path.clone();
+
+    // A single over-limit completion should not auto-compact until the next user message.
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("m1", FIRST_REPLY),
+            ev_completed_with_tokens("r1", over_limit_tokens),
+        ]),
+    )
+    .await;
+    initial.submit_turn("OVER_LIMIT_TURN").await.unwrap();
+
+    assert!(
+        compact_mock.requests().is_empty(),
+        "remote compaction should not run before the next user message"
+    );
+
+    let mut resume_builder = test_codex().with_config(move |config| {
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(limit);
+        config.features.enable(Feature::RemoteCompaction);
+    });
+    let resumed = resume_builder
+        .resume(&server, home, rollout_path)
+        .await
+        .unwrap();
+
+    let follow_up_user = "AFTER_RESUME_USER";
+    let sse_follow_up = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed("r2"),
+    ]);
+
+    let follow_up_matcher = move |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(follow_up_user) && body.contains(remote_summary)
+    };
+    mount_sse_once_match(&server, follow_up_matcher, sse_follow_up).await;
+
+    resumed
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: follow_up_user.into(),
+            }],
+            final_output_json_schema: None,
+            cwd: resumed.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: resumed.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::ContextCompacted(_))
+    })
+    .await;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        1,
+        "remote compaction should run once after resume"
+    );
+    assert_eq!(
+        compact_requests[0].path(),
+        "/v1/responses/compact",
+        "remote compaction should hit the compact endpoint"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_persists_rollout_entries() {
     skip_if_no_network!();
 
@@ -1289,45 +1362,48 @@ async fn auto_compact_persists_rollout_entries() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let NewConversation {
-        conversation: codex,
+    let NewThread {
+        thread: codex,
         session_configured,
         ..
-    } = conversation_manager.new_conversation(config).await.unwrap();
+    } = thread_manager.start_thread(config).await.unwrap();
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
@@ -1401,24 +1477,25 @@ async fn manual_compact_retries_after_context_window_error() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let codex = ConversationManager::with_models_provider(
+    let codex = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     )
-    .new_conversation(config)
+    .start_thread(config)
     .await
     .unwrap()
-    .conversation;
+    .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "first turn".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Compact).await.unwrap();
     let EventMsg::BackgroundEvent(event) =
@@ -1427,7 +1504,7 @@ async fn manual_compact_retries_after_context_window_error() {
         panic!("expected background event after compact retry");
     };
     assert!(
-        event.message.contains("Trimmed 1 older conversation item"),
+        event.message.contains("Trimmed 1 older thread item"),
         "background event should mention trimmed item count: {}",
         event.message
     );
@@ -1436,7 +1513,7 @@ async fn manual_compact_retries_after_context_window_error() {
         panic!("expected warning event after compact retry");
     };
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = request_log.requests();
     assert_eq!(
@@ -1533,50 +1610,53 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
-    let codex = ConversationManager::with_models_provider(
+    let codex = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     )
-    .new_conversation(config)
+    .start_thread(config)
     .await
     .unwrap()
-    .conversation;
+    .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: first_user_message.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Compact).await.unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: second_user_message.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Compact).await.unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: final_user_message.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = responses_mock.requests();
     assert_eq!(
@@ -1728,7 +1808,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     let follow_up_user = "FOLLOW_UP_AUTO_COMPACT";
     let final_user = "FINAL_AUTO_COMPACT";
 
-    mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4, sse5, sse6]).await;
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4, sse5, sse6]).await;
 
     let model_provider = non_openai_model_provider(&server);
 
@@ -1737,21 +1817,18 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let codex = thread_manager.start_thread(config).await.unwrap().thread;
 
     let mut auto_compact_lifecycle_events = Vec::new();
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
         codex
             .submit(Op::UserInput {
                 items: vec![UserInput::Text { text: user.into() }],
+                final_output_json_schema: None,
             })
             .await
             .unwrap();
@@ -1761,13 +1838,13 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
             if event.id.starts_with("auto-compact-")
                 && matches!(
                     event.msg,
-                    EventMsg::TaskStarted(_) | EventMsg::TaskComplete(_)
+                    EventMsg::TurnStarted(_) | EventMsg::TurnComplete(_)
                 )
             {
                 auto_compact_lifecycle_events.push(event);
                 continue;
             }
-            if let EventMsg::TaskComplete(_) = &event.msg
+            if let EventMsg::TurnComplete(_) = &event.msg
                 && !event.id.starts_with("auto-compact-")
             {
                 break;
@@ -1780,10 +1857,10 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "auto compact should not emit task lifecycle events"
     );
 
-    let requests = get_responses_requests(&server).await;
-    let request_bodies: Vec<String> = requests
+    let request_bodies: Vec<String> = request_log
+        .requests()
         .into_iter()
-        .map(|request| String::from_utf8(request.body).unwrap_or_default())
+        .map(|request| request.body_json().to_string())
         .collect();
     assert_eq!(
         request_bodies.len(),
@@ -1850,36 +1927,38 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     config.model_context_window = Some(context_window);
     config.model_auto_compact_token_limit = Some(limit);
 
-    let codex = ConversationManager::with_models_provider(
+    let codex = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
     )
-    .new_conversation(config)
+    .start_thread(config)
     .await
     .unwrap()
-    .conversation;
+    .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: follow_up_user.into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
 
     // Assert first request captured expected user message that triggers function call.
     let first_request = first_turn_mock.single_request().input();
@@ -1989,10 +2068,11 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         codex
             .submit(Op::UserInput {
                 items: vec![UserInput::Text { text: user.into() }],
+                final_output_json_schema: None,
             })
             .await
             .unwrap();
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
         if idx < 2 {
             assert!(

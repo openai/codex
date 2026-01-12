@@ -30,7 +30,7 @@ const SKIP_DIR_SUFFIXES: &[&str] = &[
     "/programdata",
 ];
 
-fn normalize_path_key(p: &Path) -> String {
+pub(crate) fn normalize_path_key(p: &Path) -> String {
     let n = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     n.to_string_lossy().replace('\\', "/").to_ascii_lowercase()
 }

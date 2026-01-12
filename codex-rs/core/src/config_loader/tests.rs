@@ -5,10 +5,12 @@ use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigRequirements;
-use crate::config_loader::config_requirements::ConfigRequirementsToml;
+use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::protocol::AskForApproval;
+#[cfg(target_os = "macos")]
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -43,6 +45,7 @@ extra = true
         managed_config_path: Some(managed_path),
         #[cfg(target_os = "macos")]
         managed_preferences_base64: None,
+        macos_managed_config_requirements_base64: None,
     };
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
@@ -73,10 +76,12 @@ extra = true
 async fn returns_empty_when_all_layers_missing() {
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");
+
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
         #[cfg(target_os = "macos")]
         managed_preferences_base64: None,
+        macos_managed_config_requirements_base64: None,
     };
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
@@ -141,12 +146,6 @@ async fn returns_empty_when_all_layers_missing() {
 async fn managed_preferences_take_highest_precedence() {
     use base64::Engine;
 
-    let managed_payload = r#"
-[nested]
-value = "managed"
-flag = false
-"#;
-    let encoded = base64::prelude::BASE64_STANDARD.encode(managed_payload.as_bytes());
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");
 
@@ -168,7 +167,17 @@ flag = true
 
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
-        managed_preferences_base64: Some(encoded),
+        managed_preferences_base64: Some(
+            base64::prelude::BASE64_STANDARD.encode(
+                r#"
+[nested]
+value = "managed"
+flag = false
+"#
+                .as_bytes(),
+            ),
+        ),
+        macos_managed_config_requirements_base64: None,
     };
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
@@ -192,6 +201,108 @@ flag = true
     assert_eq!(nested.get("flag"), Some(&TomlValue::Boolean(false)));
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_preferences_requirements_are_applied() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+allowed_approval_policies = ["never"]
+allowed_sandbox_modes = ["read-only"]
+"#
+                    .as_bytes(),
+                ),
+            ),
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        state.requirements().approval_policy.value(),
+        AskForApproval::Never
+    );
+    assert_eq!(
+        *state.requirements().sandbox_policy.get(),
+        SandboxPolicy::ReadOnly
+    );
+    assert!(
+        state
+            .requirements()
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest)
+            .is_err()
+    );
+    assert!(
+        state
+            .requirements()
+            .sandbox_policy
+            .can_set(&SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            })
+            .is_err()
+    );
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_preferences_requirements_take_precedence() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+    let managed_path = tmp.path().join("managed_config.toml");
+
+    tokio::fs::write(&managed_path, "approval_policy = \"on-request\"\n").await?;
+
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            managed_config_path: Some(managed_path),
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+allowed_approval_policies = ["never"]
+"#
+                    .as_bytes(),
+                ),
+            ),
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        state.requirements().approval_policy.value(),
+        AskForApproval::Never
+    );
+    assert!(
+        state
+            .requirements()
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest)
+            .is_err()
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Result<()> {
     let tmp = tempdir()?;
@@ -204,11 +315,14 @@ allowed_approval_policies = ["never", "on-request"]
     )
     .await?;
 
-    let mut config_requirements_toml = ConfigRequirementsToml::default();
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
 
     assert_eq!(
-        config_requirements_toml.allowed_approval_policies,
+        config_requirements_toml
+            .allowed_approval_policies
+            .as_deref()
+            .cloned(),
         Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
     );
 

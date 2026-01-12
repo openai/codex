@@ -192,26 +192,128 @@ fn render_command_for_log(cwd: &Path, git_cfg: &[String], args: &[String]) -> St
 
 /// Collect every path referenced by the diff headers inside `diff --git` sections.
 pub fn extract_paths_from_patch(diff_text: &str) -> Vec<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?m)^diff --git a/(.*?) b/(.*)$")
-            .unwrap_or_else(|e| panic!("invalid regex: {e}"))
-    });
     let mut set = std::collections::BTreeSet::new();
-    for caps in RE.captures_iter(diff_text) {
-        if let Some(a) = caps.get(1).map(|m| m.as_str())
-            && a != "/dev/null"
-            && !a.trim().is_empty()
-        {
-            set.insert(a.to_string());
+    for raw_line in diff_text.lines() {
+        let line = raw_line.trim();
+        let Some(rest) = line.strip_prefix("diff --git ") else {
+            continue;
+        };
+        let Some((a, b)) = parse_diff_git_paths(rest) else {
+            continue;
+        };
+        if let Some(a) = normalize_diff_path(&a, "a/") {
+            set.insert(a);
         }
-        if let Some(b) = caps.get(2).map(|m| m.as_str())
-            && b != "/dev/null"
-            && !b.trim().is_empty()
-        {
-            set.insert(b.to_string());
+        if let Some(b) = normalize_diff_path(&b, "b/") {
+            set.insert(b);
         }
     }
     set.into_iter().collect()
+}
+
+fn parse_diff_git_paths(line: &str) -> Option<(String, String)> {
+    let mut chars = line.chars().peekable();
+    let first = read_diff_git_token(&mut chars)?;
+    let second = read_diff_git_token(&mut chars)?;
+    Some((first, second))
+}
+
+fn read_diff_git_token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+        chars.next();
+    }
+    let quote = match chars.peek().copied() {
+        Some('"') | Some('\'') => chars.next(),
+        _ => None,
+    };
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            if c == q {
+                break;
+            }
+            if c == '\\' {
+                out.push('\\');
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                continue;
+            }
+        } else if c.is_whitespace() {
+            break;
+        }
+        out.push(c);
+    }
+    if out.is_empty() && quote.is_none() {
+        None
+    } else {
+        Some(match quote {
+            Some(_) => unescape_c_string(&out),
+            None => out,
+        })
+    }
+}
+
+fn normalize_diff_path(raw: &str, prefix: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed == "/dev/null" || trimmed == format!("{prefix}dev/null") {
+        return None;
+    }
+    let trimmed = trimmed.strip_prefix(prefix).unwrap_or(trimmed);
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn unescape_c_string(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let Some(next) = chars.next() else {
+            out.push('\\');
+            break;
+        };
+        match next {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'b' => out.push('\u{0008}'),
+            'f' => out.push('\u{000C}'),
+            'a' => out.push('\u{0007}'),
+            'v' => out.push('\u{000B}'),
+            '\\' => out.push('\\'),
+            '"' => out.push('"'),
+            '\'' => out.push('\''),
+            '0'..='7' => {
+                let mut value = next.to_digit(8).unwrap_or(0);
+                for _ in 0..2 {
+                    match chars.peek() {
+                        Some('0'..='7') => {
+                            if let Some(digit) = chars.next() {
+                                value = value * 8 + digit.to_digit(8).unwrap_or(0);
+                            } else {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                if let Some(ch) = std::char::from_u32(value) {
+                    out.push(ch);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Stage only the files that actually exist on disk for the given diff.
@@ -266,12 +368,12 @@ pub fn parse_git_apply_output(
         let first = trimmed.chars().next().unwrap_or('\0');
         let last = trimmed.chars().last().unwrap_or('\0');
         let unquoted = if (first == '"' || first == '\'') && last == first && trimmed.len() >= 2 {
-            &trimmed[1..trimmed.len() - 1]
+            unescape_c_string(&trimmed[1..trimmed.len() - 1])
         } else {
-            trimmed
+            trimmed.to_string()
         };
         if !unquoted.is_empty() {
-            set.insert(unquoted.to_string());
+            set.insert(unquoted);
         }
     }
 
@@ -529,6 +631,36 @@ mod tests {
         std::fs::read_to_string(path)
             .expect("read file")
             .replace("\r\n", "\n")
+    }
+
+    #[test]
+    fn extract_paths_handles_quoted_headers() {
+        let diff = "diff --git \"a/hello world.txt\" \"b/hello world.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello world.txt\n@@ -0,0 +1 @@\n+hi\n";
+        let paths = extract_paths_from_patch(diff);
+        assert_eq!(paths, vec!["hello world.txt".to_string()]);
+    }
+
+    #[test]
+    fn extract_paths_ignores_dev_null_header() {
+        let diff = "diff --git a/dev/null b/ok.txt\nnew file mode 100644\n--- /dev/null\n+++ b/ok.txt\n@@ -0,0 +1 @@\n+hi\n";
+        let paths = extract_paths_from_patch(diff);
+        assert_eq!(paths, vec!["ok.txt".to_string()]);
+    }
+
+    #[test]
+    fn extract_paths_unescapes_c_style_in_quoted_headers() {
+        let diff = "diff --git \"a/hello\\tworld.txt\" \"b/hello\\tworld.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello\tworld.txt\n@@ -0,0 +1 @@\n+hi\n";
+        let paths = extract_paths_from_patch(diff);
+        assert_eq!(paths, vec!["hello\tworld.txt".to_string()]);
+    }
+
+    #[test]
+    fn parse_output_unescapes_quoted_paths() {
+        let stderr = "error: patch failed: \"hello\\tworld.txt\":1\n";
+        let (applied, skipped, conflicted) = parse_git_apply_output("", stderr);
+        assert_eq!(applied, Vec::<String>::new());
+        assert_eq!(conflicted, Vec::<String>::new());
+        assert_eq!(skipped, vec!["hello\tworld.txt".to_string()]);
     }
 
     #[test]

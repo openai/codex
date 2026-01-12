@@ -46,11 +46,12 @@ async fn responses_api_emits_api_request_event() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -87,11 +88,12 @@ async fn process_sse_emits_tracing_for_output_item() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -125,11 +127,12 @@ async fn process_sse_emits_failed_event_on_parse_error() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -164,11 +167,12 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -223,11 +227,12 @@ async fn process_sse_failed_event_records_response_error_message() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -280,11 +285,12 @@ async fn process_sse_failed_event_logs_parse_error() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -324,11 +330,12 @@ async fn process_sse_failed_event_logs_missing_error() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -377,11 +384,12 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -427,11 +435,12 @@ async fn process_sse_emits_completed_telemetry() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -494,11 +503,12 @@ async fn handle_responses_span_records_response_kind_and_tool_name() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
 
@@ -558,11 +568,12 @@ async fn record_responses_sets_span_fields_for_response_events() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
 
@@ -637,6 +648,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -704,6 +716,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -781,6 +794,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -842,6 +856,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -946,11 +961,12 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
             items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(tool_decision_assertion(
         "auto_config_call",
@@ -994,6 +1010,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
             items: vec![UserInput::Text {
                 text: "approved".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1052,6 +1069,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
             items: vec![UserInput::Text {
                 text: "persist".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1110,6 +1128,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
             items: vec![UserInput::Text {
                 text: "retry".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1168,6 +1187,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
             items: vec![UserInput::Text {
                 text: "deny".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1226,6 +1246,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
             items: vec![UserInput::Text {
                 text: "persist".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1285,6 +1306,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
             items: vec![UserInput::Text {
                 text: "deny".into(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();

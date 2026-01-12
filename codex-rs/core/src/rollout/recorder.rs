@@ -6,7 +6,7 @@ use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -19,9 +19,9 @@ use tracing::info;
 use tracing::warn;
 
 use super::SESSIONS_SUBDIR;
-use super::list::ConversationsPage;
 use super::list::Cursor;
-use super::list::get_conversations;
+use super::list::ThreadsPage;
+use super::list::get_threads;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
@@ -52,7 +52,7 @@ pub struct RolloutRecorder {
 #[derive(Clone)]
 pub enum RolloutRecorderParams {
     Create {
-        conversation_id: ConversationId,
+        conversation_id: ThreadId,
         instructions: Option<String>,
         source: SessionSource,
     },
@@ -74,7 +74,7 @@ enum RolloutCmd {
 
 impl RolloutRecorderParams {
     pub fn new(
-        conversation_id: ConversationId,
+        conversation_id: ThreadId,
         instructions: Option<String>,
         source: SessionSource,
     ) -> Self {
@@ -91,16 +91,16 @@ impl RolloutRecorderParams {
 }
 
 impl RolloutRecorder {
-    /// List conversations (rollout files) under the provided Codex home directory.
-    pub async fn list_conversations(
+    /// List threads (rollout files) under the provided Codex home directory.
+    pub async fn list_threads(
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
-    ) -> std::io::Result<ConversationsPage> {
-        get_conversations(
+    ) -> std::io::Result<ThreadsPage> {
+        get_threads(
             codex_home,
             page_size,
             cursor,
@@ -143,7 +143,7 @@ impl RolloutRecorder {
                         id: session_id,
                         timestamp,
                         cwd: config.cwd.clone(),
-                        originator: originator().value.clone(),
+                        originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
                         source,
@@ -215,7 +215,7 @@ impl RolloutRecorder {
         }
 
         let mut items: Vec<RolloutItem> = Vec::new();
-        let mut conversation_id: Option<ConversationId> = None;
+        let mut thread_id: Option<ThreadId> = None;
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -233,9 +233,9 @@ impl RolloutRecorder {
                 Ok(rollout_line) => match rollout_line.item {
                     RolloutItem::SessionMeta(session_meta_line) => {
                         // Use the FIRST SessionMeta encountered in the file as the canonical
-                        // conversation id and main session information. Keep all items intact.
-                        if conversation_id.is_none() {
-                            conversation_id = Some(session_meta_line.meta.id);
+                        // thread id and main session information. Keep all items intact.
+                        if thread_id.is_none() {
+                            thread_id = Some(session_meta_line.meta.id);
                         }
                         items.push(RolloutItem::SessionMeta(session_meta_line));
                     }
@@ -259,12 +259,12 @@ impl RolloutRecorder {
         }
 
         info!(
-            "Resumed rollout with {} items, conversation ID: {:?}",
+            "Resumed rollout with {} items, thread ID: {:?}",
             items.len(),
-            conversation_id
+            thread_id
         );
-        let conversation_id = conversation_id
-            .ok_or_else(|| IoError::other("failed to parse conversation ID from rollout file"))?;
+        let conversation_id = thread_id
+            .ok_or_else(|| IoError::other("failed to parse thread ID from rollout file"))?;
 
         if items.is_empty() {
             return Ok(InitialHistory::New);
@@ -302,16 +302,13 @@ struct LogFileInfo {
     path: PathBuf,
 
     /// Session ID (also embedded in filename).
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
 
     /// Timestamp for the start of the session.
     timestamp: OffsetDateTime,
 }
 
-fn create_log_file(
-    config: &Config,
-    conversation_id: ConversationId,
-) -> std::io::Result<LogFileInfo> {
+fn create_log_file(config: &Config, conversation_id: ThreadId) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
