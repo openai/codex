@@ -2967,6 +2967,9 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
+            InputResult::Queued(_) => {
+                panic!("expected command dispatch, but composer queued literal text")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -3043,6 +3046,9 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
+            InputResult::Queued(_) => {
+                panic!("expected command dispatch after Tab completion, got literal queue")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
@@ -3078,6 +3084,9 @@ mod tests {
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
+            }
+            InputResult::Queued(_) => {
+                panic!("expected command dispatch, but composer queued literal text")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }
