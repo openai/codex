@@ -1275,6 +1275,7 @@ dependencies = [
  "base64",
  "chardetng",
  "chrono",
+ "clap",
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",

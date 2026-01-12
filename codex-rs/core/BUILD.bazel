@@ -26,11 +26,11 @@ codex_rust_crate(
     # the working directory is different and so the file is not found unless it
     # is explicitly added as test data.
     #
-    # TODO(aibrahim): Update the tests so that `just bazel-remote-test` succeeds
-    # without this workaround.
     test_data_extra = [
-        "//:AGENTS.md",
         "config.schema.json",
+        # TODO(aibrahim): Update the tests so that `just bazel-remote-test`
+        # succeeds without this workaround.
+        "//:AGENTS.md",
     ],
     integration_deps_extra = ["//codex-rs/core/tests/common:common"],
     test_tags = ["no-sandbox"],
