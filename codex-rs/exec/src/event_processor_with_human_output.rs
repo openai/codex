@@ -571,6 +571,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ContextCompacted(_) => {
                 ts_msg!(self, "context compacted");
             }
+            EventMsg::CollabInteraction(_) => {
+                // TODO(jif) handle collab tools.
+            }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::WebSearchBegin(_)
             | EventMsg::ExecApprovalRequest(_)

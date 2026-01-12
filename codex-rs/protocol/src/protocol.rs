@@ -683,6 +683,9 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+
+    /// Collab interaction.
+    CollabInteraction(CollabInteractionEvent),
 }
 
 /// Agent lifecycle status, derived from emitted events.
@@ -1931,6 +1934,56 @@ pub enum TurnAbortReason {
     Interrupted,
     Replaced,
     ReviewEnded,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CollabInteractionEvent {
+    AgentSpawned {
+        /// Thread ID of the sender.
+        sender_id: ThreadId,
+        /// Thread ID of the newly spawned agent.
+        new_id: ThreadId,
+        /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
+        /// beginning.
+        prompt: String,
+    },
+    AgentInteraction {
+        /// Thread ID of the sender.
+        sender_id: ThreadId,
+        /// Thread ID of the receiver.
+        receiver_id: ThreadId,
+        /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
+        /// leaking at the beginning.
+        prompt: String,
+    },
+    WaitingBegin {
+        /// Thread ID of the sender.
+        sender_id: ThreadId,
+        /// Thread ID of the receiver.
+        receiver_id: ThreadId,
+        /// ID of the waiting call.
+        waiting_id: String,
+    },
+    WaitingEnd {
+        /// Thread ID of the sender.
+        sender_id: ThreadId,
+        /// Thread ID of the receiver.
+        receiver_id: ThreadId,
+        /// ID of the waiting call.
+        waiting_id: String,
+        /// Final status of the receiver agent reported to the sender agent.
+        status: AgentStatus,
+    },
+    Close {
+        /// Thread ID of the sender.
+        sender_id: ThreadId,
+        /// Thread ID of the receiver.
+        receiver_id: ThreadId,
+        /// Last known status of the receiver agent reported to the sender agent before
+        /// the close.
+        status: AgentStatus,
+    },
 }
 
 #[cfg(test)]

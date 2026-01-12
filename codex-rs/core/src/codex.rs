@@ -354,7 +354,7 @@ impl Codex {
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
-    conversation_id: ThreadId,
+    pub(crate) conversation_id: ThreadId,
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
     state: Mutex<SessionState>,
