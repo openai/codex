@@ -18,9 +18,6 @@ use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::KeyEvent;
-use crossterm::event::KeyboardEnhancementFlags;
-use crossterm::event::PopKeyboardEnhancementFlags;
-use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::supports_keyboard_enhancement;
@@ -59,21 +56,6 @@ pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
-    // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
-    // chat_composer.rs is using a keyboard event listener to enter for any modified keys
-    // to create a new line that require this.
-    // Some terminals (notably legacy Windows consoles) do not support
-    // keyboard enhancement flags. Attempt to enable them, but continue
-    // gracefully if unsupported.
-    let _ = execute!(
-        stdout(),
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
-    );
-
     let _ = execute!(stdout(), EnableFocusChange);
     Ok(())
 }
@@ -121,8 +103,6 @@ impl Command for DisableAlternateScroll {
 }
 
 fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
-    // Pop may fail on platforms that didn't support the push; ignore errors.
-    let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     execute!(stdout(), DisableBracketedPaste)?;
     let _ = execute!(stdout(), DisableFocusChange);
     if should_disable_raw_mode {

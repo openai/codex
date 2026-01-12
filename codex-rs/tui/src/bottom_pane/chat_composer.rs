@@ -1,4 +1,5 @@
 use crate::key_hint::has_ctrl_or_alt;
+use crate::key_hint::is_altgr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -80,6 +81,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
+    SubmittedImmediately(String),
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String),
     None,
@@ -1140,6 +1142,168 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
+    fn is_send_immediately_key(&self, key_event: &KeyEvent) -> bool {
+        if key_event.kind != KeyEventKind::Press || key_event.code != KeyCode::Enter {
+            return false;
+        }
+        let modifiers = key_event.modifiers;
+        if modifiers.contains(KeyModifiers::ALT) && !is_altgr(modifiers) {
+            return true;
+        }
+        modifiers == KeyModifiers::SHIFT
+    }
+
+    fn handle_submit(&mut self, immediate: bool) -> (InputResult, bool) {
+        // If the first line is a bare built-in slash command (no args),
+        // dispatch it even when the slash popup isn't visible. This preserves
+        // the workflow: type a prefix ("/di"), press Tab to complete to
+        // "/diff ", then press Enter to run it. Tab moves the cursor beyond
+        // the '/name' token and our caret-based heuristic hides the popup,
+        // but Enter should still dispatch the command rather than submit
+        // literal text.
+        let first_line = self.textarea.text().lines().next().unwrap_or("");
+        if let Some((name, rest)) = parse_slash_name(first_line)
+            && rest.is_empty()
+            && let Some((_n, cmd)) = built_in_slash_commands()
+                .into_iter()
+                .filter(|(_, cmd)| {
+                    windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
+                })
+                .find(|(n, _)| *n == name)
+        {
+            self.textarea.set_text("");
+            return (InputResult::Command(cmd), true);
+        }
+        // If we're in a paste-like burst capture, treat Enter as part of the burst
+        // and accumulate it rather than submitting or inserting immediately.
+        // Do not treat Enter as paste inside a slash-command context.
+        let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
+            || self
+                .textarea
+                .text()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .starts_with('/');
+        if self.paste_burst.is_active() && !in_slash_context {
+            let now = Instant::now();
+            if self.paste_burst.append_newline_if_active(now) {
+                return (InputResult::None, true);
+            }
+        }
+        // If we have pending placeholder pastes, replace them in the textarea text
+        // and continue to the normal submission flow to handle slash commands.
+        if !self.pending_pastes.is_empty() {
+            let mut text = self.textarea.text().to_string();
+            for (placeholder, actual) in &self.pending_pastes {
+                if text.contains(placeholder) {
+                    text = text.replace(placeholder, actual);
+                }
+            }
+            self.textarea.set_text(&text);
+            self.pending_pastes.clear();
+        }
+
+        // During a paste-like burst, treat Enter as a newline instead of submit.
+        let now = Instant::now();
+        if self
+            .paste_burst
+            .newline_should_insert_instead_of_submit(now)
+            && !in_slash_context
+        {
+            self.textarea.insert_str("\n");
+            self.paste_burst.extend_window(now);
+            return (InputResult::None, true);
+        }
+        let mut text = self.textarea.text().to_string();
+        let original_input = text.clone();
+        let input_starts_with_space = original_input.starts_with(' ');
+        self.textarea.set_text("");
+
+        // Replace all pending pastes in the text
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        self.pending_pastes.clear();
+
+        // If there is neither text nor attachments, suppress submission entirely.
+        let has_attachments = !self.attached_images.is_empty();
+        text = text.trim().to_string();
+        if let Some((name, _rest)) = parse_slash_name(&text) {
+            let treat_as_plain_text = input_starts_with_space || name.contains('/');
+            if !treat_as_plain_text {
+                let is_builtin = built_in_slash_commands()
+                    .into_iter()
+                    .filter(|(_, cmd)| {
+                        windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
+                    })
+                    .any(|(command_name, _)| command_name == name);
+                let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+                let is_known_prompt = name
+                    .strip_prefix(&prompt_prefix)
+                    .map(|prompt_name| {
+                        self.custom_prompts
+                            .iter()
+                            .any(|prompt| prompt.name == prompt_name)
+                    })
+                    .unwrap_or(false);
+                if !is_builtin && !is_known_prompt {
+                    let message = format!(
+                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                    );
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(message, None),
+                    )));
+                    self.textarea.set_text(&original_input);
+                    self.textarea.set_cursor(original_input.len());
+                    return (InputResult::None, true);
+                }
+            }
+        }
+
+        if !input_starts_with_space
+            && let Some((name, rest)) = parse_slash_name(&text)
+            && !rest.is_empty()
+            && !name.contains('/')
+            && let Some((_n, cmd)) = built_in_slash_commands()
+                .into_iter()
+                .find(|(command_name, _)| *command_name == name)
+            && cmd == SlashCommand::Review
+        {
+            return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
+        }
+
+        let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
+            Ok(expanded) => expanded,
+            Err(err) => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(err.user_message()),
+                )));
+                self.textarea.set_text(&original_input);
+                self.textarea.set_cursor(original_input.len());
+                return (InputResult::None, true);
+            }
+        };
+        if let Some(expanded) = expanded_prompt {
+            text = expanded;
+        }
+        if text.is_empty() && !has_attachments {
+            return (InputResult::None, true);
+        }
+        if !text.is_empty() {
+            self.history.record_local_submission(&text);
+        }
+        // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
+        let result = if immediate {
+            InputResult::SubmittedImmediately(text)
+        } else {
+            InputResult::Submitted(text)
+        };
+        (result, true)
+    }
+
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
@@ -1156,6 +1320,10 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+        if self.is_task_running && self.is_send_immediately_key(&key_event) {
+            return self.handle_submit(true);
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -1202,153 +1370,7 @@ impl ChatComposer {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => {
-                // If the first line is a bare built-in slash command (no args),
-                // dispatch it even when the slash popup isn't visible. This preserves
-                // the workflow: type a prefix ("/di"), press Tab to complete to
-                // "/diff ", then press Enter to run it. Tab moves the cursor beyond
-                // the '/name' token and our caret-based heuristic hides the popup,
-                // but Enter should still dispatch the command rather than submit
-                // literal text.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, rest)) = parse_slash_name(first_line)
-                    && rest.is_empty()
-                    && let Some((_n, cmd)) = built_in_slash_commands()
-                        .into_iter()
-                        .filter(|(_, cmd)| {
-                            windows_degraded_sandbox_active()
-                                || *cmd != SlashCommand::ElevateSandbox
-                        })
-                        .find(|(n, _)| *n == name)
-                {
-                    self.textarea.set_text("");
-                    return (InputResult::Command(cmd), true);
-                }
-                // If we're in a paste-like burst capture, treat Enter as part of the burst
-                // and accumulate it rather than submitting or inserting immediately.
-                // Do not treat Enter as paste inside a slash-command context.
-                let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
-                    || self
-                        .textarea
-                        .text()
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .starts_with('/');
-                if self.paste_burst.is_active() && !in_slash_context {
-                    let now = Instant::now();
-                    if self.paste_burst.append_newline_if_active(now) {
-                        return (InputResult::None, true);
-                    }
-                }
-                // If we have pending placeholder pastes, replace them in the textarea text
-                // and continue to the normal submission flow to handle slash commands.
-                if !self.pending_pastes.is_empty() {
-                    let mut text = self.textarea.text().to_string();
-                    for (placeholder, actual) in &self.pending_pastes {
-                        if text.contains(placeholder) {
-                            text = text.replace(placeholder, actual);
-                        }
-                    }
-                    self.textarea.set_text(&text);
-                    self.pending_pastes.clear();
-                }
-
-                // During a paste-like burst, treat Enter as a newline instead of submit.
-                let now = Instant::now();
-                if self
-                    .paste_burst
-                    .newline_should_insert_instead_of_submit(now)
-                    && !in_slash_context
-                {
-                    self.textarea.insert_str("\n");
-                    self.paste_burst.extend_window(now);
-                    return (InputResult::None, true);
-                }
-                let mut text = self.textarea.text().to_string();
-                let original_input = text.clone();
-                let input_starts_with_space = original_input.starts_with(' ');
-                self.textarea.set_text("");
-
-                // Replace all pending pastes in the text
-                for (placeholder, actual) in &self.pending_pastes {
-                    if text.contains(placeholder) {
-                        text = text.replace(placeholder, actual);
-                    }
-                }
-                self.pending_pastes.clear();
-
-                // If there is neither text nor attachments, suppress submission entirely.
-                let has_attachments = !self.attached_images.is_empty();
-                text = text.trim().to_string();
-                if let Some((name, _rest)) = parse_slash_name(&text) {
-                    let treat_as_plain_text = input_starts_with_space || name.contains('/');
-                    if !treat_as_plain_text {
-                        let is_builtin = built_in_slash_commands()
-                            .into_iter()
-                            .filter(|(_, cmd)| {
-                                windows_degraded_sandbox_active()
-                                    || *cmd != SlashCommand::ElevateSandbox
-                            })
-                            .any(|(command_name, _)| command_name == name);
-                        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
-                        let is_known_prompt = name
-                            .strip_prefix(&prompt_prefix)
-                            .map(|prompt_name| {
-                                self.custom_prompts
-                                    .iter()
-                                    .any(|prompt| prompt.name == prompt_name)
-                            })
-                            .unwrap_or(false);
-                        if !is_builtin && !is_known_prompt {
-                            let message = format!(
-                                r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                            );
-                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_info_event(message, None),
-                            )));
-                            self.textarea.set_text(&original_input);
-                            self.textarea.set_cursor(original_input.len());
-                            return (InputResult::None, true);
-                        }
-                    }
-                }
-
-                if !input_starts_with_space
-                    && let Some((name, rest)) = parse_slash_name(&text)
-                    && !rest.is_empty()
-                    && !name.contains('/')
-                    && let Some((_n, cmd)) = built_in_slash_commands()
-                        .into_iter()
-                        .find(|(command_name, _)| *command_name == name)
-                    && cmd == SlashCommand::Review
-                {
-                    return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
-                }
-
-                let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
-                    Ok(expanded) => expanded,
-                    Err(err) => {
-                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_error_event(err.user_message()),
-                        )));
-                        self.textarea.set_text(&original_input);
-                        self.textarea.set_cursor(original_input.len());
-                        return (InputResult::None, true);
-                    }
-                };
-                if let Some(expanded) = expanded_prompt {
-                    text = expanded;
-                }
-                if text.is_empty() && !has_attachments {
-                    return (InputResult::None, true);
-                }
-                if !text.is_empty() {
-                    self.history.record_local_submission(&text);
-                }
-                // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
-                (InputResult::Submitted(text), true)
-            }
+            } => self.handle_submit(false),
             input => self.handle_input_basic(input),
         }
     }
@@ -2490,7 +2512,9 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "1あ"),
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
+                assert_eq!(text, "1あ")
+            }
             _ => panic!("expected Submitted"),
         }
     }
@@ -2629,7 +2653,9 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "hello"),
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
+                assert_eq!(text, "hello")
+            }
             _ => panic!("expected Submitted"),
         }
     }
@@ -2689,7 +2715,9 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, large),
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
+                assert_eq!(text, large)
+            }
             _ => panic!("expected Submitted"),
         }
         assert!(composer.pending_pastes.is_empty());
@@ -2944,7 +2972,7 @@ mod tests {
             InputResult::CommandWithArgs(_, _) => {
                 panic!("expected command dispatch without args for '/init'")
             }
-            InputResult::Submitted(text) => {
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
@@ -3020,7 +3048,7 @@ mod tests {
             InputResult::CommandWithArgs(_, _) => {
                 panic!("expected command dispatch without args for '/diff'")
             }
-            InputResult::Submitted(text) => {
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
             InputResult::None => panic!("expected Command result for '/diff'"),
@@ -3056,7 +3084,7 @@ mod tests {
             InputResult::CommandWithArgs(_, _) => {
                 panic!("expected command dispatch without args for '/mention'")
             }
-            InputResult::Submitted(text) => {
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
@@ -3363,7 +3391,9 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[Image #1] hi"),
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
+                assert_eq!(text, "[Image #1] hi")
+            }
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -3386,7 +3416,9 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[Image #1]"),
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
+                assert_eq!(text, "[Image #1]")
+            }
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -3759,7 +3791,7 @@ mod tests {
 
         // Verify the custom prompt was expanded with the large content as positional arg
         match result {
-            InputResult::Submitted(text) => {
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
                 // The prompt should be expanded, with the large content replacing $1
                 assert_eq!(
                     text,

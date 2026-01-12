@@ -205,6 +205,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
+    let mut send_immediately = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
     let mut edit_previous = Line::from("");
@@ -217,6 +218,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::Commands => commands = text,
                 ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
+                ShortcutId::SendImmediately => send_immediately = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::EditPrevious => edit_previous = text,
@@ -230,6 +232,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         commands,
         shell_commands,
         newline,
+        send_immediately,
         file_paths,
         paste_image,
         edit_previous,
@@ -307,6 +310,7 @@ enum ShortcutId {
     Commands,
     ShellCommands,
     InsertNewline,
+    SendImmediately,
     FilePaths,
     PasteImage,
     EditPrevious,
@@ -411,6 +415,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         ],
         prefix: "",
         label: " for newline",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::SendImmediately,
+        bindings: &[ShortcutBinding {
+            key: key_hint::alt(KeyCode::Enter),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to send immediately",
     },
     ShortcutDescriptor {
         id: ShortcutId::FilePaths,

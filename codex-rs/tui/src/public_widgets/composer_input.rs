@@ -54,7 +54,9 @@ impl ComposerInput {
     /// Feed a key event into the composer and return a high-level action.
     pub fn input(&mut self, key: KeyEvent) -> ComposerAction {
         let action = match self.inner.handle_key_event(key).0 {
-            InputResult::Submitted(text) => ComposerAction::Submitted(text),
+            InputResult::Submitted(text) | InputResult::SubmittedImmediately(text) => {
+                ComposerAction::Submitted(text)
+            }
             _ => ComposerAction::None,
         };
         self.drain_app_events();
