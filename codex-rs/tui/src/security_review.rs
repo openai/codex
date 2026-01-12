@@ -15673,6 +15673,73 @@ async fn run_validation_refine_agent(
     Ok(ValidationRefineAgentOutput { text, logs })
 }
 
+async fn write_validation_snapshot_and_reports(
+    snapshot: &SecurityReviewSnapshot,
+    batch: &BugVerificationBatchRequest,
+    logs: &[String],
+) -> Result<(), BugVerificationFailure> {
+    let snapshot_bytes =
+        serde_json::to_vec_pretty(snapshot).map_err(|err| BugVerificationFailure {
+            message: format!("Failed to serialize bug snapshot: {err}"),
+            logs: logs.to_owned(),
+        })?;
+    tokio_fs::write(&batch.snapshot_path, snapshot_bytes)
+        .await
+        .map_err(|err| BugVerificationFailure {
+            message: format!("Failed to write {}: {err}", batch.snapshot_path.display()),
+            logs: logs.to_owned(),
+        })?;
+
+    let git_link_info = build_git_link_info(&batch.repo_path).await;
+    let bugs_markdown = build_bugs_markdown(snapshot, git_link_info.as_ref());
+    tokio_fs::write(&batch.bugs_path, bugs_markdown.as_bytes())
+        .await
+        .map_err(|err| BugVerificationFailure {
+            message: format!("Failed to write {}: {err}", batch.bugs_path.display()),
+            logs: logs.to_owned(),
+        })?;
+
+    let mut sections = snapshot.report_sections_prefix.clone();
+    if !bugs_markdown.trim().is_empty() {
+        sections.push(format!("# Security Findings\n\n{}", bugs_markdown.trim()));
+    }
+
+    let report_markdown = if sections.is_empty() {
+        None
+    } else {
+        Some(fix_mermaid_blocks(&sections.join("\n\n")))
+    };
+
+    if let Some(report_path) = batch.report_path.as_ref()
+        && let Some(ref markdown) = report_markdown
+    {
+        tokio_fs::write(report_path, markdown.as_bytes())
+            .await
+            .map_err(|err| BugVerificationFailure {
+                message: format!("Failed to write {}: {err}", report_path.display()),
+                logs: logs.to_owned(),
+            })?;
+
+        if let Some(html_path) = batch.report_html_path.as_ref() {
+            let repo_label = batch
+                .repo_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Security Review");
+            let title = format!("{repo_label} Security Report");
+            let html = build_report_html(&title, markdown);
+            tokio_fs::write(html_path, html)
+                .await
+                .map_err(|err| BugVerificationFailure {
+                    message: format!("Failed to write {}: {err}", html_path.display()),
+                    logs: logs.to_owned(),
+                })?;
+        }
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_asan_validation(
     repo_path: PathBuf,
@@ -15687,18 +15754,36 @@ async fn run_asan_validation(
     progress_sender: Option<AppEventSender>,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<(), BugVerificationFailure> {
-    // Load snapshot
-    let bytes = tokio_fs::read(&snapshot_path)
-        .await
-        .map_err(|e| BugVerificationFailure {
-            message: format!("Failed to read {}: {e}", snapshot_path.display()),
-            logs: vec![],
-        })?;
-    let mut snapshot: SecurityReviewSnapshot =
-        serde_json::from_slice(&bytes).map_err(|e| BugVerificationFailure {
-            message: format!("Failed to parse {}: {e}", snapshot_path.display()),
-            logs: vec![],
-        })?;
+    let mut logs: Vec<String> = Vec::new();
+
+    let bytes = match tokio_fs::read(&snapshot_path).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let message = format!(
+                "Validation skipped: failed to read {}: {err}",
+                snapshot_path.display()
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            logs.push(message);
+            return Ok(());
+        }
+    };
+    let mut snapshot: SecurityReviewSnapshot = match serde_json::from_slice(&bytes) {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            let message = format!(
+                "Validation skipped: failed to parse {}: {err}",
+                snapshot_path.display()
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            logs.push(message);
+            return Ok(());
+        }
+    };
 
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(
@@ -15723,7 +15808,6 @@ async fn run_asan_validation(
         .map(|finding| (finding.id, finding))
         .collect();
 
-    let mut logs: Vec<String> = Vec::new();
     let mut handled: HashSet<BugIdentifier> = HashSet::new();
     let run_at = OffsetDateTime::now_utc();
     let mut requests: Vec<BugVerificationRequest> = Vec::new();
@@ -15935,17 +16019,8 @@ async fn run_asan_validation(
         }
     }
 
-    let snapshot_bytes =
-        serde_json::to_vec_pretty(&snapshot).map_err(|err| BugVerificationFailure {
-            message: format!("Failed to serialize bug snapshot: {err}"),
-            logs: logs.clone(),
-        })?;
-    tokio_fs::write(&snapshot_path, snapshot_bytes)
-        .await
-        .map_err(|err| BugVerificationFailure {
-            message: format!("Failed to write {}: {err}", snapshot_path.display()),
-            logs: logs.clone(),
-        })?;
+    let planned_snapshot = snapshot.clone();
+    let requested_ids: Vec<BugIdentifier> = requests.iter().map(|req| req.id).collect();
 
     let batch = BugVerificationBatchRequest {
         snapshot_path,
@@ -15956,30 +16031,92 @@ async fn run_asan_validation(
         work_dir,
         requests,
     };
-    if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(
-            "Executing validation checks...".to_string(),
-        ));
-    }
-    let outcome = verify_bugs(batch.clone()).await?;
-    for line in outcome.logs {
+
+    let mut verification_failed: Option<String> = None;
+    if batch.requests.is_empty() {
+        logs.push("No validation checks to execute.".to_string());
+    } else {
         if let Some(tx) = progress_sender.as_ref() {
-            tx.send(AppEvent::SecurityReviewLog(line.clone()));
+            tx.send(AppEvent::SecurityReviewLog(
+                "Executing validation checks...".to_string(),
+            ));
+        }
+        match verify_bugs(batch.clone()).await {
+            Ok(outcome) => {
+                for line in outcome.logs {
+                    if let Some(tx) = progress_sender.as_ref() {
+                        tx.send(AppEvent::SecurityReviewLog(line.clone()));
+                    }
+                }
+            }
+            Err(err) => {
+                verification_failed = Some(err.message.clone());
+                logs.extend(err.logs);
+                if let Some(tx) = progress_sender.as_ref() {
+                    tx.send(AppEvent::SecurityReviewLog(format!(
+                        "Validation checks encountered an error; recording UnableToValidate statuses: {}",
+                        err.message
+                    )));
+                }
+            }
         }
     }
 
-    let snapshot_bytes =
-        tokio_fs::read(&batch.snapshot_path)
-            .await
-            .map_err(|err| BugVerificationFailure {
-                message: format!("Failed to read {}: {err}", batch.snapshot_path.display()),
-                logs: logs.clone(),
-            })?;
-    let mut snapshot: SecurityReviewSnapshot =
-        serde_json::from_slice(&snapshot_bytes).map_err(|err| BugVerificationFailure {
-            message: format!("Failed to parse {}: {err}", batch.snapshot_path.display()),
-            logs: logs.clone(),
-        })?;
+    let snapshot_bytes = tokio_fs::read(&batch.snapshot_path).await.ok();
+    let mut snapshot: SecurityReviewSnapshot = snapshot_bytes
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice(bytes).ok())
+        .unwrap_or_else(|| planned_snapshot.clone());
+
+    for id in &findings.ids {
+        let Some(planned_index) = find_bug_index(&planned_snapshot, *id) else {
+            continue;
+        };
+        let Some(index) = find_bug_index(&snapshot, *id) else {
+            continue;
+        };
+        let planned_validation = planned_snapshot.bugs[planned_index].bug.validation.clone();
+        let current_validation = snapshot.bugs[index].bug.validation.clone();
+        if matches!(current_validation.status, BugValidationStatus::Pending)
+            && !matches!(planned_validation.status, BugValidationStatus::Pending)
+        {
+            snapshot.bugs[index].bug.validation = planned_validation;
+        }
+    }
+
+    if let Some(message) = verification_failed.as_deref() {
+        for id in requested_ids {
+            if let Some(index) = find_bug_index(&snapshot, id) {
+                let validation = &mut snapshot.bugs[index].bug.validation;
+                if matches!(validation.status, BugValidationStatus::Pending) {
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    validation.tool = Some("python".to_string());
+                    validation.target = None;
+                    validation.summary = Some(
+                        format!(
+                            "Validation could not be completed (verification error): {message}"
+                        )
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string(),
+                    );
+                    validation.run_at = Some(run_at);
+                }
+            }
+        }
+    }
+
+    if let Err(err) = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await {
+        if let Some(tx) = progress_sender.as_ref() {
+            tx.send(AppEvent::SecurityReviewLog(format!(
+                "Validation results could not be written: {}",
+                err.message
+            )));
+        }
+        return Ok(());
+    }
 
     let build_validation_state_prompt = |state: &BugValidationState| -> String {
         let mut lines: Vec<String> = Vec::new();
@@ -16066,7 +16203,7 @@ async fn run_asan_validation(
         })
         .collect();
 
-    if !refine_items.is_empty() {
+    if verification_failed.is_none() && !refine_items.is_empty() {
         let refine_results = futures::stream::iter(refine_items.into_iter().map(|item| {
             let provider = provider.clone();
             let auth_manager = auth_manager.clone();
@@ -16351,65 +16488,14 @@ async fn run_asan_validation(
             }
         }
 
-        if updated {
-            let snapshot_bytes =
-                serde_json::to_vec_pretty(&snapshot).map_err(|err| BugVerificationFailure {
-                    message: format!("Failed to serialize bug snapshot: {err}"),
-                    logs: logs.clone(),
-                })?;
-            tokio_fs::write(&batch.snapshot_path, snapshot_bytes)
-                .await
-                .map_err(|err| BugVerificationFailure {
-                    message: format!("Failed to write {}: {err}", batch.snapshot_path.display()),
-                    logs: logs.clone(),
-                })?;
-
-            let git_link_info = build_git_link_info(&batch.repo_path).await;
-            let bugs_markdown = build_bugs_markdown(&snapshot, git_link_info.as_ref());
-            tokio_fs::write(&batch.bugs_path, bugs_markdown.as_bytes())
-                .await
-                .map_err(|err| BugVerificationFailure {
-                    message: format!("Failed to write {}: {err}", batch.bugs_path.display()),
-                    logs: logs.clone(),
-                })?;
-
-            let mut sections = snapshot.report_sections_prefix.clone();
-            if !bugs_markdown.trim().is_empty() {
-                sections.push(format!("# Security Findings\n\n{}", bugs_markdown.trim()));
-            }
-
-            let report_markdown = if sections.is_empty() {
-                None
-            } else {
-                Some(fix_mermaid_blocks(&sections.join("\n\n")))
-            };
-
-            if let Some(report_path) = batch.report_path.as_ref()
-                && let Some(ref markdown) = report_markdown
-            {
-                tokio_fs::write(report_path, markdown.as_bytes())
-                    .await
-                    .map_err(|err| BugVerificationFailure {
-                        message: format!("Failed to write {}: {err}", report_path.display()),
-                        logs: logs.clone(),
-                    })?;
-
-                if let Some(html_path) = batch.report_html_path.as_ref() {
-                    let repo_label = batch
-                        .repo_path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("Security Review");
-                    let title = format!("{repo_label} Security Report");
-                    let html = build_report_html(&title, markdown);
-                    tokio_fs::write(html_path, html).await.map_err(|err| {
-                        BugVerificationFailure {
-                            message: format!("Failed to write {}: {err}", html_path.display()),
-                            logs: logs.clone(),
-                        }
-                    })?;
-                }
-            }
+        if updated
+            && let Err(err) = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await
+            && let Some(tx) = progress_sender.as_ref()
+        {
+            tx.send(AppEvent::SecurityReviewLog(format!(
+                "Validation refinement results could not be written: {}",
+                err.message
+            )));
         }
     }
     Ok(())
