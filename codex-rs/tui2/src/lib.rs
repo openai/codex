@@ -451,28 +451,79 @@ async fn run_ratatui_app(
         initial_config
     };
 
-    // Determine resume behavior: explicit id, then resume last, then picker.
-    let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
-        match find_thread_path_by_id_str(&config.codex_home, id_str).await? {
-            Some(path) => resume_picker::ResumeSelection::Resume(path),
-            None => {
-                error!("Error finding conversation path: {id_str}");
-                restore();
-                session_log::log_session_end();
-                let _ = tui.terminal.clear();
-                if let Err(err) = writeln!(
-                    std::io::stdout(),
-                    "No saved session found with ID {id_str}. Run `codex resume` without an ID to choose from existing sessions."
-                ) {
-                    error!("Failed to write resume error message: {err}");
-                }
-                return Ok(AppExitInfo {
-                    token_usage: codex_core::protocol::TokenUsage::default(),
-                    conversation_id: None,
-                    update_action: None,
-                    session_lines: Vec::new(),
-                });
+    let mut missing_session_exit = |id_str: &str, action: &str| {
+        error!("Error finding conversation path: {id_str}");
+        restore();
+        session_log::log_session_end();
+        let _ = tui.terminal.clear();
+        if let Err(err) = writeln!(
+            std::io::stdout(),
+            "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
+        ) {
+            error!("Failed to write session error message: {err}");
+        }
+        Ok(AppExitInfo {
+            token_usage: codex_core::protocol::TokenUsage::default(),
+            conversation_id: None,
+            update_action: None,
+            session_lines: Vec::new(),
+        })
+    };
+
+    let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
+    let session_selection = if use_fork {
+        if let Some(id_str) = cli.fork_session_id.as_deref() {
+            match find_thread_path_by_id_str(&config.codex_home, id_str).await? {
+                Some(path) => resume_picker::SessionSelection::Fork(path),
+                None => return missing_session_exit(id_str, "fork"),
             }
+        } else if cli.fork_last {
+            let provider_filter = vec![config.model_provider_id.clone()];
+            match RolloutRecorder::list_threads(
+                &config.codex_home,
+                1,
+                None,
+                INTERACTIVE_SESSION_SOURCES,
+                Some(provider_filter.as_slice()),
+                &config.model_provider_id,
+            )
+            .await
+            {
+                Ok(page) => page
+                    .items
+                    .first()
+                    .map(|it| resume_picker::SessionSelection::Fork(it.path.clone()))
+                    .unwrap_or(resume_picker::SessionSelection::StartFresh),
+                Err(_) => resume_picker::SessionSelection::StartFresh,
+            }
+        } else if cli.fork_picker {
+            match resume_picker::run_fork_picker(
+                &mut tui,
+                &config.codex_home,
+                &config.model_provider_id,
+                cli.fork_show_all,
+            )
+            .await?
+            {
+                resume_picker::SessionSelection::Exit => {
+                    restore();
+                    session_log::log_session_end();
+                    return Ok(AppExitInfo {
+                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        conversation_id: None,
+                        update_action: None,
+                        session_lines: Vec::new(),
+                    });
+                }
+                other => other,
+            }
+        } else {
+            resume_picker::SessionSelection::StartFresh
+        }
+    } else if let Some(id_str) = cli.resume_session_id.as_deref() {
+        match find_thread_path_by_id_str(&config.codex_home, id_str).await? {
+            Some(path) => resume_picker::SessionSelection::Resume(path),
+            None => return missing_session_exit(id_str, "resume"),
         }
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
@@ -489,9 +540,9 @@ async fn run_ratatui_app(
             Ok(page) => page
                 .items
                 .first()
-                .map(|it| resume_picker::ResumeSelection::Resume(it.path.clone()))
-                .unwrap_or(resume_picker::ResumeSelection::StartFresh),
-            Err(_) => resume_picker::ResumeSelection::StartFresh,
+                .map(|it| resume_picker::SessionSelection::Resume(it.path.clone()))
+                .unwrap_or(resume_picker::SessionSelection::StartFresh),
+            Err(_) => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
         match resume_picker::run_resume_picker(
@@ -502,7 +553,7 @@ async fn run_ratatui_app(
         )
         .await?
         {
-            resume_picker::ResumeSelection::Exit => {
+            resume_picker::SessionSelection::Exit => {
                 restore();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
@@ -515,7 +566,7 @@ async fn run_ratatui_app(
             other => other,
         }
     } else {
-        resume_picker::ResumeSelection::StartFresh
+        resume_picker::SessionSelection::StartFresh
     };
 
     let Cli {
@@ -560,7 +611,7 @@ async fn run_ratatui_app(
         active_profile,
         prompt,
         images,
-        resume_selection,
+        session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
     )
