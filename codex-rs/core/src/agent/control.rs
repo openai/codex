@@ -287,6 +287,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subscribe_status_errors_for_missing_thread() {
+        let harness = AgentControlHarness::new().await;
+        let thread_id = ThreadId::new();
+        let err = harness
+            .control
+            .subscribe_status(thread_id)
+            .await
+            .expect_err("subscribe_status should fail for missing thread");
+        assert_matches!(err, CodexErr::ThreadNotFound(id) if id == thread_id);
+    }
+
+    #[tokio::test]
+    async fn subscribe_status_updates_on_shutdown() {
+        let harness = AgentControlHarness::new().await;
+        let (thread_id, thread) = harness.start_thread().await;
+        let mut status_rx = harness
+            .control
+            .subscribe_status(thread_id)
+            .await
+            .expect("subscribe_status should succeed");
+        assert_eq!(status_rx.borrow().clone(), AgentStatus::PendingInit);
+
+        let _ = thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+
+        let _ = status_rx.changed().await;
+        assert_eq!(status_rx.borrow().clone(), AgentStatus::Shutdown);
+    }
+
+    #[tokio::test]
     async fn send_prompt_submits_user_message() {
         let harness = AgentControlHarness::new().await;
         let (thread_id, _thread) = harness.start_thread().await;

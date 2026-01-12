@@ -699,7 +699,7 @@ pub enum AgentStatus {
     Completed(Option<String>),
     /// Agent encountered an error.
     Errored(String),
-    /// Agent has been shutdowned.
+    /// Agent has been shutdown.
     Shutdown,
     /// Agent is not found.
     NotFound,

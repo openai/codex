@@ -55,7 +55,7 @@ impl ToolHandler for CollabHandler {
         match tool_name.as_str() {
             "spawn_agent" => spawn::handle(session, turn, arguments).await,
             "send_input" => send_input::handle(session, arguments).await,
-            "wait" => wait::handle(session, arguments).await
+            "wait" => wait::handle(session, arguments).await,
             "close_agent" => close_agent::handle(arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
@@ -206,7 +206,12 @@ mod wait {
             match timeout_at(deadline, status_rx.changed()).await {
                 Ok(Ok(())) => status = status_rx.borrow().clone(),
                 Ok(Err(_)) => {
-                    status = session.services.agent_control.get_status(agent_id).await;
+                    let last_status = session.services.agent_control.get_status(agent_id).await;
+                    if last_status != AgentStatus::NotFound {
+                        // On-purpose we keep the last known status if the agent gets dropped. This
+                        // event is not supposed to happen.
+                        status = last_status;
+                    }
                     break false;
                 }
                 Err(_) => break true,
@@ -290,6 +295,7 @@ mod tests {
     use crate::config::types::ShellEnvironmentPolicy;
     use crate::function_tool::FunctionCallError;
     use crate::protocol::AskForApproval;
+    use crate::protocol::Op;
     use crate::protocol::SandboxPolicy;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::ThreadId;
@@ -297,7 +303,9 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::Mutex;
+    use tokio::time::timeout;
 
     fn invocation(
         session: Arc<crate::codex::Session>,
@@ -499,6 +507,83 @@ mod tests {
             panic!("expected respond-to-model error");
         };
         assert!(msg.starts_with("invalid agent id invalid:"));
+    }
+
+    #[tokio::test]
+    async fn wait_times_out_when_status_is_not_final() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({"id": agent_id.to_string(), "timeout_ms": 10})),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(content, r#"{"status":"pending_init","timed_out":true}"#);
+        assert_eq!(success, Some(false));
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn wait_returns_final_status_without_timeout() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let mut status_rx = manager
+            .agent_control()
+            .subscribe_status(agent_id)
+            .await
+            .expect("subscribe should succeed");
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+        let _ = timeout(Duration::from_secs(1), status_rx.changed())
+            .await
+            .expect("shutdown status should arrive");
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({"id": agent_id.to_string(), "timeout_ms": 1000})),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(content, r#"{"status":"shutdown","timed_out":false}"#);
+        assert_eq!(success, Some(true));
     }
 
     #[tokio::test]
