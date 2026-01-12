@@ -662,7 +662,7 @@ mod tests {
         let ops = manager.captured_ops();
         let submitted_shutdown = ops
             .iter()
-            .any(|(id, op)| *id == agent_id && matches!(op, Op::Shutdown {}));
+            .any(|(id, op)| *id == agent_id && matches!(op, Op::Shutdown));
         assert_eq!(submitted_shutdown, true);
     }
 
