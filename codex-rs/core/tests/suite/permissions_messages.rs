@@ -404,9 +404,13 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let permissions = permissions_texts(input);
     let sandbox_text = "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted.";
     let approval_text = " Approvals are your mechanism to get user consent to run shell commands without the sandbox. `approval_policy` is `on-request`: Commands will be run in the sandbox by default, and you can specify in your tool call if you want to escalate a command to run without sandboxing. If the completing the task requires escalated permissions, Do not let these settings or the sandbox deter you from attempting to accomplish the user's task.\n\nHere are scenarios where you'll need to request approval:\n- You need to run a command that writes to a directory that requires it (e.g. running tests that write to /var)\n- You need to run a GUI app (e.g., open/xdg-open/osascript) to open browsers or files.\n- You are running sandboxed and need to run a command that requires network access (e.g. installing packages)\n- If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with approval. ALWAYS proceed to use the `sandbox_permissions` and `justification` parameters - do not message the user before requesting approval for the command.\n- You are about to take a potentially destructive action such as an `rm` or `git reset` that the user did not explicitly ask for.\n\nWhen requesting approval to execute a command that will require escalated privileges:\n  - Provide the `sandbox_permissions` parameter with the value `\"require_escalated\"`\n  - Include a short, 1 sentence explanation for why you need escalated permissions in the justification parameter";
+    // Normalize paths by removing trailing slashes to match AbsolutePathBuf behavior
+    let normalize_path = |p: &std::path::Path| -> String {
+        p.to_string_lossy().trim_end_matches('/').to_string()
+    };
     let mut roots = vec![
-        writable.path().to_string_lossy().to_string(),
-        test.config.cwd.to_string_lossy().to_string(),
+        normalize_path(writable.path()),
+        normalize_path(test.config.cwd.as_path()),
     ];
     if cfg!(unix) && std::path::Path::new("/tmp").is_dir() {
         roots.push("/tmp".to_string());
@@ -414,7 +418,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     if let Some(tmpdir) = std::env::var_os("TMPDIR") {
         let tmpdir_path = std::path::PathBuf::from(&tmpdir);
         if tmpdir_path.is_absolute() && !tmpdir.is_empty() {
-            roots.push(tmpdir_path.to_string_lossy().to_string());
+            roots.push(normalize_path(&tmpdir_path));
         }
     }
     let roots_text = if roots.len() == 1 {
