@@ -7,6 +7,8 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_core::built_in_model_providers;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -87,6 +89,82 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
         .unwrap_or_default();
     let expected = format!("unsupported custom tool call: {tool_name}");
     assert_eq!(output, expected);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn web_search_returns_results_for_current_event_fact() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    use pretty_assertions::assert_eq;
+
+    let api_key = match std::env::var("TAVILY_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        Some(api_key) => api_key,
+        None => {
+            eprintln!("skipping Tavily web search test – TAVILY_API_KEY not set");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        config.tavily_api_key = Some(api_key);
+        config.features.enable(Feature::WebSearchRequest);
+        let mut provider = built_in_model_providers()[LMSTUDIO_OSS_PROVIDER_ID].clone();
+        provider.base_url = config.model_provider.base_url.clone();
+        config.model_provider = provider;
+        config.model_provider_id = LMSTUDIO_OSS_PROVIDER_ID.to_string();
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "web-search-1";
+    let query = "search the internet and tell me one current event fact";
+    let args = json!({ "query": query });
+
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "web_search", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("please search the web").await?;
+
+    let output = mock
+        .function_call_output_text(call_id)
+        .context("expected web_search function call output")?;
+    if output.trim().is_empty() {
+        anyhow::bail!("web_search output was empty");
+    }
+    let payload: Value =
+        serde_json::from_str(&output).context(format!("invalid web_search output: {output}"))?;
+
+    assert_eq!(payload["query"], query);
+    assert_eq!(payload["limit"], 10);
+
+    let results = payload["results"]
+        .as_array()
+        .context("expected results array")?;
+    assert!(!results.is_empty(), "expected at least one result");
+
+    let first_url = results[0]["url"].as_str().unwrap_or_default();
+    assert!(
+        !first_url.is_empty(),
+        "expected first result to include a URL"
+    );
 
     Ok(())
 }

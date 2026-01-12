@@ -190,7 +190,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
                 tool_event = Some(event.clone());
                 false
             }
-            EventMsg::TurnComplete(_) => true,
+            EventMsg::TurnComplete(_) => tool_event.is_some(),
             _ => false,
         },
         // Empirically, we have seen this run slow when run under

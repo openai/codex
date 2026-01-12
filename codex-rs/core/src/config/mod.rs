@@ -271,6 +271,9 @@ pub struct Config {
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// API key for Tavily web search integration.
+    pub tavily_api_key: Option<String>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
 
@@ -738,6 +741,12 @@ pub struct ConfigToml {
     /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+
+    /// API key for Tavily web search integration.
+    /// Provided via the `tavily_api_key` key in `~/.codex/config.toml`.
+    /// Optional; when omitted, search functionality will be disabled.
+    #[serde(default)]
+    pub tavily_api_key: Option<String>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
@@ -1282,6 +1291,15 @@ impl Config {
 
         let model = model.or(config_profile.model).or(cfg.model);
 
+        let tavily_api_key = cfg.tavily_api_key.as_ref().and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -1362,6 +1380,7 @@ impl Config {
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
             model_providers,
+            tavily_api_key,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
@@ -3246,6 +3265,7 @@ model_verbosity = "high"
                 mcp_servers: HashMap::new(),
                 mcp_oauth_credentials_store_mode: Default::default(),
                 model_providers: fixture.model_provider_map.clone(),
+                tavily_api_key: None,
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
@@ -3332,6 +3352,7 @@ model_verbosity = "high"
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
             model_providers: fixture.model_provider_map.clone(),
+            tavily_api_key: None,
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
@@ -3433,6 +3454,7 @@ model_verbosity = "high"
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
             model_providers: fixture.model_provider_map.clone(),
+            tavily_api_key: None,
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
@@ -3520,6 +3542,7 @@ model_verbosity = "high"
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
             model_providers: fixture.model_provider_map.clone(),
+            tavily_api_key: None,
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,

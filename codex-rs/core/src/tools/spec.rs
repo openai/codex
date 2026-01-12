@@ -3,6 +3,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::WebSearchHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
@@ -25,6 +26,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub web_search_cached: bool,
+    pub web_search_use_openai: bool,
     pub collab_tools: bool,
     pub experimental_supported_tools: Vec<String>,
 }
@@ -32,6 +34,7 @@ pub(crate) struct ToolsConfig {
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
+    pub(crate) provider_is_openai: bool,
 }
 
 impl ToolsConfig {
@@ -39,7 +42,9 @@ impl ToolsConfig {
         let ToolsConfigParams {
             model_info,
             features,
+            provider_is_openai,
         } = params;
+        let provider_is_openai = *provider_is_openai;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_web_search_cached = features.enabled(Feature::WebSearchCached);
@@ -75,6 +80,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             web_search_cached: include_web_search_cached,
+            web_search_use_openai: provider_is_openai,
             collab_tools: include_collab_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
@@ -420,6 +426,33 @@ fn create_view_image_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_web_search_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "query".to_string(),
+        JsonSchema::String {
+            description: Some("Search query.".to_string()),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some("Maximum number of results to return (default: 10).".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "web_search".to_string(),
+        description: "Search the web via Tavily and return structured results.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["query".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1217,14 +1250,20 @@ pub(crate) fn build_specs(
     }
 
     // Prefer web_search_cached flag over web_search_request
-    if config.web_search_cached {
-        builder.push_spec(ToolSpec::WebSearch {
-            external_web_access: Some(false),
-        });
-    } else if config.web_search_request {
-        builder.push_spec(ToolSpec::WebSearch {
-            external_web_access: Some(true),
-        });
+    if config.web_search_use_openai {
+        if config.web_search_cached {
+            builder.push_spec(ToolSpec::WebSearch {
+                external_web_access: Some(false),
+            });
+        } else if config.web_search_request {
+            builder.push_spec(ToolSpec::WebSearch {
+                external_web_access: Some(true),
+            });
+        }
+    } else if config.web_search_request || config.web_search_cached {
+        let web_search_handler = Arc::new(WebSearchHandler);
+        builder.push_spec(create_web_search_tool());
+        builder.register_handler("web_search", web_search_handler);
     }
 
     builder.push_spec_with_parallel_support(create_view_image_tool(), true);
@@ -1369,6 +1408,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -1430,6 +1470,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
         assert_contains_tool_names(
@@ -1444,6 +1485,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
@@ -1460,6 +1502,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1483,6 +1526,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1685,6 +1729,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
 
@@ -1706,6 +1751,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1724,6 +1770,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1755,6 +1802,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -1849,6 +1897,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -1926,6 +1975,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
 
         let (tools, _) = build_specs(
@@ -1983,6 +2033,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
 
         let (tools, _) = build_specs(
@@ -2037,6 +2088,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
 
         let (tools, _) = build_specs(
@@ -2093,6 +2145,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
 
         let (tools, _) = build_specs(
@@ -2205,6 +2258,7 @@ Examples of valid command strings:
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            provider_is_openai: true,
         });
         let (tools, _) = build_specs(
             &tools_config,

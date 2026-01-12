@@ -35,6 +35,7 @@ pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
 pub mod models_manager;
+pub mod tavily;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
 pub use mcp_connection_manager::SandboxState;

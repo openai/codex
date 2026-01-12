@@ -20,6 +20,7 @@ pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exit_success.xml");
 pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
+const WEB_SEARCH_TOOL_INSTRUCTIONS: &str = "If you need up-to-date or factual information beyond what is in the conversation, use the web_search tool and cite the results instead of guessing.";
 
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
@@ -43,11 +44,24 @@ pub struct Prompt {
 
 impl Prompt {
     pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelInfo) -> Cow<'a, str> {
-        Cow::Borrowed(
-            self.base_instructions_override
-                .as_deref()
-                .unwrap_or(model.base_instructions.as_str()),
-        )
+        let base = self
+            .base_instructions_override
+            .as_deref()
+            .unwrap_or(model.base_instructions.as_str());
+        let is_web_search_tool_present = self.tools.iter().any(|tool| match tool {
+            ToolSpec::Function(f) => f.name == "web_search",
+            ToolSpec::Freeform(f) => f.name == "web_search",
+            ToolSpec::WebSearch { .. } => true,
+            _ => false,
+        });
+        if self.base_instructions_override.is_none() && is_web_search_tool_present {
+            let mut combined = String::from(base);
+            combined.push('\n');
+            combined.push_str(WEB_SEARCH_TOOL_INSTRUCTIONS);
+            Cow::Owned(combined)
+        } else {
+            Cow::Borrowed(base)
+        }
     }
 
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
