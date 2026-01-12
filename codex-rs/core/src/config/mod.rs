@@ -513,46 +513,12 @@ fn sanitize_reasoning_effort_table(
 
     table.remove("model_reasoning_effort");
 
-    let suggestion = closest_value(&normalized, allowed);
-    let suggestion_text = suggestion
-        .as_deref()
-        .map(|value| format!(" Did you mean \"{value}\"?"))
-        .unwrap_or_default();
     let allowed_text = allowed.join(", ");
     warnings.push(ConfigWarning {
         message: format!(
-            "Invalid config value for {path}: \"{raw}\". Allowed values: {allowed_text}.{suggestion_text} Falling back to default."
+            "Invalid config value for {path}: \"{raw}\". Allowed values: {allowed_text}. Falling back to default."
         ),
     });
-}
-
-fn closest_value(input: &str, options: &[String]) -> Option<String> {
-    let mut best: Option<(&String, usize)> = None;
-    for option in options {
-        let distance = edit_distance(input, option);
-        match best {
-            Some((_, best_distance)) if distance >= best_distance => {}
-            _ => best = Some((option, distance)),
-        }
-    }
-    best.map(|(option, _)| option.clone())
-}
-
-fn edit_distance(a: &str, b: &str) -> usize {
-    let mut costs = (0..=b.len()).collect::<Vec<_>>();
-    for (i, ca) in a.chars().enumerate() {
-        let mut last = i;
-        costs[0] = i + 1;
-        for (j, cb) in b.chars().enumerate() {
-            let next = costs[j + 1];
-            let replace_cost = if ca == cb { last } else { last + 1 };
-            let insert_cost = costs[j] + 1;
-            let delete_cost = costs[j + 1] + 1;
-            costs[j + 1] = replace_cost.min(insert_cost).min(delete_cost);
-            last = next;
-        }
-    }
-    costs[b.len()]
 }
 
 impl Config {
