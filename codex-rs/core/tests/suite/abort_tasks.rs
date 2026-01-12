@@ -73,6 +73,28 @@ fn assert_aborted_output(output: &str) {
     assert!(secs >= 0.0);
 }
 
+fn assert_unified_exec_aborted_output(output: &str) {
+    let normalized_output = output.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized_output = normalized_output.trim_end_matches('\n');
+    let expected_pattern = concat!(
+        r#"(?s)^(?:Total output lines: \d+\n\n)?"#,
+        r#"(?:Chunk ID: [^\n]+\n)?"#,
+        r#"Wall time: (-?[0-9]+(?:\.[0-9]+)?) seconds\n"#,
+        r#"(?:Process exited with code -?\d+\n)?"#,
+        r#"(?:Process running with session ID -?\d+\n)?"#,
+        r#"(?:Original token count: \d+\n)?"#,
+        r#"Output:\npartial output\ncommand aborted by user$"#,
+    );
+    let captures = assert_regex_match(expected_pattern, &normalized_output);
+    let secs: f64 = captures
+        .get(1)
+        .expect("unified exec aborted message with elapsed seconds")
+        .as_str()
+        .parse()
+        .expect("parse unified exec wall time seconds");
+    assert!(secs >= 0.0);
+}
+
 /// Integration test: spawn a long‑running shell_command tool via a mocked Responses SSE
 /// function call, then interrupt the session and expect TurnAborted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -394,5 +416,5 @@ async fn interrupt_unified_exec_records_partial_output() {
     let output = response_mock
         .function_call_output_text(call_id)
         .expect("missing exec_command output");
-    assert_aborted_output(&output);
+    assert_unified_exec_aborted_output(&output);
 }
