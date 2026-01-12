@@ -9,7 +9,11 @@ const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
-pub fn is_safe_command_windows(command: &[String]) -> bool {
+///
+/// `command` must be the _exact_ proposed list of arguments that will be sent
+/// to `execvp(3)`, so `command[0]` must satisfy [`is_powershell_executable`]
+/// for this function to return true.
+pub fn is_safe_powershell_command(command: &[String]) -> bool {
     if let Some(commands) = try_parse_powershell_command_sequence(command) {
         commands
             .iter()
@@ -108,7 +112,7 @@ fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<Str
 }
 
 /// Returns true when the executable name is one of the supported PowerShell binaries.
-fn is_powershell_executable(exe: &str) -> bool {
+pub fn is_powershell_executable(exe: &str) -> bool {
     let executable_name = Path::new(exe)
         .file_name()
         .and_then(|osstr| osstr.to_str())
