@@ -197,6 +197,12 @@
       "description": "System instructions.",
       "type": "string"
     },
+    "mcp_oauth_callback_port": {
+      "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0.0
+    },
     "mcp_oauth_credentials_store": {
       "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file.",
       "default": null,
