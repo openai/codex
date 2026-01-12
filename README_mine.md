@@ -70,6 +70,24 @@ macOS/Linux 向けに GitHub Releases に prebuilt バイナリ（`codex-<target
 
 - その作業ディレクトリで **global 設定を有効にしたい**場合は、`./.codex/config.toml` を置かない（または別ディレクトリから起動する）。
 
+#### ツールの有効化（例: AskUserQuestion）
+
+`ask_user_question` はデフォルト無効で、明示的に有効化した場合のみモデルへ露出する。
+
+推奨（canonical）: feature で有効化する:
+
+```toml
+[features]
+ask_user_question_tool = true
+```
+
+互換（legacy）: tools で有効化する（内部的には feature にマップされる）:
+
+```toml
+[tools]
+ask_user_question = true
+```
+
 ### subagents
 
 - `@name <prompt>` 形式の指示を解釈してサブエージェント実行を補助（`<git root>/.codex/agents` / user（`$CODEX_HOME`）/`agents` から定義を探索）

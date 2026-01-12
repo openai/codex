@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 変更: AskUserQuestion（`ask_user_question` tool）をデフォルト無効にし、`config.toml` で明示的に有効化した場合のみモデルへ露出
+  - 推奨: `[features].ask_user_question_tool = true`（互換: `[tools].ask_user_question = true`）
 - 改善: チャット内のファイル参照リンク（Ctrl/Cmd+Click で開く）を安定化
   - `+` を含むパスでもリンクが途中で切れない
   - `README.md` などが外部リンク扱いになってブラウザが開く誤動作を防止
