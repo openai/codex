@@ -3736,18 +3736,14 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        let aborted = loop {
-            let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-                .await
-                .expect("timeout waiting for event")
-                .expect("event");
-            match evt.msg {
-                EventMsg::RawResponseItem(_) => continue,
-                EventMsg::TurnAborted(e) => break e,
-                other => panic!("unexpected event: {other:?}"),
-            }
-        };
-        assert_eq!(TurnAbortReason::Interrupted, aborted.reason);
+        let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for event")
+            .expect("event");
+        match evt.msg {
+            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+            other => panic!("unexpected event: {other:?}"),
+        }
         assert!(rx.try_recv().is_err());
     }
 
@@ -3769,18 +3765,14 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        let aborted = loop {
-            let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-                .await
-                .expect("timeout waiting for event")
-                .expect("event");
-            match evt.msg {
-                EventMsg::RawResponseItem(_) => continue,
-                EventMsg::TurnAborted(e) => break e,
-                other => panic!("unexpected event: {other:?}"),
-            }
-        };
-        assert_eq!(TurnAbortReason::Interrupted, aborted.reason);
+        let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for event")
+            .expect("event");
+        match evt.msg {
+            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+            other => panic!("unexpected event: {other:?}"),
+        }
         assert!(rx.try_recv().is_err());
     }
 
@@ -3795,42 +3787,62 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        // Drain events until we observe ExitedReviewMode; earlier
-        // RawResponseItem entries (e.g., environment context) may arrive first.
-        loop {
-            let evt = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        let mut exited_review_mode_idx = None;
+        let mut turn_aborted_idx = None;
+        let mut idx = 0usize;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
                 .await
-                .expect("timeout waiting for first event")
-                .expect("first event");
+                .expect("timeout waiting for event")
+                .expect("event");
+            let event_idx = idx;
+            idx = idx.saturating_add(1);
             match evt.msg {
                 EventMsg::ExitedReviewMode(ev) => {
                     assert!(ev.review_output.is_none());
+                    exited_review_mode_idx = Some(event_idx);
+                }
+                EventMsg::TurnAborted(ev) => {
+                    assert_eq!(TurnAbortReason::Interrupted, ev.reason);
+                    turn_aborted_idx = Some(event_idx);
                     break;
                 }
-                // Ignore any non-critical events before exit.
-                _ => continue,
+                _ => {}
             }
         }
-        loop {
-            let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-                .await
-                .expect("timeout waiting for next event")
-                .expect("event");
-            match evt.msg {
-                EventMsg::RawResponseItem(_) => continue,
-                EventMsg::ItemStarted(_) | EventMsg::ItemCompleted(_) => continue,
-                EventMsg::AgentMessage(_) => continue,
-                EventMsg::TurnAborted(e) => {
-                    assert_eq!(TurnAbortReason::Interrupted, e.reason);
-                    break;
-                }
-                other => panic!("unexpected second event: {other:?}"),
-            }
-        }
+        assert!(
+            exited_review_mode_idx.is_some(),
+            "expected ExitedReviewMode after abort"
+        );
+        assert!(
+            turn_aborted_idx.is_some(),
+            "expected TurnAborted after abort"
+        );
+        assert!(
+            exited_review_mode_idx.unwrap() < turn_aborted_idx.unwrap(),
+            "expected ExitedReviewMode before TurnAborted"
+        );
 
-        // TODO(jif) investigate what is this?
         let history = sess.clone_history().await;
-        let _ = history.raw_items();
+        assert!(
+            history.raw_items().iter().any(|item| {
+                let ResponseItem::Message { role, content, .. } = item else {
+                    return false;
+                };
+                if role != "user" {
+                    return false;
+                }
+                content.iter().any(|content_item| {
+                    let ContentItem::InputText { text } = content_item else {
+                        return false;
+                    };
+                    text.contains(crate::session_prefix::TURN_ABORTED_OPEN_TAG)
+                })
+            }),
+            "expected a model-visible turn aborted marker in history after interrupt"
+        );
     }
 
     #[tokio::test]

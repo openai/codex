@@ -1,5 +1,6 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::session_prefix::is_session_prefix;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
@@ -314,12 +315,6 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .checked_div(4)
         .unwrap_or(0)
         .saturating_sub(650)
-}
-
-fn is_session_prefix(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>") || lowered.starts_with("<turn_aborted>")
 }
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
