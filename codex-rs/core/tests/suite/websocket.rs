@@ -1,3 +1,4 @@
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;

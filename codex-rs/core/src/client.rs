@@ -90,7 +90,6 @@ struct WebsocketSessionState {
     connection: Option<ApiWebSocketConnection>,
 }
 
-
 #[allow(clippy::too_many_arguments)]
 impl ModelClient {
     pub fn new(
@@ -374,15 +373,15 @@ impl ModelClientSession {
             Some(conn) => !conn.is_closed().await,
             None => false,
         };
-    
+
         if can_reuse {
             return Ok(self.websocket.connection.as_ref().unwrap());
         }
-    
+
         let new_conn = ApiWebSocketResponsesClient::new(api_provider, api_auth)
             .connect(headers)
             .await?;
-    
+
         Ok(self.websocket.connection.insert(new_conn))
     }
 
@@ -542,7 +541,11 @@ impl ModelClientSession {
                 self.build_responses_websocket_request(&api_provider, &api_prompt, options)?;
 
             let connection = match self
-                .websocket_connection(api_provider.clone(), api_auth.clone(), request.headers.clone())
+                .websocket_connection(
+                    api_provider.clone(),
+                    api_auth.clone(),
+                    request.headers.clone(),
+                )
                 .await
             {
                 Ok(connection) => connection,
@@ -555,9 +558,15 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             };
 
-            let stream_result = connection.stream_request(request).await.map_err(map_api_error)?;
+            let stream_result = connection
+                .stream_request(request)
+                .await
+                .map_err(map_api_error)?;
 
-            return Ok(map_response_stream(stream_result, self.state.otel_manager.clone()));
+            return Ok(map_response_stream(
+                stream_result,
+                self.state.otel_manager.clone(),
+            ));
         }
     }
 

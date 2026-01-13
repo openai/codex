@@ -35,6 +35,7 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
+    // TODO (pakrym): is this the right place for timeout?
     idle_timeout: Duration,
 }
 
@@ -111,6 +112,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
         let ws_url = Url::parse(&self.provider.url_for_path("responses"))
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+
         let mut headers = self.provider.headers.clone();
         headers.extend(extra_headers);
         apply_auth_headers(&mut headers, &self.auth);
