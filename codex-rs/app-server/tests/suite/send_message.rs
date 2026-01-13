@@ -220,9 +220,10 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
         let event: RawResponseItemEvent =
             serde_json::from_value(msg_value).expect("deserialize raw response item");
         if let ResponseItem::Message { role, .. } = &event.item
-            && role == "assistant" {
-                assert_assistant_message(&event.item, "Done");
-            }
+            && role == "assistant"
+        {
+            assert_assistant_message(&event.item, "Done");
+        }
     }
 
     let _ = tokio::time::timeout(
