@@ -137,7 +137,7 @@ impl ModelsManager {
     }
 
     /// Look up model metadata, applying remote overrides and config adjustments.
-    pub(crate) async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
+    pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
             .remote_models(config)
             .await
