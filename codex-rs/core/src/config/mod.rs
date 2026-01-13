@@ -516,34 +516,18 @@ fn deserialize_config_toml_with_base(
 }
 
 fn deserialize_config_toml_lenient(
-    mut root_value: TomlValue,
+    root_value: TomlValue,
     config_base_dir: Option<&Path>,
 ) -> std::io::Result<ConfigToml> {
-    // Config loading should tolerate invalid enum values in on-disk config (drop them), while
-    // interactive edits remain strict so bad values are rejected at write time.
-    loop {
-        let attempt = match config_base_dir {
-            Some(base_dir) => {
-                let _guard = AbsolutePathBufGuard::new(base_dir);
-                deserialize_config_toml_with_path(&root_value)
-            }
-            None => deserialize_config_toml_with_path(&root_value),
-        };
-
-        match attempt {
-            Ok(config) => return Ok(config),
-            Err(err) => {
-                let path = err.path().clone();
-                let inner = err.into_inner();
-                if !is_unknown_enum_error(&inner) {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, inner));
-                }
-                if path.to_string().is_empty() || !remove_toml_path(&mut root_value, &path) {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, inner));
-                }
-            }
+    let attempt = match config_base_dir {
+        Some(base_dir) => {
+            let _guard = AbsolutePathBufGuard::new(base_dir);
+            deserialize_config_toml_with_path(&root_value)
         }
-    }
+        None => deserialize_config_toml_with_path(&root_value),
+    };
+
+    attempt.map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_inner()))
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -568,62 +552,6 @@ fn deserialize_config_toml_with_path(
     value: &TomlValue,
 ) -> Result<ConfigToml, serde_path_to_error::Error<toml::de::Error>> {
     serde_path_to_error::deserialize(value.clone())
-}
-
-fn is_unknown_enum_error(error: &toml::de::Error) -> bool {
-    error.to_string().contains("unknown variant")
-}
-
-#[derive(Debug)]
-enum TomlPathSegment {
-    Key(String),
-    Index(usize),
-}
-
-fn remove_toml_path(root: &mut TomlValue, path: &serde_path_to_error::Path) -> bool {
-    let segments: Vec<TomlPathSegment> = path
-        .iter()
-        .filter_map(|segment| match segment {
-            serde_path_to_error::Segment::Seq { index } => Some(TomlPathSegment::Index(*index)),
-            serde_path_to_error::Segment::Map { key } => Some(TomlPathSegment::Key(key.clone())),
-            serde_path_to_error::Segment::Enum { .. } => None,
-            serde_path_to_error::Segment::Unknown => None,
-        })
-        .collect();
-
-    if segments.is_empty() {
-        return false;
-    }
-
-    let mut current = root;
-    for segment in &segments[..segments.len() - 1] {
-        current = match (current, segment) {
-            (TomlValue::Table(table), TomlPathSegment::Key(key)) => match table.get_mut(key) {
-                Some(value) => value,
-                None => return false,
-            },
-            (TomlValue::Array(items), TomlPathSegment::Index(index)) => {
-                match items.get_mut(*index) {
-                    Some(value) => value,
-                    None => return false,
-                }
-            }
-            _ => return false,
-        };
-    }
-
-    match (current, segments.last()) {
-        (TomlValue::Table(table), Some(TomlPathSegment::Key(key))) => table.remove(key).is_some(),
-        (TomlValue::Array(items), Some(TomlPathSegment::Index(index))) => {
-            if *index < items.len() {
-                items.remove(*index);
-                true
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }
 }
 
 fn constrain_mcp_servers(
@@ -1849,7 +1777,7 @@ persistence = "none"
     }
 
     #[tokio::test]
-    async fn invalid_reasoning_effort_is_ignored() -> anyhow::Result<()> {
+    async fn invalid_reasoning_effort_is_rejected() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
 
@@ -1864,9 +1792,10 @@ model_reasoning_effort = "super-high"
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
-            .await?;
+            .await;
 
-        assert_eq!(config.model_reasoning_effort, None);
+        let error = config.expect_err("invalid enum values should reject config");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 
         Ok(())
     }
