@@ -14,6 +14,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use std::fs;
+use std::path::PathBuf;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -101,15 +102,40 @@ fn stores_oversized_user_message_in_temp_file() {
         panic!("expected single message item");
     };
 
-    let [ContentItem::InputText { text }] = content.as_slice() else {
-        panic!("expected single input text");
-    };
+    let placeholder = content
+        .iter()
+        .find_map(|item| match item {
+            ContentItem::InputText { text }
+                if text.contains("User input was too large for the remaining context window") =>
+            {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected placeholder text, got {content:?}"));
 
-    let re = Regex::new(r"saved to (.+?)\. Use the read_file tool").expect("regex");
-    let captures = re.captures(text).expect("capture temp path");
-    let path = captures.get(1).expect("path capture").as_str();
+    let path = placeholder
+        .split("saved to ")
+        .nth(1)
+        .and_then(|tail| tail.strip_suffix('.'))
+        .expect("capture temp path");
+    let path = PathBuf::from(path);
 
-    let file_contents = fs::read_to_string(path).expect("read temp file");
+    assert!(
+        content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == &original
+        )),
+        "original user text should remain in the message content"
+    );
+
+    assert!(
+        path.exists(),
+        "expected saved user message at {}, placeholder: {placeholder}",
+        path.display()
+    );
+
+    let file_contents = fs::read_to_string(&path).expect("read temp file");
     assert_eq!(file_contents, original);
 
     fs::remove_file(path).expect("cleanup temp file");

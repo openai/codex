@@ -277,11 +277,11 @@ async fn oversized_user_message_is_written_to_temp_file() -> Result<()> {
         .find(|text| text.contains("User input was too large for the remaining context window"))
         .unwrap_or_else(|| panic!("expected replacement message, got {user_texts:?}"));
 
-    let captures = assert_regex_match(
-        r"saved to (.+?)\\. Use the read_file tool",
-        replaced.as_str(),
-    );
-    let path = captures.get(1).expect("path capture").as_str();
+    let path = replaced
+        .split("saved to ")
+        .nth(1)
+        .and_then(|tail| tail.strip_suffix('.'))
+        .context("extract saved path")?;
 
     let saved = fs::read_to_string(path).context("read saved user message")?;
     assert_eq!(saved, large_message);
