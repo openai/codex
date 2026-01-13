@@ -3753,13 +3753,15 @@ impl Notification {
 
 const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
 
-const EXAMPLE_PROMPTS: [&str; 6] = [
+const EXAMPLE_PROMPTS: [&str; 8] = [
     "Explain this codebase",
     "Summarize recent commits",
     "Implement {feature}",
     "Find and fix a bug in @filename",
     "Write tests for @filename",
     "Improve documentation in @filename",
+    "Run /review on my current changes",
+    "Use /skills to list available skills",
 ];
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.
