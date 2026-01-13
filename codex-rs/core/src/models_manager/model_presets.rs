@@ -3,6 +3,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use indoc::indoc;
 use once_cell::sync::Lazy;
 
 pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_prompt";
@@ -317,6 +318,16 @@ fn gpt_52_codex_upgrade() -> ModelUpgrade {
         upgrade_copy: Some(
             "Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
                 .to_string(),
+        ),
+        migration_markdown: Some(
+            indoc! {r#"
+                **Codex just got an upgrade. Introducing {model_to}.**
+
+                Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about {model_to} at https://openai.com/index/introducing-gpt-5-2-codex
+
+                You can continue using {model_from} if you prefer.
+            "#}
+            .to_string(),
         ),
     }
 }

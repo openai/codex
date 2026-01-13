@@ -1543,6 +1543,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        widget
+            .bottom_pane
+            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
 
         widget
     }
@@ -1630,6 +1633,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        widget
+            .bottom_pane
+            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
 
         widget
     }
@@ -1650,26 +1656,10 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                && c.eq_ignore_ascii_case(&'v') =>
+            } if c.eq_ignore_ascii_case(&'v')
+                && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                match paste_image_to_temp_png() {
-                    Ok((path, info)) => {
-                        tracing::debug!(
-                            "pasted image size={}x{} format={}",
-                            info.width,
-                            info.height,
-                            info.encoded_format.label()
-                        );
-                        self.attach_image(path);
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to paste image: {err}");
-                        self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to paste image: {err}",
-                        )));
-                    }
-                }
+                self.paste_image_from_clipboard();
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -1695,7 +1685,19 @@ impl ChatWidget {
             _ => {
                 match self.bottom_pane.handle_key_event(key_event) {
                     InputResult::Submitted(text) => {
-                        // If a task is running, queue the user input to be sent after the turn completes.
+                        // Enter always sends messages immediately (bypasses queue check)
+                        // Clear any reasoning status header when submitting a new message
+                        self.reasoning_buffer.clear();
+                        self.full_reasoning_buffer.clear();
+                        self.set_status_header(String::from("Working"));
+                        let user_message = UserMessage {
+                            text,
+                            image_paths: self.bottom_pane.take_recent_submission_images(),
+                        };
+                        self.submit_user_message(user_message);
+                    }
+                    InputResult::Queued(text) => {
+                        // Tab queues the message if a task is running, otherwise submits immediately
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
@@ -1718,6 +1720,32 @@ impl ChatWidget {
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
+    }
+
+    /// Attempt to attach an image from the system clipboard.
+    ///
+    /// This is a best-effort path used when we receive an empty paste event,
+    /// which some terminals emit when the clipboard contains non-text data
+    /// (like images). When the clipboard can't be read or no image exists,
+    /// surface a helpful follow-up so the user can retry with a file path.
+    fn paste_image_from_clipboard(&mut self) {
+        match paste_image_to_temp_png() {
+            Ok((path, info)) => {
+                tracing::debug!(
+                    "pasted image size={}x{} format={}",
+                    info.width,
+                    info.height,
+                    info.encoded_format.label()
+                );
+                self.attach_image(path);
+            }
+            Err(err) => {
+                tracing::warn!("failed to paste image: {err}");
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Failed to paste image: {err}. Try saving the image to a file and pasting the file path instead.",
+                )));
+            }
+        }
     }
 
     pub(crate) fn composer_text_with_pending(&self) -> String {
@@ -1974,6 +2002,20 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
+    /// Route paste events through image detection.
+    ///
+    /// Terminals vary in how they represent paste: some emit an empty paste
+    /// payload when the clipboard isn't text (common for image-only clipboard
+    /// contents). Treat the empty payload as a hint to attempt a clipboard
+    /// image read; otherwise, fall back to text handling.
+    pub(crate) fn handle_paste_event(&mut self, text: String) {
+        if text.is_empty() {
+            self.paste_image_from_clipboard();
+        } else {
+            self.handle_paste(text);
+        }
+    }
+
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
     pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
         if self.bottom_pane.flush_paste_burst_if_due() {
@@ -2109,6 +2151,7 @@ impl ChatWidget {
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
+
         self.needs_final_message_separator = false;
     }
 
@@ -3633,6 +3676,9 @@ impl ChatWidget {
             self.config.features.enable(feature);
         } else {
             self.config.features.disable(feature);
+        }
+        if feature == Feature::Steer {
+            self.bottom_pane.set_steer_enabled(enabled);
         }
     }
 
