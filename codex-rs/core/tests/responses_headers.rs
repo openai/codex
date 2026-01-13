@@ -81,7 +81,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         session_source.clone(),
     );
 
-    let client = ModelClient::new(
+    let mut client_session = ModelClient::new(
         Arc::clone(&config),
         None,
         model_info,
@@ -103,7 +103,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         }],
     }];
 
-    let mut stream = client.stream(&prompt).await.expect("stream failed");
+    let mut stream = client_session.stream(&prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {
         if matches!(event, Ok(ResponseEvent::Completed { .. })) {
             break;
@@ -177,7 +177,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         session_source.clone(),
     );
 
-    let client = ModelClient::new(
+    let mut client_session = ModelClient::new(
         Arc::clone(&config),
         None,
         model_info,
@@ -199,7 +199,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         }],
     }];
 
-    let mut stream = client.stream(&prompt).await.expect("stream failed");
+    let mut stream = client_session.stream(&prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {
         if matches!(event, Ok(ResponseEvent::Completed { .. })) {
             break;
@@ -271,7 +271,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         session_source.clone(),
     );
 
-    let client = ModelClient::new(
+    let mut client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_info,

@@ -1,3 +1,20 @@
+//! The main Codex TUI chat surface.
+//!
+//! `ChatWidget` consumes protocol events, builds and updates history cells, and drives rendering
+//! for both the main viewport and overlay UIs.
+//!
+//! The UI has both committed transcript cells (finalized `HistoryCell`s) and an in-flight active
+//! cell (`ChatWidget.active_cell`) that can mutate in place while streaming (often representing a
+//! coalesced exec/tool group). The transcript overlay (`Ctrl+T`) renders committed cells plus a
+//! cached, render-only live tail derived from the current active cell so in-flight tool calls are
+//! visible immediately.
+//!
+//! The transcript overlay is kept in sync by `App::overlay_forward_event`, which syncs a live tail
+//! during draws using `active_cell_transcript_key()` and `active_cell_transcript_lines()`. The
+//! cache key is designed to change when the active cell mutates in place or when its transcript
+//! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
+//! every draw.
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -318,6 +335,16 @@ pub(crate) struct ChatWidget {
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
+    /// Monotonic-ish counter used to invalidate transcript overlay caching.
+    ///
+    /// The transcript overlay appends a cached "live tail" for the current active cell. Most
+    /// active-cell updates are mutations of the *existing* cell (not a replacement), so pointer
+    /// identity alone is not a good cache key.
+    ///
+    /// Callers bump this whenever the active cell's transcript output could change without
+    /// flushing. It is intentionally allowed to wrap, which implies a rare one-time cache collision
+    /// where the overlay may briefly treat new tail content as already cached.
+    active_cell_revision: u64,
     config: Config,
     model: String,
     auth_manager: Arc<AuthManager>,
@@ -372,6 +399,30 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+}
+
+/// Snapshot of active-cell state that affects transcript overlay rendering.
+///
+/// The overlay keeps a cached "live tail" for the in-flight cell; this key lets
+/// it cheaply decide when to recompute that tail as the active cell evolves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ActiveCellTranscriptKey {
+    /// Cache-busting revision for in-place updates.
+    ///
+    /// Many active cells are updated incrementally while streaming (for example when exec groups
+    /// add output or change status), and the transcript overlay caches its live tail, so this
+    /// revision gives a cheap way to say "same active cell, but its transcript output is different
+    /// now". Callers bump it on any mutation that can affect `HistoryCell::transcript_lines`.
+    pub(crate) revision: u64,
+    /// Whether the active cell continues the prior stream, which affects
+    /// spacing between transcript blocks.
+    pub(crate) is_stream_continuation: bool,
+    /// Optional animation tick for time-dependent transcript output.
+    ///
+    /// When this changes, the overlay recomputes the cached tail even if the revision and width
+    /// are unchanged, which is how shimmer/spinner visuals can animate in the overlay without any
+    /// underlying data change.
+    pub(crate) animation_tick: Option<u64>,
 }
 
 struct UserMessage {
@@ -903,7 +954,9 @@ impl ChatWidget {
             }) && wait_cell.matches(command_display.as_deref())
             {
                 // Same process still waiting; update command display if it shows up late.
-                wait_cell.update_command_display(command_display);
+                if wait_cell.update_command_display(command_display) {
+                    self.bump_active_cell_revision();
+                }
                 self.request_redraw();
                 return;
             }
@@ -924,6 +977,7 @@ impl ChatWidget {
                 command_display,
                 self.config.animations,
             )));
+            self.bump_active_cell_revision();
             self.request_redraw();
         } else {
             if let Some(wait_cell) = self.active_cell.as_ref().and_then(|cell| {
@@ -1228,6 +1282,9 @@ impl ChatWidget {
             cell.complete_call(&ev.call_id, output, ev.duration);
             if cell.should_flush() {
                 self.flush_active_cell();
+            } else {
+                self.bump_active_cell_revision();
+                self.request_redraw();
             }
         }
     }
@@ -1344,6 +1401,7 @@ impl ChatWidget {
             )
         {
             *cell = new_exec;
+            self.bump_active_cell_revision();
         } else {
             self.flush_active_cell();
 
@@ -1355,6 +1413,7 @@ impl ChatWidget {
                 interaction_input,
                 self.config.animations,
             )));
+            self.bump_active_cell_revision();
         }
 
         self.request_redraw();
@@ -1368,6 +1427,7 @@ impl ChatWidget {
             ev.invocation,
             self.config.animations,
         )));
+        self.bump_active_cell_revision();
         self.request_redraw();
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
@@ -1440,6 +1500,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
+            active_cell_revision: 0,
             config,
             model: model.clone(),
             auth_manager,
@@ -1526,6 +1587,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
+            active_cell_revision: 0,
             config,
             model: model.clone(),
             auth_manager,
@@ -2257,6 +2319,12 @@ impl ChatWidget {
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
+    }
+
+    fn bump_active_cell_revision(&mut self) {
+        // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
+        // worst causes a one-time cache-key collision.
+        self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
     }
 
     fn notify(&mut self, notification: Notification) {
@@ -3874,6 +3942,37 @@ impl ChatWidget {
 
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
+    }
+
+    /// Returns a cache key describing the current in-flight active cell for the transcript overlay.
+    ///
+    /// `Ctrl+T` renders committed transcript cells plus a render-only live tail derived from the
+    /// current active cell, and the overlay caches that tail; this key is what it uses to decide
+    /// whether it must recompute. When there is no active cell, this returns `None` so the overlay
+    /// can drop the tail entirely.
+    ///
+    /// If callers mutate the active cell's transcript output without bumping the revision (or
+    /// providing an appropriate animation tick), the overlay will keep showing a stale tail while
+    /// the main viewport updates.
+    pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
+        let cell = self.active_cell.as_ref()?;
+        Some(ActiveCellTranscriptKey {
+            revision: self.active_cell_revision,
+            is_stream_continuation: cell.is_stream_continuation(),
+            animation_tick: cell.transcript_animation_tick(),
+        })
+    }
+
+    /// Returns the active cell's transcript lines for a given terminal width.
+    ///
+    /// This is a convenience for the transcript overlay live-tail path, and it intentionally
+    /// filters out empty results so the overlay can treat "nothing to render" as "no tail". Callers
+    /// should pass the same width the overlay uses; using a different width will cause wrapping
+    /// mismatches between the main viewport and the transcript overlay.
+    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+        let cell = self.active_cell.as_ref()?;
+        let lines = cell.transcript_lines(width);
+        (!lines.is_empty()).then_some(lines)
     }
 
     /// Return a reference to the widget's current config (includes any

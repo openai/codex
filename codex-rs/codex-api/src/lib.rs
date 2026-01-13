@@ -26,6 +26,7 @@ pub use crate::endpoint::models::ModelsClient;
 pub use crate::endpoint::responses::ResponsesClient;
 pub use crate::endpoint::responses::ResponsesOptions;
 pub use crate::endpoint::responses_websocket::ResponsesWebsocketClient;
+pub use crate::endpoint::responses_websocket::ResponsesWebsocketConnection;
 pub use crate::error::ApiError;
 pub use crate::provider::Provider;
 pub use crate::provider::WireApi;

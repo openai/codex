@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
@@ -13,7 +14,10 @@ use codex_api::ReqwestTransport;
 use codex_api::ResponseStream as ApiResponseStream;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
+use codex_api::ResponsesRequest;
+use codex_api::ResponsesRequestBuilder;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
+use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
 use codex_api::common::Reasoning;
@@ -76,9 +80,9 @@ pub struct ModelClient {
     state: Arc<ModelClientState>,
 }
 
-#[derive(Debug, Clone)]
 pub struct ModelClientSession {
     state: Arc<ModelClientState>,
+    connection: Option<ApiWebSocketConnection>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -112,6 +116,7 @@ impl ModelClient {
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             state: Arc::clone(&self.state),
+            connection: None,
         }
     }
 }
@@ -228,7 +233,7 @@ impl ModelClientSession {
     ///
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
-    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         match self.state.provider.wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
             WireApi::ResponsesWebsocket => self.stream_responses_websocket(prompt).await,
@@ -313,6 +318,67 @@ impl ModelClientSession {
             extra_headers: beta_feature_headers(&self.state.config),
             compression,
         }
+    }
+
+    fn build_responses_websocket_request(
+        &self,
+        api_provider: &codex_api::Provider,
+        api_prompt: &ApiPrompt,
+        options: ApiResponsesOptions,
+    ) -> Result<ResponsesRequest> {
+        let ApiResponsesOptions {
+            reasoning,
+            include,
+            prompt_cache_key,
+            text,
+            store_override,
+            conversation_id,
+            session_source,
+            extra_headers,
+            compression,
+        } = options;
+
+        ResponsesRequestBuilder::new(
+            &self.state.model_info.slug,
+            &api_prompt.instructions,
+            &api_prompt.input,
+        )
+        .tools(&api_prompt.tools)
+        .parallel_tool_calls(api_prompt.parallel_tool_calls)
+        .reasoning(reasoning)
+        .include(include)
+        .prompt_cache_key(prompt_cache_key)
+        .text(text)
+        .conversation(conversation_id)
+        .session_source(session_source)
+        .store_override(store_override)
+        .extra_headers(extra_headers)
+        .compression(compression)
+        .build(api_provider)
+        .map_err(map_api_error)
+    }
+
+    async fn websocket_connection(
+        &mut self,
+        api_provider: codex_api::Provider,
+        api_auth: CoreAuthProvider,
+        headers: ApiHeaderMap,
+    ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
+        let needs_new = match self.connection.as_ref() {
+            Some(conn) => conn.is_closed().await,
+            None => true,
+        };
+
+        if needs_new {
+            let new_conn = ApiWebSocketResponsesClient::new(api_provider, api_auth)
+                .connect(headers)
+                .await?;
+            self.connection = Some(new_conn);
+        }
+
+        self.connection.as_ref().ok_or(ApiError::Stream(
+            "websocket connection is unavailable".to_string(),
+        ))
     }
 
     fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
@@ -447,7 +513,7 @@ impl ModelClientSession {
     }
 
     /// Streams a turn via the Responses API over WebSocket transport.
-    async fn stream_responses_websocket(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    async fn stream_responses_websocket(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let auth_manager = self.state.auth_manager.clone();
         let api_prompt = self.build_responses_request(prompt)?;
 
@@ -467,16 +533,18 @@ impl ModelClientSession {
             let compression = self.responses_request_compression(auth.as_ref());
 
             let options = self.build_responses_options(prompt, compression);
-            let client = ApiWebSocketResponsesClient::new(api_provider, api_auth);
+            let request =
+                self.build_responses_websocket_request(&api_provider, &api_prompt, options)?;
 
-            let stream_result = client
-                .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
-                .await;
-
-            match stream_result {
-                Ok(stream) => {
-                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
-                }
+            let connection = match self
+                .websocket_connection(
+                    api_provider.clone(),
+                    api_auth.clone(),
+                    request.headers.clone(),
+                )
+                .await
+            {
+                Ok(connection) => connection,
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
@@ -484,7 +552,17 @@ impl ModelClientSession {
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
-            }
+            };
+
+            let stream_result = connection
+                .stream_request(request)
+                .await
+                .map_err(map_api_error)?;
+
+            return Ok(map_response_stream(
+                stream_result,
+                self.state.otel_manager.clone(),
+            ));
         }
     }
 
