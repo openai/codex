@@ -44,6 +44,10 @@ install:
 test:
     cargo nextest run --no-fail-fast
 
+# Run Codex from source using Bazel
+bazel-codex *args:
+    bazel run //codex-rs/cli:codex -- --cd "$PWD" "$@"
+
 bazel-test:
     bazel test //... --keep_going
 
