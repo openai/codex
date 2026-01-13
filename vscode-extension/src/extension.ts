@@ -642,10 +642,28 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       if (rewind) {
-        const v = cliVariantForBackendKey(session.backendKey);
-        if (v !== "codex-mine") {
+        if (!isMineSelectedForBackendKey(session.backendKey)) {
           void vscode.window.showErrorMessage(
-            `Rewind は codex-mine のみ対応です（現在: ${v}）。CLI を codex-mine に切り替えてください。`,
+            "Rewind は codex-mine 選択時のみ対応です。Settings (⚙) から codex-mine を選択し、必要ならバックエンドを再起動してください。",
+          );
+          return;
+        }
+
+        const folder = resolveWorkspaceFolderForSession(session);
+        if (!folder) {
+          void vscode.window.showErrorMessage(
+            "WorkspaceFolder not found for session.",
+          );
+          return;
+        }
+        try {
+          await ensureBackendMatchesConfiguredCli(folder, "mineFeature");
+        } catch (err) {
+          outputChannel?.appendLine(
+            `[rewind] Backend configuration check failed: ${String(err)}`,
+          );
+          void vscode.window.showErrorMessage(
+            "Backend configuration check failed. See Codex UI output channel.",
           );
           return;
         }
@@ -757,8 +775,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!folder)
         throw new Error(`WorkspaceFolder not found for session: ${sessionId}`);
 
-      const v = cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
-      if (v !== "codex-mine") return [];
+      if (!isMineSelectedForBackendKey(session.backendKey)) return [];
 
       const { agents } = await listAgentsFromDisk(folder.uri.fsPath);
       return agents
@@ -1189,10 +1206,28 @@ export function activate(context: vscode.ExtensionContext): void {
         : null;
       if (!session) return;
 
-      const v = cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
-      if (v !== "codex-mine") {
+      if (!isMineSelectedForBackendKey(session.backendKey)) {
         void vscode.window.showErrorMessage(
           "Reload is only supported when using codex-mine backend.",
+        );
+        return;
+      }
+
+      const folder = resolveWorkspaceFolderForSession(session);
+      if (!folder) {
+        void vscode.window.showErrorMessage(
+          "WorkspaceFolder not found for session.",
+        );
+        return;
+      }
+      try {
+        await ensureBackendMatchesConfiguredCli(folder, "mineFeature");
+      } catch (err) {
+        output.appendLine(
+          `[session] Reload backend configuration check failed: ${String(err)}`,
+        );
+        void vscode.window.showErrorMessage(
+          "Backend configuration check failed. See Codex UI output channel.",
         );
         return;
       }
@@ -1588,8 +1623,7 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        const v = cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
-        if (v !== "codex-mine") {
+        if (!isMineSelectedForBackendKey(session.backendKey)) {
           void vscode.window.showInformationMessage(
             "Agents are available only when running codex-mine. Click Settings (⚙) and select codex-mine, then restart the backend.",
           );
@@ -2683,13 +2717,12 @@ async function handleSlashCommand(
       return true;
     }
 
-    const v = cliVariantForBackendKey(session.backendKey);
-    if (v !== "codex-mine") {
+    if (!isMineSelectedForBackendKey(session.backendKey)) {
       upsertBlock(session.id, {
         id: newLocalId("compactUnsupported"),
         type: "error",
         title: "Compact unsupported",
-        text: `/compact は codex-mine のみ対応です（現在: ${v}）。CLI を codex-mine に切り替えてください。`,
+        text: "/compact は codex-mine 選択時のみ対応です。Settings (⚙) から codex-mine を選択し、必要ならバックエンドを再起動してください。",
       });
       chatView?.refresh();
       schedulePersistRuntime(session.id);
@@ -2697,6 +2730,37 @@ async function handleSlashCommand(
     }
 
     if (!backendManager) throw new Error("backendManager is not initialized");
+    {
+      const folder = resolveWorkspaceFolderForSession(session);
+      if (!folder) {
+        upsertBlock(session.id, {
+          id: newLocalId("compactNoFolder"),
+          type: "error",
+          title: "Compact failed",
+          text: "このセッションに紐づく workspace folder が見つかりません。",
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+      try {
+        await ensureBackendMatchesConfiguredCli(folder, "mineFeature");
+      } catch (err) {
+        outputChannel?.appendLine(
+          `[compact] Backend configuration check failed: ${String(err)}`,
+        );
+        upsertBlock(session.id, {
+          id: newLocalId("compactConfigError"),
+          type: "error",
+          title: "Compact failed",
+          text: "バックエンド設定の確認に失敗しました。Output Channel (Codex UI) を確認してください。",
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+    }
+
     const rt = ensureRuntime(session.id);
     if (rt.compactInFlight) {
       upsertBlock(session.id, {
@@ -2802,16 +2866,16 @@ async function handleSlashCommand(
         return "- /prompts:" + p.name + hint;
       })
       .join("\n");
-    const v = cliVariantForBackendKey(session.backendKey);
+    const mineSelected = isMineSelectedForBackendKey(session.backendKey);
     upsertBlock(session.id, {
       id: newLocalId("help"),
       type: "system",
       title: "Help",
       text: [
         "Slash commands:",
-        v === "codex-mine"
+        mineSelected
           ? "- /compact: Compact context"
-          : "- /compact: (codex-mine のみ対応)",
+          : "- /compact: (codex-mine 選択時のみ対応)",
         "- /new: New session",
         "- /init: Create AGENTS.md",
         "- /resume: Resume from history",
@@ -2819,7 +2883,9 @@ async function handleSlashCommand(
         "- /diff: Open Latest Diff",
         "- /rename <title>: Rename session",
         "- /skills: Browse skills",
-        "- /agents: Browse agents (codex-mine)",
+        mineSelected
+          ? "- /agents: Browse agents"
+          : "- /agents: Browse agents (codex-mine 選択時のみ対応)",
         "- /help: Show help",
         customList ? "\nCustom prompts:" : null,
         customList || null,
@@ -3296,6 +3362,22 @@ function cliVariantForBackendKey(
   return "unknown";
 }
 
+function selectedCliVariantForBackendKey(
+  backendKey: string,
+): "auto" | "codex" | "codex-mine" {
+  try {
+    const folderUri = vscode.Uri.parse(backendKey);
+    const cfg = vscode.workspace.getConfiguration("codexMine", folderUri);
+    return normalizeCliVariant(cfg.get<string>("cli.variant") ?? "auto");
+  } catch {
+    return "auto";
+  }
+}
+
+function isMineSelectedForBackendKey(backendKey: string): boolean {
+  return selectedCliVariantForBackendKey(backendKey) === "codex-mine";
+}
+
 function backendKeyForCwd(cwd: string | null): string | null {
   if (!cwd) return null;
   const folders = vscode.workspace.workspaceFolders ?? [];
@@ -3340,7 +3422,7 @@ function desiredCliCommandFromConfig(cfg: vscode.WorkspaceConfiguration): {
 
 async function ensureBackendMatchesConfiguredCli(
   folder: vscode.WorkspaceFolder,
-  reason: "newSession" | "agents",
+  reason: "newSession" | "agents" | "mineFeature",
 ): Promise<void> {
   if (!backendManager) throw new Error("backendManager is not initialized");
   if (!outputChannel) throw new Error("outputChannel is not initialized");
@@ -3561,22 +3643,11 @@ function buildChatState(): ChatViewState {
   }));
   const capsForBackendKey = (backendKey: string | null) => {
     if (!backendKey) return { agents: false, cliVariant: "unknown" as const };
-    const detected = cliVariantByBackendKey.get(backendKey) ?? "unknown";
-    if (detected !== "unknown") {
-      return { agents: detected === "codex-mine", cliVariant: detected };
-    }
-
-    // No detected runtime variant yet (e.g. backend not started). Use config as a hint.
-    const folderUri = vscode.Uri.parse(backendKey);
-    const cfg = vscode.workspace.getConfiguration("codexMine", folderUri);
-    const raw = cfg.get<string>("cli.variant") ?? "auto";
-    const normalized =
-      raw === "mine" ? "codex-mine" : raw === "upstream" ? "codex" : raw;
-    if (normalized === "codex-mine")
-      return { agents: true, cliVariant: "codex-mine" as const };
-    if (normalized === "codex")
-      return { agents: false, cliVariant: "codex" as const };
-    return { agents: false, cliVariant: "unknown" as const };
+    const cliVariant = cliVariantForBackendKey(backendKey);
+    return {
+      agents: isMineSelectedForBackendKey(backendKey),
+      cliVariant,
+    };
   };
   if (!sessions)
     return {
@@ -4774,8 +4845,10 @@ function applyGlobalNotification(
 
       const effectiveBackendKey = backendKeyForCwd(cwd) ?? backendKey;
       if (effectiveBackendKey) {
-        const mcpLine = formatMcpStatusSummary(effectiveBackendKey);
-        if (mcpLine) lines.push(mcpLine);
+        if (isMineSelectedForBackendKey(effectiveBackendKey)) {
+          const mcpLine = formatMcpStatusSummary(effectiveBackendKey);
+          if (mcpLine) lines.push(mcpLine);
+        }
         const next = inferCliVariantFromCliVersion(cliVersion);
         cliVariantByBackendKey.set(effectiveBackendKey, next);
       }
@@ -4799,7 +4872,7 @@ function applyGlobalNotification(
         text: lines.join("\n") || "(no details)",
       });
 
-      if (cwd && effectiveBackendKey) {
+      if (cwd && effectiveBackendKey && isMineSelectedForBackendKey(effectiveBackendKey)) {
         void refreshMcpConfiguredServersForBackend(effectiveBackendKey, cwd);
       }
 
@@ -4926,6 +4999,7 @@ async function refreshMcpConfiguredServersForBackend(
   cwd: string,
 ): Promise<void> {
   if (!backendManager) return;
+  if (!isMineSelectedForBackendKey(backendKey)) return;
 
   try {
     const response = await backendManager.listMcpServerStatus(backendKey, cwd);
