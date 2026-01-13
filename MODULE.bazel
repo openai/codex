@@ -1,0 +1,128 @@
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.3.1")
+archive_override(
+    module_name = "toolchains_llvm_bootstrapped",
+    integrity = "sha256-9ks21bgEqbQWmwUIvqeLA64+Jk6o4ZVjC8KxjVa2Vw8=",
+    strip_prefix = "toolchains_llvm_bootstrapped-e3775e66a7b6d287c705ca0cd24497ef4a77c503",
+    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/e3775e66a7b6d287c705ca0cd24497ef4a77c503/master.tar.gz"],
+    patch_strip = 1,
+    patches = [
+        "//patches:llvm_toolchain_archive_params.patch",
+    ],
+)
+
+osx = use_extension("@toolchains_llvm_bootstrapped//toolchain/extension:osx.bzl", "osx")
+osx.framework(name = "ApplicationServices")
+osx.framework(name = "AppKit")
+osx.framework(name = "ColorSync")
+osx.framework(name = "CoreFoundation")
+osx.framework(name = "CoreGraphics")
+osx.framework(name = "CoreServices")
+osx.framework(name = "CoreText")
+osx.framework(name = "CFNetwork")
+osx.framework(name = "Foundation")
+osx.framework(name = "ImageIO")
+osx.framework(name = "Kernel")
+osx.framework(name = "OSLog")
+osx.framework(name = "Security")
+osx.framework(name = "SystemConfiguration")
+
+register_toolchains(
+    "@toolchains_llvm_bootstrapped//toolchain:all",
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.16")
+bazel_dep(name = "rules_platform", version = "0.1.0")
+bazel_dep(name = "rules_rust", version = "0.68.1")
+single_version_override(
+    module_name = "rules_rust",
+    patch_strip = 1,
+    patches = [
+        "//patches:rules_rust.patch",
+        "//patches:rules_rust_windows_gnu.patch",
+        "//patches:rules_rust_musl.patch",
+    ],
+)
+
+RUST_TRIPLES = [
+    "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "aarch64-pc-windows-gnullvm",
+    "x86_64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnullvm",
+]
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_target_triples = RUST_TRIPLES,
+    versions = ["1.90.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+bazel_dep(name = "rules_rs", version = "0.0.23")
+
+crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
+crate.from_cargo(
+    cargo_lock = "//codex-rs:Cargo.lock",
+    cargo_toml = "//codex-rs:Cargo.toml",
+    platform_triples = RUST_TRIPLES,
+)
+
+bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
+
+crate.annotation(
+    build_script_data = [
+        "@openssl//:gen_dir",
+    ],
+    build_script_env = {
+        "OPENSSL_DIR": "$(execpath @openssl//:gen_dir)",
+        "OPENSSL_NO_VENDOR": "1",
+        "OPENSSL_STATIC": "1",
+    },
+    crate = "openssl-sys",
+    data = ["@openssl//:gen_dir"],
+)
+
+inject_repo(crate, "openssl")
+
+# Fix readme inclusions
+crate.annotation(
+    crate = "windows-link",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:windows-link.patch"
+    ],
+)
+
+WINDOWS_IMPORT_LIB = """
+load("@rules_cc//cc:defs.bzl", "cc_import")
+
+cc_import(
+    name = "windows_import_lib",
+    static_library = glob(["lib/*.a"])[0],
+)
+"""
+
+crate.annotation(
+    additive_build_file_content = WINDOWS_IMPORT_LIB,
+    crate = "windows_x86_64_gnullvm",
+    gen_build_script = "off",
+    deps = [":windows_import_lib"],
+)
+crate.annotation(
+    additive_build_file_content = WINDOWS_IMPORT_LIB,
+    crate = "windows_aarch64_gnullvm",
+    gen_build_script = "off",
+    deps = [":windows_import_lib"],
+)
+use_repo(crate, "crates")
+
+rbe_platform_repository = use_repo_rule("//:rbe.bzl", "rbe_platform_repository")
+
+rbe_platform_repository(
+    name = "rbe_platform",
+)

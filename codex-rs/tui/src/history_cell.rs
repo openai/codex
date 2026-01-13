@@ -1,3 +1,15 @@
+//! Transcript/history cells for the Codex TUI.
+//!
+//! A `HistoryCell` is the unit of display in the conversation UI, representing both committed
+//! transcript entries and, transiently, an in-flight active cell that can mutate in place while
+//! streaming.
+//!
+//! The transcript overlay (`Ctrl+T`) appends a cached live tail derived from the active cell, and
+//! that cached tail is refreshed based on an active-cell cache key. Cells that change based on
+//! elapsed time expose `transcript_animation_tick()`, and code that mutates the active cell in place
+//! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
+//! rendered transcript output can change.
+
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -99,6 +111,20 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 
     fn is_stream_continuation(&self) -> bool {
         false
+    }
+
+    /// Returns a coarse "animation tick" when transcript output is time-dependent.
+    ///
+    /// The transcript overlay caches the rendered output of the in-flight active cell, so cells
+    /// that include time-based UI (spinner, shimmer, etc.) should return a tick that changes over
+    /// time to signal that the cached tail should be recomputed. Returning `None` means the
+    /// transcript lines are stable, while returning `Some(tick)` during an in-flight animation
+    /// allows the overlay to keep up with the main viewport.
+    ///
+    /// If a cell uses time-based visuals but always returns `None`, `Ctrl+T` can appear "frozen" on
+    /// the first rendered frame even though the main viewport is animating.
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        None
     }
 }
 
@@ -448,6 +474,7 @@ pub(crate) fn new_unified_exec_interaction(
 pub(crate) struct UnifiedExecWaitCell {
     command_display: Option<String>,
     animations_enabled: bool,
+    start_time: Instant,
 }
 
 impl UnifiedExecWaitCell {
@@ -455,6 +482,7 @@ impl UnifiedExecWaitCell {
         Self {
             command_display: command_display.filter(|display| !display.is_empty()),
             animations_enabled,
+            start_time: Instant::now(),
         }
     }
 
@@ -466,10 +494,19 @@ impl UnifiedExecWaitCell {
         }
     }
 
-    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) {
-        if self.command_display.is_none() {
-            self.command_display = command_display.filter(|display| !display.is_empty());
+    /// Update the command display once.
+    ///
+    /// Unified exec can start without a stable command string, and later correlate a process id to
+    /// a user-facing `command_display`. This method records that first non-empty command display and
+    /// returns whether it changed the cell; callers use the `true` case to invalidate any cached
+    /// transcript rendering (for example, the transcript overlay live tail).
+    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) -> bool {
+        let command_display = command_display.filter(|display| !display.is_empty());
+        if self.command_display.is_some() || command_display.is_none() {
+            return false;
         }
+        self.command_display = command_display;
+        true
     }
 
     pub(crate) fn command_display(&self) -> Option<String> {
@@ -507,6 +544,14 @@ impl HistoryCell for UnifiedExecWaitCell {
     fn desired_height(&self, width: u16) -> u16 {
         self.display_lines(width).len() as u16
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled {
+            return None;
+        }
+        // Match `App`'s frame scheduling cadence for transcript overlay live-tail animation.
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
+    }
 }
 
 pub(crate) fn new_unified_exec_wait_live(
@@ -517,29 +562,29 @@ pub(crate) fn new_unified_exec_wait_live(
 }
 
 #[derive(Debug)]
-struct UnifiedExecSessionsCell {
-    sessions: Vec<String>,
+struct UnifiedExecProcessesCell {
+    processes: Vec<String>,
 }
 
-impl UnifiedExecSessionsCell {
-    fn new(sessions: Vec<String>) -> Self {
-        Self { sessions }
+impl UnifiedExecProcessesCell {
+    fn new(processes: Vec<String>) -> Self {
+        Self { processes }
     }
 }
 
-impl HistoryCell for UnifiedExecSessionsCell {
+impl HistoryCell for UnifiedExecProcessesCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if width == 0 {
             return Vec::new();
         }
 
         let wrap_width = width as usize;
-        let max_sessions = 16usize;
+        let max_processes = 16usize;
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push(vec!["Background terminals".bold()].into());
         out.push("".into());
 
-        if self.sessions.is_empty() {
+        if self.processes.is_empty() {
             out.push("  • No background terminals running.".italic().into());
             return out;
         }
@@ -549,8 +594,8 @@ impl HistoryCell for UnifiedExecSessionsCell {
         let truncation_suffix = " [...]";
         let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
         let mut shown = 0usize;
-        for command in &self.sessions {
-            if shown >= max_sessions {
+        for command in &self.processes {
+            if shown >= max_processes {
                 break;
             }
             let (snippet, snippet_truncated) = {
@@ -590,7 +635,7 @@ impl HistoryCell for UnifiedExecSessionsCell {
             shown += 1;
         }
 
-        let remaining = self.sessions.len().saturating_sub(shown);
+        let remaining = self.processes.len().saturating_sub(shown);
         if remaining > 0 {
             let more_text = format!("... and {remaining} more running");
             if wrap_width <= prefix_width {
@@ -610,9 +655,9 @@ impl HistoryCell for UnifiedExecSessionsCell {
     }
 }
 
-pub(crate) fn new_unified_exec_sessions_output(sessions: Vec<String>) -> CompositeHistoryCell {
+pub(crate) fn new_unified_exec_processes_output(processes: Vec<String>) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
-    let summary = UnifiedExecSessionsCell::new(sessions);
+    let summary = UnifiedExecProcessesCell::new(processes);
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
 }
 
@@ -816,11 +861,11 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 
 #[derive(Debug)]
 struct TooltipHistoryCell {
-    tip: &'static str,
+    tip: String,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: &'static str) -> Self {
+    fn new(tip: String) -> Self {
         Self { tip }
     }
 }
@@ -1251,6 +1296,13 @@ impl HistoryCell for McpToolCallCell {
         }
 
         lines
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.result.is_some() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
     }
 }
 
@@ -1819,14 +1871,14 @@ mod tests {
 
     #[test]
     fn ps_output_empty_snapshot() {
-        let cell = new_unified_exec_sessions_output(Vec::new());
+        let cell = new_unified_exec_processes_output(Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
     #[test]
     fn ps_output_multiline_snapshot() {
-        let cell = new_unified_exec_sessions_output(vec![
+        let cell = new_unified_exec_processes_output(vec![
             "echo hello\nand then some extra text".to_string(),
             "rg \"foo\" src".to_string(),
         ]);
@@ -1836,7 +1888,7 @@ mod tests {
 
     #[test]
     fn ps_output_long_command_snapshot() {
-        let cell = new_unified_exec_sessions_output(vec![String::from(
+        let cell = new_unified_exec_processes_output(vec![String::from(
             "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
         )]);
         let rendered = render_lines(&cell.display_lines(36)).join("\n");
@@ -1845,8 +1897,9 @@ mod tests {
 
     #[test]
     fn ps_output_many_sessions_snapshot() {
-        let cell =
-            new_unified_exec_sessions_output((0..20).map(|idx| format!("command {idx}")).collect());
+        let cell = new_unified_exec_processes_output(
+            (0..20).map(|idx| format!("command {idx}")).collect(),
+        );
         let rendered = render_lines(&cell.display_lines(32)).join("\n");
         insta::assert_snapshot!(rendered);
     }

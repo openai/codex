@@ -37,10 +37,11 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
             items: vec![UserInput::Text {
                 text: "Record some messages".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let resumed = builder.resume(&server, home, rollout_path).await?;
     let initial_messages = resumed
@@ -89,10 +90,11 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
             items: vec![UserInput::Text {
                 text: "Record reasoning messages".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let resumed = builder.resume(&server, home, rollout_path).await?;
     let initial_messages = resumed

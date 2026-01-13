@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
+use tokio::time::timeout;
 use tracing::error;
 
 use super::cache;
@@ -21,14 +22,16 @@ use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
+use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::model_family::ModelFamily;
+use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
+const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
 const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
@@ -36,7 +39,6 @@ const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
-    // todo(aibrahim) merge available_models and model family creation into one struct
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
     auth_manager: Arc<AuthManager>,
@@ -48,8 +50,7 @@ pub struct ModelsManager {
 
 impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager`.
-    pub fn new(auth_manager: Arc<AuthManager>) -> Self {
-        let codex_home = auth_manager.codex_home().to_path_buf();
+    pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
@@ -63,8 +64,11 @@ impl ModelsManager {
 
     #[cfg(any(test, feature = "test-support"))]
     /// Construct a manager scoped to the provided `AuthManager` with a specific provider. Used for integration tests.
-    pub fn with_provider(auth_manager: Arc<AuthManager>, provider: ModelProviderInfo) -> Self {
-        let codex_home = auth_manager.codex_home().to_path_buf();
+    pub fn with_provider(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        provider: ModelProviderInfo,
+    ) -> Self {
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
@@ -77,7 +81,7 @@ impl ModelsManager {
     }
 
     /// Fetch the latest remote models, using the on-disk cache when still fresh.
-    pub async fn refresh_available_models(&self, config: &Config) -> CoreResult<()> {
+    pub async fn refresh_available_models_with_cache(&self, config: &Config) -> CoreResult<()> {
         if !config.features.enabled(Feature::RemoteModels)
             || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey)
         {
@@ -86,20 +90,31 @@ impl ModelsManager {
         if self.try_load_cache().await {
             return Ok(());
         }
+        self.refresh_available_models_no_cache(config.features.enabled(Feature::RemoteModels))
+            .await
+    }
 
-        let auth = self.auth_manager.auth();
+    pub(crate) async fn refresh_available_models_no_cache(
+        &self,
+        remote_models_feature: bool,
+    ) -> CoreResult<()> {
+        if !remote_models_feature || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
+            return Ok(());
+        }
+        let auth = self.auth_manager.auth().await;
         let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
         let client_version = format_client_version_to_whole();
-        let ModelsResponse { models, etag } = client
-            .list_models(&client_version, HeaderMap::new())
-            .await
-            .map_err(map_api_error)?;
-
-        let etag = (!etag.is_empty()).then_some(etag);
+        let (models, etag) = timeout(
+            MODELS_REFRESH_TIMEOUT,
+            client.list_models(&client_version, HeaderMap::new()),
+        )
+        .await
+        .map_err(|_| CodexErr::Timeout)?
+        .map_err(map_api_error)?;
 
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
@@ -108,7 +123,7 @@ impl ModelsManager {
     }
 
     pub async fn list_models(&self, config: &Config) -> Vec<ModelPreset> {
-        if let Err(err) = self.refresh_available_models(config).await {
+        if let Err(err) = self.refresh_available_models_with_cache(config).await {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.remote_models(config).await;
@@ -120,38 +135,54 @@ impl ModelsManager {
         Ok(self.build_available_models(remote_models))
     }
 
-    fn find_family_for_model(slug: &str) -> ModelFamily {
-        super::model_family::find_family_for_model(slug)
-    }
-
-    /// Look up the requested model family while applying remote metadata overrides.
-    pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
-        Self::find_family_for_model(model)
-            .with_remote_overrides(self.remote_models(config).await)
-            .with_config_overrides(config)
+    /// Look up the requested model metadata while applying remote metadata overrides.
+    pub async fn construct_model_info(&self, model: &str, config: &Config) -> ModelInfo {
+        let remote = self
+            .remote_models(config)
+            .await
+            .into_iter()
+            .find(|m| m.slug == model);
+        let model = if let Some(remote) = remote {
+            remote
+        } else {
+            model_info::find_model_info_for_slug(model)
+        };
+        model_info::with_config_overrides(model, config)
     }
 
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
         if let Some(model) = model.as_ref() {
             return model.to_string();
         }
-        if let Err(err) = self.refresh_available_models(config).await {
+        if let Err(err) = self.refresh_available_models_with_cache(config).await {
             error!("failed to refresh available models: {err}");
         }
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
         let auth_mode = self.auth_manager.get_auth_mode();
         let remote_models = self.remote_models(config).await;
-        if auth_mode == Some(AuthMode::ChatGPT)
-            && self
+        if auth_mode == Some(AuthMode::ChatGPT) {
+            let has_auto_balanced = self
                 .build_available_models(remote_models)
                 .iter()
-                .any(|m| m.model == CODEX_AUTO_BALANCED_MODEL)
-        {
-            return CODEX_AUTO_BALANCED_MODEL.to_string();
-        } else if auth_mode == Some(AuthMode::ChatGPT) {
+                .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL && model.show_in_picker);
+            if has_auto_balanced {
+                return CODEX_AUTO_BALANCED_MODEL.to_string();
+            }
             return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
+    }
+    pub async fn refresh_if_new_etag(&self, etag: String, remote_models_feature: bool) {
+        let current_etag = self.get_etag().await;
+        if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
+            return;
+        }
+        if let Err(err) = self
+            .refresh_available_models_no_cache(remote_models_feature)
+            .await
+        {
+            error!("failed to refresh available models: {err}");
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -160,9 +191,13 @@ impl ModelsManager {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    /// Offline helper that builds a `ModelFamily` without consulting remote state.
-    pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
-        Self::find_family_for_model(model).with_config_overrides(config)
+    /// Offline helper that builds a `ModelInfo` without consulting remote state.
+    pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
+        model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
+    }
+
+    async fn get_etag(&self) -> Option<String> {
+        self.etag.read().await.clone()
     }
 
     /// Replace the cached remote models and rebuild the derived presets list.
@@ -223,10 +258,15 @@ impl ModelsManager {
         merged_presets = self.filter_visible_models(merged_presets);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
-        if let Some(default) = merged_presets.first_mut()
-            && !has_default
-        {
-            default.is_default = true;
+        if !has_default {
+            if let Some(default) = merged_presets
+                .iter_mut()
+                .find(|preset| preset.show_in_picker)
+            {
+                default.is_default = true;
+            } else if let Some(default) = merged_presets.first_mut() {
+                default.is_default = true;
+            }
         }
 
         merged_presets
@@ -236,7 +276,7 @@ impl ModelsManager {
         let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
         models
             .into_iter()
-            .filter(|model| model.show_in_picker && (chatgpt_mode || model.supported_in_api))
+            .filter(|model| chatgpt_mode || model.supported_in_api)
             .collect()
     }
 
@@ -288,24 +328,12 @@ impl ModelsManager {
 
 /// Convert a client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3")
 fn format_client_version_to_whole() -> String {
-    format_client_version_from_parts(
+    format!(
+        "{}.{}.{}",
         env!("CARGO_PKG_VERSION_MAJOR"),
         env!("CARGO_PKG_VERSION_MINOR"),
-        env!("CARGO_PKG_VERSION_PATCH"),
+        env!("CARGO_PKG_VERSION_PATCH")
     )
-}
-
-fn format_client_version_from_parts(major: &str, minor: &str, patch: &str) -> String {
-    const DEV_VERSION: &str = "0.0.0";
-    const FALLBACK_VERSION: &str = "99.99.99";
-
-    let normalized = format!("{major}.{minor}.{patch}");
-
-    if normalized == DEV_VERSION {
-        FALLBACK_VERSION.to_string()
-    } else {
-        normalized
-    }
 }
 
 #[cfg(test)]
@@ -346,14 +374,14 @@ mod tests {
             "supported_in_api": true,
             "priority": priority,
             "upgrade": null,
-            "base_instructions": null,
+            "base_instructions": "base instructions",
             "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
             "truncation_policy": {"mode": "bytes", "limit": 10_000},
             "supports_parallel_tool_calls": false,
-            "context_window": null,
+            "context_window": 272_000,
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
@@ -388,7 +416,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: remote_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -403,10 +430,11 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider(auth_manager, provider);
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("refresh succeeds");
         let cached_remote = manager.remote_models(&config).await;
@@ -445,7 +473,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: remote_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -463,10 +490,11 @@ mod tests {
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider(auth_manager, provider);
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("first refresh succeeds");
         assert_eq!(
@@ -477,7 +505,7 @@ mod tests {
 
         // Second call should read from cache and avoid the network.
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("cached refresh succeeds");
         assert_eq!(
@@ -500,7 +528,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: initial_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -518,10 +545,11 @@ mod tests {
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider(auth_manager, provider);
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("initial refresh succeeds");
 
@@ -541,13 +569,12 @@ mod tests {
             &server,
             ModelsResponse {
                 models: updated_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("second refresh succeeds");
         assert_eq!(
@@ -575,7 +602,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: initial_models,
-                etag: String::new(),
             },
         )
         .await;
@@ -590,11 +616,12 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let mut manager = ModelsManager::with_provider(auth_manager, provider);
+        let mut manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
         manager.cache_ttl = Duration::ZERO;
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("initial refresh succeeds");
 
@@ -604,13 +631,12 @@ mod tests {
             &server,
             ModelsResponse {
                 models: refreshed_models,
-                etag: String::new(),
             },
         )
         .await;
 
         manager
-            .refresh_available_models(&config)
+            .refresh_available_models_with_cache(&config)
             .await
             .expect("second refresh succeeds");
 
@@ -639,21 +665,24 @@ mod tests {
 
     #[test]
     fn build_available_models_picks_default_after_hiding_hidden_models() {
+        let codex_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for("http://example.test".to_string());
-        let mut manager = ModelsManager::with_provider(auth_manager, provider);
+        let mut manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
         manager.local_models = Vec::new();
 
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
         let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
 
-        let mut expected = ModelPreset::from(visible_model.clone());
-        expected.is_default = true;
+        let expected_hidden = ModelPreset::from(hidden_model.clone());
+        let mut expected_visible = ModelPreset::from(visible_model.clone());
+        expected_visible.is_default = true;
 
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
-        assert_eq!(available, vec![expected]);
+        assert_eq!(available, vec![expected_hidden, expected_visible]);
     }
 
     #[test]

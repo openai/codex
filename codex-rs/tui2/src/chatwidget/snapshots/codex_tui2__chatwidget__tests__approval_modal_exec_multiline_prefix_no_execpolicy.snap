@@ -1,0 +1,16 @@
+---
+source: tui2/src/chatwidget/tests.rs
+expression: contents
+---
+
+
+  Would you like to run the following command?
+
+  $ python - <<'PY'
+  print('hello')
+  PY
+
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

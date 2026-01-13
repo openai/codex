@@ -95,7 +95,7 @@ pub fn restore() -> Result<()> {
     Ok(())
 }
 
-/// Initialize the terminal (inline viewport; history stays in normal scrollback)
+/// Initialize the terminal (inline viewport; no always-on scrollback printing).
 pub fn init() -> Result<Terminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
@@ -143,6 +143,8 @@ pub struct Tui {
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
+    // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
+    alt_screen_enabled: bool,
 }
 
 impl Tui {
@@ -170,7 +172,13 @@ impl Tui {
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend()),
+            alt_screen_enabled: true,
         }
+    }
+
+    /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
+    pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
+        self.alt_screen_enabled = enabled;
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -309,6 +317,9 @@ impl Tui {
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
+        if !self.alt_screen_enabled {
+            return Ok(());
+        }
         if !self.alt_screen_nesting.enter() {
             self.alt_screen_active.store(true, Ordering::Relaxed);
             return Ok(());
@@ -330,6 +341,9 @@ impl Tui {
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
+        if !self.alt_screen_enabled {
+            return Ok(());
+        }
         if !self.alt_screen_nesting.leave() {
             self.alt_screen_active
                 .store(self.alt_screen_nesting.is_active(), Ordering::Relaxed);

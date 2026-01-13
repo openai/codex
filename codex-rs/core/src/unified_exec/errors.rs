@@ -3,11 +3,11 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub(crate) enum UnifiedExecError {
-    #[error("Failed to create unified exec session: {message}")]
-    CreateSession { message: String },
-    // Called "session" in the model's training.
-    #[error("Unknown session id {process_id}")]
-    UnknownSessionId { process_id: String },
+    #[error("Failed to create unified exec process: {message}")]
+    CreateProcess { message: String },
+    // The model is trained on `session_id`, but internally we track a `process_id`.
+    #[error("Unknown process id {process_id}")]
+    UnknownProcessId { process_id: String },
     #[error("failed to write to stdin")]
     WriteToStdin,
     #[error("missing command line for unified exec request")]
@@ -20,8 +20,8 @@ pub(crate) enum UnifiedExecError {
 }
 
 impl UnifiedExecError {
-    pub(crate) fn create_session(message: String) -> Self {
-        Self::CreateSession { message }
+    pub(crate) fn create_process(message: String) -> Self {
+        Self::CreateProcess { message }
     }
 
     pub(crate) fn sandbox_denied(message: String, output: ExecToolCallOutput) -> Self {

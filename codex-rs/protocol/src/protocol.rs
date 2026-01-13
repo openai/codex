@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::ConversationId;
+use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
@@ -60,6 +60,13 @@ pub struct Submission {
     pub op: Op,
 }
 
+/// Config payload for refreshing MCP servers.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+pub struct McpServerRefreshConfig {
+    pub mcp_servers: Value,
+    pub mcp_oauth_credentials_store_mode: Value,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -74,10 +81,13 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
+        /// Optional JSON Schema used to constrain the final assistant message for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_output_json_schema: Option<Value>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
-    /// for a turn of a [`crate::codex_conversation::CodexConversation`].
+    /// for a turn of a [`crate::codex_thread::CodexThread`].
     UserTurn {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -92,7 +102,7 @@ pub enum Op {
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
-        /// Must be a valid model slug for the [`crate::client::ModelClient`]
+        /// Must be a valid model slug for the configured client session
         /// associated with this conversation.
         model: String,
 
@@ -124,7 +134,7 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<SandboxPolicy>,
 
-        /// Updated model slug. When set, the model family is derived
+        /// Updated model slug. When set, the model info is derived
         /// automatically.
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
@@ -183,6 +193,9 @@ pub enum Op {
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
 
+    /// Request MCP servers to reinitialize and refresh cached tool lists.
+    RefreshMcpServers { config: McpServerRefreshConfig },
+
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
@@ -207,6 +220,12 @@ pub enum Op {
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
+    /// Request Codex to drop the last N user turns from in-memory context.
+    ///
+    /// This does not attempt to revert local filesystem changes. Clients are
+    /// responsible for undoing any edits on disk.
+    ThreadRollback { num_turns: u32 },
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
@@ -217,7 +236,7 @@ pub enum Op {
     ///
     /// The command string is executed using the user's default shell and may
     /// include shell syntax (pipes, redirects, etc.). Output is streamed via
-    /// `ExecCommand*` events and the UI regains control upon `TaskComplete`.
+    /// `ExecCommand*` events and the UI regains control upon `TurnComplete`.
     RunUserShellCommand {
         /// The raw command string after '!'
         command: String,
@@ -532,17 +551,24 @@ pub enum EventMsg {
     Error(ErrorEvent),
 
     /// Warning issued while processing a submission. Unlike `Error`, this
-    /// indicates the task continued but the user should still be notified.
+    /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
-    /// Agent has started a task
-    TaskStarted(TaskStartedEvent),
+    /// Conversation history was rolled back by dropping the last N user turns.
+    ThreadRolledBack(ThreadRolledBackEvent),
 
-    /// Agent has completed all actions
-    TaskComplete(TaskCompleteEvent),
+    /// Agent has started a turn.
+    /// v1 wire format uses `task_started`; accept `turn_started` for v2 interop.
+    #[serde(rename = "task_started", alias = "turn_started")]
+    TurnStarted(TurnStartedEvent),
+
+    /// Agent has completed all actions.
+    /// v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.
+    #[serde(rename = "task_complete", alias = "turn_complete")]
+    TurnComplete(TurnCompleteEvent),
 
     /// Usage update for the current session, including totals and last turn.
     /// Optional means unknown — UIs should not display when `None`.
@@ -669,6 +695,26 @@ pub enum EventMsg {
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 }
 
+/// Agent lifecycle status, derived from emitted events.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum AgentStatus {
+    /// Agent is waiting for initialization.
+    #[default]
+    PendingInit,
+    /// Agent is currently running.
+    Running,
+    /// Agent is done. Contains the final assistant message.
+    Completed(Option<String>),
+    /// Agent encountered an error.
+    Errored(String),
+    /// Agent has been shutdown.
+    Shutdown,
+    /// Agent is not found.
+    NotFound,
+}
+
 /// Codex errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -695,6 +741,7 @@ pub enum CodexErrorInfo {
     ResponseTooManyFailedAttempts {
         http_status_code: Option<u16>,
     },
+    ThreadRollbackFailed,
     Other,
 }
 
@@ -705,7 +752,7 @@ pub struct RawResponseItemEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ItemStartedEvent {
-    pub thread_id: ConversationId,
+    pub thread_id: ThreadId,
     pub turn_id: String,
     pub item: TurnItem,
 }
@@ -723,7 +770,7 @@ impl HasLegacyEvent for ItemStartedEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ItemCompletedEvent {
-    pub thread_id: ConversationId,
+    pub thread_id: ThreadId,
     pub turn_id: String,
     pub item: TurnItem,
 }
@@ -835,16 +882,17 @@ pub struct WarningEvent {
 pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct TaskCompleteEvent {
+pub struct TurnCompleteEvent {
     pub last_agent_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct TaskStartedEvent {
+pub struct TurnStartedEvent {
+    // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsage {
     #[ts(type = "number")]
     pub input_tokens: i64,
@@ -858,10 +906,11 @@ pub struct TokenUsage {
     pub total_tokens: i64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
 }
@@ -1147,17 +1196,18 @@ pub struct WebSearchEndEvent {
     pub query: String,
 }
 
+// Conversation kept for backward compatibility.
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ConversationPathResponseEvent {
-    pub conversation_id: ConversationId,
+    pub conversation_id: ThreadId,
     pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ResumedHistory {
-    pub conversation_id: ConversationId,
+    pub conversation_id: ThreadId,
     pub history: Vec<RolloutItem>,
     pub rollout_path: PathBuf,
 }
@@ -1252,7 +1302,7 @@ impl fmt::Display for SubAgentSource {
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
-    pub id: ConversationId,
+    pub id: ThreadId,
     pub timestamp: String,
     pub cwd: PathBuf,
     pub originator: String,
@@ -1266,7 +1316,7 @@ pub struct SessionMeta {
 impl Default for SessionMeta {
     fn default() -> Self {
         SessionMeta {
-            id: ConversationId::default(),
+            id: ThreadId::default(),
             timestamp: String::new(),
             cwd: PathBuf::new(),
             originator: String::new(),
@@ -1596,10 +1646,21 @@ pub struct UndoCompletedEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadRolledBackEvent {
+    /// Number of user turns that were removed from context.
+    pub num_turns: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+    /// Optional details about the underlying stream failure (often the same
+    /// human-readable message that is surfaced as the terminal error if retries
+    /// are exhausted).
+    #[serde(default)]
+    pub additional_details: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1767,8 +1828,8 @@ pub struct SkillsListEntry {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
-    /// Name left as session_id instead of conversation_id for backwards compatibility.
-    pub session_id: ConversationId,
+    /// Name left as session_id instead of thread_id for backwards compatibility.
+    pub session_id: ThreadId,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -1829,6 +1890,20 @@ pub enum ReviewDecision {
     /// User has denied this command and the agent should not do anything until
     /// the user's next command.
     Abort,
+}
+
+impl ReviewDecision {
+    /// Returns an opaque version of the decision without PII. We can't use an ignored flag
+    /// on `serde` because the serialization is required by some surfaces.
+    pub fn to_opaque_string(&self) -> &'static str {
+        match self {
+            ReviewDecision::Approved => "approved",
+            ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
+            ReviewDecision::ApprovedForSession => "approved_for_session",
+            ReviewDecision::Denied => "denied",
+            ReviewDecision::Abort => "abort",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -1896,7 +1971,7 @@ mod tests {
     #[test]
     fn item_started_event_from_web_search_emits_begin_event() {
         let event = ItemStartedEvent {
-            thread_id: ConversationId::new(),
+            thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
             item: TurnItem::WebSearch(WebSearchItem {
                 id: "search-1".into(),
@@ -1915,7 +1990,7 @@ mod tests {
     #[test]
     fn item_started_event_from_non_web_search_emits_no_legacy_events() {
         let event = ItemStartedEvent {
-            thread_id: ConversationId::new(),
+            thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
             item: TurnItem::UserMessage(UserMessageItem::new(&[])),
         };
@@ -1923,11 +1998,67 @@ mod tests {
         assert!(event.as_legacy_events(false).is_empty());
     }
 
+    #[test]
+    fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: None,
+        };
+
+        let json_op = serde_json::to_value(op)?;
+        assert_eq!(json_op, json!({ "type": "user_input", "items": [] }));
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_deserializes_without_final_output_json_schema_field() -> Result<()> {
+        let op: Op = serde_json::from_value(json!({ "type": "user_input", "items": [] }))?;
+
+        assert_eq!(
+            op,
+            Op::UserInput {
+                items: Vec::new(),
+                final_output_json_schema: None,
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_serialization_includes_final_output_json_schema_when_some() -> Result<()> {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "answer": { "type": "string" }
+            },
+            "required": ["answer"],
+            "additionalProperties": false
+        });
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: Some(schema.clone()),
+        };
+
+        let json_op = serde_json::to_value(op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "final_output_json_schema": schema,
+            })
+        );
+
+        Ok(())
+    }
+
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
     #[test]
     fn serialize_event() -> Result<()> {
-        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let conversation_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
         let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1234".to_string(),
