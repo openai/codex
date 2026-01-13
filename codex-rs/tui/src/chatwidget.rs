@@ -2133,7 +2133,7 @@ impl ChatWidget {
             use crate::key_hint;
             use ratatui::text::Line;
             let hint_line = Line::from(vec![
-                "Tip: you can queue messages by pressing ".dim(),
+                "You can queue messages by pressing ".dim(),
                 key_hint::plain(KeyCode::Tab).into(),
             ]);
             self.add_to_history(history_cell::PlainHistoryCell::new(vec![hint_line]));
