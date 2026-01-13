@@ -340,12 +340,18 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
-/// Maintains the per-session UI state for the chat screen.
+/// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
-/// This type owns the state derived from a `codex_core::protocol` event stream (history cells,
-/// active streaming buffers, bottom-pane overlays, and transient status text). It is not
-/// responsible for running the agent itself; it only reflects progress by updating UI state and by
-/// sending `Op` requests back to codex-core.
+/// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
+/// buffers, bottom-pane overlays, and transient status text) and turns key presses into user
+/// intent (`Op` submissions and `AppEvent` requests).
+///
+/// It is not responsible for running the agent itself; it reflects progress by updating UI state
+/// and by sending requests back to codex-core.
+///
+/// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
+/// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
+/// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -3832,7 +3838,15 @@ impl ChatWidget {
         self.bottom_pane.on_file_search_result(query, matches);
     }
 
-    /// Handle Ctrl-C key press.
+    /// Handles a Ctrl+C press at the chat-widget layer.
+    ///
+    /// The first press arms a time-bounded quit shortcut and shows a footer hint via the bottom
+    /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
+    /// is armed.
+    ///
+    /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
+    /// quit. The "second press" check currently runs before offering Ctrl+C to the bottom pane,
+    /// which means a second press can bypass modal handling.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
         if self.quit_shortcut_active_for(key) {
@@ -3853,7 +3867,7 @@ impl ChatWidget {
         }
     }
 
-    /// Handle Ctrl-D key press.
+    /// Handles a Ctrl+D press at the chat-widget layer.
     ///
     /// Ctrl-D only participates in quit when the composer is empty and no modal/popup is active.
     /// Otherwise it should be routed to the active view and not attempt to quit.

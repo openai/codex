@@ -1,3 +1,13 @@
+//! Application-level events used to coordinate UI actions.
+//!
+//! `AppEvent` is the internal message bus between UI components and the top-level `App` loop.
+//! Widgets emit events to request actions that must be handled at the app layer (like opening
+//! pickers, persisting configuration, or shutting down the agent), without needing direct access to
+//! `App` internals.
+//!
+//! Exit is modelled explicitly via `AppEvent::Exit(ExitMode)` so callers can request shutdown-first
+//! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
+
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
@@ -211,6 +221,11 @@ pub(crate) enum AppEvent {
     },
 }
 
+/// The exit strategy requested by the UI layer.
+///
+/// Most user-initiated exits should use `ShutdownFirst` so core cleanup runs and the UI exits only
+/// after core acknowledges completion. `Immediate` is an escape hatch for cases where shutdown has
+/// already completed (or is being bypassed) and the UI loop should terminate right away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExitMode {
     /// Shutdown core and exit after completion.

@@ -1,4 +1,18 @@
-//! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
+//! The bottom pane is the interactive footer of the chat UI.
+//!
+//! The pane owns the [`ChatComposer`] (editable prompt input) and a stack of transient
+//! [`BottomPaneView`]s (popups/modals) that temporarily replace the composer for focused
+//! interactions like selection lists.
+//!
+//! Input routing is layered: `BottomPane` decides which local surface receives a key (view vs
+//! composer), while higher-level intent such as "interrupt" or "quit" is decided by the parent
+//! widget (`ChatWidget`). This split matters for Ctrl+C/Ctrl+D: the bottom pane gives the active
+//! view the first chance to consume Ctrl+C (typically to dismiss itself), and `ChatWidget` may
+//! treat an unhandled Ctrl+C as an interrupt or as the first press of a double-press quit
+//! shortcut.
+//!
+//! Some UI is time-based rather than input-based, such as the transient "press again to quit"
+//! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
 use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
@@ -54,6 +68,11 @@ pub(crate) use feedback_view::FeedbackNoteView;
 /// Keeping a single value ensures Ctrl+C and Ctrl+D behave identically.
 pub(crate) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// The result of offering a cancellation key to a bottom-pane surface.
+///
+/// This is primarily used for Ctrl+C routing: active views can consume the key to dismiss
+/// themselves, and the caller can decide what higher-level action (if any) to take when the key is
+/// not handled locally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
     Handled,
@@ -69,6 +88,10 @@ pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
 /// Pane displayed in the lower half of the chat UI.
+///
+/// This is the owning container for the prompt input (`ChatComposer`) and the view stack
+/// (`BottomPaneView`). It performs local input routing and renders time-based hints, while leaving
+/// process-level decisions (quit, interrupt, shutdown) to `ChatWidget`.
 pub(crate) struct BottomPane {
     /// Composer is retained even when a BottomPaneView is displayed so the
     /// input state is retained when the view is closed.
@@ -219,8 +242,14 @@ impl BottomPane {
         }
     }
 
-    /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
-    /// chance to consume the event (e.g. to dismiss itself).
+    /// Handles a Ctrl+C press within the bottom pane.
+    ///
+    /// An active modal view is given the first chance to consume the key (typically to dismiss
+    /// itself). If no view is active, Ctrl+C clears draft composer input.
+    ///
+    /// This method may show the quit shortcut hint as a user-visible acknowledgement that Ctrl+C
+    /// was received, but it does not decide whether the process should exit; `ChatWidget` owns the
+    /// quit/interrupt state machine and uses the result to decide what happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();

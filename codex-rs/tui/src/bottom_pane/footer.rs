@@ -1,3 +1,13 @@
+//! The bottom-pane footer renders transient hints and context indicators.
+//!
+//! The footer is pure rendering: it formats `FooterProps` into `Line`s without mutating any state.
+//! It intentionally does not decide *which* footer content should be shown; that is owned by the
+//! `ChatComposer` (which selects a `FooterMode`) and by higher-level state machines like
+//! `ChatWidget` (which decides when quit/interrupt is allowed).
+//!
+//! Some footer content is time-based rather than event-based, such as the "press again to quit"
+//! hint. The owning widgets schedule redraws so time-based hints can expire even if the UI is
+//! otherwise idle.
 #[cfg(target_os = "linux")]
 use crate::clipboard_paste::is_probably_wsl;
 use crate::key_hint;
@@ -14,6 +24,12 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+/// The rendering inputs for the footer area under the composer.
+///
+/// Callers are expected to construct `FooterProps` from higher-level state (`ChatComposer`,
+/// `BottomPane`, and `ChatWidget`) and pass it to `render_footer`. The footer treats these values as
+/// authoritative and does not attempt to infer missing state (for example, it does not query
+/// whether a task is running).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
@@ -29,6 +45,10 @@ pub(crate) struct FooterProps {
     pub(crate) context_window_used_tokens: Option<i64>,
 }
 
+/// Selects which footer content is rendered.
+///
+/// The current mode is owned by `ChatComposer`, which may override it based on transient state
+/// (for example, showing `QuitShortcutReminder` only while its timer is active).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FooterMode {
     /// Transient "press again to quit" reminder (Ctrl+C/Ctrl+D).

@@ -33,15 +33,15 @@ Exit is coordinated via a single event with explicit modes:
 
 Priority order in the UI layer:
 
-1. Active modal/view gets the first chance to consume (`BottomPane::on_ctrl_c`).
-   - If the modal handles it, the quit flow stops.
-2. If cancellable work is active (streaming/tools/review), send `Op::Interrupt`.
-3. If the composer has draft input, clear the draft.
-4. Always show the quit hint (`ctrl + c again to quit`) below the composer prompt.
-   - The hint text matches the key that was pressed (e.g., `ctrl + d again to quit`).
-   - The hint times out after 1 second.
-5. If the user presses Ctrl+C again while the hint is visible, request shutdown-first quit.
-   - The second press must match the first key (Ctrl+C then Ctrl+D will not quit).
+1. The quit shortcut state machine is checked first.
+   - If the user has already armed Ctrl+C and the 1 second window has not expired, the second
+     Ctrl+C triggers shutdown-first quit immediately.
+2. If no quit shortcut is armed, `ChatWidget` arms it and shows the quit hint (`ctrl + c again to
+   quit`) for 1 second.
+3. `ChatWidget` then offers Ctrl+C to the bottom pane via `BottomPane::on_ctrl_c`.
+   - This gives active modals/views a chance to consume Ctrl+C (typically to dismiss themselves),
+     but it also means the hint can remain armed even when a modal consumes the first press.
+4. If cancellable work is active (streaming/tools/review), `ChatWidget` submits `Op::Interrupt`.
 
 ### Ctrl+D
 
