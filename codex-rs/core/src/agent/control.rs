@@ -57,7 +57,7 @@ impl AgentControl {
         prompt: String,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        state
+        let result = state
             .send_op(
                 agent_id,
                 Op::UserInput {
@@ -65,13 +65,19 @@ impl AgentControl {
                     final_output_json_schema: None,
                 },
             )
-            .await
+            .await;
+        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+            let _ = state.remove_thread(&agent_id).await;
+        }
+        result
     }
 
     /// Submit a shutdown request to an existing agent thread.
     pub(crate) async fn shutdown_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
-        state.send_op(agent_id, Op::Shutdown {}).await
+        let result = state.send_op(agent_id, Op::Shutdown {}).await;
+        let _ = state.remove_thread(&agent_id).await;
+        result
     }
 
     #[allow(dead_code)] // Will be used for collab tools.

@@ -249,6 +249,7 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    /// Fetch a thread by ID or return ThreadNotFound.
     pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         let threads = self.threads.read().await;
         threads
@@ -257,6 +258,7 @@ impl ThreadManagerState {
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
     }
 
+    /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         #[cfg(any(test, feature = "test-support"))]
@@ -268,7 +270,12 @@ impl ThreadManagerState {
         thread.submit(op).await
     }
 
-    #[allow(dead_code)] // Used by upcoming multi-agent tooling.
+    /// Remove a thread from the manager by ID, returning it when present.
+    pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
+        self.threads.write().await.remove(thread_id)
+    }
+
+    /// Spawn a new thread with no history using a provided config.
     pub(crate) async fn spawn_new_thread(
         &self,
         config: Config,
@@ -283,6 +290,7 @@ impl ThreadManagerState {
         .await
     }
 
+    /// Spawn a new thread with optional history and register it with the manager.
     pub(crate) async fn spawn_thread(
         &self,
         config: Config,
