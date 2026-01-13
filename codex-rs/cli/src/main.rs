@@ -825,7 +825,7 @@ mod tests {
         )
     }
 
-    fn sample_exit_info(conversation: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
+    fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,
             total_tokens: 2,
@@ -833,7 +833,9 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
-            thread_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
+            thread_id: conversation_id
+                .map(ThreadId::from_string)
+                .map(Result::unwrap),
             thread_name: thread_name.map(str::to_string),
             update_action: None,
         }
