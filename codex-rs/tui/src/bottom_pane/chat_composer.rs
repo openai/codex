@@ -2884,6 +2884,7 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
+        use std::time::Duration;
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -2898,13 +2899,12 @@ mod tests {
         composer.set_steer_enabled(true);
         composer.set_steer_enabled(true);
 
-        // Force an active burst so this test doesn't depend on tight timing.
-        composer
-            .paste_burst
-            .begin_with_retro_grabbed(String::new(), Instant::now());
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        // Use a synthetic timeline rather than relying on the wall clock to keep
+        // "fast burst" tests deterministic under slow runners (e.g., Bazel on arm64).
+        let mut now = Instant::now();
+        for ch in ['h', 'i'] {
+            feed_fast_ascii_burst_char(&mut composer, ch, &mut now);
+        }
 
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -2914,10 +2914,12 @@ mod tests {
         );
 
         for ch in ['t', 'h', 'e', 'r', 'e'] {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            feed_fast_ascii_burst_char(&mut composer, ch, &mut now);
         }
 
-        let _ = flush_after_paste_burst(&mut composer);
+        assert!(composer.handle_paste_burst_flush(
+            now + PasteBurst::recommended_active_flush_delay() + Duration::from_millis(1)
+        ));
         assert_eq!(composer.textarea.text(), "hi\nthere");
     }
 
@@ -3243,6 +3245,21 @@ mod tests {
     fn flush_after_paste_burst(composer: &mut ChatComposer) -> bool {
         std::thread::sleep(PasteBurst::recommended_active_flush_delay());
         composer.flush_paste_burst_if_due()
+    }
+
+    fn feed_fast_ascii_burst_char(composer: &mut ChatComposer, ch: char, now: &mut Instant) {
+        use std::time::Duration;
+
+        *now += Duration::from_millis(1);
+        match composer.paste_burst.on_plain_char(ch, *now) {
+            CharDecision::BufferAppend | CharDecision::BeginBufferFromPending => {
+                composer.paste_burst.append_char_to_buffer(ch, *now);
+            }
+            CharDecision::RetainFirstChar => {}
+            CharDecision::BeginBuffer { .. } => {
+                unreachable!("the fast-burst tests feed chars into an empty textarea")
+            }
+        }
     }
 
     // Test helper: simulate human typing with a brief delay and flush the paste-burst buffer
