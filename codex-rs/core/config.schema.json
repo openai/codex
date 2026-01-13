@@ -120,6 +120,9 @@
         "shell_tool": {
           "type": "boolean"
         },
+        "steer": {
+          "type": "boolean"
+        },
         "tui2": {
           "type": "boolean"
         },
@@ -281,7 +284,7 @@
       }
     },
     "oss_provider": {
-      "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
+      "description": "Preferred OSS provider for local models, e.g. \"lmstudio\", \"ollama\", or \"ollama-chat\".",
       "type": "string"
     },
     "otel": {
@@ -575,6 +578,9 @@
               "type": "boolean"
             },
             "shell_tool": {
+              "type": "boolean"
+            },
+            "steer": {
               "type": "boolean"
             },
             "tui2": {
@@ -1422,6 +1428,13 @@
           "type": "string",
           "enum": [
             "responses"
+          ]
+        },
+        {
+          "description": "Experimental: Responses API over WebSocket transport.",
+          "type": "string",
+          "enum": [
+            "responses_websocket"
           ]
         },
         {
