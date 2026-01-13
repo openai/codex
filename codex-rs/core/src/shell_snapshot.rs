@@ -267,12 +267,43 @@ $envVars | ForEach-Object {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::env;
+    use std::ffi::OsString;
     #[cfg(target_os = "linux")]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(target_os = "linux")]
     use std::process::Command as StdCommand;
 
     use tempfile::tempdir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = env::var_os(key);
+            unsafe {
+                env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.take() {
+                unsafe {
+                    env::set_var(self.key, previous);
+                }
+            } else {
+                unsafe {
+                    env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     #[cfg(not(target_os = "windows"))]
     fn assert_posix_snapshot_sections(snapshot: &str) {
@@ -401,6 +432,22 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_zsh_snapshot_sources_zdotdir() -> Result<()> {
+        let dir = tempdir()?;
+        let rc_path = dir.path().join(".zshrc");
+        fs::write(&rc_path, "export CODEX_SNAPSHOT_RC_TEST=from_zshrc\n").await?;
+        let _env_guard = EnvVarGuard::set("ZDOTDIR", dir.path());
+
+        let snapshot = get_snapshot(ShellType::Zsh).await?;
+        assert!(
+            snapshot.contains("CODEX_SNAPSHOT_RC_TEST") && snapshot.contains("from_zshrc"),
+            "snapshot should include values from ZDOTDIR/.zshrc"
+        );
+        Ok(())
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn linux_bash_snapshot_includes_sections() -> Result<()> {
@@ -411,9 +458,41 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
+    async fn linux_bash_snapshot_sources_bash_env() -> Result<()> {
+        let dir = tempdir()?;
+        let rc_path = dir.path().join("bash_env");
+        fs::write(&rc_path, "export CODEX_SNAPSHOT_RC_TEST=from_bash_env\n").await?;
+        let _env_guard = EnvVarGuard::set("BASH_ENV", &rc_path);
+
+        let snapshot = get_snapshot(ShellType::Bash).await?;
+        assert!(
+            snapshot.contains("CODEX_SNAPSHOT_RC_TEST") && snapshot.contains("from_bash_env"),
+            "snapshot should include values from BASH_ENV"
+        );
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
     async fn linux_sh_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Sh).await?;
         assert_posix_snapshot_sections(&snapshot);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_sh_snapshot_sources_env_file() -> Result<()> {
+        let dir = tempdir()?;
+        let rc_path = dir.path().join("sh_env");
+        fs::write(&rc_path, "export CODEX_SNAPSHOT_RC_TEST=from_sh_env\n").await?;
+        let _env_guard = EnvVarGuard::set("ENV", &rc_path);
+
+        let snapshot = get_snapshot(ShellType::Sh).await?;
+        assert!(
+            snapshot.contains("CODEX_SNAPSHOT_RC_TEST") && snapshot.contains("from_sh_env"),
+            "snapshot should include values from ENV"
+        );
         Ok(())
     }
 
