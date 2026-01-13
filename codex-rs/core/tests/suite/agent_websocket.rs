@@ -1,10 +1,9 @@
 use anyhow::Result;
-use codex_core::WireApi;
 use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_done;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call;
-use core_test_support::responses::start_mock_server;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -25,19 +24,14 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         vec![
             ev_response_created("resp-2"),
             ev_assistant_message("msg-1", "done"),
-            ev_done(),
+            ev_completed("resp-2"),
         ],
     ]])
     .await;
 
-    let ws_base_url = format!("{}/v1", server.uri());
-    let mock_server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.model_provider.base_url = Some(ws_base_url);
-        config.model_provider.wire_api = WireApi::ResponsesWebsocket;
-    });
+    let mut builder = test_codex();
 
-    let test = builder.build(&mock_server).await?;
+    let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn("run the echo command").await?;
 
     let connection = server.single_connection();

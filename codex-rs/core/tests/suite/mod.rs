@@ -15,6 +15,7 @@ pub static CODEX_ALIASES_TEMP_DIR: TempDir = unsafe {
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
+mod agent_websocket;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
@@ -72,4 +73,3 @@ mod user_notification;
 mod user_shell_cmd;
 mod view_image;
 mod web_search_cached;
-mod websocket;
