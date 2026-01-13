@@ -1,4 +1,4 @@
-#[allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
@@ -19,6 +19,7 @@ use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
+use core_test_support::skip_if_no_network;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -33,6 +34,8 @@ struct WebsocketTestHarness {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_streams_request() {
+    skip_if_no_network!();
+
     let server = start_websocket_server(vec![vec![vec![
         ev_response_created("resp-1"),
         ev_completed("resp-1"),
@@ -55,7 +58,7 @@ async fn responses_websocket_streams_request() {
     let connection = server.single_connection();
     assert_eq!(connection.len(), 1);
     let body = connection.first().expect("missing request").body_json();
-    
+
     assert_eq!(body["model"].as_str(), Some(MODEL));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
@@ -65,6 +68,8 @@ async fn responses_websocket_streams_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_reuses_connection() {
+    skip_if_no_network!();
+
     let server = start_websocket_server(vec![vec![
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
@@ -89,7 +94,7 @@ async fn responses_websocket_reuses_connection() {
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
     let body = connection.first().expect("missing request").body_json();
-    
+
     assert_eq!(body["model"].as_str(), Some(MODEL));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));

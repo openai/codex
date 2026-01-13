@@ -82,11 +82,6 @@ pub struct ModelClient {
 
 pub struct ModelClientSession {
     state: Arc<ModelClientState>,
-    websocket: WebsocketSessionState,
-}
-
-#[derive(Default)]
-struct WebsocketSessionState {
     connection: Option<ApiWebSocketConnection>,
 }
 
@@ -121,7 +116,7 @@ impl ModelClient {
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             state: Arc::clone(&self.state),
-            websocket: WebsocketSessionState::default(),
+            connection: None,
         }
     }
 }
@@ -369,20 +364,21 @@ impl ModelClientSession {
         api_auth: CoreAuthProvider,
         headers: ApiHeaderMap,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
-        let can_reuse = match self.websocket.connection.as_ref() {
-            Some(conn) => !conn.is_closed().await,
-            None => false,
+        let needs_new = match self.connection.as_ref() {
+            Some(conn) => conn.is_closed().await,
+            None => true,
         };
 
-        if can_reuse {
-            return Ok(self.websocket.connection.as_ref().unwrap());
+        if needs_new {
+            let new_conn = ApiWebSocketResponsesClient::new(api_provider, api_auth)
+                .connect(headers)
+                .await?;
+            self.connection = Some(new_conn);
         }
 
-        let new_conn = ApiWebSocketResponsesClient::new(api_provider, api_auth)
-            .connect(headers)
-            .await?;
-
-        Ok(self.websocket.connection.insert(new_conn))
+        self.connection.as_ref().ok_or(ApiError::Stream(
+            "websocket connection is unavailable".to_string(),
+        ))
     }
 
     fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
