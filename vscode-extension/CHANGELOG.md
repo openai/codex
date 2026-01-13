@@ -4,8 +4,19 @@
 
 ## Unreleased
 
-- 変更: AskUserQuestion（`ask_user_question` tool）をデフォルト無効にし、`config.toml` で明示的に有効化した場合のみモデルへ露出
+- 追加: SESSIONS/Chat のセッションをプロジェクト（workspace folder）単位で色分け
+  - Chat のセッションタブをプロジェクトごとに角丸グループ枠で囲って表示（Chrome のタブグループ風）
+  - SESSIONS ツリーにも同色のマーカーを表示
+- 追加: プロジェクト色の手動設定（workspaceFolderUri 単位で永続化）
+  - Chat のグループ見出しを右クリック/二本指タップして色を選択（QuickPick）
+  - 「自動」を選ぶと手動設定を解除
+- 改善: Chat 上部 UI の視認性調整（ボタン/ラベルのサイズ、ラベルの省略表示）
+- 追加: AskUserQuestion（`ask_user_question` tool）の UI をサポート（デフォルト無効。`config.toml` で明示的に有効化した場合のみモデルへ露出）
   - 推奨: `[features].ask_user_question_tool = true`（互換: `[tools].ask_user_question = true`）
+  - 質問カードの表示と回答の送信
+  - 選択肢（options）のクリック選択
+  - 回答（answers）をチャット履歴に保持
+- 修正: Webview の state 更新 ACK が来ない場合に、デバッグ用メッセージ（`Webview did not acknowledge state update...`）が表示されることがある
 - 改善: チャット内のファイル参照リンク（Ctrl/Cmd+Click で開く）を安定化
   - `+` を含むパスでもリンクが途中で切れない
   - `README.md` などが外部リンク扱いになってブラウザが開く誤動作を防止
