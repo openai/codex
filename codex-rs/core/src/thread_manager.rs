@@ -31,8 +31,8 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
 use tokio::sync::RwLock;
-use tracing::warn;
 use tokio::sync::broadcast;
+use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
