@@ -873,16 +873,16 @@ fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> 
         "Polish, dedupe, and rerank findings",
     ));
     steps.push(SecurityReviewPlanItem::new(
-        SecurityReviewPlanStep::AssembleReport,
-        "Assemble report and artifacts",
-    ));
-    steps.push(SecurityReviewPlanItem::new(
         SecurityReviewPlanStep::ValidateFindings,
         "Validate findings",
     ));
     steps.push(SecurityReviewPlanItem::new(
         SecurityReviewPlanStep::PostValidationRefine,
         "Post-validation PoC refinement",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::AssembleReport,
+        "Assemble report and artifacts",
     ));
     steps
 }
@@ -2261,14 +2261,14 @@ fn render_bug_sections(
         }
         let base_owned = prune_bug_markdown_file_lines_for_reporting(base_raw);
         let base = base_owned.trim();
-        let mut composed = String::new();
         let anchor_snippet = format!("<a id=\"bug-{}\"", snapshot.bug.summary_id);
-        if base.contains(&anchor_snippet) {
-            composed.push_str(&linkify_file_lines(base, git_link_info));
+        let mut composed = if base.contains(&anchor_snippet) {
+            linkify_file_lines(base, git_link_info)
         } else {
-            composed.push_str(&format!("<a id=\"bug-{}\"></a>\n", snapshot.bug.summary_id));
-            composed.push_str(&linkify_file_lines(base, git_link_info));
-        }
+            let linked = linkify_file_lines(base, git_link_info);
+            rewrite_bug_markdown_heading_id(linked.as_str(), snapshot.bug.summary_id)
+                .unwrap_or(linked)
+        };
         if let Some(handle) = snapshot.bug.assignee_github.as_deref() {
             let mut replaced = false;
             let mut adjusted: Vec<String> = Vec::new();
@@ -4500,7 +4500,6 @@ pub async fn run_security_review(
 
     let mut bug_summary_table: Option<String> = None;
     let mut bugs_for_result: Vec<SecurityReviewBug> = Vec::new();
-    let mut report_sections_prefix: Vec<String> = Vec::new();
     let mut snapshot: Option<SecurityReviewSnapshot> = None;
     let mut bugs_markdown: String = String::new();
     let mut findings_summary: String = String::new();
@@ -4589,11 +4588,19 @@ pub async fn run_security_review(
 
                     plan_tracker.mark_complete(SecurityReviewPlanStep::AnalyzeBugs);
                     plan_tracker.mark_complete(SecurityReviewPlanStep::PolishFindings);
-                    if !matches!(
-                        plan_tracker.status_for(SecurityReviewPlanStep::AssembleReport),
-                        Some(StepStatus::Completed | StepStatus::InProgress)
-                    ) {
-                        plan_tracker.start_step(SecurityReviewPlanStep::AssembleReport);
+                    for step in [
+                        SecurityReviewPlanStep::ValidateFindings,
+                        SecurityReviewPlanStep::PostValidationRefine,
+                        SecurityReviewPlanStep::AssembleReport,
+                    ] {
+                        if matches!(
+                            plan_tracker.status_for(step),
+                            Some(StepStatus::Completed | StepStatus::InProgress)
+                        ) {
+                            continue;
+                        }
+                        plan_tracker.start_step(step);
+                        break;
                     }
                     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
                     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -4601,7 +4608,6 @@ pub async fn run_security_review(
                     findings_summary = loaded.findings_summary.clone();
                     bugs_for_result = snapshot_bugs(&loaded);
                     bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
-                    report_sections_prefix = loaded.report_sections_prefix.clone();
                     bugs_markdown = build_bugs_markdown(
                         &loaded,
                         git_link_info.as_ref(),
@@ -5153,7 +5159,7 @@ pub async fn run_security_review(
         record(&mut logs, "Bug analysis complete.".to_string());
         plan_tracker.complete_and_start_next(
             SecurityReviewPlanStep::PolishFindings,
-            Some(SecurityReviewPlanStep::AssembleReport),
+            Some(SecurityReviewPlanStep::ValidateFindings),
         );
         checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
         persist_checkpoint(&mut checkpoint, &mut logs);
@@ -5161,7 +5167,7 @@ pub async fn run_security_review(
             let prompt = build_linear_progress_prompt(
                 linear_issue,
                 &checkpoint.model,
-                "Assemble report and artifacts",
+                "Validate findings",
                 &checkpoint.plan_statuses,
                 &checkpoint,
                 &request.output_root,
@@ -5190,7 +5196,7 @@ pub async fn run_security_review(
 
         let (next_bugs_for_result, bug_snapshots) = build_bug_records(bug_summaries, bug_details);
         bugs_for_result = next_bugs_for_result;
-        report_sections_prefix = Vec::new();
+        let mut report_sections_prefix = Vec::new();
         if matches!(mode, SecurityReviewMode::Full) {
             if let Some(spec) = spec_generation.as_ref() {
                 record(
@@ -5217,7 +5223,7 @@ pub async fn run_security_review(
         let built_snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
             findings_summary: findings_summary.clone(),
-            report_sections_prefix: report_sections_prefix.clone(),
+            report_sections_prefix,
             bugs: bug_snapshots,
         };
 
@@ -5230,7 +5236,7 @@ pub async fn run_security_review(
         snapshot = Some(built_snapshot);
     }
 
-    let snapshot = match snapshot {
+    let mut snapshot = match snapshot {
         Some(snapshot) => snapshot,
         None => {
             return Err(SecurityReviewFailure {
@@ -5240,6 +5246,206 @@ pub async fn run_security_review(
         }
     };
 
+    if is_open_source {
+        let _ = run_trufflehog_scan(
+            &repo_path,
+            &request.output_root,
+            progress_sender.clone(),
+            log_sink.clone(),
+            &mut logs,
+        )
+        .await;
+    }
+
+    // Intentionally avoid logging the output path pre-write to keep logs concise.
+    let (git_commit, git_branch, git_commit_timestamp) = match git_revision.as_ref() {
+        Some((commit, branch, ts)) => (Some(commit.clone()), branch.clone(), *ts),
+        None => (None, None, None),
+    };
+    let metadata = SecurityReviewMetadata {
+        mode,
+        scope_paths: scope_display_paths.clone(),
+        git_commit,
+        git_branch,
+        git_commit_timestamp,
+        linear_issue: linear_issue.clone(),
+    };
+    let api_entries_for_persist = spec_generation
+        .as_ref()
+        .map(|spec| spec.api_entries.clone())
+        .unwrap_or_default();
+    let classification_rows_for_persist = spec_generation
+        .as_ref()
+        .map(|spec| spec.classification_rows.clone())
+        .unwrap_or_default();
+    let classification_table_for_persist = spec_generation
+        .as_ref()
+        .and_then(|spec| spec.classification_table.clone());
+    let mut artifacts = match persist_artifacts(
+        &request.output_root,
+        &repo_path,
+        &metadata,
+        &bugs_markdown,
+        &api_entries_for_persist,
+        &classification_rows_for_persist,
+        classification_table_for_persist.as_deref(),
+        None,
+        &snapshot,
+    )
+    .await
+    {
+        Ok(paths) => {
+            record(
+                &mut logs,
+                "Prepared bugs snapshot for validation.".to_string(),
+            );
+            checkpoint.bug_snapshot_path = Some(paths.snapshot_path.clone());
+            checkpoint.bugs_path = Some(paths.bugs_path.clone());
+            // Report is assembled after validation.
+            checkpoint.report_path = None;
+            checkpoint.report_html_path = None;
+            checkpoint.api_overview_path = paths.api_overview_path.clone();
+            checkpoint.classification_json_path = paths.classification_json_path.clone();
+            checkpoint.classification_table_path = paths.classification_table_path.clone();
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+            paths
+        }
+        Err(err) => {
+            record(&mut logs, format!("Failed to write artifacts: {err}"));
+            return Err(SecurityReviewFailure {
+                message: format!("Failed to write artifacts: {err}"),
+                logs,
+            });
+        }
+    };
+
+    let validation_targets = build_validation_findings_context(&snapshot);
+
+    if validation_targets.ids.is_empty() {
+        record(
+            &mut logs,
+            "No high-risk findings selected for validation; skipping.".to_string(),
+        );
+    } else {
+        record(
+            &mut logs,
+            format!(
+                "Validating high-risk findings... (model: {model}, reasoning: {validation_reasoning_label}).",
+                model = request.validation_model.as_str(),
+                validation_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.validation_model.as_str(),
+                        validation_reasoning_effort,
+                    ))
+            ),
+        );
+        match run_asan_validation(
+            repo_path.clone(),
+            artifacts.snapshot_path.clone(),
+            artifacts.bugs_path.clone(),
+            None,
+            None,
+            request.provider.clone(),
+            request.validation_model.clone(),
+            validation_reasoning_effort,
+            &request.config,
+            request.auth_manager.clone(),
+            progress_sender.clone(),
+            metrics.clone(),
+        )
+        .await
+        {
+            Ok(_) => {
+                record(
+                    &mut logs,
+                    "Validation complete; snapshot updated.".to_string(),
+                );
+            }
+            Err(err) => {
+                record(&mut logs, format!("Validation failed: {}", err.message));
+                logs.extend(err.logs);
+            }
+        }
+    }
+
+    match tokio_fs::read(&artifacts.snapshot_path).await {
+        Ok(bytes) => match serde_json::from_slice::<SecurityReviewSnapshot>(&bytes) {
+            Ok(updated) => {
+                snapshot = updated;
+                findings_summary = snapshot.findings_summary.clone();
+                bugs_for_result = snapshot_bugs(&snapshot);
+                bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
+                bugs_markdown = build_bugs_markdown(
+                    &snapshot,
+                    git_link_info.as_ref(),
+                    Some(repo_path.as_path()),
+                    Some(request.output_root.as_path()),
+                );
+            }
+            Err(err) => {
+                record(
+                    &mut logs,
+                    format!(
+                        "Failed to parse updated bug snapshot {}: {err}",
+                        artifacts.snapshot_path.display()
+                    ),
+                );
+            }
+        },
+        Err(err) => {
+            record(
+                &mut logs,
+                format!(
+                    "Failed to read updated bug snapshot {}: {err}",
+                    artifacts.snapshot_path.display()
+                ),
+            );
+        }
+    }
+
+    plan_tracker.complete_and_start_next(
+        SecurityReviewPlanStep::ValidateFindings,
+        Some(SecurityReviewPlanStep::PostValidationRefine),
+    );
+    plan_tracker.complete_and_start_next(
+        SecurityReviewPlanStep::PostValidationRefine,
+        Some(SecurityReviewPlanStep::AssembleReport),
+    );
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
+
+    if let Some(linear_issue) = linear_issue.as_ref() {
+        let prompt = build_linear_progress_prompt(
+            linear_issue,
+            &checkpoint.model,
+            "Assemble report and artifacts",
+            &checkpoint.plan_statuses,
+            &checkpoint,
+            &request.output_root,
+        );
+        let config = request.config.clone();
+        let provider = request.provider.clone();
+        let auth_manager = request.auth_manager.clone();
+        let repo_for_task = repo_path.clone();
+        let progress_for_task = progress_sender.clone();
+        let log_sink_for_task = log_sink.clone();
+        let metrics_for_task = metrics.clone();
+        tokio::spawn(async move {
+            let _ = run_linear_status_agent(
+                &config,
+                &provider,
+                auth_manager,
+                &repo_for_task,
+                progress_for_task,
+                log_sink_for_task,
+                prompt,
+                metrics_for_task,
+            )
+            .await;
+        });
+    }
+
     let findings_section = if bugs_markdown.trim().is_empty() {
         None
     } else {
@@ -5247,7 +5453,7 @@ pub async fn run_security_review(
     };
     let report_markdown = match mode {
         SecurityReviewMode::Full => {
-            let mut sections = report_sections_prefix.clone();
+            let mut sections = snapshot.report_sections_prefix.clone();
             if let Some(section) = findings_section.clone() {
                 sections.push(section);
             }
@@ -5288,42 +5494,7 @@ pub async fn run_security_review(
         }
     };
 
-    if is_open_source {
-        let _ = run_trufflehog_scan(
-            &repo_path,
-            &request.output_root,
-            progress_sender.clone(),
-            log_sink.clone(),
-            &mut logs,
-        )
-        .await;
-    }
-
-    // Intentionally avoid logging the output path pre-write to keep logs concise.
-    let (git_commit, git_branch, git_commit_timestamp) = match git_revision.as_ref() {
-        Some((commit, branch, ts)) => (Some(commit.clone()), branch.clone(), *ts),
-        None => (None, None, None),
-    };
-    let metadata = SecurityReviewMetadata {
-        mode,
-        scope_paths: scope_display_paths.clone(),
-        git_commit,
-        git_branch,
-        git_commit_timestamp,
-        linear_issue: linear_issue.clone(),
-    };
-    let api_entries_for_persist = spec_generation
-        .as_ref()
-        .map(|spec| spec.api_entries.clone())
-        .unwrap_or_default();
-    let classification_rows_for_persist = spec_generation
-        .as_ref()
-        .map(|spec| spec.classification_rows.clone())
-        .unwrap_or_default();
-    let classification_table_for_persist = spec_generation
-        .as_ref()
-        .and_then(|spec| spec.classification_table.clone());
-    let artifacts = match persist_artifacts(
+    artifacts = match persist_artifacts(
         &request.output_root,
         &repo_path,
         &metadata,
@@ -5361,94 +5532,7 @@ pub async fn run_security_review(
         }
     };
 
-    let validation_targets = build_validation_findings_context(&snapshot);
-    plan_tracker.complete_and_start_next(
-        SecurityReviewPlanStep::AssembleReport,
-        Some(SecurityReviewPlanStep::ValidateFindings),
-    );
-    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
-    persist_checkpoint(&mut checkpoint, &mut logs);
-
-    if validation_targets.ids.is_empty() {
-        record(
-            &mut logs,
-            "No high-risk findings selected for validation; skipping.".to_string(),
-        );
-    } else {
-        record(
-            &mut logs,
-            format!(
-                "Validating high-risk findings... (model: {model}, reasoning: {validation_reasoning_label}).",
-                model = request.validation_model.as_str(),
-                validation_reasoning_label =
-                    reasoning_effort_label(normalize_reasoning_effort_for_model(
-                        request.validation_model.as_str(),
-                        validation_reasoning_effort,
-                    ))
-            ),
-        );
-        match run_asan_validation(
-            repo_path.clone(),
-            artifacts.snapshot_path.clone(),
-            artifacts.bugs_path.clone(),
-            artifacts.report_path.clone(),
-            artifacts.report_html_path.clone(),
-            request.provider.clone(),
-            request.validation_model.clone(),
-            validation_reasoning_effort,
-            &request.config,
-            request.auth_manager.clone(),
-            progress_sender.clone(),
-            metrics.clone(),
-        )
-        .await
-        {
-            Ok(_) => {
-                record(
-                    &mut logs,
-                    "Validation complete; report updated.".to_string(),
-                );
-            }
-            Err(err) => {
-                record(&mut logs, format!("Validation failed: {}", err.message));
-                logs.extend(err.logs);
-            }
-        }
-
-        match tokio_fs::read(&artifacts.snapshot_path).await {
-            Ok(bytes) => match serde_json::from_slice::<SecurityReviewSnapshot>(&bytes) {
-                Ok(updated) => {
-                    findings_summary = updated.findings_summary.clone();
-                    bugs_for_result = snapshot_bugs(&updated);
-                    bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
-                }
-                Err(err) => {
-                    record(
-                        &mut logs,
-                        format!(
-                            "Failed to parse updated bug snapshot {}: {err}",
-                            artifacts.snapshot_path.display()
-                        ),
-                    );
-                }
-            },
-            Err(err) => {
-                record(
-                    &mut logs,
-                    format!(
-                        "Failed to read updated bug snapshot {}: {err}",
-                        artifacts.snapshot_path.display()
-                    ),
-                );
-            }
-        }
-    }
-
-    plan_tracker.complete_and_start_next(
-        SecurityReviewPlanStep::ValidateFindings,
-        Some(SecurityReviewPlanStep::PostValidationRefine),
-    );
-    plan_tracker.mark_complete(SecurityReviewPlanStep::PostValidationRefine);
+    plan_tracker.mark_complete(SecurityReviewPlanStep::AssembleReport);
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     checkpoint.status = SecurityReviewCheckpointStatus::Complete;
     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -5635,6 +5719,8 @@ fn render_checklist_markdown(statuses: &HashMap<String, StepStatus>) -> String {
         ("threat_model", "Draft threat model"),
         ("analyze_bugs", "Analyze code for bugs"),
         ("polish_findings", "Polish, dedupe, and rerank findings"),
+        ("validate_findings", "Validate findings"),
+        ("post_validation_refine", "Post-validation PoC refinement"),
         ("assemble_report", "Assemble report and artifacts"),
     ];
     for (slug, title) in order {
@@ -8652,13 +8738,13 @@ mod bug_dedupe_tests {
         snapshot.bugs.reverse();
         let markdown = build_bugs_markdown(&snapshot, None, None, None);
         let high = markdown
-            .find("### [1] High last by old rank")
+            .find("### <a id=\"bug-1\"></a> [1] High last by old rank")
             .expect("high heading");
         let medium = markdown
-            .find("### [2] Medium first by old rank")
+            .find("### <a id=\"bug-2\"></a> [2] Medium first by old rank")
             .expect("medium heading");
         let low = markdown
-            .find("### [3] Low second by old rank")
+            .find("### <a id=\"bug-3\"></a> [3] Low second by old rank")
             .expect("low heading");
         assert!(high < medium);
         assert!(medium < low);
@@ -12861,9 +12947,11 @@ fn rewrite_bug_markdown_heading_id(markdown: &str, summary_id: usize) -> Option<
                     .trim_start_matches(|c: char| c.is_ascii_digit())
                     .trim_start_matches(']')
                     .trim_start();
-                // Prepend an explicit anchor for stable linking
-                out.push(format!("<a id=\"bug-{summary_id}\"></a>"));
-                out.push(format!("### [{summary_id}] {clean}"));
+                // Embed an explicit anchor inline for stable linking without adding a separate
+                // paragraph/line in rendered HTML output.
+                out.push(format!(
+                    "### <a id=\"bug-{summary_id}\"></a> [{summary_id}] {clean}"
+                ));
                 changed = true;
                 updated_first_heading = true;
                 continue;
