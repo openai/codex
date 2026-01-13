@@ -6,7 +6,6 @@ use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
@@ -40,8 +39,6 @@ mod outgoing_message;
 /// is a balance between throughput and memory usage – 128 messages should be
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
-// Poll for agent-spawned threads that need listeners.
-const LISTENER_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -143,9 +140,9 @@ pub async fn run_main(
             loader_overrides,
             feedback.clone(),
         );
-        let mut refresh_interval = tokio::time::interval(LISTENER_REFRESH_INTERVAL);
-        refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut thread_created_rx = processor.thread_created_receiver();
         async move {
+            let mut listen_for_threads = true;
             loop {
                 tokio::select! {
                     msg = incoming_rx.recv() => {
@@ -159,8 +156,18 @@ pub async fn run_main(
                             JSONRPCMessage::Error(e) => processor.process_error(e),
                         }
                     }
-                    _ = refresh_interval.tick() => {
-                        processor.refresh_thread_listeners().await;
+                    created = thread_created_rx.recv(), if listen_for_threads => {
+                        match created {
+                            Ok(_thread_id) => {
+                                processor.refresh_thread_listeners().await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                processor.refresh_thread_listeners().await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                listen_for_threads = false;
+                            }
+                        }
                     }
                 }
             }

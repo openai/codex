@@ -26,7 +26,9 @@ use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use tokio::sync::broadcast;
 use toml::Value as TomlValue;
 
 pub(crate) struct MessageProcessor {
@@ -200,6 +202,10 @@ impl MessageProcessor {
         // Currently, we do not expect to receive any notifications from the
         // client, so we just log them.
         tracing::info!("<- notification: {:?}", notification);
+    }
+
+    pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
+        self.codex_message_processor.thread_created_receiver()
     }
 
     pub(crate) async fn refresh_thread_listeners(&mut self) {
