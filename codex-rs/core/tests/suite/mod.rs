@@ -21,6 +21,7 @@ mod approvals;
 mod auth_refresh;
 mod cli_stream;
 mod client;
+mod client_websockets;
 mod codex_delegate;
 mod compact;
 mod compact_remote;
