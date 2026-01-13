@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::config_loader::ConfigLayerStack;
 use crate::skills::model::SkillError;
+use crate::skills::model::SkillInterface;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
 use crate::skills::system::system_cache_root_dir;
@@ -31,7 +32,22 @@ struct SkillFrontmatterMetadata {
     short_description: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct SkillToml {
+    #[serde(default)]
+    interface: Option<Interface>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Interface {
+    display_name: Option<String>,
+    short_description: Option<String>,
+    icon_small: Option<PathBuf>,
+    icon_large: Option<PathBuf>,
+}
+
 const SKILLS_FILENAME: &str = "SKILL.md";
+const SKILLS_TOML_FILENAME: &str = "SKILL.toml";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
@@ -45,6 +61,7 @@ enum SkillParseError {
     Read(std::io::Error),
     MissingFrontmatter,
     InvalidYaml(serde_yaml::Error),
+    InvalidToml(toml::de::Error),
     MissingField(&'static str),
     InvalidField { field: &'static str, reason: String },
 }
@@ -57,6 +74,7 @@ impl fmt::Display for SkillParseError {
                 write!(f, "missing YAML frontmatter delimited by ---")
             }
             SkillParseError::InvalidYaml(e) => write!(f, "invalid YAML: {e}"),
+            SkillParseError::InvalidToml(e) => write!(f, "invalid TOML: {e}"),
             SkillParseError::MissingField(field) => write!(f, "missing field `{field}`"),
             SkillParseError::InvalidField { field, reason } => {
                 write!(f, "invalid {field}: {reason}")
@@ -336,6 +354,9 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty());
+    let interface = load_skill_interface(path)?
+        .map(sanitize_interface_metadata)
+        .transpose()?;
 
     validate_field(&name, MAX_NAME_LEN, "name")?;
     validate_field(&description, MAX_DESCRIPTION_LEN, "description")?;
@@ -353,9 +374,87 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         name,
         description,
         short_description,
+        interface,
         path: resolved_path,
         scope,
     })
+}
+
+fn load_skill_interface(skill_path: &Path) -> Result<Option<SkillInterface>, SkillParseError> {
+    let Some(skill_dir) = skill_path.parent() else {
+        return Ok(None);
+    };
+    let interface_path = skill_dir.join(SKILLS_TOML_FILENAME);
+    if !interface_path.exists() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(&interface_path).map_err(SkillParseError::Read)?;
+    let parsed: SkillToml = toml::from_str(&contents).map_err(SkillParseError::InvalidToml)?;
+    let Some(interface) = parsed.interface else {
+        return Ok(None);
+    };
+
+    let interface = SkillInterface {
+        display_name: interface.display_name,
+        short_description: interface.short_description,
+        icon_small: resolve_icon_path(skill_dir, interface.icon_small),
+        icon_large: resolve_icon_path(skill_dir, interface.icon_large),
+    };
+
+    if interface.display_name.is_none()
+        && interface.short_description.is_none()
+        && interface.icon_small.is_none()
+        && interface.icon_large.is_none()
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(interface))
+}
+
+fn sanitize_interface_metadata(
+    interface: SkillInterface,
+) -> Result<SkillInterface, SkillParseError> {
+    let display_name = interface
+        .display_name
+        .as_deref()
+        .map(sanitize_single_line)
+        .filter(|value| !value.is_empty());
+    let short_description = interface
+        .short_description
+        .as_deref()
+        .map(sanitize_single_line)
+        .filter(|value| !value.is_empty());
+
+    if let Some(display_name) = display_name.as_deref() {
+        validate_field(display_name, MAX_NAME_LEN, "interface.display_name")?;
+    }
+    if let Some(short_description) = short_description.as_deref() {
+        validate_field(
+            short_description,
+            MAX_SHORT_DESCRIPTION_LEN,
+            "interface.short_description",
+        )?;
+    }
+
+    Ok(SkillInterface {
+        display_name,
+        short_description,
+        icon_small: interface.icon_small,
+        icon_large: interface.icon_large,
+    })
+}
+
+fn resolve_icon_path(skill_dir: &Path, path: Option<PathBuf>) -> Option<PathBuf> {
+    let path = path?;
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    if path.is_absolute() {
+        return Some(path);
+    }
+    Some(skill_dir.join(path))
 }
 
 fn sanitize_single_line(raw: &str) -> String {
@@ -528,6 +627,56 @@ mod tests {
         path
     }
 
+    fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
+        let path = skill_dir.join(SKILLS_TOML_FILENAME);
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn loads_skill_interface_metadata_from_toml() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        let normalized_skill_dir = normalized(skill_dir);
+
+        write_skill_interface_at(
+            skill_dir,
+            r#"
+[interface]
+display_name = "UI Skill"
+short_description = "  short    desc   "
+icon_small = "./assets/small-400px.png"
+icon_large = "./assets/large-logo.svg"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: Some(SkillInterface {
+                    display_name: Some("UI Skill".to_string()),
+                    short_description: Some("short desc".to_string()),
+                    icon_small: Some(normalized_skill_dir.join("./assets/small-400px.png")),
+                    icon_large: Some(normalized_skill_dir.join("./assets/large-logo.svg")),
+                }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
     #[cfg(unix)]
     fn symlink_dir(target: &Path, link: &Path) {
         std::os::unix::fs::symlink(target, link).unwrap();
@@ -563,6 +712,7 @@ mod tests {
                 name: "linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::User,
             }]
@@ -596,6 +746,7 @@ mod tests {
                 name: "linked-file-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::User,
             }]
@@ -629,6 +780,7 @@ mod tests {
                 name: "cycle-skill".to_string(),
                 description: "still loads".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -662,6 +814,7 @@ mod tests {
                 name: "admin-linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::Admin,
             }]
@@ -699,6 +852,7 @@ mod tests {
                 name: "repo-linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&linked_skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -759,6 +913,7 @@ mod tests {
                 name: "within-depth-skill".to_string(),
                 description: "loads".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&within_depth_path),
                 scope: SkillScope::User,
             }]
@@ -783,6 +938,7 @@ mod tests {
                 name: "demo-skill".to_string(),
                 description: "does things carefully".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -811,6 +967,7 @@ mod tests {
                 name: "demo-skill".to_string(),
                 description: "long description".to_string(),
                 short_description: Some("short summary".to_string()),
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -920,6 +1077,7 @@ mod tests {
                 name: "repo-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -970,6 +1128,7 @@ mod tests {
                     name: "nested-skill".to_string(),
                     description: "from nested".to_string(),
                     short_description: None,
+                    interface: None,
                     path: normalized(&nested_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -977,6 +1136,7 @@ mod tests {
                     name: "root-skill".to_string(),
                     description: "from root".to_string(),
                     short_description: None,
+                    interface: None,
                     path: normalized(&root_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -1013,6 +1173,7 @@ mod tests {
                 name: "local-skill".to_string(),
                 description: "from cwd".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1050,6 +1211,7 @@ mod tests {
                 name: "dupe-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&repo_skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1077,6 +1239,7 @@ mod tests {
                 name: "dupe-skill".to_string(),
                 description: "from user".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&user_skill_path),
                 scope: SkillScope::User,
             }]
@@ -1145,6 +1308,7 @@ mod tests {
                 name: "repo-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1200,6 +1364,7 @@ mod tests {
                 name: "system-skill".to_string(),
                 description: "from system".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::System,
             }]
@@ -1254,6 +1419,7 @@ mod tests {
                 name: "dupe-skill".to_string(),
                 description: "from system".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&system_skill_path),
                 scope: SkillScope::System,
             }]
@@ -1283,6 +1449,7 @@ mod tests {
                 name: "dupe-skill".to_string(),
                 description: "from user".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&user_skill_path),
                 scope: SkillScope::User,
             }]
@@ -1321,6 +1488,7 @@ mod tests {
                 name: "dupe-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&repo_skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1371,6 +1539,7 @@ mod tests {
                 name: "dupe-skill".to_string(),
                 description: "from nested".to_string(),
                 short_description: None,
+                interface: None,
                 path: expected_path,
                 scope: SkillScope::Repo,
             }],
