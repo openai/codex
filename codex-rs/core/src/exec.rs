@@ -666,7 +666,7 @@ async fn consume_truncated_output(
     // That would cause the `read_capped` tasks to block on `read()`
     // indefinitely, effectively hanging the whole agent.
 
-    const IO_DRAIN_TIMEOUT_MS: u64 = 2_000; // 2 s should be plenty for local pipes
+    const IO_DRAIN_TIMEOUT_MS: u64 = 10;
 
     // We need mutable bindings so we can `abort()` them on timeout.
     use tokio::task::JoinHandle;
