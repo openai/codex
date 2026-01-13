@@ -1,5 +1,17 @@
+//! Backtracking and transcript overlay event routing.
+//!
+//! This file owns backtrack mode (Esc/Enter navigation in the transcript overlay) and also
+//! mediates a key rendering boundary for the transcript overlay.
+//!
+//! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
+//! tail derived from the current in-flight `ChatWidget.active_cell`.
+//!
+//! That live tail is kept in sync during `TuiEvent::Draw` handling for `Overlay::Transcript` by
+//! asking `ChatWidget` for an active-cell cache key and transcript lines and by passing them into
+//! `TranscriptOverlay::sync_live_tail`. This preserves the invariant that the overlay reflects
+//! both committed history and in-flight activity without changing flush or coalescing behavior.
+
 use std::any::TypeId;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
@@ -8,7 +20,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
-use codex_core::protocol::ConversationPathResponseEvent;
+use codex_core::protocol::Op;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -20,14 +32,18 @@ use crossterm::event::KeyEventKind;
 pub(crate) struct BacktrackState {
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
-    /// Session id of the base conversation to fork from.
+    /// Session id of the base thread to rollback.
     pub(crate) base_id: Option<ThreadId>,
     /// Index in the transcript of the last user message.
     pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
-    /// Pending fork request: (base_id, nth_user_message, prefill).
-    pub(crate) pending: Option<(ThreadId, usize, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BacktrackSelection {
+    pub(crate) nth_user_message: usize,
+    pub(crate) prefill: String,
 }
 
 impl App {
@@ -95,23 +111,22 @@ impl App {
         }
     }
 
-    /// Stage a backtrack and request conversation history from the agent.
-    pub(crate) fn request_backtrack(
-        &mut self,
-        prefill: String,
-        base_id: ThreadId,
-        nth_user_message: usize,
-    ) {
-        self.backtrack.pending = Some((base_id, nth_user_message, prefill));
-        if let Some(path) = self.chat_widget.rollout_path() {
-            let ev = ConversationPathResponseEvent {
-                conversation_id: base_id,
-                path,
-            };
-            self.app_event_tx
-                .send(crate::app_event::AppEvent::ConversationHistory(ev));
-        } else {
-            tracing::error!("rollout path unavailable; cannot backtrack");
+    pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
+        let user_total = user_count(&self.transcript_cells);
+        if user_total == 0 {
+            return;
+        }
+
+        let num_turns = user_total.saturating_sub(selection.nth_user_message);
+        let num_turns = u32::try_from(num_turns).unwrap_or(u32::MAX);
+        if num_turns == 0 {
+            return;
+        }
+
+        self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
+        self.trim_transcript_for_backtrack(selection.nth_user_message);
+        if !selection.prefill.is_empty() {
+            self.chat_widget.set_composer_text(selection.prefill);
         }
     }
 
@@ -203,7 +218,7 @@ impl App {
         self.backtrack.overlay_preview_active = true;
         let count = user_count(&self.transcript_cells);
         if let Some(last) = count.checked_sub(1) {
-            self.apply_backtrack_selection(last);
+            self.apply_backtrack_selection_internal(last);
         }
         tui.frame_requester().schedule_frame();
     }
@@ -227,12 +242,12 @@ impl App {
                 .min(last_index)
         };
 
-        self.apply_backtrack_selection(next_selection);
+        self.apply_backtrack_selection_internal(next_selection);
         tui.frame_requester().schedule_frame();
     }
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
-    fn apply_backtrack_selection(&mut self, nth_user_message: usize) {
+    fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
         if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
             self.backtrack.nth_user_message = nth_user_message;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -248,6 +263,37 @@ impl App {
 
     /// Forward any event to the overlay and close it if done.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        // Transcript overlay draws are special: include a live, in-flight tail so the
+        // overlay matches the main viewport while the active cell is still streaming.
+        // This path also drives tail animations and closes the overlay immediately
+        // once it reports completion.
+        if let TuiEvent::Draw = &event
+            && let Some(Overlay::Transcript(t)) = &mut self.overlay
+        {
+            let active_key = self.chat_widget.active_cell_transcript_key();
+            let chat_widget = &self.chat_widget;
+            tui.draw(u16::MAX, |frame| {
+                let width = frame.area().width.max(1);
+                t.sync_live_tail(width, active_key, |w| {
+                    chat_widget.active_cell_transcript_lines(w)
+                });
+                t.render(frame.area(), frame.buffer);
+            })?;
+            let close_overlay = t.is_done();
+            if !close_overlay
+                && active_key.is_some_and(|key| key.animation_tick.is_some())
+                && t.is_scrolled_to_bottom()
+            {
+                tui.frame_requester()
+                    .schedule_frame_in(std::time::Duration::from_millis(50));
+            }
+            if close_overlay {
+                self.close_transcript_overlay(tui);
+                tui.frame_requester().schedule_frame();
+            }
+            return Ok(());
+        }
+
         if let Some(overlay) = &mut self.overlay {
             overlay.handle_event(tui, event)?;
             if overlay.is_done() {
@@ -261,16 +307,13 @@ impl App {
     /// Handle Enter in overlay backtrack preview: confirm selection and reset state.
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
         let nth_user_message = self.backtrack.nth_user_message;
-        if let Some(base_id) = self.backtrack.base_id {
-            let prefill = nth_user_position(&self.transcript_cells, nth_user_message)
-                .and_then(|idx| self.transcript_cells.get(idx))
-                .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
-                .map(|c| c.message.clone())
-                .unwrap_or_default();
-            self.close_transcript_overlay(tui);
-            self.request_backtrack(prefill, base_id, nth_user_message);
+        let selection = self.backtrack_selection(nth_user_message);
+        self.close_transcript_overlay(tui);
+        if let Some(selection) = selection {
+            self.apply_backtrack_rollback(selection);
+            self.render_transcript_once(tui);
+            tui.frame_requester().schedule_frame();
         }
-        self.reset_backtrack_state();
     }
 
     /// Handle Esc in overlay backtrack preview: step selection if armed, else forward.
@@ -284,18 +327,11 @@ impl App {
     }
 
     /// Confirm a primed backtrack from the main view (no overlay visible).
-    /// Computes the prefill from the selected user message and requests history.
-    pub(crate) fn confirm_backtrack_from_main(&mut self) {
-        if let Some(base_id) = self.backtrack.base_id {
-            let prefill =
-                nth_user_position(&self.transcript_cells, self.backtrack.nth_user_message)
-                    .and_then(|idx| self.transcript_cells.get(idx))
-                    .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
-                    .map(|c| c.message.clone())
-                    .unwrap_or_default();
-            self.request_backtrack(prefill, base_id, self.backtrack.nth_user_message);
-        }
+    /// Computes the prefill from the selected user message for rollback.
+    pub(crate) fn confirm_backtrack_from_main(&mut self) -> Option<BacktrackSelection> {
+        let selection = self.backtrack_selection(self.backtrack.nth_user_message);
         self.reset_backtrack_state();
+        selection
     }
 
     /// Clear all backtrack-related state and composer hints.
@@ -307,87 +343,31 @@ impl App {
         self.chat_widget.clear_esc_backtrack_hint();
     }
 
-    /// Handle a ConversationHistory response while a backtrack is pending.
-    /// If it matches the primed base session, fork and switch to the new thread.
-    pub(crate) async fn on_conversation_history_for_backtrack(
+    pub(crate) fn apply_backtrack_selection(
         &mut self,
         tui: &mut tui::Tui,
-        ev: ConversationPathResponseEvent,
-    ) -> Result<()> {
-        if let Some((base_id, _, _)) = self.backtrack.pending.as_ref()
-            && ev.conversation_id == *base_id
-            && let Some((_, nth_user_message, prefill)) = self.backtrack.pending.take()
-        {
-            self.fork_and_switch_to_new_conversation(tui, ev, nth_user_message, prefill)
-                .await;
-        }
-        Ok(())
-    }
-
-    /// Fork the thread using provided history and switch UI/state accordingly.
-    async fn fork_and_switch_to_new_conversation(
-        &mut self,
-        tui: &mut tui::Tui,
-        ev: ConversationPathResponseEvent,
-        nth_user_message: usize,
-        prefill: String,
+        selection: BacktrackSelection,
     ) {
-        let cfg = self.chat_widget.config_ref().clone();
-        // Perform the fork via a thin wrapper for clarity/testability.
-        let result = self
-            .perform_fork(ev.path.clone(), nth_user_message, cfg.clone())
-            .await;
-        match result {
-            Ok(new_conv) => {
-                self.install_forked_conversation(tui, cfg, new_conv, nth_user_message, &prefill)
-            }
-            Err(e) => tracing::error!("error forking conversation: {e:#}"),
-        }
-    }
-
-    /// Thin wrapper around ThreadManager::fork_thread.
-    async fn perform_fork(
-        &self,
-        path: PathBuf,
-        nth_user_message: usize,
-        cfg: codex_core::config::Config,
-    ) -> codex_core::error::Result<codex_core::NewThread> {
-        self.server.fork_thread(nth_user_message, cfg, path).await
-    }
-
-    /// Install a forked thread into the ChatWidget and update UI to reflect selection.
-    fn install_forked_conversation(
-        &mut self,
-        tui: &mut tui::Tui,
-        cfg: codex_core::config::Config,
-        new_conv: codex_core::NewThread,
-        nth_user_message: usize,
-        prefill: &str,
-    ) {
-        let thread = new_conv.thread;
-        let session_configured = new_conv.session_configured;
-        let init = crate::chatwidget::ChatWidgetInit {
-            config: cfg,
-            model: self.current_model.clone(),
-            frame_requester: tui.frame_requester(),
-            app_event_tx: self.app_event_tx.clone(),
-            initial_prompt: None,
-            initial_images: Vec::new(),
-            enhanced_keys_supported: self.enhanced_keys_supported,
-            auth_manager: self.auth_manager.clone(),
-            models_manager: self.server.get_models_manager(),
-            feedback: self.feedback.clone(),
-            is_first_run: false,
-        };
-        self.chat_widget =
-            crate::chatwidget::ChatWidget::new_from_existing(init, thread, session_configured);
-        // Trim transcript up to the selected user message and re-render it.
-        self.trim_transcript_for_backtrack(nth_user_message);
+        self.apply_backtrack_rollback(selection);
         self.render_transcript_once(tui);
-        if !prefill.is_empty() {
-            self.chat_widget.set_composer_text(prefill.to_string());
-        }
         tui.frame_requester().schedule_frame();
+    }
+    fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
+        let base_id = self.backtrack.base_id?;
+        if self.chat_widget.conversation_id() != Some(base_id) {
+            return None;
+        }
+
+        let prefill = nth_user_position(&self.transcript_cells, nth_user_message)
+            .and_then(|idx| self.transcript_cells.get(idx))
+            .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
+            .map(|c| c.message.clone())
+            .unwrap_or_default();
+
+        Some(BacktrackSelection {
+            nth_user_message,
+            prefill,
+        })
     }
 
     /// Trim transcript_cells to preserve only content up to the selected user message.

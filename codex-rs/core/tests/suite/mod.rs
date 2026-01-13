@@ -15,12 +15,14 @@ pub static CODEX_ALIASES_TEMP_DIR: TempDir = unsafe {
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
+mod agent_websocket;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
 mod auth_refresh;
 mod cli_stream;
 mod client;
+mod client_websockets;
 mod codex_delegate;
 mod compact;
 mod compact_remote;
@@ -42,6 +44,7 @@ mod model_overrides;
 mod model_tools;
 mod models_etag_responses;
 mod otel;
+mod pending_input;
 mod permissions_messages;
 mod prompt_caching;
 mod quota_exceeded;
