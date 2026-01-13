@@ -72,7 +72,7 @@ Codex security reviews run a multi-step pipeline (file triage, spec generation, 
 ```toml
 [security_review.models]
 # Current hardcoded defaults:
-file_triage = "gpt-5-codex"
+file_triage = "gpt-5.2-codex"
 spec = "gpt-5.2"
 bugs = "gpt-5.2"
 validation = "gpt-5.2"
