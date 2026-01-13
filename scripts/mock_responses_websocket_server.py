@@ -155,6 +155,9 @@ env_key = "OPENAI_API_KEY_STAGING"
 model = "gpt-5.2"
 model_provider = "localapi_ws"
 model_reasoning_effort = "medium"
+
+
+start codex with `codex --profile localapi_ws`
 """)
     sys.stdout.flush()
 
