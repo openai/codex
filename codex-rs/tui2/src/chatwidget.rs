@@ -1569,7 +1569,7 @@ impl ChatWidget {
                         self.submit_user_message(user_message);
                     }
                     InputResult::Queued(text) => {
-                        // Tab/Ctrl+K queues the message if a task is running, otherwise submits immediately
+                        // Tab queues the message if a task is running, otherwise submits immediately
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),

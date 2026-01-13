@@ -1608,6 +1608,17 @@ impl Session {
         }
     }
 
+    pub async fn has_pending_input(&self) -> bool {
+        let active = self.active_turn.lock().await;
+        match active.as_ref() {
+            Some(at) => {
+                let ts = at.turn_state.lock().await;
+                ts.has_pending_input()
+            }
+            None => false,
+        }
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,
@@ -2903,6 +2914,9 @@ async fn try_run_turn(
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
+
+                needs_follow_up |= sess.has_pending_input().await;
+                error!("needs_follow_up: {needs_follow_up}");
 
                 break Ok(TurnRunResult {
                     needs_follow_up,
