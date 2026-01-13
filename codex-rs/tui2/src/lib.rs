@@ -454,7 +454,8 @@ async fn run_ratatui_app(
 
     // Determine resume behavior: explicit id, then resume last, then picker.
     let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
-        let resume_path = if Uuid::parse_str(id_str).is_ok() {
+        let is_uuid = Uuid::parse_str(id_str).is_ok();
+        let resume_path = if is_uuid {
             find_thread_path_by_id_str(&config.codex_home, id_str).await?
         } else {
             find_thread_path_by_name_str(&config.codex_home, id_str).await?
@@ -466,9 +467,10 @@ async fn run_ratatui_app(
                 restore();
                 session_log::log_session_end();
                 let _ = tui.terminal.clear();
+                let selector_hint = if is_uuid { "UUID" } else { "name" };
                 if let Err(err) = writeln!(
                     std::io::stdout(),
-                    "No saved session found with ID or name {id_str}. Run `codex resume` without an ID to choose from existing sessions."
+                    "No saved session found with {selector_hint} {id_str}. Run `codex resume` without an ID to choose from existing sessions."
                 ) {
                     error!("Failed to write resume error message: {err}");
                 }
