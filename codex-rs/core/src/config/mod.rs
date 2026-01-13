@@ -9,6 +9,8 @@ use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ScrollInputMode;
+use crate::config::types::SecurityReviewModels;
+use crate::config::types::SecurityReviewToml;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
@@ -103,6 +105,9 @@ pub struct Config {
 
     /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
+
+    /// Optional model overrides used by the security review pipeline.
+    pub security_review_models: SecurityReviewModels,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
@@ -672,6 +677,9 @@ pub struct ConfigToml {
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
+
+    /// Configuration for the security review pipeline.
+    pub security_review: Option<SecurityReviewToml>,
 
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
@@ -1296,6 +1304,32 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let normalize_non_empty = |value: Option<String>| {
+            value.and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+        };
+
+        let security_review_models = {
+            let models = cfg
+                .security_review
+                .as_ref()
+                .map(|review| review.models.clone())
+                .unwrap_or_default();
+            SecurityReviewModels {
+                file_triage: normalize_non_empty(models.file_triage),
+                spec: normalize_non_empty(models.spec),
+                bugs: normalize_non_empty(models.bugs),
+                validation: normalize_non_empty(models.validation),
+                writing: normalize_non_empty(models.writing),
+            }
+        };
+
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
 
         // Ensure that every field of ConfigRequirements is applied to the final
@@ -1315,6 +1349,7 @@ impl Config {
         let config = Self {
             model,
             review_model,
+            security_review_models,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_provider_id,
@@ -3152,6 +3187,7 @@ model_verbosity = "high"
             Config {
                 model: Some("o3".to_string()),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
+                security_review_models: Default::default(),
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
@@ -3235,6 +3271,7 @@ model_verbosity = "high"
         let expected_gpt3_profile_config = Config {
             model: Some("gpt-3.5-turbo".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
+            security_review_models: Default::default(),
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
@@ -3333,6 +3370,7 @@ model_verbosity = "high"
         let expected_zdr_profile_config = Config {
             model: Some("o3".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
+            security_review_models: Default::default(),
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
@@ -3417,6 +3455,7 @@ model_verbosity = "high"
         let expected_gpt5_profile_config = Config {
             model: Some("gpt-5.1".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
+            security_review_models: Default::default(),
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),

@@ -478,7 +478,10 @@ pub struct SecurityReviewRequest {
     pub mode: SecurityReviewMode,
     pub include_spec_in_bug_analysis: bool,
     pub triage_model: String,
+    pub spec_model: String,
     pub model: String,
+    pub validation_model: String,
+    pub writing_model: String,
     pub provider: ModelProviderInfo,
     pub auth: Option<CodexAuth>,
     pub config: Config,
@@ -2482,6 +2485,7 @@ async fn polish_bug_markdowns(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    writing_model: &str,
     summaries: &mut [BugSummary],
     details: &mut [BugDetail],
     metrics: Arc<ReviewMetrics>,
@@ -2510,6 +2514,7 @@ async fn polish_bug_markdowns(
         .collect();
 
     let mut stream = futures::stream::iter(work_items.into_iter().map(|(bug_id, content)| {
+        let writing_model = writing_model.to_string();
         let metrics = metrics.clone();
         async move {
             if content.trim().is_empty() {
@@ -2519,9 +2524,17 @@ async fn polish_bug_markdowns(
                     logs: Vec::new(),
                 });
             }
-            let outcome = polish_markdown_block(client, provider, auth, metrics, &content, None)
-                .await
-                .map_err(|err| format!("Bug {bug_id}: {err}"))?;
+            let outcome = polish_markdown_block(
+                client,
+                provider,
+                auth,
+                &writing_model,
+                metrics,
+                &content,
+                None,
+            )
+            .await
+            .map_err(|err| format!("Bug {bug_id}: {err}"))?;
             let polished = fix_mermaid_blocks(&outcome.text);
             let logs = outcome
                 .reasoning_logs
@@ -3364,6 +3377,31 @@ pub async fn run_security_review(
     mut request: SecurityReviewRequest,
 ) -> Result<SecurityReviewResult, SecurityReviewFailure> {
     request.provider = provider_with_beta_features(&request.provider, &request.config);
+
+    request.model = request.model.trim().to_string();
+    if request.model.is_empty() {
+        request.model = request.config.review_model.clone();
+    }
+
+    request.triage_model = request.triage_model.trim().to_string();
+    if request.triage_model.is_empty() {
+        request.triage_model = FILE_TRIAGE_MODEL.to_string();
+    }
+
+    request.spec_model = request.spec_model.trim().to_string();
+    if request.spec_model.is_empty() {
+        request.spec_model = SPEC_GENERATION_MODEL.to_string();
+    }
+
+    request.validation_model = request.validation_model.trim().to_string();
+    if request.validation_model.is_empty() {
+        request.validation_model = request.model.clone();
+    }
+
+    request.writing_model = request.writing_model.trim().to_string();
+    if request.writing_model.is_empty() {
+        request.writing_model = MARKDOWN_FIX_MODEL.to_string();
+    }
     let mut progress_sender = request.progress_sender.clone();
     let log_sink = request.log_sink.clone();
     let mut logs = Vec::new();
@@ -3990,11 +4028,7 @@ pub async fn run_security_review(
             });
         }
 
-        let triage_model = if request.triage_model.trim().is_empty() {
-            FILE_TRIAGE_MODEL
-        } else {
-            request.triage_model.as_str()
-        };
+        let triage_model = request.triage_model.as_str();
 
         // First prune at the directory level to keep triage manageable.
         let mut directories: HashMap<PathBuf, Vec<FileSnippet>> = HashMap::new();
@@ -4030,7 +4064,7 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Running LLM file triage to prioritize analysis across {} files ({} directories).",
+                "Running LLM file triage to prioritize analysis across {} files ({} directories) (model: {triage_model}).",
                 pruned_snippets.len(),
                 pruned_snippets
                     .iter()
@@ -4236,6 +4270,7 @@ pub async fn run_security_review(
             &model_client,
             &request.provider,
             &request.auth,
+            request.spec_model.as_str(),
             &repo_path,
             &directory_candidates,
             metrics.clone(),
@@ -4299,8 +4334,9 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Generating system specifications for {} scope path(s) (running in parallel with bug analysis).",
-                spec_targets.len()
+                "Generating system specifications for {} scope path(s) (running in parallel with bug analysis) (model: {spec_model}).",
+                spec_targets.len(),
+                spec_model = request.spec_model.as_str()
             ),
         );
         let model_client = model_client.clone();
@@ -4315,11 +4351,15 @@ pub async fn run_security_review(
         let config = request.config.clone();
         let auth_manager = request.auth_manager.clone();
         let repository_summary = repository_summary.clone();
+        let spec_model = request.spec_model.clone();
+        let writing_model = request.writing_model.clone();
         Some(tokio::spawn(async move {
             let spec_generation = match generate_specs(
                 &model_client,
                 &provider,
                 &auth,
+                spec_model.as_str(),
+                writing_model.as_str(),
                 &repo_path,
                 &spec_targets,
                 &output_root,
@@ -4341,6 +4381,7 @@ pub async fn run_security_review(
                     &provider,
                     &auth,
                     THREAT_MODEL_MODEL,
+                    writing_model.as_str(),
                     &repository_summary,
                     &repo_path,
                     spec,
@@ -4529,7 +4570,10 @@ pub async fn run_security_review(
         let total_passes = BUG_FINDING_PASSES.max(1);
         record(
             &mut logs,
-            format!("Running bug analysis in {total_passes} pass(es)."),
+            format!(
+                "Running bug analysis in {total_passes} pass(es) (model: {model}).",
+                model = request.model.as_str()
+            ),
         );
 
         let mut aggregated_logs: Vec<String> = Vec::new();
@@ -4956,8 +5000,9 @@ pub async fn run_security_review(
 
         if !all_summaries.is_empty() {
             let polish_message = format!(
-                "Polishing markdown for {} bug finding(s).",
-                all_summaries.len()
+                "Polishing markdown for {} bug finding(s) (model: {model}).",
+                all_summaries.len(),
+                model = request.writing_model.as_str()
             );
             record(&mut logs, polish_message.clone());
             aggregated_logs.push(polish_message);
@@ -4965,6 +5010,7 @@ pub async fn run_security_review(
                 &model_client,
                 &request.provider,
                 &request.auth,
+                request.writing_model.as_str(),
                 &mut all_summaries,
                 &mut all_details,
                 metrics.clone(),
@@ -5242,7 +5288,13 @@ pub async fn run_security_review(
             "No high-risk findings selected for validation; skipping.".to_string(),
         );
     } else {
-        record(&mut logs, "Validating high-risk findings...".to_string());
+        record(
+            &mut logs,
+            format!(
+                "Validating high-risk findings... (model: {model}).",
+                model = request.validation_model.as_str()
+            ),
+        );
         match run_asan_validation(
             repo_path.clone(),
             artifacts.snapshot_path.clone(),
@@ -5250,7 +5302,7 @@ pub async fn run_security_review(
             artifacts.report_path.clone(),
             artifacts.report_html_path.clone(),
             request.provider.clone(),
-            request.model.clone(),
+            request.validation_model.clone(),
             &request.config,
             request.auth_manager.clone(),
             progress_sender.clone(),
@@ -6681,6 +6733,8 @@ async fn generate_specs(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    spec_model: &str,
+    writing_model: &str,
     repo_root: &Path,
     include_paths: &[PathBuf],
     output_root: &Path,
@@ -6835,6 +6889,7 @@ async fn generate_specs(
             client,
             provider,
             auth,
+            spec_model,
             repo_root,
             &heuristically_filtered,
             metrics.clone(),
@@ -6894,9 +6949,7 @@ async fn generate_specs(
         let kept = spec_targets.len();
         let total = directory_candidates.len();
         let message = if spec_progress_state.targets.is_empty() {
-            format!(
-                "Spec directory filter kept {kept}/{total} directories using {SPEC_GENERATION_MODEL}."
-            )
+            format!("Spec directory filter kept {kept}/{total} directories using {spec_model}.")
         } else {
             format!("Resuming specification generation for {kept} directory(s).")
         };
@@ -6981,6 +7034,8 @@ async fn generate_specs(
         client,
         provider,
         auth,
+        spec_model,
+        writing_model,
         repo_root,
         &pending_targets,
         &display_locations,
@@ -7065,6 +7120,8 @@ async fn generate_specs(
         client,
         provider,
         auth,
+        spec_model,
+        writing_model,
         &display_locations,
         &spec_entries,
         &combined_path,
@@ -7078,8 +7135,15 @@ async fn generate_specs(
 
     let mut classification_rows: Vec<DataClassificationRow> = Vec::new();
     let mut classification_table: Option<String> = None;
-    match extract_data_classification(client, provider, auth, &combined_markdown, metrics.clone())
-        .await
+    match extract_data_classification(
+        client,
+        provider,
+        auth,
+        spec_model,
+        &combined_markdown,
+        metrics.clone(),
+    )
+    .await
     {
         Ok(Some(extraction)) => {
             for line in extraction.reasoning_logs {
@@ -8612,6 +8676,7 @@ async fn filter_spec_directories(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    model: &str,
     repo_root: &Path,
     candidates: &[(PathBuf, String)],
     metrics: Arc<ReviewMetrics>,
@@ -8633,7 +8698,7 @@ Return ALL to keep every directory.",
         client,
         provider,
         auth,
-        SPEC_GENERATION_MODEL,
+        model,
         SPEC_DIR_FILTER_SYSTEM_PROMPT,
         &prompt,
         metrics,
@@ -8722,11 +8787,12 @@ async fn run_spec_agent(
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     prompt: String,
     metrics: Arc<ReviewMetrics>,
+    model: &str,
 ) -> Result<(String, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
 
     let mut spec_config = config.clone();
-    spec_config.model = Some(SPEC_GENERATION_MODEL.to_string());
+    spec_config.model = Some(model.to_string());
     spec_config.model_reasoning_effort = Some(ReasoningEffort::High);
     spec_config.model_provider = provider.clone();
     spec_config.base_instructions = Some(SPEC_SYSTEM_PROMPT.to_string());
@@ -8971,6 +9037,8 @@ async fn generate_specs_single_worker(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    spec_model: &str,
+    writing_model: &str,
     repo_root: &Path,
     project_locations: &[String],
     raw_dir: &Path,
@@ -8999,7 +9067,7 @@ async fn generate_specs_single_worker(
     let prompt = build_spec_prompt_text(
         project_locations,
         &scope_label,
-        SPEC_GENERATION_MODEL,
+        spec_model,
         &date,
         repo_root,
     );
@@ -9013,6 +9081,7 @@ async fn generate_specs_single_worker(
         log_sink.clone(),
         prompt,
         metrics.clone(),
+        spec_model,
     )
     .await
     {
@@ -9038,13 +9107,20 @@ async fn generate_specs_single_worker(
             &mut logs,
             polish_message.clone(),
         );
-        let outcome =
-            polish_markdown_block(client, provider, auth, metrics.clone(), &sanitized, None)
-                .await
-                .map_err(|err| SecurityReviewFailure {
-                    message: format!("Failed to polish specification for {scope_label}: {err}"),
-                    logs: Vec::new(),
-                })?;
+        let outcome = polish_markdown_block(
+            client,
+            provider,
+            auth,
+            writing_model,
+            metrics.clone(),
+            &sanitized,
+            None,
+        )
+        .await
+        .map_err(|err| SecurityReviewFailure {
+            message: format!("Failed to polish specification for {scope_label}: {err}"),
+            logs: Vec::new(),
+        })?;
         if let Some(tx) = progress_sender.as_ref() {
             for line in &outcome.reasoning_logs {
                 tx.send(AppEvent::SecurityReviewLog(line.clone()));
@@ -9090,6 +9166,8 @@ async fn generate_specs_parallel_workers(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    spec_model: &str,
+    writing_model: &str,
     repo_root: &Path,
     normalized: &[PathBuf],
     display_locations: &[String],
@@ -9121,6 +9199,8 @@ async fn generate_specs_parallel_workers(
                 client,
                 provider,
                 auth,
+                spec_model,
+                writing_model,
                 repo_root,
                 target.clone(),
                 project_locations,
@@ -9168,6 +9248,8 @@ async fn generate_spec_for_location(
     client: &CodexHttpClient,
     provider: ModelProviderInfo,
     auth: Option<CodexAuth>,
+    spec_model: &str,
+    writing_model: &str,
     repo_root: PathBuf,
     target: PathBuf,
     project_locations: Vec<String>,
@@ -9194,7 +9276,7 @@ async fn generate_spec_for_location(
     let prompt = build_spec_prompt_text(
         &project_locations,
         &location_label,
-        SPEC_GENERATION_MODEL,
+        spec_model,
         &date,
         &repo_root,
     );
@@ -9208,6 +9290,7 @@ async fn generate_spec_for_location(
         log_sink.clone(),
         prompt,
         metrics.clone(),
+        spec_model,
     )
     .await
     {
@@ -9233,13 +9316,20 @@ async fn generate_spec_for_location(
             &mut logs,
             polish_message.clone(),
         );
-        let outcome =
-            polish_markdown_block(client, &provider, &auth, metrics.clone(), &sanitized, None)
-                .await
-                .map_err(|err| SecurityReviewFailure {
-                    message: format!("Failed to polish specification for {location_label}: {err}"),
-                    logs: Vec::new(),
-                })?;
+        let outcome = polish_markdown_block(
+            client,
+            &provider,
+            &auth,
+            writing_model,
+            metrics.clone(),
+            &sanitized,
+            None,
+        )
+        .await
+        .map_err(|err| SecurityReviewFailure {
+            message: format!("Failed to polish specification for {location_label}: {err}"),
+            logs: Vec::new(),
+        })?;
         if let Some(tx) = progress_sender.as_ref() {
             for line in &outcome.reasoning_logs {
                 tx.send(AppEvent::SecurityReviewLog(line.clone()));
@@ -9286,6 +9376,7 @@ async fn generate_threat_model(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    writing_model: &str,
     repository_summary: &str,
     repo_root: &Path,
     spec: &SpecGenerationOutcome,
@@ -9415,6 +9506,7 @@ async fn generate_threat_model(
             client,
             provider,
             auth,
+            writing_model,
             metrics.clone(),
             &sanitized_response,
             None,
@@ -9866,6 +9958,8 @@ async fn combine_spec_markdown(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    model: &str,
+    writing_model: &str,
     project_locations: &[String],
     specs: &[SpecEntry],
     combined_path: &Path,
@@ -9906,7 +10000,7 @@ async fn combine_spec_markdown(
             client,
             provider,
             auth,
-            SPEC_GENERATION_MODEL,
+            model,
             SPEC_COMBINE_SYSTEM_PROMPT,
             &prompt,
             metrics.clone(),
@@ -10124,7 +10218,8 @@ async fn combine_spec_markdown(
 
     let sanitized = fix_mermaid_blocks(&combined_raw);
 
-    let polish_message = "Polishing combined specification markdown formatting.".to_string();
+    let polish_message =
+        format!("Polishing combined specification markdown formatting (model: {writing_model}).");
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(polish_message.clone()));
     }
@@ -10135,7 +10230,7 @@ async fn combine_spec_markdown(
         client,
         provider,
         auth,
-        MARKDOWN_FIX_MODEL,
+        writing_model,
         MARKDOWN_FIX_SYSTEM_PROMPT,
         &fix_prompt,
         metrics.clone(),
@@ -10452,6 +10547,7 @@ async fn extract_data_classification(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    model: &str,
     spec_markdown: &str,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<Option<ClassificationExtraction>, String> {
@@ -10467,7 +10563,7 @@ async fn extract_data_classification(
         client,
         provider,
         auth,
-        SPEC_GENERATION_MODEL,
+        model,
         SPEC_SYSTEM_PROMPT,
         &prompt,
         metrics,
@@ -10673,6 +10769,7 @@ async fn polish_markdown_block(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    model: &str,
     metrics: Arc<ReviewMetrics>,
     original_content: &str,
     template_hint: Option<&str>,
@@ -10689,7 +10786,7 @@ async fn polish_markdown_block(
         client,
         provider,
         auth,
-        MARKDOWN_FIX_MODEL,
+        model,
         MARKDOWN_FIX_SYSTEM_PROMPT,
         &fix_prompt,
         metrics,
@@ -16303,9 +16400,10 @@ async fn run_asan_validation(
     };
 
     if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(
-            "Planning validation for high-risk findings...".to_string(),
-        ));
+        tx.send(AppEvent::SecurityReviewLog(format!(
+            "Planning validation for high-risk findings... (model: {model}).",
+            model = model.as_str()
+        )));
     }
 
     let output_root = snapshot_path

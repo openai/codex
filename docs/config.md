@@ -65,6 +65,20 @@ The model that Codex should use.
 model = "gpt-5.1"  # overrides the default ("gpt-5.1-codex-max" across platforms)
 ```
 
+### security_review.models
+
+Codex security reviews run a multi-step pipeline (file triage, spec generation, bug finding, validation, and markdown polishing). You can override the model used for each step:
+
+```toml
+[security_review.models]
+# Current hardcoded defaults:
+file_triage = "gpt-5-codex-mini"
+spec = "gpt-5.2"
+bugs = "gpt-5.1-codex-max"
+validation = "gpt-5.1-codex-max"
+writing = "gpt-5.1"
+```
+
 ### model_providers
 
 This option lets you add to the default set of model providers bundled with Codex. The map key becomes the value you use with `model_provider` to select the provider.

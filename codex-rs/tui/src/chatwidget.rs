@@ -4529,12 +4529,41 @@ impl ChatWidget {
             output_root,
             mode,
             include_spec_in_bug_analysis: true,
-            triage_model: self.config.review_model.clone(),
+            triage_model: self
+                .config
+                .security_review_models
+                .file_triage
+                .clone()
+                .unwrap_or_default(),
+            spec_model: self
+                .config
+                .security_review_models
+                .spec
+                .clone()
+                .unwrap_or_default(),
             model: self
                 .config
-                .model
+                .security_review_models
+                .bugs
                 .clone()
-                .unwrap_or_else(|| self.model_family.get_model_slug().to_string()),
+                .unwrap_or_else(|| {
+                    self.config
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| self.model_family.get_model_slug().to_string())
+                }),
+            validation_model: self
+                .config
+                .security_review_models
+                .validation
+                .clone()
+                .unwrap_or_default(),
+            writing_model: self
+                .config
+                .security_review_models
+                .writing
+                .clone()
+                .unwrap_or_default(),
             provider: self.config.model_provider.clone(),
             auth: self.auth_manager.auth(),
             config: self.config.clone(),

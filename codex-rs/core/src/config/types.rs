@@ -17,6 +17,26 @@ use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecurityReviewModels {
+    /// Model used for the file triage step.
+    pub file_triage: Option<String>,
+    /// Model used for specification generation.
+    pub spec: Option<String>,
+    /// Model used for bug finding / analysis.
+    pub bugs: Option<String>,
+    /// Model used for validation and post-validation refinement.
+    pub validation: Option<String>,
+    /// Model used for writing/polishing output artifacts.
+    pub writing: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecurityReviewToml {
+    #[serde(default)]
+    pub models: SecurityReviewModels,
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
