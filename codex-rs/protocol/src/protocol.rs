@@ -1299,8 +1299,6 @@ pub struct SessionMeta {
     pub id: ThreadId,
     pub timestamp: String,
     pub cwd: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
     pub originator: String,
     pub cli_version: String,
     pub instructions: Option<String>,
@@ -1315,7 +1313,6 @@ impl Default for SessionMeta {
             id: ThreadId::default(),
             timestamp: String::new(),
             cwd: PathBuf::new(),
-            name: None,
             originator: String::new(),
             cli_version: String::new(),
             instructions: None,
@@ -1825,7 +1822,6 @@ pub struct SkillsListEntry {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
-    /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
 
     /// Optional user-facing thread name (may be unset).
@@ -1868,7 +1864,6 @@ pub struct SessionConfiguredEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionMetaUpdatedEvent {
-    /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
