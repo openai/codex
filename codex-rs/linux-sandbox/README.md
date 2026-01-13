@@ -10,10 +10,9 @@ This crate is responsible for producing:
 ## Git safety mounts (Linux)
 
 When the sandbox policy allows workspace writes, the Linux sandbox now uses a
-user namespace plus a mount namespace to bind-mount a handful of high-risk
-paths read-only before applying Landlock rules. This keeps `.git/hooks/` and
-`.git/config` immutable while still allowing writes to `.git/index`, refs, and
-objects.
+user namespace plus a mount namespace to bind-mount `.git` read-only before
+applying Landlock rules. This keeps Git metadata immutable while still
+allowing writes to other workspace files.
 
 ### How this plays with Landlock
 
@@ -36,7 +35,7 @@ set -euo pipefail
 
 echo "should fail" > .git/config && exit 1 || true
 echo "should fail" > .git/hooks/pre-commit && exit 1 || true
-echo "ok" > .git/index.lock
+echo "should fail" > .git/index.lock && exit 1 || true
 echo "ok" > sandbox-write-test.txt
 '
 ```
@@ -45,5 +44,5 @@ Expected behavior:
 
 - Writes to `.git/config` fail with `Read-only file system`.
 - Creating or modifying files under `.git/hooks/` fails.
-- Writing `.git/index.lock` succeeds.
+- Writing `.git/index.lock` fails (since `.git` is read-only).
 - Writing a normal repo file succeeds.

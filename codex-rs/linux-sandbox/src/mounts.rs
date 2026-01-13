@@ -35,7 +35,6 @@ fn collect_read_only_mount_targets(
 ) -> Result<Vec<AbsolutePathBuf>> {
     let mut targets = Vec::new();
     for writable_root in writable_roots {
-        ensure_gitdir_is_directory(&writable_root.root)?;
         for ro_subpath in &writable_root.read_only_subpaths {
             if !ro_subpath.as_path().exists() {
                 return Err(CodexErr::UnsupportedOperation(format!(
@@ -44,21 +43,54 @@ fn collect_read_only_mount_targets(
                 )));
             }
             targets.push(ro_subpath.clone());
+            if is_git_pointer_file(ro_subpath) {
+                let gitdir = resolve_gitdir_from_file(ro_subpath)?;
+                if !targets
+                    .iter()
+                    .any(|target| target.as_path() == gitdir.as_path())
+                {
+                    targets.push(gitdir);
+                }
+            }
         }
     }
     Ok(targets)
 }
 
-fn ensure_gitdir_is_directory(root: &AbsolutePathBuf) -> Result<()> {
-    #[allow(clippy::expect_used)]
-    let dot_git = root.join(".git").expect(".git is a valid relative path");
-    if dot_git.as_path().is_file() {
+fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
+    path.as_path().is_file() && path.as_path().file_name() == Some(std::ffi::OsStr::new(".git"))
+}
+
+fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Result<AbsolutePathBuf> {
+    let contents = std::fs::read_to_string(dot_git.as_path()).map_err(CodexErr::from)?;
+    let trimmed = contents.trim();
+    let (_, gitdir_raw) = trimmed.split_once(':').ok_or_else(|| {
+        CodexErr::UnsupportedOperation(format!(
+            "Expected {path} to contain a gitdir pointer, but it did not match `gitdir: <path>`.",
+            path = dot_git.as_path().display()
+        ))
+    })?;
+    let gitdir_raw = gitdir_raw.trim();
+    if gitdir_raw.is_empty() {
         return Err(CodexErr::UnsupportedOperation(format!(
-            "Sandbox protection requires .git to be a directory, but {path} is a file. If this is a worktree, protect the real gitdir (from `git rev-parse --git-dir`) and consider making the .git pointer file read-only.",
+            "Expected {path} to contain a gitdir pointer, but it was empty.",
             path = dot_git.as_path().display()
         )));
     }
-    Ok(())
+    let base = dot_git.as_path().parent().ok_or_else(|| {
+        CodexErr::UnsupportedOperation(format!(
+            "Unable to resolve parent directory for {path}.",
+            path = dot_git.as_path().display()
+        ))
+    })?;
+    let gitdir_path = AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base)?;
+    if !gitdir_path.as_path().exists() {
+        return Err(CodexErr::UnsupportedOperation(format!(
+            "Resolved gitdir path {path} does not exist.",
+            path = gitdir_path.as_path().display()
+        )));
+    }
+    Ok(gitdir_path)
 }
 
 fn unshare_mount_namespace() -> Result<()> {

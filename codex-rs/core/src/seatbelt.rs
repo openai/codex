@@ -177,13 +177,12 @@ mod tests {
     #[test]
     fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         // Create a temporary workspace with two writable roots: one containing
-        // top-level .git hooks/config and .codex directories and one without them.
+        // top-level .git and .codex directories and one without them.
         let tmp = TempDir::new().expect("tempdir");
         let PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
-            dot_git_config_canonical,
-            dot_git_hooks_canonical,
+            dot_git_canonical,
             dot_codex_canonical,
             empty_root,
             empty_root_canonical,
@@ -224,13 +223,13 @@ mod tests {
         // Note that the policy includes:
         // - the base policy,
         // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git/hooks, .git/config, or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+        // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_2"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
 )
 "#,
         );
@@ -244,14 +243,10 @@ mod tests {
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_0={}",
-                dot_git_hooks_canonical.to_string_lossy()
+                dot_git_canonical.to_string_lossy()
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_1={}",
-                dot_git_config_canonical.to_string_lossy()
-            ),
-            format!(
-                "-DWRITABLE_ROOT_0_RO_2={}",
                 dot_codex_canonical.to_string_lossy()
             ),
             format!(
@@ -302,7 +297,7 @@ mod tests {
 
         // Create a similar Seatbelt command that tries to write to a file in
         // the .git/hooks folder, which should also be blocked.
-        let pre_commit_hook = dot_git_hooks_canonical.join("pre-commit");
+        let pre_commit_hook = dot_git_canonical.join("hooks").join("pre-commit");
         let shell_command_git: Vec<String> = [
             "bash",
             "-c",
@@ -372,13 +367,12 @@ mod tests {
     #[test]
     fn create_seatbelt_args_for_cwd_as_git_repo() {
         // Create a temporary workspace with two writable roots: one containing
-        // top-level .git hooks/config and .codex directories and one without them.
+        // top-level .git and .codex directories and one without them.
         let tmp = TempDir::new().expect("tempdir");
         let PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
-            dot_git_config_canonical,
-            dot_git_hooks_canonical,
+            dot_git_canonical,
             dot_codex_canonical,
             ..
         } = populate_tmpdir(tmp.path());
@@ -425,13 +419,13 @@ mod tests {
         // Note that the policy includes:
         // - the base policy,
         // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git/hooks, .git/config, or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+        // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_2"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
 "#,
         );
@@ -445,14 +439,10 @@ mod tests {
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_0={}",
-                dot_git_hooks_canonical.to_string_lossy()
+                dot_git_canonical.to_string_lossy()
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_1={}",
-                dot_git_config_canonical.to_string_lossy()
-            ),
-            format!(
-                "-DWRITABLE_ROOT_0_RO_2={}",
                 dot_codex_canonical.to_string_lossy()
             ),
             format!(
@@ -490,8 +480,7 @@ mod tests {
         /// have full privileges the next time it ran in that repo.
         vulnerable_root: PathBuf,
         vulnerable_root_canonical: PathBuf,
-        dot_git_config_canonical: PathBuf,
-        dot_git_hooks_canonical: PathBuf,
+        dot_git_canonical: PathBuf,
         dot_codex_canonical: PathBuf,
 
         /// Path without .git or .codex subfolders.
@@ -528,15 +517,12 @@ mod tests {
             .canonicalize()
             .expect("canonicalize vulnerable_root");
         let dot_git_canonical = vulnerable_root_canonical.join(".git");
-        let dot_git_config_canonical = dot_git_canonical.join("config");
-        let dot_git_hooks_canonical = dot_git_canonical.join("hooks");
         let dot_codex_canonical = vulnerable_root_canonical.join(".codex");
         let empty_root_canonical = empty_root.canonicalize().expect("canonicalize empty_root");
         PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
-            dot_git_config_canonical,
-            dot_git_hooks_canonical,
+            dot_git_canonical,
             dot_codex_canonical,
             empty_root,
             empty_root_canonical,
