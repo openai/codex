@@ -54,7 +54,12 @@ impl MessageProcessor {
             config.cli_auth_credentials_store_mode,
         );
         let thread_manager = Arc::new(
-            ThreadManager::new((*config).clone(), auth_manager.clone(), SessionSource::VSCode).await,
+            ThreadManager::new(
+                (*config).clone(),
+                auth_manager.clone(),
+                SessionSource::VSCode,
+            )
+            .await,
         );
         let codex_message_processor = CodexMessageProcessor::new(
             auth_manager,
