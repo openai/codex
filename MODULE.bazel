@@ -94,7 +94,12 @@ crate.annotation(
     crate = "aws-lc-sys",
     build_script_env = {
         "AWS_LC_SYS_CMAKE_BUILDER": "0",
+        "AWS_LC_SYS_SKIP_MEMCMP_CHECK": "1",
     },
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:aws-lc-sys-skip-memcmp.patch",
+    ],
 )
 
 # Fix readme inclusions
