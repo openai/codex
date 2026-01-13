@@ -13,6 +13,7 @@ use codex_api::ReqwestTransport;
 use codex_api::ResponseStream as ApiResponseStream;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
+use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
 use codex_api::common::Reasoning;
@@ -230,6 +231,7 @@ impl ModelClientSession {
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         match self.state.provider.wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
+            WireApi::ResponsesWebsocket => self.stream_responses_websocket(prompt).await,
             WireApi::Chat => {
                 let api_stream = self.stream_chat_completions(prompt).await?;
 
@@ -245,6 +247,86 @@ impl ModelClientSession {
                     ))
                 }
             }
+        }
+    }
+
+    fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
+        let model_info = self.state.model_info.clone();
+        let instructions = prompt.get_full_instructions(&model_info).into_owned();
+        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
+        Ok(build_api_prompt(prompt, instructions, tools_json))
+    }
+
+    fn build_responses_options(
+        &self,
+        prompt: &Prompt,
+        compression: Compression,
+    ) -> ApiResponsesOptions {
+        let model_info = &self.state.model_info;
+
+        let default_reasoning_effort = model_info.default_reasoning_level;
+        let reasoning = if model_info.supports_reasoning_summaries {
+            Some(Reasoning {
+                effort: self.state.effort.or(default_reasoning_effort),
+                summary: if self.state.summary == ReasoningSummaryConfig::None {
+                    None
+                } else {
+                    Some(self.state.summary)
+                },
+            })
+        } else {
+            None
+        };
+
+        let include = if reasoning.is_some() {
+            vec!["reasoning.encrypted_content".to_string()]
+        } else {
+            Vec::new()
+        };
+
+        let verbosity = if model_info.support_verbosity {
+            self.state
+                .config
+                .model_verbosity
+                .or(model_info.default_verbosity)
+        } else {
+            if self.state.config.model_verbosity.is_some() {
+                warn!(
+                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                    model_info.slug
+                );
+            }
+            None
+        };
+
+        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+        let conversation_id = self.state.conversation_id.to_string();
+
+        ApiResponsesOptions {
+            reasoning,
+            include,
+            prompt_cache_key: Some(conversation_id.clone()),
+            text,
+            store_override: None,
+            conversation_id: Some(conversation_id),
+            session_source: Some(self.state.session_source.clone()),
+            extra_headers: beta_feature_headers(&self.state.config),
+            compression,
+        }
+    }
+
+    fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
+        if self
+            .state
+            .config
+            .features
+            .enabled(Feature::EnableRequestCompression)
+            && auth.is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+            && self.state.provider.is_openai()
+        {
+            Compression::Zstd
+        } else {
+            Compression::None
         }
     }
 
@@ -321,49 +403,7 @@ impl ModelClientSession {
         }
 
         let auth_manager = self.state.auth_manager.clone();
-        let model_info = self.state.model_info.clone();
-        let instructions = prompt.get_full_instructions(&model_info).into_owned();
-        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
-
-        let default_reasoning_effort = model_info.default_reasoning_level;
-        let reasoning = if model_info.supports_reasoning_summaries {
-            Some(Reasoning {
-                effort: self.state.effort.or(default_reasoning_effort),
-                summary: if self.state.summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
-                    Some(self.state.summary)
-                },
-            })
-        } else {
-            None
-        };
-
-        let include: Vec<String> = if reasoning.is_some() {
-            vec!["reasoning.encrypted_content".to_string()]
-        } else {
-            vec![]
-        };
-
-        let verbosity = if model_info.support_verbosity {
-            self.state
-                .config
-                .model_verbosity
-                .or(model_info.default_verbosity)
-        } else {
-            if self.state.config.model_verbosity.is_some() {
-                warn!(
-                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
-                    model_info.slug
-                );
-            }
-            None
-        };
-
-        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let api_prompt = build_api_prompt(prompt, instructions.clone(), tools_json);
-        let conversation_id = self.state.conversation_id.to_string();
-        let session_source = self.state.session_source.clone();
+        let api_prompt = self.build_responses_request(prompt)?;
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -380,35 +420,54 @@ impl ModelClientSession {
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let compression = if self
-                .state
-                .config
-                .features
-                .enabled(Feature::EnableRequestCompression)
-                && auth
-                    .as_ref()
-                    .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
-                && self.state.provider.is_openai()
-            {
-                Compression::Zstd
-            } else {
-                Compression::None
-            };
+            let compression = self.responses_request_compression(auth.as_ref());
 
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-            let options = ApiResponsesOptions {
-                reasoning: reasoning.clone(),
-                include: include.clone(),
-                prompt_cache_key: Some(conversation_id.clone()),
-                text: text.clone(),
-                store_override: None,
-                conversation_id: Some(conversation_id.clone()),
-                session_source: Some(session_source.clone()),
-                extra_headers: beta_feature_headers(&self.state.config),
-                compression,
+            let options = self.build_responses_options(prompt, compression);
+
+            let stream_result = client
+                .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
+                .await;
+
+            match stream_result {
+                Ok(stream) => {
+                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
+                }
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UNAUTHORIZED =>
+                {
+                    handle_unauthorized(status, &mut auth_recovery).await?;
+                    continue;
+                }
+                Err(err) => return Err(map_api_error(err)),
+            }
+        }
+    }
+
+    /// Streams a turn via the Responses API over WebSocket transport.
+    async fn stream_responses_websocket(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        let auth_manager = self.state.auth_manager.clone();
+        let api_prompt = self.build_responses_request(prompt)?;
+
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(super::auth::AuthManager::unauthorized_recovery);
+        loop {
+            let auth = match auth_manager.as_ref() {
+                Some(manager) => manager.auth().await,
+                None => None,
             };
+            let api_provider = self
+                .state
+                .provider
+                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+            let compression = self.responses_request_compression(auth.as_ref());
+
+            let options = self.build_responses_options(prompt, compression);
+            let client = ApiWebSocketResponsesClient::new(api_provider, api_auth);
 
             let stream_result = client
                 .stream_prompt(&self.state.model_info.slug, &api_prompt, options)

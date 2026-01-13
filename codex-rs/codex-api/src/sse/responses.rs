@@ -126,7 +126,7 @@ struct ResponseCompletedOutputTokensDetails {
 }
 
 #[derive(Deserialize, Debug)]
-struct ResponsesStreamEvent {
+pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     kind: String,
     response: Option<Value>,
@@ -149,7 +149,7 @@ impl ResponsesEventError {
     }
 }
 
-fn process_responses_event(
+pub fn process_responses_event(
     event: ResponsesStreamEvent,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
     match event.kind.as_str() {
