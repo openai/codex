@@ -14,7 +14,12 @@
 //! cache key is designed to change when the active cell mutates in place or when its transcript
 //! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
 //! every draw.
-
+//!
+//! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
+//! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
+//! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
+//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
+//! `update_task_running_state`.
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -330,6 +335,12 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+/// Maintains the per-session UI state for the chat screen.
+///
+/// This type owns the state derived from a `codex_core::protocol` event stream (history cells,
+/// active streaming buffers, bottom-pane overlays, and transient status text). It is not
+/// responsible for running the agent itself; it only reflects progress by updating UI state and by
+/// sending `Op` requests back to codex-core.
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -364,7 +375,16 @@ pub(crate) struct ChatWidget {
     last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    /// Tracks whether codex-core currently considers an agent turn to be in progress.
+    ///
+    /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
+    /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
+    /// Tracks per-server MCP startup state while startup is in progress.
+    ///
+    /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
+    /// bottom pane is treated as "running" while this is populated, even if no agent turn is
+    /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -458,11 +478,14 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
+    ///
+    /// The bottom pane only has one running flag, but this module treats it as a derived state of
+    /// both the agent turn lifecycle and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
     }
-
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -763,7 +786,10 @@ impl ChatWidget {
             self.rate_limit_snapshot = None;
         }
     }
-    /// Finalize any active exec as failed and stop/clear running UI state.
+    /// Finalize any active exec as failed and stop/clear agent-turn UI state.
+    ///
+    /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
+    /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();

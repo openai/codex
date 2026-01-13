@@ -1,3 +1,9 @@
+//! Exercises `ChatWidget` event handling and rendering invariants.
+//!
+//! These tests treat the widget as the adapter between `codex_core::protocol::EventMsg` inputs and
+//! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
+//! changes show up as stable, reviewable diffs.
+
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -2533,6 +2539,8 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
         }),
     });
 
+    // The bottom pane has a single "task running" indicator even though MCP startup and an agent
+    // turn are tracked independently, so a startup completion event must not clear an active turn.
     assert!(chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_indicator_visible());
 
