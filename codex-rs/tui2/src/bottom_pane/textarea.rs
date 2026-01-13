@@ -730,8 +730,8 @@ impl TextArea {
 
     /// Renames a single text element in-place, keeping it atomic.
     ///
-    /// This is intended for cases where the element payload is an identifier (e.g. a placeholder)
-    /// that must be updated without converting the element back into normal text.
+    /// Use this when the element payload is an identifier (e.g. a placeholder) that must be
+    /// updated without converting the element back into normal text.
     pub fn replace_element_payload(&mut self, old: &str, new: &str) -> bool {
         let Some(idx) = self
             .elements
