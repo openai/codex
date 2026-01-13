@@ -1689,16 +1689,18 @@ fn parse_grep_like(main_cmd: &[String], args: &[String]) -> ParsedCommand {
         match arg.as_str() {
             "-e" | "--regexp" => {
                 if let Some(pat) = iter.next()
-                    && pattern.is_none() {
-                        pattern = Some(pat.clone());
-                    }
+                    && pattern.is_none()
+                {
+                    pattern = Some(pat.clone());
+                }
                 continue;
             }
             "-f" | "--file" => {
                 if let Some(pat_file) = iter.next()
-                    && pattern.is_none() {
-                        pattern = Some(pat_file.clone());
-                    }
+                    && pattern.is_none()
+                {
+                    pattern = Some(pat_file.clone());
+                }
                 continue;
             }
             "-m" | "--max-count" | "-C" | "--context" | "-A" | "--after-context" | "-B"
