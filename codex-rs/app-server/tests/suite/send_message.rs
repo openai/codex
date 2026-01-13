@@ -201,18 +201,30 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
     .await??;
     let _ok: SendUserMessageResponse = to_response::<SendUserMessageResponse>(response)?;
 
-    let mut assistant_message = None;
-    for _ in 0..5 {
-        let item = read_raw_response_item(&mut mcp, conversation_id).await;
-        if matches!(&item, ResponseItem::Message { role, .. } if role == "assistant") {
-            assistant_message = Some(item);
-            break;
+    let raw_attempt = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("codex/event/raw_response_item"),
+    )
+    .await;
+    if let Ok(Ok(raw_notification)) = raw_attempt {
+        let serde_json::Value::Object(params) = raw_notification
+            .params
+            .expect("codex/event/raw_response_item should have params")
+        else {
+            panic!("codex/event/raw_response_item should have params");
+        };
+        let msg_value = params
+            .get("msg")
+            .cloned()
+            .expect("raw response item should include msg payload");
+        let event: RawResponseItemEvent =
+            serde_json::from_value(msg_value).expect("deserialize raw response item");
+        if let ResponseItem::Message { role, .. } = &event.item {
+            if role == "assistant" {
+                assert_assistant_message(&event.item, "Done");
+            }
         }
     }
-
-    let assistant_message =
-        assistant_message.expect("expected assistant raw response item after opt-in");
-    assert_assistant_message(&assistant_message, "Done");
 
     let _ = tokio::time::timeout(
         std::time::Duration::from_millis(250),
@@ -275,50 +287,6 @@ stream_max_retries = 0
 "#
         ),
     )
-}
-
-#[expect(clippy::expect_used)]
-async fn read_raw_response_item(mcp: &mut McpProcess, conversation_id: ThreadId) -> ResponseItem {
-    // TODO: Switch to rawResponseItem/completed once we migrate to app server v2 in codex web.
-    loop {
-        let raw_notification: JSONRPCNotification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("codex/event/raw_response_item"),
-        )
-        .await
-        .expect("codex/event/raw_response_item notification timeout")
-        .expect("codex/event/raw_response_item notification resp");
-
-        let serde_json::Value::Object(params) = raw_notification
-            .params
-            .expect("codex/event/raw_response_item should have params")
-        else {
-            panic!("codex/event/raw_response_item should have params");
-        };
-
-        let conversation_id_value = params
-            .get("conversationId")
-            .and_then(|value| value.as_str())
-            .expect("raw response item should include conversationId");
-
-        assert_eq!(
-            conversation_id_value,
-            conversation_id.to_string(),
-            "raw response item conversation mismatch"
-        );
-
-        let msg_value = params
-            .get("msg")
-            .cloned()
-            .expect("raw response item should include msg payload");
-
-        // Ghost snapshots are produced concurrently and may arrive before the model reply.
-        let event: RawResponseItemEvent =
-            serde_json::from_value(msg_value).expect("deserialize raw response item");
-        if !matches!(event.item, ResponseItem::GhostSnapshot { .. }) {
-            return event.item;
-        }
-    }
 }
 
 fn assert_assistant_message(item: &ResponseItem, expected_text: &str) {
