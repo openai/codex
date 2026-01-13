@@ -162,9 +162,7 @@ export -p
 }
 
 fn bash_snapshot_script() -> &'static str {
-    r##"if [ -n "$BASH_ENV" ] && [ -r "$BASH_ENV" ]; then
-  . "$BASH_ENV"
-elif [ -r "$HOME/.bashrc" ]; then
+    r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
   . "$HOME/.bashrc"
 fi
 echo '# Snapshot file'
