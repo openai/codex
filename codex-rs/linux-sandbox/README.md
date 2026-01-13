@@ -12,7 +12,8 @@ This crate is responsible for producing:
 When the sandbox policy allows workspace writes, the Linux sandbox now uses a
 user namespace plus a mount namespace to bind-mount `.git` read-only before
 applying Landlock rules. This keeps Git metadata immutable while still
-allowing writes to other workspace files.
+allowing writes to other workspace files, including worktree setups where
+`.git` is a pointer file.
 
 ### How this plays with Landlock
 

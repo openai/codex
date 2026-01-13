@@ -347,7 +347,7 @@ pub enum SandboxPolicy {
 /// A writable root path accompanied by a list of subpaths that should remain
 /// read‑only even when the root is writable. This is primarily used to ensure
 /// that folders containing files that could be modified to escalate the
-/// privileges of the agent (e.g. `.codex`, `.git`) under
+/// privileges of the agent (e.g. `.codex`, `.git`, notably `.git/hooks`) under
 /// a writable root are not modified by the agent.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
 pub struct WritableRoot {
@@ -500,6 +500,9 @@ impl SandboxPolicy {
                         let top_level_git = writable_root
                             .join(".git")
                             .expect(".git is a valid relative path");
+                        // This applies to typical repos (directory .git), worktrees/submodules
+                        // (file .git with gitdir pointer), and bare repos when the gitdir is the
+                        // writable root itself.
                         if top_level_git.as_path().is_dir() || top_level_git.as_path().is_file() {
                             subpaths.push(top_level_git);
                         }

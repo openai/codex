@@ -296,7 +296,7 @@ mod tests {
         );
 
         // Create a similar Seatbelt command that tries to write to a file in
-        // the .git/hooks folder, which should also be blocked.
+        // the .git folder, which should also be blocked.
         let pre_commit_hook = dot_git_canonical.join("hooks").join("pre-commit");
         let shell_command_git: Vec<String> = [
             "bash",
