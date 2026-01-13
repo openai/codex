@@ -2077,7 +2077,7 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if self.bottom_pane.is_task_running() {
+        if self.bottom_pane.is_task_running() || self.is_review_mode {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
         } else {
@@ -2286,7 +2286,7 @@ impl ChatWidget {
                 }
             }
             EventMsg::EnteredReviewMode(review_request) => {
-                self.on_entered_review_mode(review_request)
+                self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
@@ -2300,10 +2300,14 @@ impl ChatWidget {
         }
     }
 
-    fn on_entered_review_mode(&mut self, review: ReviewRequest) {
+    fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         // Enter review mode and emit a concise banner
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
+        }
+        // Avoid toggling running state for replayed history events on resume.
+        if !from_replay && !self.bottom_pane.is_task_running() {
+            self.bottom_pane.set_task_running(true);
         }
         self.is_review_mode = true;
         let hint = review
@@ -3787,9 +3791,12 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
     /// Forward an `Op` directly to codex.
-    pub(crate) fn submit_op(&self, op: Op) {
+    pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
+        if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
+            self.bottom_pane.set_task_running(true);
+        }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
         }
