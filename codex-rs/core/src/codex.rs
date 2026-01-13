@@ -2138,6 +2138,13 @@ mod handlers {
         .await;
     }
 
+    /// Persists the thread name in the session index, updates in-memory state, and emits
+    /// a `ThreadNameUpdated` event on success.
+    ///
+    /// This appends the name to `CODEX_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
+    /// current `thread_id`, then updates `SessionState::thread_name`.
+    ///
+    /// Returns an error event if the name is empty or session persistence is disabled.
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
         let name = name.trim().to_string();
         if name.is_empty() {

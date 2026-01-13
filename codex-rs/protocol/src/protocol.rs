@@ -1864,7 +1864,7 @@ pub struct SessionConfiguredEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ThreadNameUpdatedEvent {
-    pub session_id: ThreadId,
+    pub thread_id: ThreadId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub thread_name: Option<String>,
