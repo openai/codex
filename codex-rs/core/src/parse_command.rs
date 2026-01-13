@@ -1485,7 +1485,7 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
 }
 
 fn is_mutating_xargs_command(tokens: &[String]) -> bool {
-    xargs_subcommand(tokens).is_some_and(is_mutating_subcommand)
+    xargs_subcommand(tokens).is_some_and(xargs_is_mutating_subcommand)
 }
 
 fn xargs_subcommand(tokens: &[String]) -> Option<&[String]> {
@@ -1514,19 +1514,19 @@ fn xargs_subcommand(tokens: &[String]) -> Option<&[String]> {
     None
 }
 
-fn is_mutating_subcommand(tokens: &[String]) -> bool {
+fn xargs_is_mutating_subcommand(tokens: &[String]) -> bool {
     let Some((head, tail)) = tokens.split_first() else {
         return false;
     };
     match head.as_str() {
-        "perl" | "ruby" => has_in_place_flag(tail),
-        "sed" => has_in_place_flag(tail) || tail.iter().any(|token| token == "--in-place"),
+        "perl" | "ruby" => xargs_has_in_place_flag(tail),
+        "sed" => xargs_has_in_place_flag(tail) || tail.iter().any(|token| token == "--in-place"),
         "rg" => tail.iter().any(|token| token == "--replace"),
         _ => false,
     }
 }
 
-fn has_in_place_flag(tokens: &[String]) -> bool {
+fn xargs_has_in_place_flag(tokens: &[String]) -> bool {
     tokens.iter().any(|token| {
         token == "-i" || token.starts_with("-i") || token == "-pi" || token.starts_with("-pi")
     })
