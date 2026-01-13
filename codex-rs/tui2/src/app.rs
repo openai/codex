@@ -97,6 +97,7 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ThreadId>,
     pub update_action: Option<UpdateAction>,
+    pub exit_reason: ExitReason,
     /// ANSI-styled transcript lines to print after the TUI exits.
     ///
     /// These lines are rendered against the same width as the final TUI
@@ -105,12 +106,29 @@ pub struct AppExitInfo {
     pub session_lines: Vec<String>,
 }
 
+#[derive(Debug)]
+pub(crate) enum AppRunControl {
+    Continue,
+    Exit(ExitReason),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitReason {
+    UserRequested,
+    Fatal(String),
+}
+
 impl From<AppExitInfo> for codex_tui::AppExitInfo {
     fn from(info: AppExitInfo) -> Self {
+        let exit_reason = match info.exit_reason {
+            ExitReason::UserRequested => codex_tui::ExitReason::UserRequested,
+            ExitReason::Fatal(message) => codex_tui::ExitReason::Fatal(message),
+        };
         codex_tui::AppExitInfo {
             token_usage: info.token_usage,
             thread_id: info.conversation_id,
             update_action: info.update_action.map(Into::into),
+            exit_reason,
         }
     }
 }
@@ -316,6 +334,7 @@ async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    exit_reason: ExitReason::UserRequested,
                     session_lines: Vec::new(),
                 });
             }
@@ -584,14 +603,24 @@ impl App {
 
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
-            app.handle_event(
-                tui,
-                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                    latest_version,
-                    crate::update_action::get_update_action(),
-                ))),
-            )
-            .await?;
+            let control = app
+                .handle_event(
+                    tui,
+                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                        latest_version,
+                        crate::update_action::get_update_action(),
+                    ))),
+                )
+                .await?;
+            if let AppRunControl::Exit(exit_reason) = control {
+                return Ok(AppExitInfo {
+                    token_usage: app.token_usage(),
+                    conversation_id: app.chat_widget.conversation_id(),
+                    update_action: app.pending_update_action,
+                    exit_reason,
+                    session_lines: Vec::new(),
+                });
+            }
         }
 
         let tui_events = tui.event_stream();
@@ -599,14 +628,20 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
-        while select! {
-            Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event).await?
+        let exit_reason = loop {
+            let control = select! {
+                Some(event) = app_event_rx.recv() => {
+                    app.handle_event(tui, event).await?
+                }
+                Some(event) = tui_events.next() => {
+                    app.handle_tui_event(tui, event).await?
+                }
+            };
+            match control {
+                AppRunControl::Continue => {}
+                AppRunControl::Exit(reason) => break reason,
             }
-            Some(event) = tui_events.next() => {
-                app.handle_tui_event(tui, event).await?
-            }
-        } {}
+        };
         let width = tui.terminal.last_known_screen_size.width;
         let session_lines = if width == 0 {
             Vec::new()
@@ -627,6 +662,7 @@ impl App {
             token_usage: app.token_usage(),
             conversation_id: app.chat_widget.conversation_id(),
             update_action: app.pending_update_action,
+            exit_reason,
             session_lines,
         })
     }
@@ -635,7 +671,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         event: TuiEvent,
-    ) -> Result<bool> {
+    ) -> Result<AppRunControl> {
         if matches!(&event, TuiEvent::Draw) {
             self.handle_scroll_tick(tui);
         }
@@ -664,7 +700,7 @@ impl App {
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
                     {
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
                     let cells = self.transcript_cells.clone();
                     tui.draw(tui.terminal.size()?.height, |frame| {
@@ -724,7 +760,7 @@ impl App {
                 }
             }
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
     pub(crate) fn render_transcript_cells(
@@ -1375,7 +1411,7 @@ impl App {
         Some(TranscriptSelectionPoint { line_index, column })
     }
 
-    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
                 let summary = session_summary(
@@ -1585,7 +1621,7 @@ impl App {
                     && matches!(event.msg, EventMsg::ShutdownComplete)
                 {
                     self.suppress_shutdown_complete = false;
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 if let EventMsg::ListSkillsResponse(response) = &event.msg {
                     let cwd = self.chat_widget.config_ref().cwd.clone();
@@ -1595,7 +1631,10 @@ impl App {
                 self.chat_widget.handle_codex_event(event);
             }
             AppEvent::ExitRequest => {
-                return Ok(false);
+                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+            }
+            AppEvent::FatalExitRequest(message) => {
+                return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
@@ -1690,7 +1729,7 @@ impl App {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
                         });
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
@@ -1859,7 +1898,7 @@ impl App {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
@@ -1871,7 +1910,7 @@ impl App {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
@@ -1880,7 +1919,7 @@ impl App {
                     // One-shot suppression if the user just confirmed continue.
                     if self.skip_world_writable_scan_once {
                         self.skip_world_writable_scan_once = false;
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     let should_check = codex_core::get_platform_sandbox().is_some()
@@ -2028,7 +2067,7 @@ impl App {
                 }
             },
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
