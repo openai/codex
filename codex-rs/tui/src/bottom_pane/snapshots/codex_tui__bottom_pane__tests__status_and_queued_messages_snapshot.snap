@@ -1,11 +1,12 @@
 ---
 source: tui/src/bottom_pane/mod.rs
+assertion_line: 888
 expression: "render_snapshot(&pane, area)"
 ---
 • Working (0s • esc to interrupt)               
+                                                
   ↳ Queued follow-up question                   
     ⌥ + ↑ edit                                  
-                                                
                                                 
 › Ask Codex to do anything                      
                                                 

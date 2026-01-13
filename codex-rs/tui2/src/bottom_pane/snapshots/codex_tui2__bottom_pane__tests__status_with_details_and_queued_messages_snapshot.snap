@@ -1,8 +1,12 @@
 ---
 source: tui2/src/bottom_pane/mod.rs
-assertion_line: 844
+assertion_line: 847
 expression: "render_snapshot(&pane, area)"
 ---
+• Working (0s • esc to interrupt)               
+  └ First detail line                           
+    Second detail line                          
+                                                
   ↳ Queued follow-up question                   
     ⌥ + ↑ edit                                  
                                                 

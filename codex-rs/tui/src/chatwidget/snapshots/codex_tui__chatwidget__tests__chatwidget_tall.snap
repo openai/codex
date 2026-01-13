@@ -1,8 +1,11 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 3810
 expression: term.backend().vt100().screen().contents()
 ---
+
 • Working (0s • esc to interrupt)
+
   ↳ Hello, world! 0
   ↳ Hello, world! 1
   ↳ Hello, world! 2
@@ -20,7 +23,6 @@ expression: term.backend().vt100().screen().contents()
   ↳ Hello, world! 14
   ↳ Hello, world! 15
   ↳ Hello, world! 16
-
 
 › Ask Codex to do anything
 
