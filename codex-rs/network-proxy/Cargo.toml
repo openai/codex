@@ -2,6 +2,7 @@
 name = "codex-network-proxy"
 edition = "2024"
 version = { workspace = true }
+license.workspace = true
 
 [[bin]]
 name = "codex-network-proxy"

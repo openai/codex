@@ -117,6 +117,9 @@ allow = [
     # MIT-0 - https://opensource.org/license/mit-0
     # Used by: dunce
     "MIT-0",
+    # OpenSSL - https://opensource.org/license/openssl
+    # Used by: aws-lc-sys (via rama/rcgen)
+    "OpenSSL",
     # MPL-2.0 - https://www.mozilla.org/MPL/2.0/
     # Used by: nucleo-matcher
     "MPL-2.0",

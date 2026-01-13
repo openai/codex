@@ -46,6 +46,7 @@ members = [
     "utils/pty",
     "utils/readiness",
     "utils/string",
+    "vendor/rama-tls-rustls",
     "codex-client",
     "codex-api",
 ]
