@@ -435,8 +435,7 @@ impl ConfigBuilder {
 
         // Note that each layer in ConfigLayerStack should have resolved
         // relative paths to absolute paths based on the parent folder of the
-        // respective config file, so we should be safe to deserialize without
-        // AbsolutePathBufGuard here.
+        // respective config file, so the base-dir guard is not needed here.
         let config_toml = deserialize_config_toml_with_base(merged_toml, None)?;
         Config::load_config_with_layer_stack(
             config_toml,
@@ -2391,7 +2390,7 @@ trust_level = "trusted"
             load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides).await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
-            codex_home.path(),
+            Some(codex_home.path()),
         )
         .map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
@@ -2518,7 +2517,7 @@ trust_level = "trusted"
 
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
-            codex_home.path(),
+            Some(codex_home.path()),
         )
         .map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
