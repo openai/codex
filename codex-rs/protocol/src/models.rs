@@ -68,6 +68,49 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
+const ENVIRONMENT_CONTEXT_PREFIX: &str = "<environment_context>";
+const USER_INSTRUCTIONS_OPEN_TAG_LEGACY: &str = "<user_instructions>";
+const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
+const SKILL_INSTRUCTIONS_PREFIX: &str = "<skill";
+const USER_SHELL_COMMAND_OPEN: &str = "<user_shell_command>";
+
+impl ContentItem {
+    pub fn is_user_message_text(&self) -> bool {
+        let ContentItem::InputText { text } = self else {
+            return false;
+        };
+
+        if text.is_empty() {
+            return false;
+        }
+
+        if is_local_image_open_tag_text(text)
+            || is_local_image_close_tag_text(text)
+            || is_image_open_tag_text(text)
+            || is_image_close_tag_text(text)
+        {
+            return false;
+        }
+
+        let trimmed = text.trim_start();
+        if trimmed.starts_with(USER_INSTRUCTIONS_PREFIX)
+            || trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
+            || trimmed.starts_with(SKILL_INSTRUCTIONS_PREFIX)
+        {
+            return false;
+        }
+
+        let lowered = trimmed.to_ascii_lowercase();
+        if lowered.starts_with(ENVIRONMENT_CONTEXT_PREFIX)
+            || lowered.starts_with(USER_SHELL_COMMAND_OPEN)
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -1186,5 +1229,48 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn input_text_detects_user_message_text() {
+        let user_text = ContentItem::InputText {
+            text: "hello world".to_string(),
+        };
+        assert!(user_text.is_user_message_text());
+
+        let user_instructions = ContentItem::InputText {
+            text: format!("{USER_INSTRUCTIONS_PREFIX}dir\n\n<INSTRUCTIONS>\ntext\n</INSTRUCTIONS>"),
+        };
+        assert!(!user_instructions.is_user_message_text());
+
+        let legacy_instructions = ContentItem::InputText {
+            text: "<user_instructions>text</user_instructions>".to_string(),
+        };
+        assert!(!legacy_instructions.is_user_message_text());
+
+        let skill_instructions = ContentItem::InputText {
+            text: "<skill>\n<name>x</name>\n<path>y</path>\nbody\n</skill>".to_string(),
+        };
+        assert!(!skill_instructions.is_user_message_text());
+
+        let session_prefix = ContentItem::InputText {
+            text: "<environment_context>\nfoo</environment_context>".to_string(),
+        };
+        assert!(!session_prefix.is_user_message_text());
+
+        let shell_command = ContentItem::InputText {
+            text: "<user_shell_command>\ncmd\n</user_shell_command>".to_string(),
+        };
+        assert!(!shell_command.is_user_message_text());
+
+        let image_open = ContentItem::InputText {
+            text: image_open_tag_text(),
+        };
+        assert!(!image_open.is_user_message_text());
+
+        let image_close = ContentItem::InputText {
+            text: image_close_tag_text(),
+        };
+        assert!(!image_close.is_user_message_text());
     }
 }

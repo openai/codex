@@ -15,6 +15,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
+use std::path::PathBuf;
+use tracing::warn;
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
@@ -277,8 +279,8 @@ impl ContextManager {
                     output: truncated,
                 }
             }
-            ResponseItem::Message { .. }
-            | ResponseItem::Reasoning { .. }
+            ResponseItem::Message { .. } => self.process_message_item(item),
+            ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::WebSearchCall { .. }
@@ -288,6 +290,111 @@ impl ContextManager {
             | ResponseItem::Other => item.clone(),
         }
     }
+
+    fn process_message_item(&self, item: &ResponseItem) -> ResponseItem {
+        let ResponseItem::Message { role, content, id } = item else {
+            return item.clone();
+        };
+
+        if role != "user" {
+            return item.clone();
+        }
+
+        let Some(token_info) = self.token_info.as_ref() else {
+            return item.clone();
+        };
+        let Some(context_window) = token_info.model_context_window else {
+            return item.clone();
+        };
+
+        let text = message_text(content);
+        if text.is_empty() {
+            return item.clone();
+        }
+
+        let remaining = context_window.saturating_sub(self.get_total_token_usage());
+        let text_tokens = i64::try_from(approx_token_count(&text)).unwrap_or(i64::MAX);
+        if text_tokens <= remaining {
+            return item.clone();
+        }
+
+        let Some(path) = write_message_to_temp_file(&text) else {
+            return item.clone();
+        };
+
+        let mut new_content = Vec::with_capacity(content.len().saturating_add(1));
+        new_content.push(ContentItem::InputText {
+            text: format!(
+                "User input was too large for the remaining context window and was saved to {}.",
+                path.display()
+            ),
+        });
+
+        for item in content {
+            match item {
+                ContentItem::InputImage { image_url } => {
+                    new_content.push(ContentItem::InputImage {
+                        image_url: image_url.clone(),
+                    });
+                }
+                ContentItem::InputText { .. } if item.is_user_message_text() => {
+                    new_content.push(item.clone());
+                }
+                ContentItem::InputText { .. } | ContentItem::OutputText { .. } => {}
+            }
+        }
+
+        ResponseItem::Message {
+            id: id.clone(),
+            role: role.clone(),
+            content: new_content,
+        }
+    }
+}
+
+fn message_text(content: &[ContentItem]) -> String {
+    let mut pieces = Vec::new();
+    for item in content {
+        match item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                if !text.is_empty() {
+                    pieces.push(text.as_str());
+                }
+            }
+            ContentItem::InputImage { .. } => {}
+        }
+    }
+
+    pieces.join("\n")
+}
+
+fn write_message_to_temp_file(text: &str) -> Option<PathBuf> {
+    let mut temp = match tempfile::Builder::new()
+        .prefix("codex-user-input-")
+        .suffix(".txt")
+        .tempfile()
+    {
+        Ok(temp) => temp,
+        Err(err) => {
+            warn!(error = %err, "failed to create temp file for user message");
+            return None;
+        }
+    };
+
+    if let Err(err) = std::io::Write::write_all(&mut temp, text.as_bytes()) {
+        warn!(error = %err, "failed to write user message to temp file");
+        return None;
+    }
+
+    let (_, path) = match temp.keep() {
+        Ok(kept) => kept,
+        Err(err) => {
+            warn!(error = %err, "failed to persist user message temp file");
+            return None;
+        }
+    };
+
+    Some(path)
 }
 
 /// API messages include every non-system item (user/assistant messages, reasoning,

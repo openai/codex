@@ -9,8 +9,11 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use std::fs;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -79,6 +82,37 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
 
 fn truncate_exec_output(content: &str) -> String {
     truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
+}
+
+#[test]
+fn stores_oversized_user_message_in_temp_file() {
+    let mut history = ContextManager::new();
+    history.set_token_info(Some(TokenUsageInfo {
+        total_token_usage: TokenUsage::default(),
+        last_token_usage: TokenUsage::default(),
+        model_context_window: Some(10),
+    }));
+
+    let original = "x".repeat(80);
+    let item = user_input_text_msg(&original);
+    history.record_items([&item], TruncationPolicy::Tokens(10_000));
+
+    let [ResponseItem::Message { content, .. }] = history.raw_items() else {
+        panic!("expected single message item");
+    };
+
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected single input text");
+    };
+
+    let re = Regex::new(r"saved to (.+?)\. Use the read_file tool").expect("regex");
+    let captures = re.captures(text).expect("capture temp path");
+    let path = captures.get(1).expect("path capture").as_str();
+
+    let file_contents = fs::read_to_string(path).expect("read temp file");
+    assert_eq!(file_contents, original);
+
+    fs::remove_file(path).expect("cleanup temp file");
 }
 
 #[test]

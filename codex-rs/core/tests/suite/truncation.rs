@@ -25,9 +25,11 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
+use std::fs;
 use std::time::Duration;
 
 // Verifies byte-truncation formatting for function error output (RespondToModel errors)
@@ -237,6 +239,53 @@ async fn tool_call_output_exceeds_limit_truncated_chars_limit() -> Result<()> {
         (9_900..=10_100).contains(&len),
         "expected ~10k chars after truncation, got {len}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_user_message_is_written_to_temp_file() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config.model_context_window = Some(10);
+        });
+    let test = builder.build(&server).await?;
+
+    let _first = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let second = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    test.submit_turn("seed").await?;
+
+    let large_message = "x".repeat(4_000);
+    test.submit_turn(&large_message).await?;
+
+    let user_texts = second.single_request().message_input_texts("user");
+    let replaced = user_texts
+        .iter()
+        .find(|text| text.contains("User input was too large for the remaining context window"))
+        .unwrap_or_else(|| panic!("expected replacement message, got {user_texts:?}"));
+
+    let captures = assert_regex_match(
+        r"saved to (.+?)\\. Use the read_file tool",
+        replaced.as_str(),
+    );
+    let path = captures.get(1).expect("path capture").as_str();
+
+    let saved = fs::read_to_string(path).context("read saved user message")?;
+    assert_eq!(saved, large_message);
+    fs::remove_file(path).context("cleanup saved user message")?;
 
     Ok(())
 }
