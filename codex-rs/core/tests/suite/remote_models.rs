@@ -478,7 +478,7 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     let start = Instant::now();
     let model = timeout(
         Duration::from_secs(7),
-        manager.get_model(&None, &config, RefreshStrategy::OnlineIfUncached),
+        manager.get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached),
     )
     .await;
     let elapsed = start.elapsed();
@@ -543,7 +543,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     );
 
     let selected = manager
-        .get_model(&None, &config, RefreshStrategy::OnlineIfUncached)
+        .get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached)
         .await;
     assert_eq!(selected, "gpt-5.2-codex");
 

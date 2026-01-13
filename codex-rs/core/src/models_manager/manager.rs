@@ -105,7 +105,7 @@ impl ModelsManager {
     ///
     /// If `model` is provided, returns it directly. Otherwise selects the default based on
     /// auth mode and available models (prefers `codex-auto-balanced` for ChatGPT auth).
-    pub async fn get_model(
+    pub async fn get_default_model(
         &self,
         model: &Option<String>,
         config: &Config,
@@ -136,6 +136,7 @@ impl ModelsManager {
         OPENAI_DEFAULT_API_MODEL.to_string()
     }
 
+    // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self

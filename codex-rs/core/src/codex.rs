@@ -255,7 +255,7 @@ impl Codex {
 
         let config = Arc::new(config);
         let model = models_manager
-            .get_model(
+            .get_default_model(
                 &config.model,
                 &config,
                 crate::models_manager::manager::RefreshStrategy::default(),

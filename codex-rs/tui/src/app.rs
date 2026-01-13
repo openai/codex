@@ -372,7 +372,7 @@ impl App {
         ));
         let mut model = thread_manager
             .get_models_manager()
-            .get_model(&config.model, &config, RefreshStrategy::default())
+            .get_default_model(&config.model, &config, RefreshStrategy::default())
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
