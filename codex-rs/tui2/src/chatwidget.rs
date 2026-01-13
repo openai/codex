@@ -2806,15 +2806,27 @@ impl ChatWidget {
                             });
                         })]
                     } else {
-                        Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                        Self::approval_preset_actions(
+                            preset.approval,
+                            preset.sandbox.clone(),
+                            preset.id != "full-access",
+                        )
                     }
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    Self::approval_preset_actions(
+                        preset.approval,
+                        preset.sandbox.clone(),
+                        preset.id != "full-access",
+                    )
                 }
             } else {
-                Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                Self::approval_preset_actions(
+                    preset.approval,
+                    preset.sandbox.clone(),
+                    preset.id != "full-access",
+                )
             };
             items.push(SelectionItem {
                 name,
@@ -2848,19 +2860,27 @@ impl ChatWidget {
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
+        persist: bool,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let sandbox_clone = sandbox.clone();
+            let sandbox_for_update = sandbox.clone();
+            let sandbox_for_persist = sandbox.clone();
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: Some(approval),
-                sandbox_policy: Some(sandbox_clone.clone()),
+                sandbox_policy: Some(sandbox_for_update.clone()),
                 model: None,
                 effort: None,
                 summary: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-            tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+            tx.send(AppEvent::UpdateSandboxPolicy(sandbox_for_update));
+            if persist {
+                tx.send(AppEvent::PersistApprovalSelection {
+                    approval,
+                    sandbox: sandbox_for_persist,
+                });
+            }
         })]
     }
 
@@ -2933,12 +2953,13 @@ impl ChatWidget {
         ));
         let header = ColumnRenderable::with(header_children);
 
-        let mut accept_actions = Self::approval_preset_actions(approval, sandbox.clone());
+        let mut accept_actions = Self::approval_preset_actions(approval, sandbox.clone(), false);
         accept_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
         }));
 
-        let mut accept_and_remember_actions = Self::approval_preset_actions(approval, sandbox);
+        let mut accept_and_remember_actions =
+            Self::approval_preset_actions(approval, sandbox, true);
         accept_and_remember_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
             tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
@@ -3043,8 +3064,15 @@ impl ChatWidget {
                 tx.send(AppEvent::SkipNextWorldWritableScan);
             }));
         }
+        let persist_approval = preset
+            .as_ref()
+            .is_some_and(|preset| preset.id != "full-access");
         if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
-            accept_actions.extend(Self::approval_preset_actions(approval, sandbox));
+            accept_actions.extend(Self::approval_preset_actions(
+                approval,
+                sandbox,
+                persist_approval,
+            ));
         }
 
         let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
@@ -3053,7 +3081,11 @@ impl ChatWidget {
             tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
         }));
         if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
-            accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+            accept_and_remember_actions.extend(Self::approval_preset_actions(
+                approval,
+                sandbox,
+                persist_approval,
+            ));
         }
 
         let items = vec![
@@ -3158,7 +3190,11 @@ impl ChatWidget {
                 .iter()
                 .find(|preset| preset.id == "read-only")
                 .map(|preset| {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    Self::approval_preset_actions(
+                        preset.approval,
+                        preset.sandbox.clone(),
+                        preset.id != "full-access",
+                    )
                 })
                 .unwrap_or_default()
         };
@@ -3238,7 +3274,11 @@ impl ChatWidget {
                 .iter()
                 .find(|preset| preset.id == "read-only")
                 .map(|preset| {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    Self::approval_preset_actions(
+                        preset.approval,
+                        preset.sandbox.clone(),
+                        preset.id != "full-access",
+                    )
                 })
                 .unwrap_or_default()
         };

@@ -1,7 +1,9 @@
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
+use crate::protocol::AskForApproval;
 use anyhow::Context;
+use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
@@ -22,6 +24,10 @@ pub enum ConfigEdit {
         model: Option<String>,
         effort: Option<ReasoningEffort>,
     },
+    /// Update the active (or default) approval policy.
+    SetApprovalPolicy { policy: Option<AskForApproval> },
+    /// Update the active (or default) sandbox mode.
+    SetSandboxMode { mode: Option<SandboxMode> },
     /// Toggle the acknowledgement flag under `[notice]`.
     SetNoticeHideFullAccessWarning(bool),
     /// Toggle the Windows world-writable directories warning acknowledgement flag.
@@ -265,6 +271,12 @@ impl ConfigDocument {
                 );
                 mutated
             }),
+            ConfigEdit::SetApprovalPolicy { policy } => Ok(self.write_profile_value(
+                &["approval_policy"],
+                policy.map(|policy| value(policy.to_string())),
+            )),
+            ConfigEdit::SetSandboxMode { mode } => Ok(self
+                .write_profile_value(&["sandbox_mode"], mode.map(|mode| value(mode.to_string())))),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &[Notice::TABLE_KEY, "hide_full_access_warning"],
@@ -593,6 +605,19 @@ impl ConfigEditsBuilder {
             model: model.map(ToOwned::to_owned),
             effort,
         });
+        self
+    }
+
+    pub fn set_approval_policy(mut self, policy: AskForApproval) -> Self {
+        self.edits.push(ConfigEdit::SetApprovalPolicy {
+            policy: Some(policy),
+        });
+        self
+    }
+
+    pub fn set_sandbox_mode(mut self, mode: SandboxMode) -> Self {
+        self.edits
+            .push(ConfigEdit::SetSandboxMode { mode: Some(mode) });
         self
     }
 

@@ -56,11 +56,13 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::Op;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
 use codex_core::terminal::terminal_info;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::SandboxMode;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -1845,6 +1847,43 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistApprovalSelection { approval, sandbox } => {
+                let profile = self.active_profile.as_deref();
+                let Some(sandbox_mode) = Self::sandbox_mode_for_policy(&sandbox) else {
+                    tracing::warn!(
+                        "Skipping approval persistence for unsupported sandbox policy: {sandbox:?}"
+                    );
+                    self.chat_widget.add_error_message(
+                        "Failed to save approval preference: unsupported sandbox policy."
+                            .to_string(),
+                    );
+                    return Ok(true);
+                };
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_approval_policy(approval)
+                    .set_sandbox_mode(sandbox_mode)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist approval selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save approvals for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save approval preferences: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.chat_widget.set_approval_policy(policy);
             }
@@ -2048,6 +2087,15 @@ impl App {
         reasoning_effort: Option<ReasoningEffortConfig>,
     ) -> Option<&'static str> {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
+    }
+
+    fn sandbox_mode_for_policy(policy: &SandboxPolicy) -> Option<SandboxMode> {
+        match policy {
+            SandboxPolicy::ReadOnly => Some(SandboxMode::ReadOnly),
+            SandboxPolicy::WorkspaceWrite { .. } => Some(SandboxMode::WorkspaceWrite),
+            SandboxPolicy::DangerFullAccess => Some(SandboxMode::DangerFullAccess),
+            SandboxPolicy::ExternalSandbox { .. } => None,
+        }
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {

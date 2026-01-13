@@ -86,6 +86,12 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
     },
 
+    /// Persist the selected approval policy and sandbox policy to the appropriate config.
+    PersistApprovalSelection {
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+    },
+
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
