@@ -39,9 +39,14 @@ export function renderVscodeChatHtml(args) {
       button.iconBtn::before { content: "↑"; font-size: 16px; transform: rotate(-90deg); display: inline-block; opacity: 0.9; }
       button.iconBtn[data-mode="stop"]::before { content: "■"; transform: none; font-size: 14px; }
       button.iconBtn.settingsBtn::before { content: "⚙"; transform: none; font-size: 14px; }
-      .tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+      .tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; flex-wrap: wrap; min-height: 34px; }
+      .tabGroup { display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(127,127,127,0.25); border-radius: 14px; padding: 6px 8px; background: rgba(127,127,127,0.04); }
+      .tabGroupLabel { padding: 4px 8px; border-radius: 999px; border: 1px solid rgba(14,99,156,0.55); color: rgba(220,220,220,0.95); font-size: 12px; white-space: nowrap; }
+      .tabGroupTabs { display: inline-flex; align-items: center; gap: 6px; overflow-x: auto; }
       .tab { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); cursor: pointer; user-select: none; font-size: 12px; white-space: nowrap; }
       .tab.active { background: rgba(127,127,127,0.18); border-color: rgba(127,127,127,0.55); }
+      .tab.running { border-color: rgba(46,160,67,0.55); background: rgba(46,160,67,0.10); }
+      .tab.unread { border-color: rgba(210,153,34,0.55); background: rgba(210,153,34,0.10); }
       .tab .close { margin-left: 2px; opacity: 0.7; }
       .approvals { padding: 10px 12px; border-bottom: 1px solid rgba(127,127,127,0.25); }
       .approval { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 10px 12px; background: rgba(0,0,0,0.03); }
@@ -69,6 +74,7 @@ export function renderVscodeChatHtml(args) {
         .top { padding-top: calc(10px + env(safe-area-inset-top)); }
         .actions button { padding: 8px 10px; }
         button.iconBtn { width: 40px; height: 36px; }
+        .tabs { flex-wrap: nowrap; min-height: 40px; }
       }
     </style>
   </head>
