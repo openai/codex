@@ -22,6 +22,7 @@ use codex_core::NewThread;
 use codex_core::OLLAMA_CHAT_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -310,7 +311,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     );
     let default_model = thread_manager
         .get_models_manager()
-        .get_model(&config.model, &config)
+        .get_model(&config.model, &config, RefreshStrategy::default())
         .await;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
