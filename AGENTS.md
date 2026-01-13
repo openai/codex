@@ -13,9 +13,13 @@ In the codex-rs folder where the rust code lives:
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
-- Always rebuild both the TUI and the regular CLI after making changes (for example, `cargo build -p codex-tui` and `cargo build -p codex-cli`).
+- Before finalizing (commit/push), rebuild both the TUI and the regular CLI (for example, `cargo build -p codex-tui` and `cargo build -p codex-cli`).
 
-Run `just fmt` (in `codex-rs` directory) automatically after making Rust code changes; do not ask for approval to run it. Before finalizing a change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Additionally, run the tests:
+Run `just fmt` (in `codex-rs` directory) automatically after making Rust code changes; do not ask for approval to run it.
+
+During iteration, do NOT run `just fix`/Clippy or tests unless the user explicitly asks. Run them only right before `git commit`/`git push` to avoid slowing down the edit loop.
+
+Right before finalizing a change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Additionally, run the tests:
 
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`.

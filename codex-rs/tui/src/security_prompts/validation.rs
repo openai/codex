@@ -1,61 +1,91 @@
-pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "You are an application security engineer planning minimal, safe validations for high-risk findings. Respond ONLY with JSON Lines as requested; do not include markdown or prose.";
+pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
 pub(crate) const VALIDATION_PLAN_PROMPT_TEMPLATE: &str = r#"
-Before any checks, create two test accounts if the app requires login. Prefer a short Python script that calls a signup endpoint or automates the registration form headlessly. If this is not feasible, return a `manual` instruction with a `login_url`.
+Validate that this bug exists.
 
-Then validate the high-risk findings below. For each finding listed in Context, emit exactly one validation line keyed by its `id_kind`/`id_value`:
-- If you can run a safe validation, choose the minimal tool and target.
-- If you cannot safely validate (missing local target, unclear setup, requires production access), emit `tool:"none"` with a short `reason`.
+- If the finding is a crash/memory-safety issue (e.g., `verification_types` includes `crash_poc_release_bin` or `crash_poc_func`), validate it against an ASan-compiled build and capture the ASan stack trace.
+- If the finding is a crypto/protocol/auth logic issue, validate it with a minimal, deterministic harness (no ASan required).
 
-Priorities (do not skip):
-- HIGH-severity findings whose `TAXONOMY.vuln_tag` is one of: `idor`, `auth-bypass`, `authn-bypass`, `authz-bypass`, `missing-authz-check`, `sql-injection`, `xxe`, or `path-traversal-*`.
-- Findings with `verification_types` including `crash_poc` (treat as memory corruption / crash-class validation).
+Shared TESTING.md (read this first):
+- The worker will follow these shared build/install/run instructions before running any per-bug PoC scripts.
+- Do NOT repeat shared setup steps inside the python script.
+- If you discover missing prerequisites or better shared setup, include them in `testing_md_additions` (markdown bullets/commands, no heading).
 
-For each validation, choose the minimal tool and target:
-- Use the Playwright MCP tool for web_browser checks (supply a reachable URL in `target`).
-- Use tool "curl" for network_api checks (supply full URL in `target`).
-- Use tool "python" only if a short, non-destructive PoC is essential (include inline script text in `script`).
+Shared TESTING.md (may be truncated):
+{testing_md}
 
-Target safety rules:
-- For `curl`/`playwright`, prefer a local target from a locally built binary or local Docker container (e.g., `http://localhost:<port>/...`). Do not target production or unknown remote hosts.
+For each finding listed in Context, emit exactly one JSON line keyed by its `id_kind`/`id_value`:
+- If you can provide a safe, local reproduction, emit `tool:"python"` with an inline script in `script`.
+- If you cannot validate safely (missing build instructions, unclear harness, requires complex dependencies), emit `tool:"none"` with a short `reason`.
 
-For python validations, the script must:
-- Print a step-by-step log with clear section headers (at least `CONTROL` and `TRIGGER`) so the run can be pasted into the security report.
-- Run a control action first (benign request/input) and then the trigger action, and print real stdout/stderr outputs for both.
-- Exit 0 only when the expected security-relevant signal is observed; otherwise exit non-zero.
+For python validations, the script must include both a CONTROL case and a TRIGGER case, and print the exact commands/inputs used with clear section headers.
 
-Special case: memory corruption
-- If `verification_types` includes `crash_poc` or the finding looks like a memory corruption bug in native code (C/C++ decoder, image preprocessing, FFI boundary, etc.), prefer a single `python` validation that:
-  - Attempts to build and run an AddressSanitizer (ASan) instrumented version of the relevant binary/service/library (best-effort; use existing build system if available).
-  - Triggers the suspected crash/bug against the ASan build (e.g., send a request / upload a crafted file / run the minimal repro).
-  - Captures stderr/log output and checks for ASan signatures (e.g., "AddressSanitizer", "heap-buffer-overflow", "use-after-free").
-  - Exits 0 only when an ASan error is observed for this trigger; otherwise exits non-zero.
+Exit codes for python validations:
+- Exit 0 only when the bug is observed.
+- Exit 1 when the target runs but the bug is NOT observed ("not validated").
+- Exit 2 when you cannot validate due to environment/build/platform issues ("not able to validate").
 
-Rules:
-- Keep requests minimal and non-destructive; no state-changing actions.
-- Prefer headless checks (e.g., page loads, HTTP status, presence of a marker string).
-- Max 5 requests total; prioritize Critical/High severity or lowest risk_rank.
+Crash/memory-safety findings:
+- Use `crash_poc_category` from Context when present:
+  - `crash_poc_release_bin`: proceed with ASan validation via a standard shipped target/entrypoint.
+  - `crash_poc_func`: do NOT create a synthetic harness just to call the function; emit `tool:"none"` unless you can reproduce via a standard shipped entrypoint without adding code.
+- Validate against a standard, shipped target (existing binary/service entrypoint) rather than a synthetic harness that calls an internal function.
+- Use only “real” entrypoints (CLI args, config, input files, HTTP requests, etc.) that exercise the same surface area as typical releases.
+- Do not create a new harness/test binary solely to call a vulnerable function; if you cannot plausibly reach the crash from a standard target, emit `tool:"none"` with a short reason.
+- Build an ASan-instrumented, ASan-compiled version of that standard target locally (if feasible).
+- Trigger the crash through that standard entrypoint against the ASan build.
+- Print the ASan stack trace.
+- Exit 0 only when an ASan signature is observed; otherwise exit non-zero.
+
+Crypto/protocol/auth logic findings:
+- Build/run a minimal harness or test that deterministically demonstrates the bug (no ASan required).
+- Print the observed behavior for both CONTROL and TRIGGER.
+- Exit 0 only when the bug is observed; otherwise exit non-zero.
 
 Context (findings):
 {findings}
 
 Output format (one JSON object per line, no fences):
-- For account setup (emit at most one line): {"id_kind":"setup","action":"register|manual","login_url":"<string, optional>","tool":"python|manual","script":"<string, optional>"}
-- For validations: {"id_kind":"risk_rank|summary_id","id_value":<int>,"tool":"playwright|curl|python|none","target":"<string, optional>","script":"<string, optional>","reason":"<string, optional>"}
+- For validations: {"id_kind":"risk_rank|summary_id","id_value":<int>,"tool":"python|none","script":"<string, optional>","reason":"<string, optional>","testing_md_additions":"<string, optional>"}
 "#;
 
-pub(crate) const VALIDATION_ACCOUNTS_SYSTEM_PROMPT: &str = "You plan how to create two test accounts for a typical web app. Respond ONLY with JSON Lines; no prose.";
-pub(crate) const VALIDATION_ACCOUNTS_PROMPT_TEMPLATE: &str = r#"
-Goal: ensure two test accounts exist prior to validation. Prefer a short Python script that registers accounts via HTTP or a headless flow; otherwise return a manual login URL.
+pub(crate) const VALIDATION_REFINE_SYSTEM_PROMPT: &str = "You are an application security engineer doing post-validation refinement of a proof-of-concept (PoC). You may use tools to inspect files and run local commands. Do NOT modify the target repository. Respond ONLY with a single JSON object (no markdown, no prose).";
+
+pub(crate) const VALIDATION_REFINE_PROMPT_TEMPLATE: &str = r#"
+You are doing post-validation refinement for a security finding.
+
+Goals:
+- If possible, produce a standalone Dockerfile that reproduces the finding in a clean environment.
+  - Prefer an ASan-compiled build for crash PoCs.
+  - For crash PoCs, reproduce via a standard, shipped target/entrypoint (existing binary/service) rather than adding a synthetic harness that calls internal functions.
+  - For crypto/protocol logic bugs, build/run a minimal harness that demonstrates the failure (no ASan required).
+- If you cannot produce a Dockerfile, summarize what you tried and why it failed.
+
+Shared TESTING.md (read first):
+- The worker will follow these shared build/install/run instructions before running per-bug Dockerfiles/PoCs.
+- If you discover missing prerequisites or better shared setup, include them in `testing_md_additions` (markdown bullets/commands, no heading).
+
+Shared TESTING.md (may be truncated):
+{testing_md}
 
 Constraints:
-- The script must be non-destructive and idempotent.
-- Print credentials to stdout as JSON: {"accounts":[{"username":"...","password":"..."},{"username":"...","password":"..."}]}.
-- If you cannot identify a safe automated path, return a single JSON line: {"action":"manual","login_url":"https://..."}.
+- You may use tools (read files, run commands) to refine the PoC.
+- Do not edit or patch the target repository.
+- Keep the output concise and reproducible.
 
-Context (findings):
-{findings}
+Finding:
+{finding}
 
-Output format (one JSON object per line, no fences):
-- Automated: {"action":"register","tool":"python","login_url":"<string, optional>","script":"<python script>"}
-- Manual: {"action":"manual","login_url":"<string>"}
+Current validation state:
+{validation_state}
+
+Python PoC script (if any):
+{python_script}
+
+Output JSON (single object, no fences). Keys:
+- summary: string (required) — what you did and why it succeeded/failed
+- dockerfile: string|null — Dockerfile contents if you can produce one
+- docker_build: string|null — exact docker build command to run
+- docker_run: string|null — exact docker run command to run
+- testing_md_additions: string|null — optional shared prerequisites to append to TESTING.md (no heading)
+- files: [{"path": "...", "contents": "..."}] — optional extra files that should live next to the Dockerfile
 "#;

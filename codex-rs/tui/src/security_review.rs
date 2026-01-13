@@ -91,6 +91,15 @@ use url::Url;
 
 const VALIDATION_SUMMARY_GRAPHEMES: usize = 96;
 const VALIDATION_OUTPUT_GRAPHEMES: usize = 480;
+const VALIDATION_REPORT_OUTPUT_MAX_BYTES: usize = 512 * 1024;
+const VALIDATION_MAX_FINDINGS: usize = 8;
+const VALIDATION_PLAN_CONCURRENCY: usize = 8;
+const VALIDATION_REFINE_CONCURRENCY: usize = 8;
+const VALIDATION_EXEC_CONCURRENCY: usize = 8;
+const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
+
+const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
+const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles.";
 
 //
 
@@ -119,8 +128,10 @@ const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
 const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
-const FILE_TRIAGE_MODEL: &str = "gpt-5-codex-mini";
+const FILE_TRIAGE_MODEL: &str = "gpt-5.2-codex";
 const SPEC_GENERATION_MODEL: &str = "gpt-5.2";
+const BUG_MODEL: &str = "gpt-5.2";
+const DEFAULT_VALIDATION_MODEL: &str = "gpt-5.2";
 const THREAT_MODEL_MODEL: &str = "gpt-5-codex";
 const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
 // prompts moved to `security_prompts.rs`
@@ -470,7 +481,10 @@ pub struct SecurityReviewRequest {
     pub mode: SecurityReviewMode,
     pub include_spec_in_bug_analysis: bool,
     pub triage_model: String,
+    pub spec_model: String,
     pub model: String,
+    pub validation_model: String,
+    pub writing_model: String,
     pub provider: ModelProviderInfo,
     pub auth: Option<CodexAuth>,
     pub config: Config,
@@ -668,6 +682,8 @@ enum SecurityReviewPlanStep {
     AnalyzeBugs,
     PolishFindings,
     AssembleReport,
+    ValidateFindings,
+    PostValidationRefine,
 }
 
 #[derive(Clone)]
@@ -857,6 +873,14 @@ fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> 
         "Polish, dedupe, and rerank findings",
     ));
     steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::ValidateFindings,
+        "Validate findings",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::PostValidationRefine,
+        "Post-validation PoC refinement",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
         SecurityReviewPlanStep::AssembleReport,
         "Assemble report and artifacts",
     ));
@@ -870,6 +894,8 @@ fn plan_step_slug(step: SecurityReviewPlanStep) -> &'static str {
         SecurityReviewPlanStep::AnalyzeBugs => "analyze_bugs",
         SecurityReviewPlanStep::PolishFindings => "polish_findings",
         SecurityReviewPlanStep::AssembleReport => "assemble_report",
+        SecurityReviewPlanStep::ValidateFindings => "validate_findings",
+        SecurityReviewPlanStep::PostValidationRefine => "post_validation_refine",
     }
 }
 
@@ -880,6 +906,8 @@ fn plan_step_from_slug(slug: &str) -> Option<SecurityReviewPlanStep> {
         "analyze_bugs" => Some(SecurityReviewPlanStep::AnalyzeBugs),
         "polish_findings" => Some(SecurityReviewPlanStep::PolishFindings),
         "assemble_report" => Some(SecurityReviewPlanStep::AssembleReport),
+        "validate_findings" => Some(SecurityReviewPlanStep::ValidateFindings),
+        "post_validation_refine" => Some(SecurityReviewPlanStep::PostValidationRefine),
         _ => None,
     }
 }
@@ -2209,7 +2237,12 @@ fn build_bug_records(
     (bugs, snapshots)
 }
 
-fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLinkInfo>) -> String {
+fn render_bug_sections(
+    snapshots: &[BugSnapshot],
+    git_link_info: Option<&GitLinkInfo>,
+    repo_root: Option<&Path>,
+    output_root: Option<&Path>,
+) -> String {
     let mut sections: Vec<String> = Vec::new();
     let mut ordered: Vec<&BugSnapshot> = snapshots.iter().collect();
     ordered.sort_by(|a, b| match (a.bug.risk_rank, b.bug.risk_rank) {
@@ -2222,18 +2255,22 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
     });
 
     for snapshot in ordered {
-        let base = snapshot.original_markdown.trim();
-        if base.is_empty() {
+        let base_raw = snapshot.original_markdown.trim();
+        if base_raw.is_empty() {
             continue;
         }
-        let mut composed = String::new();
+        let base_owned = prune_bug_markdown_file_lines_for_reporting(base_raw);
+        let base = base_owned.trim();
         let anchor_snippet = format!("<a id=\"bug-{}\"", snapshot.bug.summary_id);
-        if base.contains(&anchor_snippet) {
-            composed.push_str(&linkify_file_lines(base, git_link_info));
+        let linked = linkify_file_lines(base, git_link_info);
+        let linked =
+            strip_standalone_bug_anchor_lines(linked.as_str()).unwrap_or_else(|| linked.clone());
+        let mut composed = if linked.contains(&anchor_snippet) {
+            linked
         } else {
-            composed.push_str(&format!("<a id=\"bug-{}\"></a>\n", snapshot.bug.summary_id));
-            composed.push_str(&linkify_file_lines(base, git_link_info));
-        }
+            rewrite_bug_markdown_heading_id(linked.as_str(), snapshot.bug.summary_id)
+                .unwrap_or(linked)
+        };
         if let Some(handle) = snapshot.bug.assignee_github.as_deref() {
             let mut replaced = false;
             let mut adjusted: Vec<String> = Vec::new();
@@ -2262,11 +2299,7 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
             }
         }
         composed.push_str("\n\n#### Validation\n");
-        let expects_asan = snapshot
-            .bug
-            .verification_types
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case("crash_poc"));
+        let expects_asan = crash_poc_category(&snapshot.bug).is_some();
         let status_label = validation_status_label(&snapshot.bug.validation);
         composed.push_str(&format!("- **Status:** {status_label}\n"));
         if let Some(tool) = snapshot
@@ -2385,16 +2418,14 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
         if !artifacts.is_empty() {
             composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
         }
-        if let Some(snippet) = snapshot
-            .bug
-            .validation
-            .output_snippet
-            .as_ref()
-            .filter(|snippet| !snippet.is_empty())
-        {
-            let label = if expects_asan { "ASan trace" } else { "Output" };
-            composed.push_str(&format!("- **{label}:**\n```\n"));
-            composed.push_str(snippet.trim());
+        if let Some(output) = build_validation_output_block(
+            &snapshot.bug.validation,
+            repo_root,
+            output_root,
+            expects_asan,
+        ) {
+            composed.push_str("- **Validation Output:**\n```\n");
+            composed.push_str(output.trim());
             composed.push_str("\n```\n");
         }
         if let Some(control_snippet) = snapshot
@@ -2457,11 +2488,13 @@ fn linkify_file_lines(markdown: &str, git_link_info: Option<&GitLinkInfo>) -> St
     out_lines.join("\n")
 }
 
-#[allow(clippy::needless_collect)]
+#[allow(clippy::needless_collect, clippy::too_many_arguments)]
 async fn polish_bug_markdowns(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     summaries: &mut [BugSummary],
     details: &mut [BugDetail],
     metrics: Arc<ReviewMetrics>,
@@ -2490,6 +2523,7 @@ async fn polish_bug_markdowns(
         .collect();
 
     let mut stream = futures::stream::iter(work_items.into_iter().map(|(bug_id, content)| {
+        let writing_model = writing_model.to_string();
         let metrics = metrics.clone();
         async move {
             if content.trim().is_empty() {
@@ -2499,9 +2533,18 @@ async fn polish_bug_markdowns(
                     logs: Vec::new(),
                 });
             }
-            let outcome = polish_markdown_block(client, provider, auth, metrics, &content, None)
-                .await
-                .map_err(|err| format!("Bug {bug_id}: {err}"))?;
+            let outcome = polish_markdown_block(
+                client,
+                provider,
+                auth,
+                &writing_model,
+                writing_reasoning_effort,
+                metrics,
+                &content,
+                None,
+            )
+            .await
+            .map_err(|err| format!("Bug {bug_id}: {err}"))?;
             let polished = fix_mermaid_blocks(&outcome.text);
             let logs = outcome
                 .reasoning_logs
@@ -2927,7 +2970,7 @@ fn linear_mcp_server() -> McpServerConfig {
         },
         enabled: true,
         startup_timeout_sec: None,
-        tool_timeout_sec: Some(Duration::from_secs(300)),
+        tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
     }
@@ -2943,7 +2986,7 @@ fn notion_mcp_server() -> McpServerConfig {
         },
         enabled: true,
         startup_timeout_sec: None,
-        tool_timeout_sec: Some(Duration::from_secs(300)),
+        tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
     }
@@ -2959,7 +3002,7 @@ fn secbot_mcp_server() -> McpServerConfig {
         },
         enabled: true,
         startup_timeout_sec: None,
-        tool_timeout_sec: Some(Duration::from_secs(300)),
+        tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
     }
@@ -2976,7 +3019,7 @@ fn google_workspace_mcp_server(bin_path: PathBuf) -> McpServerConfig {
         },
         enabled: true,
         startup_timeout_sec: None,
-        tool_timeout_sec: Some(Duration::from_secs(300)),
+        tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
     }
@@ -3106,8 +3149,9 @@ pub async fn run_security_review_setup(
                     existing.enabled = true;
                     logs.push(format!("Enabled MCP server `{name}`."));
                 }
-                if existing.tool_timeout_sec.is_none() && desired.tool_timeout_sec.is_some() {
-                    existing.tool_timeout_sec = desired.tool_timeout_sec;
+                if existing.tool_timeout_sec.is_some() {
+                    existing.tool_timeout_sec = None;
+                    logs.push(format!("Removed MCP tool timeout for `{name}`."));
                 }
                 if name != "google-workspace-mcp" && existing.transport != desired_transport {
                     existing.transport = desired_transport.clone();
@@ -3306,9 +3350,102 @@ fn install_hint_for(name: &str) -> String {
     }
 }
 
+fn security_review_session_id() -> &'static str {
+    static SECURITY_REVIEW_SESSION_ID: OnceLock<String> = OnceLock::new();
+    SECURITY_REVIEW_SESSION_ID.get_or_init(|| {
+        let rand: u64 = rand::random();
+        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
+        format!("secreview-{now:x}-{rand:x}")
+    })
+}
+
+fn provider_with_beta_features(provider: &ModelProviderInfo, config: &Config) -> ModelProviderInfo {
+    let enabled = codex_core::features::FEATURES
+        .iter()
+        .filter_map(|spec| {
+            if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
+                Some(spec.key)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    if enabled.is_empty() {
+        return provider.clone();
+    }
+
+    let mut provider = provider.clone();
+    provider
+        .http_headers
+        .get_or_insert_with(HashMap::new)
+        .insert("x-codex-beta-features".to_string(), enabled);
+    provider
+}
+
 pub async fn run_security_review(
-    request: SecurityReviewRequest,
+    mut request: SecurityReviewRequest,
 ) -> Result<SecurityReviewResult, SecurityReviewFailure> {
+    request.provider = provider_with_beta_features(&request.provider, &request.config);
+
+    request.model = request.model.trim().to_string();
+    if request.model.is_empty() {
+        request.model = BUG_MODEL.to_string();
+    }
+
+    request.triage_model = request.triage_model.trim().to_string();
+    if request.triage_model.is_empty() {
+        request.triage_model = FILE_TRIAGE_MODEL.to_string();
+    }
+
+    request.spec_model = request.spec_model.trim().to_string();
+    if request.spec_model.is_empty() {
+        request.spec_model = SPEC_GENERATION_MODEL.to_string();
+    }
+
+    request.validation_model = request.validation_model.trim().to_string();
+    if request.validation_model.is_empty() {
+        request.validation_model = DEFAULT_VALIDATION_MODEL.to_string();
+    }
+
+    request.writing_model = request.writing_model.trim().to_string();
+    if request.writing_model.is_empty() {
+        request.writing_model = MARKDOWN_FIX_MODEL.to_string();
+    }
+
+    let global_reasoning_effort = request.config.model_reasoning_effort;
+    let triage_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .file_triage
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::Medium));
+    let spec_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .spec
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::High));
+    let bug_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .bugs
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::XHigh));
+    let validation_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .validation
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::XHigh));
+    let writing_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .writing
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::High));
+
     let mut progress_sender = request.progress_sender.clone();
     let log_sink = request.log_sink.clone();
     let mut logs = Vec::new();
@@ -3935,11 +4072,7 @@ pub async fn run_security_review(
             });
         }
 
-        let triage_model = if request.triage_model.trim().is_empty() {
-            FILE_TRIAGE_MODEL
-        } else {
-            request.triage_model.as_str()
-        };
+        let triage_model = request.triage_model.as_str();
 
         // First prune at the directory level to keep triage manageable.
         let mut directories: HashMap<PathBuf, Vec<FileSnippet>> = HashMap::new();
@@ -3975,13 +4108,16 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Running LLM file triage to prioritize analysis across {} files ({} directories).",
+                "Running LLM file triage to prioritize analysis across {} files ({} directories) (model: {triage_model}, reasoning: {triage_reasoning_label}).",
                 pruned_snippets.len(),
                 pruned_snippets
                     .iter()
                     .filter_map(|s| s.relative_path.parent())
                     .collect::<HashSet<_>>()
-                    .len()
+                    .len(),
+                triage_reasoning_label = reasoning_effort_label(
+                    normalize_reasoning_effort_for_model(triage_model, triage_reasoning_effort,)
+                )
             ),
         );
         let triage = match triage_files_for_bug_analysis(
@@ -3989,6 +4125,7 @@ pub async fn run_security_review(
             &request.provider,
             &request.auth,
             triage_model,
+            triage_reasoning_effort,
             auto_scope_prompt.clone(),
             pruned_snippets,
             progress_sender.clone(),
@@ -4181,6 +4318,8 @@ pub async fn run_security_review(
             &model_client,
             &request.provider,
             &request.auth,
+            request.spec_model.as_str(),
+            spec_reasoning_effort,
             &repo_path,
             &directory_candidates,
             metrics.clone(),
@@ -4244,8 +4383,20 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Generating system specifications for {} scope path(s) (running in parallel with bug analysis).",
-                spec_targets.len()
+                "Generating system specifications for {} scope path(s) (running in parallel with bug analysis) (spec model: {spec_model}, reasoning: {spec_reasoning_label}; writing model: {writing_model}, reasoning: {writing_reasoning_label}).",
+                spec_targets.len(),
+                spec_model = request.spec_model.as_str(),
+                spec_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.spec_model.as_str(),
+                        spec_reasoning_effort,
+                    )),
+                writing_model = request.writing_model.as_str(),
+                writing_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.writing_model.as_str(),
+                        writing_reasoning_effort,
+                    ))
             ),
         );
         let model_client = model_client.clone();
@@ -4260,11 +4411,17 @@ pub async fn run_security_review(
         let config = request.config.clone();
         let auth_manager = request.auth_manager.clone();
         let repository_summary = repository_summary.clone();
+        let spec_model = request.spec_model.clone();
+        let writing_model = request.writing_model.clone();
         Some(tokio::spawn(async move {
             let spec_generation = match generate_specs(
                 &model_client,
                 &provider,
                 &auth,
+                spec_model.as_str(),
+                spec_reasoning_effort,
+                writing_model.as_str(),
+                writing_reasoning_effort,
                 &repo_path,
                 &spec_targets,
                 &output_root,
@@ -4286,6 +4443,9 @@ pub async fn run_security_review(
                     &provider,
                     &auth,
                     THREAT_MODEL_MODEL,
+                    spec_reasoning_effort,
+                    writing_model.as_str(),
+                    writing_reasoning_effort,
                     &repository_summary,
                     &repo_path,
                     spec,
@@ -4342,7 +4502,6 @@ pub async fn run_security_review(
 
     let mut bug_summary_table: Option<String> = None;
     let mut bugs_for_result: Vec<SecurityReviewBug> = Vec::new();
-    let mut report_sections_prefix: Vec<String> = Vec::new();
     let mut snapshot: Option<SecurityReviewSnapshot> = None;
     let mut bugs_markdown: String = String::new();
     let mut findings_summary: String = String::new();
@@ -4376,6 +4535,7 @@ pub async fn run_security_review(
                             &request.provider,
                             &request.auth,
                             dedupe_model,
+                            bug_reasoning_effort,
                             summaries,
                             details,
                             progress_sender.clone(),
@@ -4430,11 +4590,19 @@ pub async fn run_security_review(
 
                     plan_tracker.mark_complete(SecurityReviewPlanStep::AnalyzeBugs);
                     plan_tracker.mark_complete(SecurityReviewPlanStep::PolishFindings);
-                    if !matches!(
-                        plan_tracker.status_for(SecurityReviewPlanStep::AssembleReport),
-                        Some(StepStatus::Completed | StepStatus::InProgress)
-                    ) {
-                        plan_tracker.start_step(SecurityReviewPlanStep::AssembleReport);
+                    for step in [
+                        SecurityReviewPlanStep::ValidateFindings,
+                        SecurityReviewPlanStep::PostValidationRefine,
+                        SecurityReviewPlanStep::AssembleReport,
+                    ] {
+                        if matches!(
+                            plan_tracker.status_for(step),
+                            Some(StepStatus::Completed | StepStatus::InProgress)
+                        ) {
+                            continue;
+                        }
+                        plan_tracker.start_step(step);
+                        break;
                     }
                     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
                     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -4442,8 +4610,12 @@ pub async fn run_security_review(
                     findings_summary = loaded.findings_summary.clone();
                     bugs_for_result = snapshot_bugs(&loaded);
                     bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
-                    report_sections_prefix = loaded.report_sections_prefix.clone();
-                    bugs_markdown = build_bugs_markdown(&loaded, git_link_info.as_ref());
+                    bugs_markdown = build_bugs_markdown(
+                        &loaded,
+                        git_link_info.as_ref(),
+                        Some(repo_path.as_path()),
+                        Some(request.output_root.as_path()),
+                    );
                     snapshot = Some(loaded);
                     skip_bug_analysis = true;
                 }
@@ -4474,7 +4646,14 @@ pub async fn run_security_review(
         let total_passes = BUG_FINDING_PASSES.max(1);
         record(
             &mut logs,
-            format!("Running bug analysis in {total_passes} pass(es)."),
+            format!(
+                "Running bug analysis in {total_passes} pass(es) (model: {model}, reasoning: {bug_reasoning_label}).",
+                model = request.model.as_str(),
+                bug_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+                    request.model.as_str(),
+                    bug_reasoning_effort,
+                ))
+            ),
         );
 
         let mut aggregated_logs: Vec<String> = Vec::new();
@@ -4499,6 +4678,7 @@ pub async fn run_security_review(
                 &request.provider,
                 &request.auth,
                 &request.model,
+                bug_reasoning_effort,
                 &request.config,
                 request.auth_manager.clone(),
                 &repository_summary,
@@ -4646,6 +4826,7 @@ pub async fn run_security_review(
                     progress_sender.clone(),
                     log_sink.clone(),
                     request.model.as_str(),
+                    bug_reasoning_effort,
                 )
                 .await
                 {
@@ -4781,6 +4962,7 @@ pub async fn run_security_review(
                 &request.provider,
                 &request.auth,
                 dedupe_model,
+                bug_reasoning_effort,
                 all_summaries,
                 all_details,
                 progress_sender.clone(),
@@ -4813,6 +4995,7 @@ pub async fn run_security_review(
                 &request.provider,
                 &request.auth,
                 &request.model,
+                bug_reasoning_effort,
                 &mut all_summaries,
                 &request.repo_path,
                 &repository_summary,
@@ -4901,8 +5084,14 @@ pub async fn run_security_review(
 
         if !all_summaries.is_empty() {
             let polish_message = format!(
-                "Polishing markdown for {} bug finding(s).",
-                all_summaries.len()
+                "Polishing markdown for {} bug finding(s) (model: {model}, reasoning: {writing_reasoning_label}).",
+                all_summaries.len(),
+                model = request.writing_model.as_str(),
+                writing_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.writing_model.as_str(),
+                        writing_reasoning_effort,
+                    ))
             );
             record(&mut logs, polish_message.clone());
             aggregated_logs.push(polish_message);
@@ -4910,6 +5099,8 @@ pub async fn run_security_review(
                 &model_client,
                 &request.provider,
                 &request.auth,
+                request.writing_model.as_str(),
+                writing_reasoning_effort,
                 &mut all_summaries,
                 &mut all_details,
                 metrics.clone(),
@@ -4970,7 +5161,7 @@ pub async fn run_security_review(
         record(&mut logs, "Bug analysis complete.".to_string());
         plan_tracker.complete_and_start_next(
             SecurityReviewPlanStep::PolishFindings,
-            Some(SecurityReviewPlanStep::AssembleReport),
+            Some(SecurityReviewPlanStep::ValidateFindings),
         );
         checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
         persist_checkpoint(&mut checkpoint, &mut logs);
@@ -4978,7 +5169,7 @@ pub async fn run_security_review(
             let prompt = build_linear_progress_prompt(
                 linear_issue,
                 &checkpoint.model,
-                "Assemble report and artifacts",
+                "Validate findings",
                 &checkpoint.plan_statuses,
                 &checkpoint,
                 &request.output_root,
@@ -5007,7 +5198,7 @@ pub async fn run_security_review(
 
         let (next_bugs_for_result, bug_snapshots) = build_bug_records(bug_summaries, bug_details);
         bugs_for_result = next_bugs_for_result;
-        report_sections_prefix = Vec::new();
+        let mut report_sections_prefix = Vec::new();
         if matches!(mode, SecurityReviewMode::Full) {
             if let Some(spec) = spec_generation.as_ref() {
                 record(
@@ -5034,15 +5225,20 @@ pub async fn run_security_review(
         let built_snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
             findings_summary: findings_summary.clone(),
-            report_sections_prefix: report_sections_prefix.clone(),
+            report_sections_prefix,
             bugs: bug_snapshots,
         };
 
-        bugs_markdown = build_bugs_markdown(&built_snapshot, git_link_info.as_ref());
+        bugs_markdown = build_bugs_markdown(
+            &built_snapshot,
+            git_link_info.as_ref(),
+            Some(repo_path.as_path()),
+            Some(request.output_root.as_path()),
+        );
         snapshot = Some(built_snapshot);
     }
 
-    let snapshot = match snapshot {
+    let mut snapshot = match snapshot {
         Some(snapshot) => snapshot,
         None => {
             return Err(SecurityReviewFailure {
@@ -5052,6 +5248,206 @@ pub async fn run_security_review(
         }
     };
 
+    if is_open_source {
+        let _ = run_trufflehog_scan(
+            &repo_path,
+            &request.output_root,
+            progress_sender.clone(),
+            log_sink.clone(),
+            &mut logs,
+        )
+        .await;
+    }
+
+    // Intentionally avoid logging the output path pre-write to keep logs concise.
+    let (git_commit, git_branch, git_commit_timestamp) = match git_revision.as_ref() {
+        Some((commit, branch, ts)) => (Some(commit.clone()), branch.clone(), *ts),
+        None => (None, None, None),
+    };
+    let metadata = SecurityReviewMetadata {
+        mode,
+        scope_paths: scope_display_paths.clone(),
+        git_commit,
+        git_branch,
+        git_commit_timestamp,
+        linear_issue: linear_issue.clone(),
+    };
+    let api_entries_for_persist = spec_generation
+        .as_ref()
+        .map(|spec| spec.api_entries.clone())
+        .unwrap_or_default();
+    let classification_rows_for_persist = spec_generation
+        .as_ref()
+        .map(|spec| spec.classification_rows.clone())
+        .unwrap_or_default();
+    let classification_table_for_persist = spec_generation
+        .as_ref()
+        .and_then(|spec| spec.classification_table.clone());
+    let mut artifacts = match persist_artifacts(
+        &request.output_root,
+        &repo_path,
+        &metadata,
+        &bugs_markdown,
+        &api_entries_for_persist,
+        &classification_rows_for_persist,
+        classification_table_for_persist.as_deref(),
+        None,
+        &snapshot,
+    )
+    .await
+    {
+        Ok(paths) => {
+            record(
+                &mut logs,
+                "Prepared bugs snapshot for validation.".to_string(),
+            );
+            checkpoint.bug_snapshot_path = Some(paths.snapshot_path.clone());
+            checkpoint.bugs_path = Some(paths.bugs_path.clone());
+            // Report is assembled after validation.
+            checkpoint.report_path = None;
+            checkpoint.report_html_path = None;
+            checkpoint.api_overview_path = paths.api_overview_path.clone();
+            checkpoint.classification_json_path = paths.classification_json_path.clone();
+            checkpoint.classification_table_path = paths.classification_table_path.clone();
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+            paths
+        }
+        Err(err) => {
+            record(&mut logs, format!("Failed to write artifacts: {err}"));
+            return Err(SecurityReviewFailure {
+                message: format!("Failed to write artifacts: {err}"),
+                logs,
+            });
+        }
+    };
+
+    let validation_targets = build_validation_findings_context(&snapshot);
+
+    if validation_targets.ids.is_empty() {
+        record(
+            &mut logs,
+            "No high-risk findings selected for validation; skipping.".to_string(),
+        );
+    } else {
+        record(
+            &mut logs,
+            format!(
+                "Validating high-risk findings... (model: {model}, reasoning: {validation_reasoning_label}).",
+                model = request.validation_model.as_str(),
+                validation_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.validation_model.as_str(),
+                        validation_reasoning_effort,
+                    ))
+            ),
+        );
+        match run_asan_validation(
+            repo_path.clone(),
+            artifacts.snapshot_path.clone(),
+            artifacts.bugs_path.clone(),
+            None,
+            None,
+            request.provider.clone(),
+            request.validation_model.clone(),
+            validation_reasoning_effort,
+            &request.config,
+            request.auth_manager.clone(),
+            progress_sender.clone(),
+            metrics.clone(),
+        )
+        .await
+        {
+            Ok(_) => {
+                record(
+                    &mut logs,
+                    "Validation complete; snapshot updated.".to_string(),
+                );
+            }
+            Err(err) => {
+                record(&mut logs, format!("Validation failed: {}", err.message));
+                logs.extend(err.logs);
+            }
+        }
+    }
+
+    match tokio_fs::read(&artifacts.snapshot_path).await {
+        Ok(bytes) => match serde_json::from_slice::<SecurityReviewSnapshot>(&bytes) {
+            Ok(updated) => {
+                snapshot = updated;
+                findings_summary = snapshot.findings_summary.clone();
+                bugs_for_result = snapshot_bugs(&snapshot);
+                bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
+                bugs_markdown = build_bugs_markdown(
+                    &snapshot,
+                    git_link_info.as_ref(),
+                    Some(repo_path.as_path()),
+                    Some(request.output_root.as_path()),
+                );
+            }
+            Err(err) => {
+                record(
+                    &mut logs,
+                    format!(
+                        "Failed to parse updated bug snapshot {}: {err}",
+                        artifacts.snapshot_path.display()
+                    ),
+                );
+            }
+        },
+        Err(err) => {
+            record(
+                &mut logs,
+                format!(
+                    "Failed to read updated bug snapshot {}: {err}",
+                    artifacts.snapshot_path.display()
+                ),
+            );
+        }
+    }
+
+    plan_tracker.complete_and_start_next(
+        SecurityReviewPlanStep::ValidateFindings,
+        Some(SecurityReviewPlanStep::PostValidationRefine),
+    );
+    plan_tracker.complete_and_start_next(
+        SecurityReviewPlanStep::PostValidationRefine,
+        Some(SecurityReviewPlanStep::AssembleReport),
+    );
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
+
+    if let Some(linear_issue) = linear_issue.as_ref() {
+        let prompt = build_linear_progress_prompt(
+            linear_issue,
+            &checkpoint.model,
+            "Assemble report and artifacts",
+            &checkpoint.plan_statuses,
+            &checkpoint,
+            &request.output_root,
+        );
+        let config = request.config.clone();
+        let provider = request.provider.clone();
+        let auth_manager = request.auth_manager.clone();
+        let repo_for_task = repo_path.clone();
+        let progress_for_task = progress_sender.clone();
+        let log_sink_for_task = log_sink.clone();
+        let metrics_for_task = metrics.clone();
+        tokio::spawn(async move {
+            let _ = run_linear_status_agent(
+                &config,
+                &provider,
+                auth_manager,
+                &repo_for_task,
+                progress_for_task,
+                log_sink_for_task,
+                prompt,
+                metrics_for_task,
+            )
+            .await;
+        });
+    }
+
     let findings_section = if bugs_markdown.trim().is_empty() {
         None
     } else {
@@ -5059,7 +5455,7 @@ pub async fn run_security_review(
     };
     let report_markdown = match mode {
         SecurityReviewMode::Full => {
-            let mut sections = report_sections_prefix.clone();
+            let mut sections = snapshot.report_sections_prefix.clone();
             if let Some(section) = findings_section.clone() {
                 sections.push(section);
             }
@@ -5100,42 +5496,7 @@ pub async fn run_security_review(
         }
     };
 
-    if is_open_source {
-        let _ = run_trufflehog_scan(
-            &repo_path,
-            &request.output_root,
-            progress_sender.clone(),
-            log_sink.clone(),
-            &mut logs,
-        )
-        .await;
-    }
-
-    // Intentionally avoid logging the output path pre-write to keep logs concise.
-    let (git_commit, git_branch, git_commit_timestamp) = match git_revision.as_ref() {
-        Some((commit, branch, ts)) => (Some(commit.clone()), branch.clone(), *ts),
-        None => (None, None, None),
-    };
-    let metadata = SecurityReviewMetadata {
-        mode,
-        scope_paths: scope_display_paths.clone(),
-        git_commit,
-        git_branch,
-        git_commit_timestamp,
-        linear_issue: linear_issue.clone(),
-    };
-    let api_entries_for_persist = spec_generation
-        .as_ref()
-        .map(|spec| spec.api_entries.clone())
-        .unwrap_or_default();
-    let classification_rows_for_persist = spec_generation
-        .as_ref()
-        .map(|spec| spec.classification_rows.clone())
-        .unwrap_or_default();
-    let classification_table_for_persist = spec_generation
-        .as_ref()
-        .and_then(|spec| spec.classification_table.clone());
-    let artifacts = match persist_artifacts(
+    artifacts = match persist_artifacts(
         &request.output_root,
         &repo_path,
         &metadata,
@@ -5172,72 +5533,6 @@ pub async fn run_security_review(
             });
         }
     };
-
-    let validation_targets = build_validation_findings_context(&snapshot);
-    if validation_targets.ids.is_empty() {
-        record(
-            &mut logs,
-            "No high-risk findings selected for validation; skipping.".to_string(),
-        );
-    } else {
-        record(
-            &mut logs,
-            "Validating high-risk findings (web + api)...".to_string(),
-        );
-        match run_web_validation(
-            repo_path.clone(),
-            artifacts.snapshot_path.clone(),
-            artifacts.bugs_path.clone(),
-            artifacts.report_path.clone(),
-            artifacts.report_html_path.clone(),
-            request.provider.clone(),
-            request.auth.clone(),
-            request.model.clone(),
-            progress_sender.clone(),
-            metrics.clone(),
-        )
-        .await
-        {
-            Ok(_) => {
-                record(
-                    &mut logs,
-                    "Validation complete; report updated.".to_string(),
-                );
-            }
-            Err(err) => {
-                record(&mut logs, format!("Validation failed: {}", err.message));
-                logs.extend(err.logs);
-            }
-        }
-
-        match tokio_fs::read(&artifacts.snapshot_path).await {
-            Ok(bytes) => match serde_json::from_slice::<SecurityReviewSnapshot>(&bytes) {
-                Ok(updated) => {
-                    findings_summary = updated.findings_summary.clone();
-                    bugs_for_result = snapshot_bugs(&updated);
-                    bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
-                }
-                Err(err) => {
-                    record(
-                        &mut logs,
-                        format!(
-                            "Failed to parse updated bug snapshot {}: {err}",
-                            artifacts.snapshot_path.display()
-                        ),
-                    );
-                }
-            },
-            Err(err) => {
-                record(
-                    &mut logs,
-                    format!(
-                        "Failed to read updated bug snapshot {}: {err}",
-                        artifacts.snapshot_path.display()
-                    ),
-                );
-            }
-        }
-    }
 
     plan_tracker.mark_complete(SecurityReviewPlanStep::AssembleReport);
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
@@ -5426,6 +5721,8 @@ fn render_checklist_markdown(statuses: &HashMap<String, StepStatus>) -> String {
         ("threat_model", "Draft threat model"),
         ("analyze_bugs", "Analyze code for bugs"),
         ("polish_findings", "Polish, dedupe, and rerank findings"),
+        ("validate_findings", "Validate findings"),
+        ("post_validation_refine", "Post-validation PoC refinement"),
         ("assemble_report", "Assemble report and artifacts"),
     ];
     for (slug, title) in order {
@@ -6083,6 +6380,7 @@ async fn triage_files_for_bug_analysis(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     triage_model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     scope_prompt: Option<String>,
     snippets: Vec<FileSnippet>,
     progress_sender: Option<AppEventSender>,
@@ -6188,6 +6486,7 @@ async fn triage_files_for_bug_analysis(
                 provider.clone(),
                 auth.clone(),
                 triage_model.to_string(),
+                reasoning_effort,
                 scope_prompt.clone(),
                 request,
                 progress_sender.clone(),
@@ -6222,6 +6521,7 @@ async fn triage_files_for_bug_analysis(
                         provider.clone(),
                         auth.clone(),
                         triage_model.to_string(),
+                        reasoning_effort,
                         scope_prompt.clone(),
                         next_request,
                         progress_sender.clone(),
@@ -6296,6 +6596,7 @@ async fn triage_chunk(
     provider: ModelProviderInfo,
     auth: Option<CodexAuth>,
     triage_model: String,
+    reasoning_effort: Option<ReasoningEffort>,
     scope_prompt: Option<Arc<str>>,
     request: FileTriageChunkRequest,
     progress_sender: Option<AppEventSender>,
@@ -6331,6 +6632,7 @@ async fn triage_chunk(
             &provider,
             &auth,
             &triage_model,
+            reasoning_effort,
             FILE_TRIAGE_SYSTEM_PROMPT,
             &prompt,
             metrics.clone(),
@@ -6617,6 +6919,10 @@ async fn generate_specs(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    spec_model: &str,
+    spec_reasoning_effort: Option<ReasoningEffort>,
+    writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     include_paths: &[PathBuf],
     output_root: &Path,
@@ -6771,6 +7077,8 @@ async fn generate_specs(
             client,
             provider,
             auth,
+            spec_model,
+            spec_reasoning_effort,
             repo_root,
             &heuristically_filtered,
             metrics.clone(),
@@ -6830,9 +7138,7 @@ async fn generate_specs(
         let kept = spec_targets.len();
         let total = directory_candidates.len();
         let message = if spec_progress_state.targets.is_empty() {
-            format!(
-                "Spec directory filter kept {kept}/{total} directories using {SPEC_GENERATION_MODEL}."
-            )
+            format!("Spec directory filter kept {kept}/{total} directories using {spec_model}.")
         } else {
             format!("Resuming specification generation for {kept} directory(s).")
         };
@@ -6917,6 +7223,10 @@ async fn generate_specs(
         client,
         provider,
         auth,
+        spec_model,
+        spec_reasoning_effort,
+        writing_model,
+        writing_reasoning_effort,
         repo_root,
         &pending_targets,
         &display_locations,
@@ -7001,6 +7311,10 @@ async fn generate_specs(
         client,
         provider,
         auth,
+        spec_model,
+        None,
+        writing_model,
+        None,
         &display_locations,
         &spec_entries,
         &combined_path,
@@ -7014,8 +7328,16 @@ async fn generate_specs(
 
     let mut classification_rows: Vec<DataClassificationRow> = Vec::new();
     let mut classification_table: Option<String> = None;
-    match extract_data_classification(client, provider, auth, &combined_markdown, metrics.clone())
-        .await
+    match extract_data_classification(
+        client,
+        provider,
+        auth,
+        spec_model,
+        spec_reasoning_effort,
+        &combined_markdown,
+        metrics.clone(),
+    )
+    .await
     {
         Ok(Some(extraction)) => {
             for line in extraction.reasoning_logs {
@@ -7211,6 +7533,7 @@ async fn expand_auto_scope_keywords(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    reasoning_effort: Option<ReasoningEffort>,
     user_query: &str,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<Vec<String>, String> {
@@ -7234,6 +7557,7 @@ async fn expand_auto_scope_keywords(
         provider,
         auth,
         AUTO_SCOPE_MODEL,
+        reasoning_effort,
         AUTO_SCOPE_KEYWORD_SYSTEM_PROMPT,
         &prompt,
         metrics.clone(),
@@ -7587,28 +7911,40 @@ async fn auto_detect_scope(
 ) -> Result<(Vec<AutoScopeSelection>, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
 
-    let mut keywords =
-        match expand_auto_scope_keywords(client, provider, auth, user_query, metrics.clone()).await
-        {
-            Ok(values) => {
-                if values.is_empty() {
-                    logs.push(
-                        "Auto scope keyword expansion returned no keywords; using fallback terms."
-                            .to_string(),
-                    );
-                } else {
-                    logs.push(format!(
-                        "Auto scope keywords suggested by model: {}",
-                        values.join(", ")
-                    ));
-                }
-                values
+    let keyword_reasoning_effort = config
+        .security_review_reasoning_efforts
+        .file_triage
+        .or(config.model_reasoning_effort);
+
+    let mut keywords = match expand_auto_scope_keywords(
+        client,
+        provider,
+        auth,
+        keyword_reasoning_effort,
+        user_query,
+        metrics.clone(),
+    )
+    .await
+    {
+        Ok(values) => {
+            if values.is_empty() {
+                logs.push(
+                    "Auto scope keyword expansion returned no keywords; using fallback terms."
+                        .to_string(),
+                );
+            } else {
+                logs.push(format!(
+                    "Auto scope keywords suggested by model: {}",
+                    values.join(", ")
+                ));
             }
-            Err(err) => {
-                logs.push(format!("Auto scope keyword expansion failed: {err}"));
-                Vec::new()
-            }
-        };
+            values
+        }
+        Err(err) => {
+            logs.push(format!("Auto scope keyword expansion failed: {err}"));
+            Vec::new()
+        }
+    };
 
     if keywords.is_empty() {
         let fallback = fallback_keywords_from_prompt(user_query);
@@ -7992,6 +8328,7 @@ mod bug_analysis_progress_tests {
 mod bug_dedupe_tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
 
     fn make_bug_markdown(title: &str, file: &str) -> String {
         format!(
@@ -8019,6 +8356,107 @@ mod bug_dedupe_tests {
             markdown: make_bug_markdown(title, file),
             author_github: None,
         }
+    }
+
+    #[test]
+    fn prunes_file_lines_to_sinks_from_dataflow() {
+        let markdown = r#"
+### Example finding
+- **File & Lines:** `src/source.rs#L1-L2, src/prop.rs#L3-L4, src/sink.rs#L10-L12`
+- **Description:** Vulnerable behavior at `src/sink.rs#L10-L12`.
+- **Dataflow:**
+    - Source: `src/source.rs#L1-L2`
+    - Propagation: `src/prop.rs#L3-L4`
+    - Sink: `src/sink.rs#L10-L12`
+- **Recommendation:** Fix it.
+"#;
+
+        let mut next_id = 1usize;
+        let (summaries, details) = extract_bug_summaries(
+            markdown,
+            "default.rs#L1-L1",
+            Path::new("src/lib.rs"),
+            &mut next_id,
+        );
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(details.len(), 1);
+        assert_eq!(summaries[0].file, "src/sink.rs#L10-L12");
+        assert!(
+            summaries[0]
+                .markdown
+                .contains("- **File & Lines:** `src/sink.rs#L10-L12`")
+        );
+        assert!(
+            details[0]
+                .original_markdown
+                .contains("- **File & Lines:** `src/sink.rs#L10-L12`")
+        );
+    }
+
+    #[test]
+    fn dedupe_uses_sink_locations_for_file_lines() {
+        fn bug_markdown(title: &str, file: &str, sink: &str) -> String {
+            format!(
+                "### {title}\n- **File & Lines:** `{file}`\n- **Severity:** High\n- **Impact:** x\n- **Likelihood:** x\n- **Description:** see `{sink}`\n- **Dataflow:**\n    - Sink: `{sink}`\n- **Recommendation:** x\n"
+            )
+        }
+
+        let summaries = vec![
+            BugSummary {
+                id: 1,
+                title: "Finding A".to_string(),
+                file: "a.rs#L1-L2, a.rs#L10-L12".to_string(),
+                severity: "High".to_string(),
+                impact: "x".to_string(),
+                likelihood: "x".to_string(),
+                recommendation: "x".to_string(),
+                blame: None,
+                risk_score: None,
+                risk_rank: None,
+                risk_reason: None,
+                verification_types: Vec::new(),
+                vulnerability_tag: Some("example-sink".to_string()),
+                validation: BugValidationState::default(),
+                source_path: PathBuf::new(),
+                markdown: bug_markdown("Finding A", "a.rs#L1-L2, a.rs#L10-L12", "a.rs#L10-L12"),
+                author_github: None,
+            },
+            BugSummary {
+                id: 2,
+                title: "Finding B".to_string(),
+                file: "b.rs#L3-L4, b.rs#L30-L34".to_string(),
+                severity: "High".to_string(),
+                impact: "x".to_string(),
+                likelihood: "x".to_string(),
+                recommendation: "x".to_string(),
+                blame: None,
+                risk_score: None,
+                risk_rank: None,
+                risk_reason: None,
+                verification_types: Vec::new(),
+                vulnerability_tag: Some("example-sink".to_string()),
+                validation: BugValidationState::default(),
+                source_path: PathBuf::new(),
+                markdown: bug_markdown("Finding B", "b.rs#L3-L4, b.rs#L30-L34", "b.rs#L30-L34"),
+                author_github: None,
+            },
+        ];
+        let details = summaries
+            .iter()
+            .map(|summary| BugDetail {
+                summary_id: summary.id,
+                original_markdown: summary.markdown.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let (summaries, _details, removed) = dedupe_bug_summaries(summaries, details);
+        assert_eq!(removed, 1);
+        assert_eq!(summaries.len(), 1);
+        let file = summaries[0].file.clone();
+        assert!(file.contains("a.rs#L10-L12"));
+        assert!(file.contains("b.rs#L30-L34"));
+        assert!(!file.contains("a.rs#L1-L2"));
+        assert!(!file.contains("b.rs#L3-L4"));
     }
 
     #[test]
@@ -8300,15 +8738,15 @@ mod bug_dedupe_tests {
         assert_eq!(ids, vec![1, 2, 3]);
 
         snapshot.bugs.reverse();
-        let markdown = build_bugs_markdown(&snapshot, None);
+        let markdown = build_bugs_markdown(&snapshot, None, None, None);
         let high = markdown
-            .find("### [1] High last by old rank")
+            .find("### <a id=\"bug-1\"></a> [1] High last by old rank")
             .expect("high heading");
         let medium = markdown
-            .find("### [2] Medium first by old rank")
+            .find("### <a id=\"bug-2\"></a> [2] Medium first by old rank")
             .expect("medium heading");
         let low = markdown
-            .find("### [3] Low second by old rank")
+            .find("### <a id=\"bug-3\"></a> [3] Low second by old rank")
             .expect("low heading");
         assert!(high < medium);
         assert!(medium < low);
@@ -8370,9 +8808,51 @@ mod bug_dedupe_tests {
             ],
         };
 
-        let markdown = build_bugs_markdown(&snapshot, None);
+        let markdown = build_bugs_markdown(&snapshot, None, None, None);
         assert!(markdown.contains("High bug"));
         assert!(!markdown.contains("Ignored bug"));
+    }
+}
+
+#[cfg(test)]
+mod validation_classification_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn python_exit_code_2_maps_to_unable_to_validate() {
+        let status = classify_python_validation_status(false, Some(2), false, "", "some failure");
+        assert_eq!(status, BugValidationStatus::UnableToValidate);
+    }
+
+    #[test]
+    fn python_build_failures_map_to_unable_to_validate() {
+        let status = classify_python_validation_status(
+            false,
+            Some(1),
+            false,
+            "",
+            "error: could not compile `foo`",
+        );
+        assert_eq!(status, BugValidationStatus::UnableToValidate);
+    }
+
+    #[test]
+    fn python_expect_asan_requires_signature() {
+        let status = classify_python_validation_status(true, Some(0), true, "ok", "");
+        assert_eq!(status, BugValidationStatus::Failed);
+    }
+
+    #[test]
+    fn python_expect_asan_passes_when_signature_present_even_if_nonzero() {
+        let status = classify_python_validation_status(
+            true,
+            Some(1),
+            false,
+            "AddressSanitizer: heap-buffer-overflow",
+            "",
+        );
+        assert_eq!(status, BugValidationStatus::Passed);
     }
 }
 
@@ -8442,10 +8922,13 @@ mod severity_matrix_tests {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn filter_spec_directories(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     candidates: &[(PathBuf, String)],
     metrics: Arc<ReviewMetrics>,
@@ -8467,7 +8950,8 @@ Return ALL to keep every directory.",
         client,
         provider,
         auth,
-        SPEC_GENERATION_MODEL,
+        model,
+        reasoning_effort,
         SPEC_DIR_FILTER_SYSTEM_PROMPT,
         &prompt,
         metrics,
@@ -8556,12 +9040,15 @@ async fn run_spec_agent(
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     prompt: String,
     metrics: Arc<ReviewMetrics>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(String, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
 
     let mut spec_config = config.clone();
-    spec_config.model = Some(SPEC_GENERATION_MODEL.to_string());
-    spec_config.model_reasoning_effort = Some(ReasoningEffort::High);
+    spec_config.model = Some(model.to_string());
+    spec_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
     spec_config.model_provider = provider.clone();
     spec_config.base_instructions = Some(SPEC_SYSTEM_PROMPT.to_string());
     spec_config.user_instructions = None;
@@ -8687,11 +9174,14 @@ async fn run_bug_agent(
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<BugAgentOutcome, SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
 
     let mut bug_config = config.clone();
     bug_config.model = Some(model.to_string());
+    bug_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
     bug_config.model_provider = provider.clone();
     bug_config.base_instructions = Some(BUGS_SYSTEM_PROMPT.to_string());
     bug_config.user_instructions = None;
@@ -8805,6 +9295,10 @@ async fn generate_specs_single_worker(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    spec_model: &str,
+    spec_reasoning_effort: Option<ReasoningEffort>,
+    writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     project_locations: &[String],
     raw_dir: &Path,
@@ -8833,7 +9327,7 @@ async fn generate_specs_single_worker(
     let prompt = build_spec_prompt_text(
         project_locations,
         &scope_label,
-        SPEC_GENERATION_MODEL,
+        spec_model,
         &date,
         repo_root,
     );
@@ -8847,6 +9341,8 @@ async fn generate_specs_single_worker(
         log_sink.clone(),
         prompt,
         metrics.clone(),
+        spec_model,
+        spec_reasoning_effort,
     )
     .await
     {
@@ -8872,13 +9368,21 @@ async fn generate_specs_single_worker(
             &mut logs,
             polish_message.clone(),
         );
-        let outcome =
-            polish_markdown_block(client, provider, auth, metrics.clone(), &sanitized, None)
-                .await
-                .map_err(|err| SecurityReviewFailure {
-                    message: format!("Failed to polish specification for {scope_label}: {err}"),
-                    logs: Vec::new(),
-                })?;
+        let outcome = polish_markdown_block(
+            client,
+            provider,
+            auth,
+            writing_model,
+            writing_reasoning_effort,
+            metrics.clone(),
+            &sanitized,
+            None,
+        )
+        .await
+        .map_err(|err| SecurityReviewFailure {
+            message: format!("Failed to polish specification for {scope_label}: {err}"),
+            logs: Vec::new(),
+        })?;
         if let Some(tx) = progress_sender.as_ref() {
             for line in &outcome.reasoning_logs {
                 tx.send(AppEvent::SecurityReviewLog(line.clone()));
@@ -8924,6 +9428,10 @@ async fn generate_specs_parallel_workers(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    spec_model: &str,
+    spec_reasoning_effort: Option<ReasoningEffort>,
+    writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     normalized: &[PathBuf],
     display_locations: &[String],
@@ -8955,6 +9463,10 @@ async fn generate_specs_parallel_workers(
                 client,
                 provider,
                 auth,
+                spec_model,
+                spec_reasoning_effort,
+                writing_model,
+                writing_reasoning_effort,
                 repo_root,
                 target.clone(),
                 project_locations,
@@ -9002,6 +9514,10 @@ async fn generate_spec_for_location(
     client: &CodexHttpClient,
     provider: ModelProviderInfo,
     auth: Option<CodexAuth>,
+    spec_model: &str,
+    spec_reasoning_effort: Option<ReasoningEffort>,
+    writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repo_root: PathBuf,
     target: PathBuf,
     project_locations: Vec<String>,
@@ -9028,7 +9544,7 @@ async fn generate_spec_for_location(
     let prompt = build_spec_prompt_text(
         &project_locations,
         &location_label,
-        SPEC_GENERATION_MODEL,
+        spec_model,
         &date,
         &repo_root,
     );
@@ -9042,6 +9558,8 @@ async fn generate_spec_for_location(
         log_sink.clone(),
         prompt,
         metrics.clone(),
+        spec_model,
+        spec_reasoning_effort,
     )
     .await
     {
@@ -9067,13 +9585,21 @@ async fn generate_spec_for_location(
             &mut logs,
             polish_message.clone(),
         );
-        let outcome =
-            polish_markdown_block(client, &provider, &auth, metrics.clone(), &sanitized, None)
-                .await
-                .map_err(|err| SecurityReviewFailure {
-                    message: format!("Failed to polish specification for {location_label}: {err}"),
-                    logs: Vec::new(),
-                })?;
+        let outcome = polish_markdown_block(
+            client,
+            &provider,
+            &auth,
+            writing_model,
+            writing_reasoning_effort,
+            metrics.clone(),
+            &sanitized,
+            None,
+        )
+        .await
+        .map_err(|err| SecurityReviewFailure {
+            message: format!("Failed to polish specification for {location_label}: {err}"),
+            logs: Vec::new(),
+        })?;
         if let Some(tx) = progress_sender.as_ref() {
             for line in &outcome.reasoning_logs {
                 tx.send(AppEvent::SecurityReviewLog(line.clone()));
@@ -9120,6 +9646,9 @@ async fn generate_threat_model(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repository_summary: &str,
     repo_root: &Path,
     spec: &SpecGenerationOutcome,
@@ -9140,8 +9669,12 @@ async fn generate_threat_model(
         })?;
 
     let mut logs: Vec<String> = Vec::new();
+    let reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+        model,
+        reasoning_effort,
+    ));
     let start_message = format!(
-        "Generating threat model from {} specification section(s).",
+        "Generating threat model from {} specification section(s) (model: {model}, reasoning: {reasoning_label}).",
         spec.locations.len().max(1)
     );
     if let Some(tx) = progress_sender.as_ref() {
@@ -9155,6 +9688,7 @@ async fn generate_threat_model(
         provider,
         auth,
         model,
+        reasoning_effort,
         THREAT_MODEL_SYSTEM_PROMPT,
         &prompt,
         metrics.clone(),
@@ -9197,6 +9731,7 @@ async fn generate_threat_model(
             provider,
             auth,
             model,
+            reasoning_effort,
             THREAT_MODEL_SYSTEM_PROMPT,
             &retry_prompt,
             metrics.clone(),
@@ -9240,7 +9775,13 @@ async fn generate_threat_model(
     }
 
     if !sanitized_response.trim().is_empty() {
-        let polish_message = "Polishing threat model markdown formatting.".to_string();
+        let writing_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+            writing_model,
+            writing_reasoning_effort,
+        ));
+        let polish_message = format!(
+            "Polishing threat model markdown formatting (model: {writing_model}, reasoning: {writing_reasoning_label})."
+        );
         if let Some(tx) = progress_sender.as_ref() {
             tx.send(AppEvent::SecurityReviewLog(polish_message.clone()));
         }
@@ -9249,6 +9790,8 @@ async fn generate_threat_model(
             client,
             provider,
             auth,
+            writing_model,
+            writing_reasoning_effort,
             metrics.clone(),
             &sanitized_response,
             None,
@@ -9312,6 +9855,7 @@ async fn compact_analysis_context(
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<Option<String>, SecurityReviewFailure> {
     let mut sections: Vec<String> = Vec::new();
     if let Some(spec) = spec_markdown {
@@ -9354,6 +9898,7 @@ async fn compact_analysis_context(
         provider,
         auth,
         model,
+        reasoning_effort,
         BUGS_SYSTEM_PROMPT,
         &prompt,
         metrics,
@@ -9517,11 +10062,193 @@ async fn write_testing_instructions(
     }
 }
 
+fn validation_testing_md_dedupe_key(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let normalized = trimmed
+        .trim_start_matches(['-', '*', '•'])
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn merge_validation_testing_md(existing: &str, additions: &[String]) -> Option<String> {
+    let mut addition_lines: Vec<String> = Vec::new();
+    for addition in additions {
+        for line in addition.lines() {
+            let trimmed_end = line.trim_end();
+            if trimmed_end.trim().is_empty() {
+                continue;
+            }
+            if trimmed_end.trim_start().starts_with('#') {
+                continue;
+            }
+            addition_lines.push(trimmed_end.to_string());
+        }
+    }
+    if addition_lines.is_empty() {
+        return None;
+    }
+
+    let mut file_lines: Vec<String> = existing.lines().map(str::to_string).collect();
+    let header_index = file_lines
+        .iter()
+        .position(|line| line.trim() == VALIDATION_TESTING_SECTION_HEADER);
+
+    let mut updated = false;
+
+    match header_index {
+        None => {
+            if !file_lines.is_empty() && !file_lines.last().is_some_and(|l| l.trim().is_empty()) {
+                file_lines.push(String::new());
+            }
+            file_lines.push(VALIDATION_TESTING_SECTION_HEADER.to_string());
+            file_lines.push(VALIDATION_TESTING_SECTION_INTRO.to_string());
+            file_lines.push(String::new());
+            file_lines.extend(addition_lines);
+            updated = true;
+        }
+        Some(header_index) => {
+            let mut section_end = file_lines
+                .iter()
+                .enumerate()
+                .skip(header_index + 1)
+                .find(|(_, line)| line.trim_start().starts_with("## "))
+                .map(|(index, _)| index)
+                .unwrap_or(file_lines.len());
+
+            let has_intro = file_lines
+                .iter()
+                .take(section_end)
+                .skip(header_index + 1)
+                .any(|line| line.trim() == VALIDATION_TESTING_SECTION_INTRO);
+            if !has_intro {
+                file_lines.insert(
+                    header_index + 1,
+                    VALIDATION_TESTING_SECTION_INTRO.to_string(),
+                );
+                file_lines.insert(header_index + 2, String::new());
+                section_end = section_end.saturating_add(2);
+                updated = true;
+            }
+
+            let mut seen: HashSet<String> = file_lines
+                .iter()
+                .take(section_end)
+                .skip(header_index + 1)
+                .filter_map(|line| validation_testing_md_dedupe_key(line))
+                .collect();
+
+            let mut filtered_additions: Vec<String> = Vec::new();
+            for line in addition_lines {
+                let Some(key) = validation_testing_md_dedupe_key(&line) else {
+                    continue;
+                };
+                if seen.insert(key) {
+                    filtered_additions.push(line);
+                }
+            }
+
+            if !filtered_additions.is_empty() {
+                let mut insert_at = section_end;
+                while insert_at > header_index + 1
+                    && file_lines
+                        .get(insert_at.saturating_sub(1))
+                        .is_some_and(|line| line.trim().is_empty())
+                {
+                    insert_at = insert_at.saturating_sub(1);
+                }
+
+                let mut insertion: Vec<String> = Vec::new();
+                if insert_at > 0
+                    && file_lines
+                        .get(insert_at.saturating_sub(1))
+                        .is_some_and(|line| !line.trim().is_empty())
+                {
+                    insertion.push(String::new());
+                }
+                insertion.extend(filtered_additions);
+
+                file_lines.splice(insert_at..insert_at, insertion);
+                updated = true;
+            }
+        }
+    }
+
+    if !updated {
+        return None;
+    }
+
+    let mut out = file_lines.join("\n");
+    out.push('\n');
+    Some(out)
+}
+
+async fn apply_validation_testing_md_additions(
+    testing_path: &Path,
+    repo_root: &Path,
+    additions: &[String],
+    progress_sender: &Option<AppEventSender>,
+    logs: &mut Vec<String>,
+) {
+    let merged = tokio_fs::read_to_string(testing_path)
+        .await
+        .ok()
+        .and_then(|existing| merge_validation_testing_md(&existing, additions));
+
+    let Some(contents) = merged else {
+        return;
+    };
+
+    if let Some(parent) = testing_path.parent() {
+        let _ = tokio_fs::create_dir_all(parent).await;
+    }
+
+    match tokio_fs::write(testing_path, contents.as_bytes()).await {
+        Ok(_) => {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!(
+                    "Updated shared testing instructions at {}.",
+                    display_path_for(testing_path, repo_root)
+                ),
+            );
+        }
+        Err(err) => {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!(
+                    "Failed to update shared testing instructions at {}: {err}",
+                    display_path_for(testing_path, repo_root)
+                ),
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn combine_spec_markdown(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     project_locations: &[String],
     specs: &[SpecEntry],
     combined_path: &Path,
@@ -9562,7 +10289,8 @@ async fn combine_spec_markdown(
             client,
             provider,
             auth,
-            SPEC_GENERATION_MODEL,
+            model,
+            reasoning_effort,
             SPEC_COMBINE_SYSTEM_PROMPT,
             &prompt,
             metrics.clone(),
@@ -9780,7 +10508,13 @@ async fn combine_spec_markdown(
 
     let sanitized = fix_mermaid_blocks(&combined_raw);
 
-    let polish_message = "Polishing combined specification markdown formatting.".to_string();
+    let writing_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+        writing_model,
+        writing_reasoning_effort,
+    ));
+    let polish_message = format!(
+        "Polishing combined specification markdown formatting (model: {writing_model}, reasoning: {writing_reasoning_label})."
+    );
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(polish_message.clone()));
     }
@@ -9791,7 +10525,8 @@ async fn combine_spec_markdown(
         client,
         provider,
         auth,
-        MARKDOWN_FIX_MODEL,
+        writing_model,
+        writing_reasoning_effort,
         MARKDOWN_FIX_SYSTEM_PROMPT,
         &fix_prompt,
         metrics.clone(),
@@ -10108,6 +10843,8 @@ async fn extract_data_classification(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     spec_markdown: &str,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<Option<ClassificationExtraction>, String> {
@@ -10123,7 +10860,8 @@ async fn extract_data_classification(
         client,
         provider,
         auth,
-        SPEC_GENERATION_MODEL,
+        model,
+        reasoning_effort,
         SPEC_SYSTEM_PROMPT,
         &prompt,
         metrics,
@@ -10325,10 +11063,13 @@ async fn write_bug_analysis_progress(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn polish_markdown_block(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     metrics: Arc<ReviewMetrics>,
     original_content: &str,
     template_hint: Option<&str>,
@@ -10345,7 +11086,8 @@ async fn polish_markdown_block(
         client,
         provider,
         auth,
-        MARKDOWN_FIX_MODEL,
+        model,
+        reasoning_effort,
         MARKDOWN_FIX_SYSTEM_PROMPT,
         &fix_prompt,
         metrics,
@@ -10370,6 +11112,7 @@ async fn analyze_files_individually(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     config: &Config,
     auth_manager: Arc<AuthManager>,
     repository_summary: &str,
@@ -10468,6 +11211,7 @@ async fn analyze_files_individually(
                     provider,
                     auth,
                     model,
+                    reasoning_effort,
                     config,
                     auth_manager.clone(),
                     repository_summary,
@@ -10539,6 +11283,7 @@ async fn analyze_files_individually(
                         provider,
                         auth,
                         model,
+                        reasoning_effort,
                         config,
                         auth_manager.clone(),
                         repository_summary,
@@ -10739,6 +11484,7 @@ async fn analyze_files_individually(
             provider,
             auth,
             model,
+            reasoning_effort,
             &mut bug_summaries,
             repo_root,
             repository_summary,
@@ -10852,6 +11598,7 @@ async fn analyze_single_file(
     provider: &ModelProviderInfo,
     _auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     config: &Config,
     auth_manager: Arc<AuthManager>,
     repository_summary: &str,
@@ -10894,6 +11641,7 @@ async fn analyze_single_file(
         log_sink.clone(),
         metrics,
         model,
+        reasoning_effort,
     )
     .await
     {
@@ -11104,10 +11852,24 @@ fn extract_bug_summaries(
         if let Some(mut summary) = current.take() {
             let section = lines.join("\n");
             let trimmed = section.trim().to_string();
-            summary.markdown = trimmed.clone();
+            let mut markdown = trimmed;
+            let preferred_locations =
+                preferred_bug_locations_for_reporting(markdown.as_str(), summary.file.as_str());
+            if !preferred_locations.is_empty() {
+                let joined = preferred_locations.join(", ");
+                if !joined.is_empty() && joined != summary.file {
+                    summary.file = joined.clone();
+                    if let Some(updated) =
+                        rewrite_bug_markdown_location(markdown.as_str(), joined.as_str())
+                    {
+                        markdown = updated;
+                    }
+                }
+            }
+            summary.markdown = markdown.clone();
             details.push(BugDetail {
                 summary_id: summary.id,
-                original_markdown: trimmed,
+                original_markdown: markdown,
             });
             summaries.push(summary);
         }
@@ -11219,6 +11981,169 @@ fn normalize_title_key(title: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+fn extract_file_locations_from_markdown(text: &str) -> Vec<String> {
+    static LOCATION_RE: OnceLock<Regex> = OnceLock::new();
+    let re = LOCATION_RE.get_or_init(|| {
+        Regex::new(r"(?P<loc>[^\s,;()\[\]`<>]+#L\d+(?:-L\d+)?)")
+            .unwrap_or_else(|error| panic!("failed to compile file location regex: {error}"))
+    });
+
+    let mut out: Vec<String> = Vec::new();
+    for caps in re.captures_iter(text) {
+        let Some(loc) = caps.name("loc").map(|m| m.as_str().trim()) else {
+            continue;
+        };
+        if loc.is_empty() {
+            continue;
+        }
+        if !out.iter().any(|existing| existing == loc) {
+            out.push(loc.to_string());
+        }
+    }
+    out
+}
+
+fn leading_whitespace_len(text: &str) -> usize {
+    text.bytes()
+        .take_while(|b| matches!(b, b' ' | b'\t'))
+        .count()
+}
+
+fn extract_bug_section_locations(markdown: &str, section: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut section_indent = 0usize;
+    let header = format!("- **{section}:**");
+    let mut out: Vec<String> = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !in_section {
+            if trimmed.starts_with(header.as_str()) {
+                in_section = true;
+                section_indent = leading_whitespace_len(line);
+                for loc in extract_file_locations_from_markdown(trimmed) {
+                    if !out.iter().any(|existing| existing == &loc) {
+                        out.push(loc);
+                    }
+                }
+            }
+            continue;
+        }
+
+        let indent = leading_whitespace_len(line);
+        if indent <= section_indent
+            && trimmed.starts_with("- **")
+            && !trimmed.starts_with(header.as_str())
+        {
+            break;
+        }
+
+        for loc in extract_file_locations_from_markdown(trimmed) {
+            if !out.iter().any(|existing| existing == &loc) {
+                out.push(loc);
+            }
+        }
+    }
+
+    out
+}
+
+fn extract_bug_sink_locations(markdown: &str) -> Vec<String> {
+    let mut in_dataflow = false;
+    let mut dataflow_indent = 0usize;
+    let mut sink_block_indent: Option<usize> = None;
+    let mut out: Vec<String> = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !in_dataflow {
+            if trimmed.starts_with("- **Dataflow:**") {
+                in_dataflow = true;
+                dataflow_indent = leading_whitespace_len(line);
+            }
+            continue;
+        }
+
+        let indent = leading_whitespace_len(line);
+        if indent <= dataflow_indent
+            && trimmed.starts_with("- **")
+            && !trimmed.starts_with("- **Dataflow:**")
+        {
+            break;
+        }
+
+        let lowered = trimmed.to_ascii_lowercase();
+        if lowered.contains("sink") {
+            sink_block_indent = Some(indent);
+        }
+
+        let Some(sink_indent) = sink_block_indent else {
+            continue;
+        };
+
+        if indent <= sink_indent && trimmed.starts_with('-') && !lowered.contains("sink") {
+            sink_block_indent = None;
+            continue;
+        }
+
+        for loc in extract_file_locations_from_markdown(trimmed) {
+            if !out.iter().any(|existing| existing == &loc) {
+                out.push(loc);
+            }
+        }
+    }
+
+    out
+}
+
+fn preferred_bug_locations_for_reporting(markdown: &str, file_field: &str) -> Vec<String> {
+    let sinks = extract_bug_sink_locations(markdown);
+    if !sinks.is_empty() {
+        return sinks;
+    }
+
+    let description_locs = extract_bug_section_locations(markdown, "Description");
+    if !description_locs.is_empty() {
+        return description_locs;
+    }
+
+    let mut fallback = extract_file_locations_for_dedupe(file_field);
+    if fallback.len() > 8 {
+        fallback.truncate(8);
+    }
+    fallback
+}
+
+fn prune_bug_markdown_file_lines_for_reporting(markdown: &str) -> String {
+    let mut file_field = None;
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("- **File & Lines:**") {
+            let value = rest.trim().trim_matches('`');
+            if !value.is_empty() {
+                file_field = Some(value.to_string());
+            }
+            break;
+        }
+    }
+
+    let Some(file_field) = file_field else {
+        return markdown.to_string();
+    };
+
+    let preferred = preferred_bug_locations_for_reporting(markdown, file_field.as_str());
+    if preferred.is_empty() {
+        return markdown.to_string();
+    }
+
+    let joined = preferred.join(", ");
+    if joined.is_empty() || joined == file_field {
+        return markdown.to_string();
+    }
+
+    rewrite_bug_markdown_location(markdown, joined.as_str()).unwrap_or_else(|| markdown.to_string())
 }
 
 fn extract_file_locations_for_dedupe(file_field: &str) -> Vec<String> {
@@ -11360,6 +12285,7 @@ async fn llm_dedupe_bug_summaries(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     mut summaries: Vec<BugSummary>,
     details: Vec<BugDetail>,
     progress_sender: Option<AppEventSender>,
@@ -11425,6 +12351,7 @@ async fn llm_dedupe_bug_summaries(
             provider,
             auth,
             model,
+            reasoning_effort,
             BUG_DEDUP_SYSTEM_PROMPT,
             &prompt,
             metrics.clone(),
@@ -11577,7 +12504,9 @@ async fn llm_dedupe_bug_summaries(
             entry.rep_index = idx;
         }
 
-        for loc in extract_file_locations_for_dedupe(&summary.file) {
+        for loc in
+            preferred_bug_locations_for_reporting(summary.markdown.as_str(), summary.file.as_str())
+        {
             if !entry.file_set.iter().any(|existing| existing == &loc) {
                 entry.file_set.push(loc);
             }
@@ -11820,7 +12749,7 @@ fn dedupe_bug_summaries(
             entry.rep_index = idx;
         }
 
-        for loc in extract_file_locations_for_dedupe(&s.file) {
+        for loc in preferred_bug_locations_for_reporting(s.markdown.as_str(), s.file.as_str()) {
             if !entry.file_set.iter().any(|existing| existing == &loc) {
                 entry.file_set.push(loc);
             }
@@ -12010,25 +12939,59 @@ fn rewrite_bug_markdown_heading_id(markdown: &str, summary_id: usize) -> Option<
     let mut changed = false;
     let mut updated_first_heading = false;
     for line in markdown.lines() {
+        if is_standalone_bug_anchor_line(line) {
+            changed = true;
+            continue;
+        }
         if !updated_first_heading {
             let trimmed = line.trim_start();
             if let Some(rest) = trimmed.strip_prefix("### ") {
                 // Drop any leading bracketed id like "[12] " from the heading text
                 let clean = rest
                     .trim_start()
+                    .strip_prefix("<a id=\"bug-")
+                    .and_then(|rest| rest.split_once("</a>"))
+                    .map(|(_, after)| after.trim_start())
+                    .unwrap_or(rest.trim_start())
                     .trim_start_matches('[')
                     .trim_start_matches(|c: char| c.is_ascii_digit())
                     .trim_start_matches(']')
                     .trim_start();
-                // Prepend an explicit anchor for stable linking
-                out.push(format!("<a id=\"bug-{summary_id}\"></a>"));
-                out.push(format!("### [{summary_id}] {clean}"));
+                // Embed an explicit anchor inline for stable linking without adding a separate
+                // paragraph/line in rendered HTML output.
+                out.push(format!(
+                    "### <a id=\"bug-{summary_id}\"></a> [{summary_id}] {clean}"
+                ));
                 changed = true;
                 updated_first_heading = true;
                 continue;
             }
         }
         out.push(line.to_string());
+    }
+    if changed { Some(out.join("\n")) } else { None }
+}
+
+fn is_standalone_bug_anchor_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(rest) = trimmed.strip_prefix("<a id=\"bug-") else {
+        return false;
+    };
+    let Some(id) = rest.strip_suffix("\"></a>") else {
+        return false;
+    };
+    !id.is_empty() && id.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn strip_standalone_bug_anchor_lines(markdown: &str) -> Option<String> {
+    let mut changed = false;
+    let mut out: Vec<&str> = Vec::new();
+    for line in markdown.lines() {
+        if is_standalone_bug_anchor_line(line) {
+            changed = true;
+            continue;
+        }
+        out.push(line);
     }
     if changed { Some(out.join("\n")) } else { None }
 }
@@ -12452,6 +13415,7 @@ async fn run_risk_rerank_chunk(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     system_prompt: &str,
     base_prompt: String,
     metrics: Arc<ReviewMetrics>,
@@ -12495,6 +13459,7 @@ async fn run_risk_rerank_chunk(
             provider,
             auth,
             model,
+            reasoning_effort,
             system_prompt,
             &prompt,
             metrics.clone(),
@@ -12778,6 +13743,7 @@ async fn rerank_bugs_by_risk(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     summaries: &mut [BugSummary],
     repo_root: &Path,
     repository_summary: &str,
@@ -12840,6 +13806,7 @@ async fn rerank_bugs_by_risk(
                 &provider,
                 &auth_clone,
                 model_owned.as_str(),
+                reasoning_effort,
                 BUG_RERANK_SYSTEM_PROMPT,
                 prompt,
                 metrics_clone,
@@ -14389,6 +15356,246 @@ fn contains_asan_signature(text: &str) -> bool {
         || lower.contains("use-after-free")
 }
 
+fn resolve_validation_display_path(
+    display_path: &str,
+    repo_root: Option<&Path>,
+) -> Option<PathBuf> {
+    let display_path = display_path.trim();
+    if display_path.is_empty() {
+        return None;
+    }
+
+    if let Some(tail) = display_path
+        .strip_prefix("~/")
+        .or_else(|| display_path.strip_prefix("~\\"))
+    {
+        return home_dir().map(|dir| dir.join(tail));
+    }
+
+    let path = PathBuf::from(display_path);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        repo_root.map(|root| root.join(path))
+    }
+}
+
+fn is_within_output_root(path: &Path, output_root: &Path) -> bool {
+    let Ok(candidate) = path.canonicalize() else {
+        return false;
+    };
+    let Ok(root) = output_root.canonicalize() else {
+        return false;
+    };
+    candidate.starts_with(root)
+}
+
+fn read_report_output_prefix(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes: Vec<u8> = Vec::new();
+    let max = VALIDATION_REPORT_OUTPUT_MAX_BYTES;
+    file.take((max + 1) as u64).read_to_end(&mut bytes).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let truncated = bytes.len() > max;
+    if truncated {
+        bytes.truncate(max);
+    }
+
+    let mut text = String::from_utf8_lossy(&bytes).to_string();
+    if text.trim().is_empty() {
+        return None;
+    }
+    if truncated {
+        text.push_str("\n\n… (truncated; see artifacts for full output)");
+    }
+    Some(text)
+}
+
+fn read_validation_artifact_for_report(
+    display_path: Option<&String>,
+    repo_root: Option<&Path>,
+    output_root: Option<&Path>,
+) -> Option<String> {
+    let display_path = display_path?;
+    let path = resolve_validation_display_path(display_path, repo_root)?;
+    let output_root = output_root?;
+    if !is_within_output_root(&path, output_root) {
+        return None;
+    }
+    read_report_output_prefix(&path)
+}
+
+fn build_validation_output_block(
+    validation: &BugValidationState,
+    repo_root: Option<&Path>,
+    output_root: Option<&Path>,
+    expects_asan: bool,
+) -> Option<String> {
+    let summary = validation
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty());
+
+    let stderr = read_validation_artifact_for_report(
+        validation.stderr_path.as_ref(),
+        repo_root,
+        output_root,
+    )
+    .and_then(|text| {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let stdout = read_validation_artifact_for_report(
+        validation.stdout_path.as_ref(),
+        repo_root,
+        output_root,
+    )
+    .and_then(|text| {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    let mut sections: Vec<String> = Vec::new();
+
+    if matches!(validation.status, BugValidationStatus::UnableToValidate)
+        && let Some(summary) = summary
+    {
+        sections.push(format!("Explanation: {summary}"));
+    }
+
+    match (stderr.as_ref(), stdout.as_ref()) {
+        (Some(stderr), Some(stdout)) => {
+            sections.push(format!("== STDERR ==\n{stderr}\n\n== STDOUT ==\n{stdout}"));
+        }
+        _ => {
+            let output = if expects_asan {
+                stderr.as_ref().or(stdout.as_ref())
+            } else if matches!(validation.status, BugValidationStatus::Passed) {
+                stdout.as_ref().or(stderr.as_ref())
+            } else {
+                stderr.as_ref().or(stdout.as_ref())
+            };
+            if let Some(output) = output {
+                sections.push(output.to_string());
+            }
+        }
+    }
+
+    if sections.is_empty() {
+        if let Some(snippet) = validation
+            .output_snippet
+            .as_deref()
+            .map(str::trim)
+            .filter(|snippet| !snippet.is_empty())
+        {
+            sections.push(snippet.to_string());
+        } else if matches!(validation.status, BugValidationStatus::UnableToValidate)
+            && let Some(summary) = summary
+        {
+            sections.push(format!("Explanation: {summary}"));
+        }
+    }
+
+    if sections.is_empty() {
+        None
+    } else {
+        Some(sections.join("\n\n"))
+    }
+}
+
+fn looks_like_build_failure(stdout: &str, stderr: &str) -> bool {
+    let stdout_lower = stdout.to_ascii_lowercase();
+    let stderr_lower = stderr.to_ascii_lowercase();
+    let sources = [stdout_lower.as_str(), stderr_lower.as_str()];
+
+    let tool_missing = [
+        "command not found: cargo",
+        "cargo: command not found",
+        "command not found: rustc",
+        "rustc: command not found",
+        "command not found: make",
+        "make: command not found",
+        "command not found: go",
+        "go: command not found",
+        "command not found: npm",
+        "npm: command not found",
+    ];
+
+    let compile_failures = [
+        "error: could not compile",
+        "could not compile",
+        "failed to compile",
+        "failed to run custom build command",
+        "linker ",
+        "linking with",
+        "ld: library not found",
+        "collect2: error",
+        "cmake error",
+        "ninja: build stopped",
+        "make: ***",
+    ];
+
+    let platform_mismatch = [
+        "unsupported platform",
+        "not supported on this platform",
+        "only supported on",
+        "requires macos",
+        "requires windows",
+        "requires linux",
+    ];
+
+    tool_missing
+        .iter()
+        .chain(compile_failures.iter())
+        .chain(platform_mismatch.iter())
+        .any(|needle| sources.iter().any(|source| source.contains(needle)))
+}
+
+fn classify_python_validation_status(
+    expect_asan: bool,
+    exit_code: Option<i32>,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+) -> BugValidationStatus {
+    let unable =
+        matches!(exit_code, Some(2)) || (!success && looks_like_build_failure(stdout, stderr));
+    if unable {
+        return BugValidationStatus::UnableToValidate;
+    }
+
+    let observed_asan =
+        expect_asan && (contains_asan_signature(stdout) || contains_asan_signature(stderr));
+    if expect_asan {
+        if observed_asan {
+            BugValidationStatus::Passed
+        } else {
+            BugValidationStatus::Failed
+        }
+    } else if success {
+        BugValidationStatus::Passed
+    } else {
+        BugValidationStatus::Failed
+    }
+}
+
+async fn command_output(mut command: Command) -> Result<std::process::Output, std::io::Error> {
+    command.kill_on_drop(true);
+    command.output().await
+}
+
 async fn write_validation_output_files(
     work_dir: &Path,
     repo_path: &Path,
@@ -14414,6 +15621,8 @@ async fn write_validation_output_files(
 fn build_bugs_markdown(
     snapshot: &SecurityReviewSnapshot,
     git_link_info: Option<&GitLinkInfo>,
+    repo_root: Option<&Path>,
+    output_root: Option<&Path>,
 ) -> String {
     let report_bugs: Vec<BugSnapshot> = snapshot
         .bugs
@@ -14431,7 +15640,7 @@ fn build_bugs_markdown(
     if let Some(table) = make_bug_summary_table_from_bugs(&bugs) {
         sections.push(table);
     }
-    let details = render_bug_sections(&report_bugs, git_link_info);
+    let details = render_bug_sections(&report_bugs, git_link_info, repo_root, output_root);
     if !details.trim().is_empty() {
         sections.push(details);
     }
@@ -14469,6 +15678,16 @@ async fn execute_bug_command(
         target: initial_target,
         ..BugValidationState::default()
     };
+
+    if let Some(output_root) = work_dir.parent() {
+        let testing_path = output_root.join("specs").join("TESTING.md");
+        if testing_path.exists() {
+            let step = format!("Read: `{}`", display_path_for(&testing_path, &repo_path));
+            if !validation.repro_steps.iter().any(|s| s == &step) {
+                validation.repro_steps.push(step);
+            }
+        }
+    }
 
     let start = Instant::now();
 
@@ -14689,28 +15908,28 @@ async fn execute_bug_command(
             }
             validation.repro_steps.push(format!("Run: `{cmd}`"));
 
-            match command.output().await {
+            match command_output(command).await {
                 Ok(output) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                     let success = output.status.success();
                     let duration_label = fmt_elapsed_compact(duration.as_secs());
+                    let exit_code = output.status.code();
                     let observed_asan = plan.expect_asan
                         && (contains_asan_signature(&stdout) || contains_asan_signature(&stderr));
-                    validation.status = if plan.expect_asan {
-                        if observed_asan {
-                            BugValidationStatus::Passed
-                        } else {
-                            BugValidationStatus::Failed
-                        }
-                    } else if success {
-                        BugValidationStatus::Passed
-                    } else {
-                        BugValidationStatus::Failed
-                    };
+                    validation.status = classify_python_validation_status(
+                        plan.expect_asan,
+                        exit_code,
+                        success,
+                        &stdout,
+                        &stderr,
+                    );
 
-                    if plan.expect_asan {
+                    if matches!(validation.status, BugValidationStatus::UnableToValidate) {
+                        let summary_line = summarize_process_output(false, &stdout, &stderr);
+                        validation.summary = Some(format!("{summary_line} · {duration_label}"));
+                    } else if plan.expect_asan {
                         if observed_asan {
                             validation.summary =
                                 Some(format!("ASan signature observed · {duration_label}"));
@@ -14976,7 +16195,7 @@ pub(crate) async fn verify_bugs(
                 request: request.clone(),
                 title: entry.bug.title.clone(),
                 risk_rank: entry.bug.risk_rank,
-                expect_asan: has_verification_type(&entry.bug, "crash_poc"),
+                expect_asan: crash_poc_category(&entry.bug).is_some(),
             });
         }
 
@@ -14989,7 +16208,7 @@ pub(crate) async fn verify_bugs(
             let work_dir = batch.work_dir.clone();
             async move { execute_bug_command(plan, repo_path, work_dir).await }
         }))
-        .buffer_unordered(8)
+        .buffer_unordered(VALIDATION_EXEC_CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
 
@@ -15004,7 +16223,12 @@ pub(crate) async fn verify_bugs(
     }
 
     let git_link_info = build_git_link_info(&batch.repo_path).await;
-    let bugs_markdown = build_bugs_markdown(&snapshot, git_link_info.as_ref());
+    let bugs_markdown = build_bugs_markdown(
+        &snapshot,
+        git_link_info.as_ref(),
+        Some(batch.repo_path.as_path()),
+        batch.work_dir.parent(),
+    );
 
     tokio_fs::write(&batch.bugs_path, bugs_markdown.as_bytes())
         .await
@@ -15068,180 +16292,6 @@ pub(crate) async fn verify_bugs(
 }
 
 #[derive(Debug, Deserialize)]
-struct AccountPlanItem {
-    action: String,
-    #[serde(default)]
-    login_url: Option<String>,
-    #[serde(default)]
-    tool: Option<String>,
-    #[serde(default)]
-    script: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AccountsOutputJson {
-    accounts: Vec<AccountPair>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct AccountPair {
-    username: String,
-    password: String,
-}
-
-fn parse_accounts_inline(text: &str) -> Vec<AccountPair> {
-    // Accept formats like: user:pass, user2:pass2
-    let mut out = Vec::new();
-    for chunk in text.split(',') {
-        let part = chunk.trim();
-        if part.is_empty() {
-            continue;
-        }
-        if let Some((u, p)) = part.split_once(':') {
-            let u = u.trim();
-            let p = p.trim();
-            if !u.is_empty() && !p.is_empty() {
-                out.push(AccountPair {
-                    username: u.to_string(),
-                    password: p.to_string(),
-                });
-            }
-        }
-    }
-    out
-}
-
-async fn write_accounts(work_dir: &Path, creds: &[AccountPair]) -> Result<PathBuf, String> {
-    let path = work_dir.join("credentials.json");
-    let json = serde_json::to_vec_pretty(&AccountsOutputJson {
-        accounts: creds.to_vec(),
-    })
-    .map_err(|e| e.to_string())?;
-    tokio_fs::write(&path, json)
-        .await
-        .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
-    Ok(path)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn setup_accounts(
-    client: &CodexHttpClient,
-    provider: &ModelProviderInfo,
-    auth: &Option<CodexAuth>,
-    model: &str,
-    snapshot: &SecurityReviewSnapshot,
-    work_dir: &Path,
-    progress_sender: Option<AppEventSender>,
-    metrics: Arc<ReviewMetrics>,
-) -> Result<Option<Vec<AccountPair>>, String> {
-    if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(
-            "Preparing test accounts for validation...".to_string(),
-        ));
-    }
-
-    let findings = build_validation_findings_context(snapshot).text;
-    let prompt = VALIDATION_ACCOUNTS_PROMPT_TEMPLATE.replace("{findings}", &findings);
-    let response = call_model(
-        client,
-        provider,
-        auth,
-        model,
-        VALIDATION_ACCOUNTS_SYSTEM_PROMPT,
-        &prompt,
-        metrics,
-        0.0,
-    )
-    .await
-    .map_err(|e| format!("Account planning failed: {e}"))?;
-
-    let mut chosen: Option<AccountPlanItem> = None;
-    for line in response.text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(item) = serde_json::from_str::<AccountPlanItem>(trimmed) {
-            chosen = Some(item);
-            break;
-        }
-    }
-
-    let Some(plan) = chosen else {
-        return Ok(None);
-    };
-
-    if plan.action.eq_ignore_ascii_case("register")
-        && plan.tool.as_deref().unwrap_or("") == "python"
-        && plan.script.as_ref().is_some()
-    {
-        // Write and run inline script
-        let _ = tokio_fs::create_dir_all(work_dir).await;
-        let script_path = work_dir.join("register_accounts.py");
-        let Some(code) = plan.script.as_ref() else {
-            return Ok(None);
-        };
-        tokio_fs::write(&script_path, code.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to write {}: {e}", script_path.display()))?;
-
-        let mut cmd = Command::new("python");
-        cmd.arg(&script_path);
-        if let Some(url) = plan.login_url.as_ref() {
-            cmd.arg(url);
-        }
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| format!("Failed to run python: {e}"))?;
-        let success = output.status.success();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout_path = work_dir.join("register_accounts_stdout.txt");
-        let stderr_path = work_dir.join("register_accounts_stderr.txt");
-        let _ = tokio_fs::write(&stdout_path, stdout.as_bytes()).await;
-        let _ = tokio_fs::write(&stderr_path, stderr.as_bytes()).await;
-        if !success {
-            if let Some(tx) = progress_sender.as_ref() {
-                tx.send(AppEvent::SecurityReviewLog(format!(
-                    "Account registration failed: {}",
-                    summarize_process_output(false, &stdout, &stderr)
-                )));
-            }
-            return Ok(None);
-        }
-
-        // Try to parse JSON from stdout
-        let creds = if let Ok(json) = serde_json::from_str::<AccountsOutputJson>(stdout.trim()) {
-            json.accounts
-        } else {
-            // best-effort: parse user:pass lines
-            let pairs = parse_accounts_inline(stdout.trim());
-            if pairs.len() >= 2 { pairs } else { Vec::new() }
-        };
-        if creds.len() < 2 {
-            return Ok(None);
-        }
-        return Ok(Some(creds));
-    }
-
-    // Manual fallback
-    if let Some(tx) = progress_sender.as_ref() {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        tx.send(AppEvent::OpenRegistrationPrompt {
-            url: plan.login_url.clone(),
-            responder: resp_tx,
-        });
-        if let Ok(Some(input)) = resp_rx.await {
-            let creds = parse_accounts_inline(&input);
-            if creds.len() >= 2 {
-                return Ok(Some(creds));
-            }
-        }
-    }
-    Ok(None)
-}
-#[derive(Debug, Deserialize)]
 struct ValidationPlanItem {
     id_kind: String,
     #[serde(default)]
@@ -15254,6 +16304,8 @@ struct ValidationPlanItem {
     script: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    testing_md_additions: Option<String>,
 }
 
 fn is_high_risk(bug: &SecurityReviewBug) -> bool {
@@ -15265,6 +16317,68 @@ fn is_high_risk(bug: &SecurityReviewBug) -> bool {
         return rank <= 5;
     }
     false
+}
+
+fn is_crypto_validation_vuln_tag(tag: &str) -> bool {
+    let tag = tag.trim().to_ascii_lowercase();
+    if tag.is_empty() {
+        return false;
+    }
+
+    matches!(
+        tag.as_str(),
+        "crypto"
+            | "cryptography"
+            | "crypto-misuse"
+            | "weak-crypto"
+            | "sig-bypass"
+            | "signature-bypass"
+            | "jwt-alg-none"
+            | "jwt-alg-downgrade"
+            | "alg-downgrade"
+            | "algo-downgrade"
+            | "aead-misuse"
+            | "mac-misuse"
+            | "nonce-reuse"
+            | "iv-reuse"
+            | "weak-rng"
+            | "insecure-rng"
+    ) || tag.starts_with("crypto-")
+        || tag.starts_with("jwt-")
+        || tag.starts_with("jws-")
+        || tag.starts_with("jwe-")
+        || tag.starts_with("sig-")
+        || tag.starts_with("signature-")
+        || tag.starts_with("mac-")
+        || tag.starts_with("aead-")
+        || tag.starts_with("nonce-")
+        || tag.starts_with("iv-")
+        || tag.starts_with("tls-")
+        || tag.starts_with("x509-")
+        || tag.contains("-crypto-")
+        || tag.contains("-jwt-")
+        || tag.contains("-jws-")
+        || tag.contains("-jwe-")
+        || tag.contains("-sig-")
+        || tag.contains("-signature-")
+        || tag.contains("-mac-")
+        || tag.contains("-aead-")
+        || tag.contains("-nonce-")
+        || tag.contains("-iv-")
+        || tag.contains("-tls-")
+        || tag.contains("-x509-")
+        || tag.ends_with("-crypto")
+        || tag.ends_with("-jwt")
+        || tag.ends_with("-jws")
+        || tag.ends_with("-jwe")
+        || tag.ends_with("-sig")
+        || tag.ends_with("-signature")
+        || tag.ends_with("-mac")
+        || tag.ends_with("-aead")
+        || tag.ends_with("-nonce")
+        || tag.ends_with("-iv")
+        || tag.ends_with("-tls")
+        || tag.ends_with("-x509")
 }
 
 fn is_priority_validation_vuln_tag(tag: &str) -> bool {
@@ -15282,6 +16396,7 @@ fn is_priority_validation_vuln_tag(tag: &str) -> bool {
             | "sql-injection"
             | "xxe"
     ) || tag.starts_with("path-traversal")
+        || is_crypto_validation_vuln_tag(tag.as_str())
 }
 
 fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
@@ -15290,8 +16405,25 @@ fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
         .any(|t| t.eq_ignore_ascii_case(needle))
 }
 
+fn crash_poc_category(bug: &SecurityReviewBug) -> Option<&'static str> {
+    if has_verification_type(bug, "crash_poc_release_bin") {
+        Some("crash_poc_release_bin")
+    } else if has_verification_type(bug, "crash_poc_func") {
+        Some("crash_poc_func")
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ValidationFinding {
+    id: BugIdentifier,
+    label: String,
+    context: String,
+}
+
 struct ValidationFindingsContext {
-    text: String,
+    findings: Vec<ValidationFinding>,
     ids: Vec<BugIdentifier>,
 }
 
@@ -15307,8 +16439,10 @@ fn build_validation_findings_context(
             if !is_high {
                 return false;
             }
-            if has_verification_type(&b.bug, "crash_poc") {
-                return true;
+            match crash_poc_category(&b.bug) {
+                Some("crash_poc_func") => return false,
+                Some("crash_poc_release_bin") => return true,
+                _ => {}
             }
             let tag = b.bug.vulnerability_tag.clone().or_else(|| {
                 extract_vulnerability_tag_from_bug_markdown(b.original_markdown.as_str())
@@ -15321,6 +16455,9 @@ fn build_validation_findings_context(
     let mut selected: Vec<&BugSnapshot> = Vec::new();
     let mut seen: HashSet<usize> = HashSet::new();
     for item in &required {
+        if selected.len() >= VALIDATION_MAX_FINDINGS {
+            break;
+        }
         if seen.insert(item.bug.summary_id) {
             selected.push(*item);
         }
@@ -15329,11 +16466,11 @@ fn build_validation_findings_context(
     let mut high_risk: Vec<&BugSnapshot> = snapshot
         .bugs
         .iter()
-        .filter(|b| is_high_risk(&b.bug))
+        .filter(|b| is_high_risk(&b.bug) && crash_poc_category(&b.bug) != Some("crash_poc_func"))
         .collect();
     high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
     for item in high_risk {
-        if selected.len() >= 5 {
+        if selected.len() >= VALIDATION_MAX_FINDINGS {
             break;
         }
         if seen.insert(item.bug.summary_id) {
@@ -15341,9 +16478,14 @@ fn build_validation_findings_context(
         }
     }
 
-    let mut out = String::new();
+    let mut findings: Vec<ValidationFinding> = Vec::new();
     let mut ids: Vec<BugIdentifier> = Vec::new();
     for item in selected {
+        let label = if let Some(rank) = item.bug.risk_rank {
+            format!("#{rank} {}", item.bug.title)
+        } else {
+            format!("[{}] {}", item.bug.summary_id, item.bug.title)
+        };
         let rank = item
             .bug
             .risk_rank
@@ -15362,6 +16504,9 @@ fn build_validation_findings_context(
                 extract_vulnerability_tag_from_bug_markdown(item.original_markdown.as_str())
             })
             .unwrap_or_default();
+        let crash_poc_category_line = crash_poc_category(&item.bug)
+            .map(|category| format!("\n  crash_poc_category: {category}"))
+            .unwrap_or_default();
         let (id_kind, id_value, identifier) = if let Some(risk_rank) = item.bug.risk_rank {
             ("risk_rank", risk_rank, BugIdentifier::RiskRank(risk_rank))
         } else {
@@ -15373,17 +16518,22 @@ fn build_validation_findings_context(
         };
         ids.push(identifier);
         // Include the original markdown so the model can infer concrete targets
-        let _ = writeln!(
-            &mut out,
-            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}\n  details:\n{details}\n---\n",
+        let context = format!(
+            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}{crash_poc_category_line}\n  details:\n{details}\n---\n",
             title = item.bug.title,
             severity = item.bug.severity,
             types = types,
+            crash_poc_category_line = crash_poc_category_line,
             details = indent_block(&item.original_markdown, 2)
         );
+        findings.push(ValidationFinding {
+            id: identifier,
+            label,
+            context,
+        });
     }
 
-    ValidationFindingsContext { text: out, ids }
+    ValidationFindingsContext { findings, ids }
 }
 
 fn indent_block(s: &str, spaces: usize) -> String {
@@ -15394,175 +16544,712 @@ fn indent_block(s: &str, spaces: usize) -> String {
         .join("\n")
 }
 
+fn parse_validation_plan_item(raw: &str) -> Option<ValidationPlanItem> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    for line in trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if let Ok(item) = serde_json::from_str::<ValidationPlanItem>(line) {
+            return Some(item);
+        }
+    }
+
+    for snippet in extract_json_objects(trimmed) {
+        if let Ok(item) = serde_json::from_str::<ValidationPlanItem>(&snippet) {
+            return Some(item);
+        }
+    }
+
+    None
+}
+
+struct ValidationPlanAgentOutput {
+    text: String,
+    logs: Vec<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
-async fn run_web_validation(
+async fn run_validation_plan_agent(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    prompt: String,
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    label: &str,
+) -> Result<ValidationPlanAgentOutput, BugVerificationFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    push_progress_log(
+        &progress_sender,
+        &None,
+        &mut logs,
+        format!("Planning validation for {label}..."),
+    );
+
+    let mut validation_config = config.clone();
+    validation_config.model = Some(model.to_string());
+    validation_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
+    validation_config.model_provider = provider.clone();
+    validation_config.base_instructions = Some(VALIDATION_PLAN_SYSTEM_PROMPT.to_string());
+    validation_config.user_instructions = None;
+    validation_config.developer_instructions = None;
+    validation_config.compact_prompt = None;
+    validation_config.cwd = repo_root.to_path_buf();
+    validation_config
+        .features
+        .disable(Feature::ApplyPatchFreeform)
+        .disable(Feature::ViewImageTool);
+    validation_config.mcp_servers.clear();
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other(
+            "security_review_validation".to_string(),
+        )),
+    );
+
+    let conversation = match manager.new_conversation(validation_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start validation agent for {label}: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        })
+        .await
+    {
+        let message = format!("Failed to submit validation prompt for {label}: {err}");
+        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+        return Err(BugVerificationFailure { message, logs });
+    }
+
+    let mut last_agent_message: Option<String> = None;
+    loop {
+        let event = match conversation.next_event().await {
+            Ok(event) => event,
+            Err(err) => {
+                let message =
+                    format!("Validation agent terminated unexpectedly for {label}: {err}");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+        };
+
+        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+        match event.msg {
+            EventMsg::TaskComplete(done) => {
+                if let Some(msg) = done.last_agent_message {
+                    last_agent_message = Some(msg);
+                }
+                break;
+            }
+            EventMsg::AgentMessage(msg) => {
+                last_agent_message = Some(msg.message.clone());
+            }
+            EventMsg::AgentReasoning(reason) => {
+                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::Warning(warn) => {
+                push_progress_log(&progress_sender, &None, &mut logs, warn.message);
+            }
+            EventMsg::Error(err) => {
+                let message = format!("Validation agent error for {label}: {}", err.message);
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            EventMsg::TurnAborted(aborted) => {
+                let message = format!("Validation agent aborted for {label}: {:?}", aborted.reason);
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            EventMsg::TokenCount(count) => {
+                if let Some(info) = count.info {
+                    metrics.record_model_call();
+                    metrics.record_usage(&info.last_token_usage);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let text = match last_agent_message.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(text) => text,
+        None => {
+            let message = format!("Validation agent produced an empty response for {label}.");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
+
+    let _ = conversation.submit(Op::Shutdown).await;
+
+    Ok(ValidationPlanAgentOutput { text, logs })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ValidationRefineFile {
+    path: String,
+    contents: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ValidationRefineOutput {
+    summary: Option<String>,
+    dockerfile: Option<String>,
+    docker_build: Option<String>,
+    docker_run: Option<String>,
+    #[serde(default)]
+    testing_md_additions: Option<String>,
+    #[serde(default)]
+    files: Vec<ValidationRefineFile>,
+}
+
+fn parse_validation_refine_output(raw: &str) -> Option<ValidationRefineOutput> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(item) = serde_json::from_str::<ValidationRefineOutput>(trimmed) {
+        return Some(item);
+    }
+
+    for snippet in extract_json_objects(trimmed) {
+        if let Ok(item) = serde_json::from_str::<ValidationRefineOutput>(&snippet) {
+            return Some(item);
+        }
+    }
+
+    None
+}
+
+struct ValidationRefineAgentOutput {
+    text: String,
+    logs: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_validation_refine_agent(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    prompt: String,
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    label: &str,
+) -> Result<ValidationRefineAgentOutput, BugVerificationFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    push_progress_log(
+        &progress_sender,
+        &None,
+        &mut logs,
+        format!("Refining validation PoC for {label}..."),
+    );
+
+    let mut refine_config = config.clone();
+    refine_config.model = Some(model.to_string());
+    refine_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
+    refine_config.model_provider = provider.clone();
+    refine_config.base_instructions = Some(VALIDATION_REFINE_SYSTEM_PROMPT.to_string());
+    refine_config.user_instructions = None;
+    refine_config.developer_instructions = None;
+    refine_config.compact_prompt = None;
+    refine_config.cwd = repo_root.to_path_buf();
+    refine_config
+        .features
+        .disable(Feature::ApplyPatchFreeform)
+        .disable(Feature::ViewImageTool);
+    refine_config.mcp_servers.clear();
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other(
+            "security_review_validation_refine".to_string(),
+        )),
+    );
+
+    let conversation = match manager.new_conversation(refine_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start validation refine agent for {label}: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        })
+        .await
+    {
+        let message = format!("Failed to submit validation refine prompt for {label}: {err}");
+        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+        return Err(BugVerificationFailure { message, logs });
+    }
+
+    let mut last_agent_message: Option<String> = None;
+    loop {
+        let event = match conversation.next_event().await {
+            Ok(event) => event,
+            Err(err) => {
+                let message =
+                    format!("Validation refine agent terminated unexpectedly for {label}: {err}");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+        };
+
+        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+        match event.msg {
+            EventMsg::TaskComplete(done) => {
+                if let Some(msg) = done.last_agent_message {
+                    last_agent_message = Some(msg);
+                }
+                break;
+            }
+            EventMsg::AgentMessage(msg) => {
+                last_agent_message = Some(msg.message.clone());
+            }
+            EventMsg::AgentReasoning(reason) => {
+                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::Warning(warn) => {
+                push_progress_log(&progress_sender, &None, &mut logs, warn.message);
+            }
+            EventMsg::Error(err) => {
+                let message = format!("Validation refine agent error for {label}: {}", err.message);
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            EventMsg::TurnAborted(aborted) => {
+                let message = format!(
+                    "Validation refine agent aborted for {label}: {:?}",
+                    aborted.reason
+                );
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            EventMsg::TokenCount(count) => {
+                if let Some(info) = count.info {
+                    metrics.record_model_call();
+                    metrics.record_usage(&info.last_token_usage);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let text = match last_agent_message.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(text) => text,
+        None => {
+            let message =
+                format!("Validation refine agent produced an empty response for {label}.");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
+
+    let _ = conversation.submit(Op::Shutdown).await;
+
+    Ok(ValidationRefineAgentOutput { text, logs })
+}
+
+async fn write_validation_snapshot_and_reports(
+    snapshot: &SecurityReviewSnapshot,
+    batch: &BugVerificationBatchRequest,
+    logs: &[String],
+) -> Result<(), BugVerificationFailure> {
+    let snapshot_bytes =
+        serde_json::to_vec_pretty(snapshot).map_err(|err| BugVerificationFailure {
+            message: format!("Failed to serialize bug snapshot: {err}"),
+            logs: logs.to_owned(),
+        })?;
+    tokio_fs::write(&batch.snapshot_path, snapshot_bytes)
+        .await
+        .map_err(|err| BugVerificationFailure {
+            message: format!("Failed to write {}: {err}", batch.snapshot_path.display()),
+            logs: logs.to_owned(),
+        })?;
+
+    let git_link_info = build_git_link_info(&batch.repo_path).await;
+    let bugs_markdown = build_bugs_markdown(
+        snapshot,
+        git_link_info.as_ref(),
+        Some(batch.repo_path.as_path()),
+        batch.snapshot_path.parent().and_then(Path::parent),
+    );
+    tokio_fs::write(&batch.bugs_path, bugs_markdown.as_bytes())
+        .await
+        .map_err(|err| BugVerificationFailure {
+            message: format!("Failed to write {}: {err}", batch.bugs_path.display()),
+            logs: logs.to_owned(),
+        })?;
+
+    let mut sections = snapshot.report_sections_prefix.clone();
+    if !bugs_markdown.trim().is_empty() {
+        sections.push(format!("# Security Findings\n\n{}", bugs_markdown.trim()));
+    }
+
+    let report_markdown = if sections.is_empty() {
+        None
+    } else {
+        Some(fix_mermaid_blocks(&sections.join("\n\n")))
+    };
+
+    if let Some(report_path) = batch.report_path.as_ref()
+        && let Some(ref markdown) = report_markdown
+    {
+        tokio_fs::write(report_path, markdown.as_bytes())
+            .await
+            .map_err(|err| BugVerificationFailure {
+                message: format!("Failed to write {}: {err}", report_path.display()),
+                logs: logs.to_owned(),
+            })?;
+
+        if let Some(html_path) = batch.report_html_path.as_ref() {
+            let repo_label = batch
+                .repo_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Security Review");
+            let title = format!("{repo_label} Security Report");
+            let html = build_report_html(&title, markdown);
+            tokio_fs::write(html_path, html)
+                .await
+                .map_err(|err| BugVerificationFailure {
+                    message: format!("Failed to write {}: {err}", html_path.display()),
+                    logs: logs.to_owned(),
+                })?;
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_asan_validation(
     repo_path: PathBuf,
     snapshot_path: PathBuf,
     bugs_path: PathBuf,
     report_path: Option<PathBuf>,
     report_html_path: Option<PathBuf>,
     provider: ModelProviderInfo,
-    auth: Option<CodexAuth>,
     model: String,
+    reasoning_effort: Option<ReasoningEffort>,
+    config: &Config,
+    auth_manager: Arc<AuthManager>,
     progress_sender: Option<AppEventSender>,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<(), BugVerificationFailure> {
-    // Load snapshot
-    let bytes = tokio_fs::read(&snapshot_path)
-        .await
-        .map_err(|e| BugVerificationFailure {
-            message: format!("Failed to read {}: {e}", snapshot_path.display()),
-            logs: vec![],
-        })?;
-    let mut snapshot: SecurityReviewSnapshot =
-        serde_json::from_slice(&bytes).map_err(|e| BugVerificationFailure {
-            message: format!("Failed to parse {}: {e}", snapshot_path.display()),
-            logs: vec![],
-        })?;
+    let mut logs: Vec<String> = Vec::new();
 
-    let client = create_client();
+    let bytes = match tokio_fs::read(&snapshot_path).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let message = format!(
+                "Validation skipped: failed to read {}: {err}",
+                snapshot_path.display()
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            logs.push(message);
+            return Ok(());
+        }
+    };
+    let mut snapshot: SecurityReviewSnapshot = match serde_json::from_slice(&bytes) {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            let message = format!(
+                "Validation skipped: failed to parse {}: {err}",
+                snapshot_path.display()
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            logs.push(message);
+            return Ok(());
+        }
+    };
+
+    let reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+        model.as_str(),
+        reasoning_effort,
+    ));
     if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(
-            "Planning web/API validation for high-risk findings...".to_string(),
-        ));
+        tx.send(AppEvent::SecurityReviewLog(format!(
+            "Planning validation for high-risk findings... (model: {model}, reasoning: {reasoning_label}).",
+            model = model.as_str()
+        )));
     }
 
-    // Ensure we have test accounts before validation
     let output_root = snapshot_path
         .parent()
         .and_then(|p| p.parent())
         .map(PathBuf::from)
         .unwrap_or_else(|| repo_path.join(".codex_validation"));
     let work_dir = output_root.join("validation");
-    let shared_dir = work_dir.join("shared");
-    let _ = tokio_fs::create_dir_all(&shared_dir).await;
-    if let Some(creds) = setup_accounts(
-        &client,
-        &provider,
-        &auth,
-        &model,
-        &snapshot,
-        &shared_dir,
-        progress_sender.clone(),
-        metrics.clone(),
-    )
-    .await
-    .map_err(|e| BugVerificationFailure {
-        message: e,
-        logs: vec![],
-    })? {
-        let path =
-            write_accounts(&shared_dir, &creds)
-                .await
-                .map_err(|e| BugVerificationFailure {
-                    message: e,
-                    logs: vec![],
-                })?;
-        if let Some(tx) = progress_sender.as_ref() {
-            let names: Vec<String> = creds.iter().map(|p| p.username.clone()).collect();
-            tx.send(AppEvent::SecurityReviewLog(format!(
-                "Registered {} test accounts: {} (stored in {})",
-                creds.len(),
-                names.join(", "),
-                display_path_for(&path, &repo_path)
-            )));
-        }
-    } else if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(
-            "Proceeding without auto-registered accounts; user may have registered manually."
-                .to_string(),
-        ));
+    let _ = tokio_fs::create_dir_all(&work_dir).await;
+
+    let specs_root = output_root.join("specs");
+    let testing_path = specs_root.join("TESTING.md");
+    let mut testing_md = tokio_fs::read_to_string(&testing_path)
+        .await
+        .unwrap_or_default();
+    if testing_md.trim().is_empty() {
+        write_testing_instructions(&repo_path, &specs_root, progress_sender.clone(), None).await;
+        testing_md = tokio_fs::read_to_string(&testing_path)
+            .await
+            .unwrap_or_default();
     }
+    let mut testing_md_context =
+        trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
     // Build prompt
     let findings = build_validation_findings_context(&snapshot);
-    let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE.replace("{findings}", &findings.text);
-
-    let response = call_model(
-        &client,
-        &provider,
-        &auth,
-        &model,
-        VALIDATION_PLAN_SYSTEM_PROMPT,
-        &prompt,
-        metrics.clone(),
-        0.0,
-    )
-    .await
-    .map_err(|err| BugVerificationFailure {
-        message: format!("Validation planning failed: {err}"),
-        logs: vec![],
-    })?;
-
-    let mut logs: Vec<String> = Vec::new();
-    if let Some(reasoning) = response.reasoning.as_ref() {
-        log_model_reasoning(reasoning, &progress_sender, &None, &mut logs);
-    }
+    let finding_map: HashMap<BugIdentifier, ValidationFinding> = findings
+        .findings
+        .iter()
+        .cloned()
+        .map(|finding| (finding.id, finding))
+        .collect();
 
     let mut handled: HashSet<BugIdentifier> = HashSet::new();
     let run_at = OffsetDateTime::now_utc();
     let mut requests: Vec<BugVerificationRequest> = Vec::new();
-    for line in response.text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let parsed: ValidationPlanItem = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if parsed.id_kind == "setup" {
-            // Already handled by setup_accounts() pre-step; skip.
-            continue;
-        }
-        let Some(id_value) = parsed.id_value else {
-            continue;
-        };
-        let id = match parsed.id_kind.as_str() {
-            "risk_rank" => BugIdentifier::RiskRank(id_value),
-            "summary_id" => BugIdentifier::SummaryId(id_value),
-            _ => continue,
-        };
-        handled.insert(id);
+    if findings.ids.is_empty() {
+        return Ok(());
+    }
 
-        let Some(tool_raw) = parsed.tool.as_ref() else {
+    let mark_unable =
+        |entry: &mut BugSnapshot, tool: &str, summary: String, logs: &mut Vec<String>| {
+            if !matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                return;
+            }
+            entry.bug.validation.status = BugValidationStatus::UnableToValidate;
+            entry.bug.validation.tool = Some(tool.to_string());
+            entry.bug.validation.target = None;
+            let cleaned = summary
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+            if cleaned.is_empty() {
+                logs.push("Validation planning produced an empty failure summary.".to_string());
+                entry.bug.validation.summary =
+                    Some("Validation could not be completed in this environment.".to_string());
+            } else {
+                entry.bug.validation.summary = Some(cleaned);
+            }
+            entry.bug.validation.run_at = Some(run_at);
+        };
+
+    let planning_results = futures::stream::iter(findings.findings.into_iter().map(|finding| {
+        let provider = provider.clone();
+        let auth_manager = auth_manager.clone();
+        let progress_sender = progress_sender.clone();
+        let metrics = metrics.clone();
+        let model = model.clone();
+        let repo_root = repo_path.clone();
+        let testing_md_context = testing_md_context.clone();
+        async move {
+            let ValidationFinding { id, label, context } = finding;
+            let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE
+                .replace("{findings}", &context)
+                .replace("{testing_md}", &testing_md_context);
+            let result = run_validation_plan_agent(
+                config,
+                &provider,
+                auth_manager,
+                repo_root.as_path(),
+                prompt,
+                progress_sender,
+                metrics,
+                model.as_str(),
+                reasoning_effort,
+                label.as_str(),
+            )
+            .await;
+            (id, label, result)
+        }
+    }))
+    .buffer_unordered(VALIDATION_PLAN_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+
+    let mut testing_md_additions: Vec<String> = Vec::new();
+    for (id, label, result) in planning_results {
+        let Some(index) = find_bug_index(&snapshot, id) else {
             continue;
         };
-        match tool_raw.to_ascii_lowercase().as_str() {
-            "none" => {
-                if let Some(index) = find_bug_index(&snapshot, id) {
-                    let entry = &mut snapshot.bugs[index];
-                    if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                        let reason = parsed
-                            .reason
-                            .as_ref()
-                            .map(|s| s.trim())
+        let entry = &mut snapshot.bugs[index];
+
+        match result {
+            Ok(output) => {
+                logs.extend(output.logs);
+                let Some(parsed) = parse_validation_plan_item(output.text.as_str()) else {
+                    handled.insert(id);
+                    mark_unable(
+                        entry,
+                        "none",
+                        format!(
+                            "Validation planning produced unparseable output for {label}; no validation was run."
+                        ),
+                        &mut logs,
+                    );
+                    continue;
+                };
+                if let Some(additions) = parsed
+                    .testing_md_additions
+                    .as_deref()
+                    .map(str::trim_end)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    testing_md_additions.push(additions.to_string());
+                }
+                let Some(tool_raw) = parsed
+                    .tool
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                else {
+                    handled.insert(id);
+                    mark_unable(
+                        entry,
+                        "none",
+                        format!(
+                            "Validation planning returned no tool for {label}; no validation was run."
+                        ),
+                        &mut logs,
+                    );
+                    continue;
+                };
+                handled.insert(id);
+
+                match tool_raw.to_ascii_lowercase().as_str() {
+                    "none" => {
+                        if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                            let reason = parsed
+                                .reason
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or("No safe validation available in this environment.");
+                            mark_unable(
+                                entry,
+                                "none",
+                                format!("Validation planning determined no safe check: {reason}"),
+                                &mut logs,
+                            );
+                        }
+                    }
+                    "python" => {
+                        let Some(script) = parsed
+                            .script
+                            .as_deref()
+                            .map(str::trim)
                             .filter(|s| !s.is_empty())
-                            .unwrap_or("No safe validation available in this environment.");
-                        entry.bug.validation.status = BugValidationStatus::UnableToValidate;
-                        entry.bug.validation.tool = Some("none".to_string());
-                        entry.bug.validation.target = None;
-                        entry.bug.validation.summary = Some(reason.to_string());
-                        entry.bug.validation.run_at = Some(run_at);
+                        else {
+                            let reason = parsed
+                                .reason
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty());
+                            let mut summary = format!(
+                                "Validation planning selected python but provided no script for {label}; no validation was run."
+                            );
+                            if let Some(reason) = reason {
+                                summary.push_str(" Reason: ");
+                                summary.push_str(reason);
+                            }
+                            mark_unable(entry, "python", summary, &mut logs);
+                            continue;
+                        };
+
+                        requests.push(BugVerificationRequest {
+                            id,
+                            tool: BugVerificationTool::Python,
+                            target: None,
+                            script_path: None,
+                            script_inline: Some(script.to_string()),
+                        });
+                    }
+                    "curl" | "playwright" => {
+                        if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                            mark_unable(
+                                entry,
+                                tool_raw,
+                                format!(
+                                    "Validation planning requested `{tool_raw}`, but web/API validation is disabled in this mode; no validation was run."
+                                ),
+                                &mut logs,
+                            );
+                        }
+                    }
+                    other => {
+                        if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                            mark_unable(
+                                entry,
+                                other,
+                                format!(
+                                    "Validation planning returned unsupported tool `{other}`; no validation was run."
+                                ),
+                                &mut logs,
+                            );
+                        }
                     }
                 }
             }
-            "playwright" | "curl" | "python" => {
-                let tool = match tool_raw.to_ascii_lowercase().as_str() {
-                    "playwright" => BugVerificationTool::Playwright,
-                    "curl" => BugVerificationTool::Curl,
-                    "python" => BugVerificationTool::Python,
-                    _ => continue,
-                };
-                requests.push(BugVerificationRequest {
-                    id,
-                    tool,
-                    target: parsed.target.clone(),
-                    script_path: None,
-                    script_inline: parsed.script.clone(),
-                });
+            Err(err) => {
+                logs.extend(err.logs);
+                mark_unable(
+                    entry,
+                    "none",
+                    format!(
+                        "Validation planning failed for {label}: {}; no validation was run.",
+                        err.message
+                    ),
+                    &mut logs,
+                );
+                handled.insert(id);
             }
-            _ => {}
         }
     }
 
@@ -15572,30 +17259,37 @@ async fn run_web_validation(
         }
         if let Some(index) = find_bug_index(&snapshot, id) {
             let entry = &mut snapshot.bugs[index];
-            if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                entry.bug.validation.status = BugValidationStatus::UnableToValidate;
-                entry.bug.validation.tool = Some("none".to_string());
-                entry.bug.validation.target = None;
-                entry.bug.validation.summary = Some(
-                    "Validation planning did not produce a safe check for this finding."
-                        .to_string(),
-                );
-                entry.bug.validation.run_at = Some(run_at);
-            }
+            let label = finding_map
+                .get(&id)
+                .map(|finding| finding.label.as_str())
+                .unwrap_or("this finding");
+            mark_unable(
+                entry,
+                "none",
+                format!(
+                    "Validation planning did not produce a plan for {label}; no validation was run."
+                ),
+                &mut logs,
+            );
         }
     }
 
-    let snapshot_bytes =
-        serde_json::to_vec_pretty(&snapshot).map_err(|err| BugVerificationFailure {
-            message: format!("Failed to serialize bug snapshot: {err}"),
-            logs: logs.clone(),
-        })?;
-    tokio_fs::write(&snapshot_path, snapshot_bytes)
+    apply_validation_testing_md_additions(
+        &testing_path,
+        &repo_path,
+        &testing_md_additions,
+        &progress_sender,
+        &mut logs,
+    )
+    .await;
+    let updated_testing_md = tokio_fs::read_to_string(&testing_path)
         .await
-        .map_err(|err| BugVerificationFailure {
-            message: format!("Failed to write {}: {err}", snapshot_path.display()),
-            logs: logs.clone(),
-        })?;
+        .unwrap_or_default();
+    testing_md_context =
+        trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
+
+    let planned_snapshot = snapshot.clone();
+    let requested_ids: Vec<BugIdentifier> = requests.iter().map(|req| req.id).collect();
 
     let batch = BugVerificationBatchRequest {
         snapshot_path,
@@ -15606,15 +17300,720 @@ async fn run_web_validation(
         work_dir,
         requests,
     };
-    if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(
-            "Executing validation checks...".to_string(),
-        ));
-    }
-    let outcome = verify_bugs(batch).await?;
-    for line in outcome.logs {
+
+    let mut verification_failed: Option<String> = None;
+    if batch.requests.is_empty() {
+        logs.push("No validation checks to execute.".to_string());
+    } else {
+        #[derive(Clone, Debug)]
+        struct ValidationBuildFailure {
+            command: String,
+            summary: String,
+            stdout_path: String,
+            stderr_path: String,
+            output_snippet: Option<String>,
+        }
+
+        async fn run_validation_build_preflight(
+            repo_root: &Path,
+            work_dir: &Path,
+            progress_sender: &Option<AppEventSender>,
+            logs: &mut Vec<String>,
+        ) -> Option<ValidationBuildFailure> {
+            fn has_build_script(package_json: &Value) -> bool {
+                package_json
+                    .get("scripts")
+                    .and_then(Value::as_object)
+                    .and_then(|scripts| scripts.get("build"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.trim().is_empty())
+            }
+
+            fn file_stem_for_command(program: &str, args: &[String]) -> String {
+                let mut stem = format!("preflight_{program}");
+                for arg in args.iter().take(3) {
+                    stem.push('_');
+                    stem.push_str(arg);
+                }
+                stem.chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                    .collect()
+            }
+
+            let has_cargo = repo_root.join("Cargo.toml").exists();
+            let has_go = repo_root.join("go.mod").exists();
+            let has_package_json = repo_root.join("package.json").exists();
+
+            let mut attempts: Vec<Vec<(String, Vec<String>)>> = Vec::new();
+            if has_cargo {
+                attempts.push(vec![(
+                    "cargo".to_string(),
+                    vec!["build".to_string(), "--locked".to_string()],
+                )]);
+                attempts.push(vec![("cargo".to_string(), vec!["build".to_string()])]);
+            } else if has_go {
+                attempts.push(vec![(
+                    "go".to_string(),
+                    vec!["build".to_string(), "./...".to_string()],
+                )]);
+            } else if has_package_json {
+                let package_json = tokio_fs::read_to_string(repo_root.join("package.json"))
+                    .await
+                    .ok()
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+                if package_json.as_ref().is_some_and(has_build_script) {
+                    let install_cmd = if repo_root.join("package-lock.json").exists() {
+                        vec!["ci".to_string()]
+                    } else {
+                        vec!["install".to_string()]
+                    };
+                    attempts.push(vec![
+                        ("npm".to_string(), install_cmd),
+                        (
+                            "npm".to_string(),
+                            vec!["run".to_string(), "build".to_string()],
+                        ),
+                    ]);
+                }
+            }
+
+            if attempts.is_empty() {
+                return None;
+            }
+
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                "Validation preflight: compiling the target...".to_string(),
+            );
+
+            let mut last_failure: Option<ValidationBuildFailure> = None;
+            for attempt in attempts {
+                let mut attempt_failure: Option<ValidationBuildFailure> = None;
+                for (program, args) in &attempt {
+                    let mut command = Command::new(program);
+                    command.args(args).current_dir(repo_root);
+                    let command_label = format!(
+                        "{} {}",
+                        program,
+                        args.iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                    push_progress_log(
+                        progress_sender,
+                        &None,
+                        logs,
+                        format!("Run: `{command_label}`"),
+                    );
+
+                    let start = Instant::now();
+                    match command_output(command).await {
+                        Ok(output) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                            let success = output.status.success();
+                            if !success {
+                                let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                                let summary_line =
+                                    summarize_process_output(false, &stdout, &stderr);
+                                let summary = format!("{summary_line} · {duration_label}");
+                                let snippet = if stderr.trim().is_empty() {
+                                    stdout.trim()
+                                } else {
+                                    stderr.trim()
+                                };
+                                let output_snippet = if snippet.is_empty() {
+                                    None
+                                } else {
+                                    Some(truncate_text(snippet, VALIDATION_OUTPUT_GRAPHEMES))
+                                };
+                                let file_stem = file_stem_for_command(program, args);
+                                let (stdout_path, stderr_path) = write_validation_output_files(
+                                    work_dir, repo_root, &file_stem, "build", &stdout, &stderr,
+                                )
+                                .await;
+                                attempt_failure = Some(ValidationBuildFailure {
+                                    command: command_label,
+                                    summary,
+                                    stdout_path,
+                                    stderr_path,
+                                    output_snippet,
+                                });
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            let message = format!("Failed to run `{command_label}`: {err}");
+                            let file_stem = file_stem_for_command(program, args);
+                            let (stdout_path, stderr_path) = write_validation_output_files(
+                                work_dir, repo_root, &file_stem, "build", "", &message,
+                            )
+                            .await;
+                            attempt_failure = Some(ValidationBuildFailure {
+                                command: command_label,
+                                summary: message,
+                                stdout_path,
+                                stderr_path,
+                                output_snippet: None,
+                            });
+                            break;
+                        }
+                    }
+                }
+
+                if attempt_failure.is_none() {
+                    push_progress_log(
+                        progress_sender,
+                        &None,
+                        logs,
+                        "Validation preflight succeeded.".to_string(),
+                    );
+                    return None;
+                }
+
+                last_failure = attempt_failure;
+            }
+
+            last_failure
+        }
+
+        if let Some(build_failure) = run_validation_build_preflight(
+            batch.repo_path.as_path(),
+            &batch.work_dir,
+            &progress_sender,
+            &mut logs,
+        )
+        .await
+        {
+            let note = format!(
+                "Validation preflight failed; recording UnableToValidate statuses: {}",
+                build_failure.summary
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(note.clone()));
+            }
+            logs.push(note);
+
+            for request in &batch.requests {
+                if let Some(index) = find_bug_index(&snapshot, request.id) {
+                    let validation = &mut snapshot.bugs[index].bug.validation;
+                    if !matches!(validation.status, BugValidationStatus::Pending) {
+                        continue;
+                    }
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    validation.tool = Some("python".to_string());
+                    validation.target = None;
+                    validation.summary = Some(
+                        format!(
+                            "Unable to validate (build failed): {}. Command: `{}`.",
+                            build_failure.summary, build_failure.command
+                        )
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string(),
+                    );
+                    if let Some(snippet) = build_failure.output_snippet.as_ref() {
+                        validation.output_snippet = Some(snippet.clone());
+                    }
+                    validation
+                        .repro_steps
+                        .push(format!("Run: `{}`", build_failure.command));
+                    validation.stdout_path = Some(build_failure.stdout_path.clone());
+                    validation.stderr_path = Some(build_failure.stderr_path.clone());
+                    validation.run_at = Some(run_at);
+                }
+            }
+
+            let _ = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await;
+            return Ok(());
+        }
+
         if let Some(tx) = progress_sender.as_ref() {
-            tx.send(AppEvent::SecurityReviewLog(line.clone()));
+            tx.send(AppEvent::SecurityReviewLog(
+                "Executing validation checks...".to_string(),
+            ));
+        }
+        match verify_bugs(batch.clone()).await {
+            Ok(outcome) => {
+                for line in outcome.logs {
+                    if let Some(tx) = progress_sender.as_ref() {
+                        tx.send(AppEvent::SecurityReviewLog(line.clone()));
+                    }
+                }
+            }
+            Err(err) => {
+                verification_failed = Some(err.message.clone());
+                logs.extend(err.logs);
+                if let Some(tx) = progress_sender.as_ref() {
+                    tx.send(AppEvent::SecurityReviewLog(format!(
+                        "Validation checks encountered an error; recording UnableToValidate statuses: {}",
+                        err.message
+                    )));
+                }
+            }
+        }
+    }
+
+    let snapshot_bytes = tokio_fs::read(&batch.snapshot_path).await.ok();
+    let mut snapshot: SecurityReviewSnapshot = snapshot_bytes
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice(bytes).ok())
+        .unwrap_or_else(|| planned_snapshot.clone());
+
+    for id in &findings.ids {
+        let Some(planned_index) = find_bug_index(&planned_snapshot, *id) else {
+            continue;
+        };
+        let Some(index) = find_bug_index(&snapshot, *id) else {
+            continue;
+        };
+        let planned_validation = planned_snapshot.bugs[planned_index].bug.validation.clone();
+        let current_validation = snapshot.bugs[index].bug.validation.clone();
+        if matches!(current_validation.status, BugValidationStatus::Pending)
+            && !matches!(planned_validation.status, BugValidationStatus::Pending)
+        {
+            snapshot.bugs[index].bug.validation = planned_validation;
+        }
+    }
+
+    if let Some(message) = verification_failed.as_deref() {
+        for id in requested_ids {
+            if let Some(index) = find_bug_index(&snapshot, id) {
+                let validation = &mut snapshot.bugs[index].bug.validation;
+                if matches!(validation.status, BugValidationStatus::Pending) {
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    validation.tool = Some("python".to_string());
+                    validation.target = None;
+                    validation.summary = Some(
+                        format!(
+                            "Validation could not be completed (verification error): {message}"
+                        )
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string(),
+                    );
+                    validation.run_at = Some(run_at);
+                }
+            }
+        }
+    }
+
+    if let Err(err) = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await {
+        if let Some(tx) = progress_sender.as_ref() {
+            tx.send(AppEvent::SecurityReviewLog(format!(
+                "Validation results could not be written: {}",
+                err.message
+            )));
+        }
+        return Ok(());
+    }
+
+    let build_validation_state_prompt = |state: &BugValidationState| -> String {
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(format!("status: {}", validation_status_label(state)));
+        if let Some(tool) = state
+            .tool
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            lines.push(format!("tool: {tool}"));
+        }
+        if let Some(summary) = state
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            lines.push(format!("summary: {summary}"));
+        }
+        if !state.repro_steps.is_empty() {
+            lines.push("repro_steps:".to_string());
+            for step in state.repro_steps.iter().take(8) {
+                let step = step.trim();
+                if !step.is_empty() {
+                    lines.push(format!("- {step}"));
+                }
+            }
+        }
+        if !state.artifacts.is_empty() {
+            lines.push("artifacts:".to_string());
+            for artifact in state.artifacts.iter().take(8) {
+                let artifact = artifact.trim();
+                if !artifact.is_empty() {
+                    lines.push(format!("- {artifact}"));
+                }
+            }
+        }
+        if let Some(snippet) = state
+            .output_snippet
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            lines.push("output_snippet:".to_string());
+            lines.push(truncate_text(snippet, 1_000));
+        }
+        if lines.is_empty() {
+            "(none)".to_string()
+        } else {
+            lines.join("\n")
+        }
+    };
+
+    #[derive(Clone, Debug)]
+    struct ValidationRefineWorkItem {
+        id: BugIdentifier,
+        label: String,
+        context: String,
+        validation_state: String,
+        summary_id: usize,
+        risk_rank: Option<usize>,
+    }
+
+    let refine_items: Vec<ValidationRefineWorkItem> = findings
+        .ids
+        .iter()
+        .copied()
+        .filter_map(|id| {
+            let index = find_bug_index(&snapshot, id)?;
+            let entry = snapshot.bugs.get(index)?;
+            if entry.bug.validation.tool.as_deref() != Some("python") {
+                return None;
+            }
+            let finding = finding_map.get(&id)?;
+            Some(ValidationRefineWorkItem {
+                id,
+                label: finding.label.clone(),
+                context: finding.context.clone(),
+                validation_state: build_validation_state_prompt(&entry.bug.validation),
+                summary_id: entry.bug.summary_id,
+                risk_rank: entry.bug.risk_rank,
+            })
+        })
+        .collect();
+
+    if verification_failed.is_none() && !refine_items.is_empty() {
+        let refine_results = futures::stream::iter(refine_items.into_iter().map(|item| {
+            let provider = provider.clone();
+            let auth_manager = auth_manager.clone();
+            let progress_sender = progress_sender.clone();
+            let metrics = metrics.clone();
+            let model = model.clone();
+            let repo_root = batch.repo_path.clone();
+            let work_dir = batch.work_dir.clone();
+            let testing_md_context = testing_md_context.clone();
+            async move {
+                let bug_work_dir = work_dir.join(format!("bug{}", item.summary_id));
+                let mut python_script = "(none)".to_string();
+                let candidates: Vec<PathBuf> = if let Some(rank) = item.risk_rank {
+                    vec![
+                        bug_work_dir.join(format!("bug_rank_{rank}.py")),
+                        bug_work_dir.join(format!("bug_{}.py", item.summary_id)),
+                    ]
+                } else {
+                    vec![bug_work_dir.join(format!("bug_{}.py", item.summary_id))]
+                };
+                for path in candidates {
+                    if let Ok(contents) = tokio_fs::read_to_string(&path).await
+                        && !contents.trim().is_empty()
+                    {
+                        python_script = contents;
+                        break;
+                    }
+                }
+
+                let prompt = VALIDATION_REFINE_PROMPT_TEMPLATE
+                    .replace("{finding}", &item.context)
+                    .replace("{validation_state}", &item.validation_state)
+                    .replace("{python_script}", python_script.trim())
+                    .replace("{testing_md}", &testing_md_context);
+
+                let result = run_validation_refine_agent(
+                    config,
+                    &provider,
+                    auth_manager,
+                    repo_root.as_path(),
+                    prompt,
+                    progress_sender,
+                    metrics,
+                    model.as_str(),
+                    reasoning_effort,
+                    item.label.as_str(),
+                )
+                .await;
+                (item.id, item.label, result)
+            }
+        }))
+        .buffer_unordered(VALIDATION_REFINE_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+
+        fn safe_rel_path(path: &str) -> bool {
+            let path = path.trim();
+            if path.is_empty() {
+                return false;
+            }
+            let parsed = Path::new(path);
+            if parsed.is_absolute() {
+                return false;
+            }
+            !parsed
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        }
+
+        let mut updated = false;
+        let mut refine_testing_md_additions: Vec<String> = Vec::new();
+        for (id, label, result) in refine_results {
+            match result {
+                Ok(output) => {
+                    logs.extend(output.logs);
+                    let Some(parsed) = parse_validation_refine_output(output.text.as_str()) else {
+                        if let Some(index) = find_bug_index(&snapshot, id) {
+                            let validation = &mut snapshot.bugs[index].bug.validation;
+                            let addition = format!(
+                                "PoC refinement produced unparseable output for {label}; no Dockerfile was created."
+                            );
+                            let cleaned = addition
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                                .trim()
+                                .to_string();
+                            match validation.summary.as_mut() {
+                                Some(existing) if !existing.trim().is_empty() => {
+                                    existing.push_str(" · ");
+                                    existing.push_str(&cleaned);
+                                }
+                                _ => {
+                                    validation.summary = Some(cleaned);
+                                }
+                            }
+                            updated = true;
+                        }
+                        continue;
+                    };
+                    if let Some(additions) = parsed
+                        .testing_md_additions
+                        .as_deref()
+                        .map(str::trim_end)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        refine_testing_md_additions.push(additions.to_string());
+                    }
+
+                    let Some(index) = find_bug_index(&snapshot, id) else {
+                        continue;
+                    };
+                    let Some(summary_id) =
+                        snapshot.bugs.get(index).map(|entry| entry.bug.summary_id)
+                    else {
+                        continue;
+                    };
+
+                    let bug_work_dir = batch.work_dir.join(format!("bug{summary_id}"));
+
+                    let mut summary_additions: Vec<String> = Vec::new();
+                    if let Some(summary) = parsed
+                        .summary
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        summary_additions.push(
+                            summary
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+
+                    let mut artifacts_to_add: Vec<String> = Vec::new();
+                    let mut dockerfile_display: Option<String> = None;
+
+                    if let Some(dockerfile) = parsed
+                        .dockerfile
+                        .as_deref()
+                        .map(str::trim_end)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
+                        let path = bug_work_dir.join("Dockerfile");
+                        match tokio_fs::write(&path, dockerfile.as_bytes()).await {
+                            Ok(_) => {
+                                let display = display_path_for(&path, &batch.repo_path);
+                                dockerfile_display = Some(display.clone());
+                                artifacts_to_add.push(display);
+                            }
+                            Err(err) => {
+                                summary_additions.push(
+                                    format!("Failed to write Dockerfile: {err}")
+                                        .split_whitespace()
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                        .trim()
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    }
+
+                    for file in &parsed.files {
+                        if !safe_rel_path(&file.path) {
+                            continue;
+                        }
+                        let path = bug_work_dir.join(file.path.trim());
+                        if let Some(parent) = path.parent() {
+                            let _ = tokio_fs::create_dir_all(parent).await;
+                        }
+                        match tokio_fs::write(&path, file.contents.as_bytes()).await {
+                            Ok(_) => {
+                                artifacts_to_add.push(display_path_for(&path, &batch.repo_path));
+                            }
+                            Err(err) => {
+                                summary_additions.push(
+                                    format!("Failed to write {}: {err}", file.path.trim())
+                                        .split_whitespace()
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                        .trim()
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    }
+
+                    let docker_steps = dockerfile_display.as_deref().map(|display_dockerfile| {
+                        let image_tag = format!("codex-validate-bug{summary_id}");
+                        let build_cmd = parsed
+                            .docker_build
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| {
+                                format!("docker build -f {display_dockerfile} -t {image_tag} .")
+                            });
+                        let run_cmd = parsed
+                            .docker_run
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("docker run --rm {image_tag}"));
+                        (format!("Build: `{build_cmd}`"), format!("Run: `{run_cmd}`"))
+                    });
+
+                    let needs_update = !summary_additions.is_empty()
+                        || !artifacts_to_add.is_empty()
+                        || docker_steps.is_some();
+                    if !needs_update {
+                        continue;
+                    }
+
+                    let Some(entry) = snapshot.bugs.get_mut(index) else {
+                        continue;
+                    };
+                    let validation = &mut entry.bug.validation;
+
+                    for addition in summary_additions {
+                        let cleaned = addition
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .trim()
+                            .to_string();
+                        if cleaned.is_empty() {
+                            continue;
+                        }
+                        match validation.summary.as_mut() {
+                            Some(existing) if !existing.trim().is_empty() => {
+                                if !existing.contains(&cleaned) {
+                                    existing.push_str(" · ");
+                                    existing.push_str(&cleaned);
+                                }
+                            }
+                            _ => {
+                                validation.summary = Some(cleaned);
+                            }
+                        }
+                    }
+
+                    for artifact in artifacts_to_add {
+                        let artifact = artifact.trim();
+                        if artifact.is_empty() {
+                            continue;
+                        }
+                        if !validation.artifacts.iter().any(|a| a == artifact) {
+                            validation.artifacts.push(artifact.to_string());
+                        }
+                    }
+
+                    if let Some((build_step, run_step)) = docker_steps {
+                        if !validation.repro_steps.iter().any(|s| s == &build_step) {
+                            validation.repro_steps.push(build_step);
+                        }
+                        if !validation.repro_steps.iter().any(|s| s == &run_step) {
+                            validation.repro_steps.push(run_step);
+                        }
+                    }
+
+                    updated = true;
+                }
+                Err(err) => {
+                    logs.extend(err.logs);
+                    if let Some(index) = find_bug_index(&snapshot, id) {
+                        let validation = &mut snapshot.bugs[index].bug.validation;
+                        let addition =
+                            format!("PoC refinement failed for {label}: {}", err.message);
+                        let cleaned = addition
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .trim()
+                            .to_string();
+                        match validation.summary.as_mut() {
+                            Some(existing) if !existing.trim().is_empty() => {
+                                existing.push_str(" · ");
+                                existing.push_str(&cleaned);
+                            }
+                            _ => {
+                                validation.summary = Some(cleaned);
+                            }
+                        }
+                        updated = true;
+                    }
+                }
+            }
+        }
+
+        apply_validation_testing_md_additions(
+            &testing_path,
+            &batch.repo_path,
+            &refine_testing_md_additions,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+
+        if updated
+            && let Err(err) = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await
+            && let Some(tx) = progress_sender.as_ref()
+        {
+            tx.send(AppEvent::SecurityReviewLog(format!(
+                "Validation refinement results could not be written: {}",
+                err.message
+            )));
         }
     }
     Ok(())
@@ -15632,11 +18031,20 @@ async fn make_provider_request_builder(
     auth: &Option<CodexAuth>,
     path: &str,
 ) -> Result<CodexRequestBuilder, String> {
-    // Base URL: allow provider overrides, otherwise default to the standard OpenAI-style endpoint.
+    // Base URL: allow provider overrides, otherwise match codex-core defaults (ChatGPT auth uses
+    // chatgpt.com backend API).
+    let is_chatgpt_auth = auth
+        .as_ref()
+        .is_some_and(|auth| matches!(auth.mode, codex_app_server_protocol::AuthMode::ChatGPT));
+    let default_base_url = if is_chatgpt_auth {
+        "https://chatgpt.com/backend-api/codex"
+    } else {
+        "https://api.openai.com/v1"
+    };
     let mut base_url = provider
         .base_url
         .clone()
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .unwrap_or_else(|| default_base_url.to_string());
     base_url = base_url.trim_end_matches('/').to_string();
 
     let path = path.trim_start_matches('/');
@@ -15686,6 +18094,11 @@ async fn make_provider_request_builder(
         }
     }
 
+    let session_id = security_review_session_id();
+    builder = builder.header("conversation_id", session_id);
+    builder = builder.header("session_id", session_id);
+    builder = builder.header("x-openai-subagent", "review");
+
     // Authorization: prefer provider API key, then experimental token, then user auth.
     match provider.api_key() {
         Ok(Some(api_key)) if !api_key.trim().is_empty() => {
@@ -15711,9 +18124,45 @@ async fn make_provider_request_builder(
         && !token.trim().is_empty()
     {
         builder = builder.bearer_auth(token);
+        if let Some(account_id) = auth.get_account_id()
+            && !account_id.trim().is_empty()
+            && let Ok(header_value) = HeaderValue::try_from(account_id.as_str())
+        {
+            builder = builder.header("ChatGPT-Account-ID", header_value);
+        }
     }
 
     Ok(builder)
+}
+
+fn normalize_reasoning_effort_for_model(
+    model: &str,
+    requested: Option<ReasoningEffort>,
+) -> Option<ReasoningEffort> {
+    if !model.starts_with("gpt-5-codex") {
+        return requested;
+    }
+
+    fn is_supported_by_gpt5_codex(effort: ReasoningEffort) -> bool {
+        matches!(
+            effort,
+            ReasoningEffort::Low | ReasoningEffort::Medium | ReasoningEffort::High
+        )
+    }
+
+    requested.filter(|&effort| is_supported_by_gpt5_codex(effort))
+}
+
+fn reasoning_effort_label(effort: Option<ReasoningEffort>) -> &'static str {
+    match effort {
+        None => "default",
+        Some(ReasoningEffort::None) => "none",
+        Some(ReasoningEffort::Minimal) => "minimal",
+        Some(ReasoningEffort::Low) => "low",
+        Some(ReasoningEffort::Medium) => "medium",
+        Some(ReasoningEffort::High) => "high",
+        Some(ReasoningEffort::XHigh) => "xhigh",
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -15722,6 +18171,7 @@ async fn call_model(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     system_prompt: &str,
     user_prompt: &str,
     metrics: Arc<ReviewMetrics>,
@@ -15741,6 +18191,7 @@ async fn call_model(
             provider,
             auth,
             model,
+            reasoning_effort,
             system_prompt,
             user_prompt,
             temperature,
@@ -15816,6 +18267,7 @@ async fn call_model_attempt(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     system_prompt: &str,
     user_prompt: &str,
     temperature: f32,
@@ -15826,21 +18278,31 @@ async fn call_model_attempt(
             let builder =
                 make_provider_request_builder(client, provider, auth, "responses").await?;
 
+            let input = vec![codex_protocol::models::ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![codex_protocol::models::ContentItem::InputText {
+                    text: user_prompt.to_string(),
+                }],
+            }];
+
             let mut payload = json!({
                 "model": model,
                 "instructions": system_prompt,
-                "input": [
-                    {
-                        "role": "user",
-                        "content": [
-                            { "type": "input_text", "text": user_prompt }
-                        ]
-                    }
-                ]
+                "input": input,
+                "tools": [],
+                "tool_choice": "auto",
+                "parallel_tool_calls": false,
+                "store": false,
+                "stream": true,
+                "include": [],
+                "prompt_cache_key": security_review_session_id(),
             });
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("store".to_string(), json!(false));
-                obj.insert("stream".to_string(), json!(true));
+
+            if let Some(effort) = normalize_reasoning_effort_for_model(model, reasoning_effort)
+                && let Some(map) = payload.as_object_mut()
+            {
+                map.insert("reasoning".to_string(), json!({ "effort": effort }));
             }
 
             let response = builder
@@ -16700,4 +19162,4 @@ fn human_readable_bytes(bytes: usize) -> String {
     }
 }
 
-const MARKDOWN_FIX_MODEL: &str = "gpt-5.1";
+const MARKDOWN_FIX_MODEL: &str = "gpt-5.2";

@@ -354,12 +354,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 ))
             }
         };
-        let conversation_manager =
-            ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
-        let model = conversation_manager
-            .get_models_manager()
-            .get_model(&config.model, &config)
-            .await;
         let request = SecurityReviewRequest {
             repo_path: default_cwd.clone(),
             include_paths,
@@ -367,8 +361,31 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             output_root: output_root.clone(),
             mode,
             include_spec_in_bug_analysis: true,
-            triage_model: config.review_model.clone(),
-            model,
+            triage_model: config
+                .security_review_models
+                .file_triage
+                .clone()
+                .unwrap_or_default(),
+            spec_model: config
+                .security_review_models
+                .spec
+                .clone()
+                .unwrap_or_default(),
+            model: config
+                .security_review_models
+                .bugs
+                .clone()
+                .unwrap_or_default(),
+            validation_model: config
+                .security_review_models
+                .validation
+                .clone()
+                .unwrap_or_default(),
+            writing_model: config
+                .security_review_models
+                .writing
+                .clone()
+                .unwrap_or_default(),
             provider: config.model_provider.clone(),
             auth: auth_manager.auth(),
             config: config.clone(),

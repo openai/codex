@@ -172,14 +172,14 @@ impl MermaidLinter {
                         let label_start = single_arrow.end() + first_pipe_rel + 1;
                         let label_end = label_start + second_pipe_rel;
                         let label_text = &line[label_start..label_end];
-                        if label_text.contains(['(', ')', '"']) {
+                        if label_text.contains(['(', ')', '"', '{', '}', '[', ']']) {
                             let sanitized = sanitize_label_text(label_text);
                             if !sanitized.is_empty() && sanitized != label_text {
                                 issues.push(Issue::new(
                                     line_no,
                                     label_start,
                                     label_end,
-                                    "Sanitized edge label containing parentheses/quotes.",
+                                    "Sanitized edge label containing syntax characters.",
                                     make_replace_span(label_start, label_end, sanitized),
                                 ));
                             }
@@ -600,6 +600,8 @@ lazy_static! {
     );
     static ref INLINE_ARROW_LABEL_RE: Regex =
         must_compile(r#"--[ \t]*(?P<label>[^\n-]*[()"]+[^\n-]*)[ \t]*-->"#);
+    static ref PIPE_EDGE_LABEL_RE: Regex =
+        must_compile(r#"(?P<prefix>-->\s*\|)(?P<label>[^\n|]*)(?P<suffix>\|)"#);
 }
 
 fn quote_labels_with_regex(line: &str, re: &Regex) -> String {
@@ -659,6 +661,22 @@ fn sanitize_labeled_edge(line: &str) -> String {
     out
 }
 
+fn sanitize_pipe_edge_labels(line: &str) -> String {
+    PIPE_EDGE_LABEL_RE
+        .replace_all(line, |caps: &Captures| {
+            let label = caps.name("label").map(|m| m.as_str()).unwrap_or("");
+            let sanitized = sanitize_label_text(label);
+            if sanitized.is_empty() || sanitized == label {
+                caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string()
+            } else {
+                let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
+                let suffix = caps.name("suffix").map(|m| m.as_str()).unwrap_or("");
+                format!("{prefix}{sanitized}{suffix}")
+            }
+        })
+        .into_owned()
+}
+
 fn lint_flowchart_or_graph(code: &str) -> String {
     let ensured = ensure_mermaid_header(code);
     let normalized = normalize_header_titles(&ensured);
@@ -686,6 +704,7 @@ fn lint_flowchart_or_graph(code: &str) -> String {
         let mut current = line.replace('\t', "  ");
         current = current.trim_end().to_string();
         current = sanitize_labeled_edge(&current);
+        current = sanitize_pipe_edge_labels(&current);
         current = quote_labels_with_regex(&current, &SQUARE_LABEL_RE);
         current = quote_labels_with_regex(&current, &PAR2_LABEL_RE);
         current = quote_labels_with_regex(&current, &PAR1_LABEL_RE);
@@ -756,7 +775,7 @@ fn make_replace_after_colon(colon_pos: usize, find: char, replace_with: char) ->
 }
 
 fn sanitize_label_text(raw: &str) -> String {
-    let cleaned = raw.replace(['(', ')', '"'], " ");
+    let cleaned = raw.replace(['(', ')', '"', '{', '}', '[', ']'], " ");
     cleaned
         .split_whitespace()
         .filter(|segment| !segment.is_empty())
@@ -1135,6 +1154,14 @@ sequenceDiagram
         let raw = "```mermaid\nflowchart TD\n  B --|HTTP(\"S\") + cookies/CSRF| W\n```";
         let fixed = fix_mermaid_blocks(raw);
         assert!(fixed.contains(r#"B -->|HTTP S + cookies/CSRF| W"#));
+    }
+
+    #[test]
+    fn edge_labels_with_curly_braces_are_sanitized() {
+        let raw =
+            "```mermaid\nflowchart TB\n  acceptor -->|enqueue JOB{tcp_sock, model_sock}| q\n```";
+        let fixed = fix_mermaid_blocks(raw);
+        assert!(fixed.contains("acceptor -->|enqueue JOB tcp_sock, model_sock| q"));
     }
 
     #[test]

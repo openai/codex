@@ -4492,15 +4492,23 @@ impl ChatWidget {
 
         self.add_info_message(banner, None);
 
+        let bugs_model_for_display = resume_checkpoint
+            .as_ref()
+            .map(|cp| cp.model.clone())
+            .unwrap_or_else(|| {
+                self.config
+                    .security_review_models
+                    .bugs
+                    .clone()
+                    .unwrap_or_else(|| "gpt-5.2".to_string())
+            });
+
         self.security_review_context = Some(SecurityReviewContext {
             mode,
             include_paths: context_paths.clone(),
             output_root: output_root.clone(),
             repo_path: repo_path.clone(),
-            model: resume_checkpoint
-                .as_ref()
-                .map(|cp| cp.model.clone())
-                .unwrap_or_else(|| self.model_family.get_model_slug().to_string()),
+            model: bugs_model_for_display,
             provider_name: resume_checkpoint
                 .as_ref()
                 .map(|cp| cp.provider_name.clone())
@@ -4529,12 +4537,36 @@ impl ChatWidget {
             output_root,
             mode,
             include_spec_in_bug_analysis: true,
-            triage_model: self.config.review_model.clone(),
+            triage_model: self
+                .config
+                .security_review_models
+                .file_triage
+                .clone()
+                .unwrap_or_default(),
+            spec_model: self
+                .config
+                .security_review_models
+                .spec
+                .clone()
+                .unwrap_or_default(),
             model: self
                 .config
-                .model
+                .security_review_models
+                .bugs
                 .clone()
-                .unwrap_or_else(|| self.model_family.get_model_slug().to_string()),
+                .unwrap_or_default(),
+            validation_model: self
+                .config
+                .security_review_models
+                .validation
+                .clone()
+                .unwrap_or_default(),
+            writing_model: self
+                .config
+                .security_review_models
+                .writing
+                .clone()
+                .unwrap_or_default(),
             provider: self.config.model_provider.clone(),
             auth: self.auth_manager.auth(),
             config: self.config.clone(),
