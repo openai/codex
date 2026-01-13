@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use codex_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
@@ -9,6 +10,11 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::config_types::SandboxMode;
+use crate::protocol::AskForApproval;
+use crate::protocol::NetworkAccess;
+use crate::protocol::SandboxPolicy;
+use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
@@ -156,6 +162,159 @@ pub enum ResponseItem {
     },
     #[serde(other)]
     Other,
+}
+
+/// Developer-provided guidance that is injected into a turn as a developer role
+/// message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(rename = "developer_instructions", rename_all = "snake_case")]
+pub struct DeveloperInstructions {
+    text: String,
+}
+
+const APPROVAL_POLICY_NEVER: &str = include_str!("prompts/permissions/approval_policy/never.md");
+const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
+    include_str!("prompts/permissions/approval_policy/unless_trusted.md");
+const APPROVAL_POLICY_ON_FAILURE: &str =
+    include_str!("prompts/permissions/approval_policy/on_failure.md");
+const APPROVAL_POLICY_ON_REQUEST: &str =
+    include_str!("prompts/permissions/approval_policy/on_request.md");
+
+const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
+    include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
+const SANDBOX_MODE_WORKSPACE_WRITE: &str =
+    include_str!("prompts/permissions/sandbox_mode/workspace_write.md");
+const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_mode/read_only.md");
+
+impl DeveloperInstructions {
+    pub fn new<T: Into<String>>(text: T) -> Self {
+        Self { text: text.into() }
+    }
+
+    pub fn into_text(self) -> String {
+        self.text
+    }
+
+    pub fn concat(self, other: impl Into<DeveloperInstructions>) -> Self {
+        let mut text = self.text;
+        text.push_str(&other.into().text);
+        Self { text }
+    }
+
+    pub fn from_policy(
+        sandbox_policy: &SandboxPolicy,
+        approval_policy: AskForApproval,
+        cwd: &Path,
+    ) -> Self {
+        let network_access = if sandbox_policy.has_full_network_access() {
+            NetworkAccess::Enabled
+        } else {
+            NetworkAccess::Restricted
+        };
+
+        let (sandbox_mode, writable_roots) = match sandbox_policy {
+            SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
+            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, None),
+            SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+                (SandboxMode::WorkspaceWrite, Some(roots))
+            }
+        };
+
+        DeveloperInstructions::from_permissions_with_network(
+            sandbox_mode,
+            network_access,
+            approval_policy,
+            writable_roots,
+        )
+    }
+
+    fn from_permissions_with_network(
+        sandbox_mode: SandboxMode,
+        network_access: NetworkAccess,
+        approval_policy: AskForApproval,
+        writable_roots: Option<Vec<WritableRoot>>,
+    ) -> Self {
+        let start_tag = DeveloperInstructions::new("<permissions instructions>");
+        let end_tag = DeveloperInstructions::new("</permissions instructions>");
+        start_tag
+            .concat(DeveloperInstructions::sandbox_text(
+                sandbox_mode,
+                network_access,
+            ))
+            .concat(DeveloperInstructions::from(approval_policy))
+            .concat(DeveloperInstructions::from_writable_roots(writable_roots))
+            .concat(end_tag)
+    }
+
+    fn from_writable_roots(writable_roots: Option<Vec<WritableRoot>>) -> Self {
+        let Some(roots) = writable_roots else {
+            return DeveloperInstructions::new("");
+        };
+
+        if roots.is_empty() {
+            return DeveloperInstructions::new("");
+        }
+
+        let roots_list: Vec<String> = roots
+            .iter()
+            .map(|r| format!("`{}`", r.root.to_string_lossy()))
+            .collect();
+        let text = if roots_list.len() == 1 {
+            format!(" The writable root is {}.", roots_list[0])
+        } else {
+            format!(" The writable roots are {}.", roots_list.join(", "))
+        };
+        DeveloperInstructions::new(text)
+    }
+
+    fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
+        let template = match mode {
+            SandboxMode::DangerFullAccess => SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end(),
+            SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
+            SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
+        };
+        let text = template.replace("{network_access}", &network_access.to_string());
+
+        DeveloperInstructions::new(text)
+    }
+}
+
+impl From<DeveloperInstructions> for ResponseItem {
+    fn from(di: DeveloperInstructions) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: di.into_text(),
+            }],
+        }
+    }
+}
+
+impl From<SandboxMode> for DeveloperInstructions {
+    fn from(mode: SandboxMode) -> Self {
+        let network_access = match mode {
+            SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
+            SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
+        };
+
+        DeveloperInstructions::sandbox_text(mode, network_access)
+    }
+}
+
+impl From<AskForApproval> for DeveloperInstructions {
+    fn from(mode: AskForApproval) -> Self {
+        let text = match mode {
+            AskForApproval::Never => APPROVAL_POLICY_NEVER.trim_end(),
+            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.trim_end(),
+            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.trim_end(),
+            AskForApproval::OnRequest => APPROVAL_POLICY_ON_REQUEST.trim_end(),
+        };
+
+        DeveloperInstructions::new(text)
+    }
 }
 
 fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
@@ -625,11 +784,70 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_types::SandboxMode;
+    use crate::protocol::AskForApproval;
     use anyhow::Result;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn converts_sandbox_mode_into_developer_instructions() {
+        assert_eq!(
+            DeveloperInstructions::from(SandboxMode::WorkspaceWrite),
+            DeveloperInstructions::new(
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
+            )
+        );
+
+        assert_eq!(
+            DeveloperInstructions::from(SandboxMode::ReadOnly),
+            DeveloperInstructions::new(
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
+            )
+        );
+    }
+
+    #[test]
+    fn builds_permissions_with_network_access_override() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            AskForApproval::OnRequest,
+            None,
+        );
+
+        let text = instructions.into_text();
+        assert!(
+            text.contains("Network access is enabled."),
+            "expected network access to be enabled in message"
+        );
+        assert!(
+            text.contains("`approval_policy` is `on-request`"),
+            "expected approval guidance to be included"
+        );
+    }
+
+    #[test]
+    fn builds_permissions_from_policy() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        let instructions = DeveloperInstructions::from_policy(
+            &policy,
+            AskForApproval::UnlessTrusted,
+            &PathBuf::from("/tmp"),
+        );
+        let text = instructions.into_text();
+        assert!(text.contains("Network access is enabled."));
+        assert!(text.contains("`approval_policy` is `unless-trusted`"));
+    }
 
     #[test]
     fn serializes_success_as_plain_string() -> Result<()> {
