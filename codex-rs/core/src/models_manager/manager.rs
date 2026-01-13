@@ -88,7 +88,7 @@ impl ModelsManager {
         {
             error!("failed to refresh available models: {err}");
         }
-        let remote_models = self.remote_models(config).await;
+        let remote_models = self.get_remote_models(config).await;
         self.build_available_models(remote_models)
     }
 
@@ -122,7 +122,7 @@ impl ModelsManager {
         }
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
         let auth_mode = self.auth_manager.get_auth_mode();
-        let remote_models = self.remote_models(config).await;
+        let remote_models = self.get_remote_models(config).await;
         if auth_mode == Some(AuthMode::ChatGPT) {
             let has_auto_balanced = self
                 .build_available_models(remote_models)
@@ -140,7 +140,7 @@ impl ModelsManager {
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
-            .remote_models(config)
+            .get_remote_models(config)
             .await
             .into_iter()
             .find(|m| m.slug == model);
@@ -255,8 +255,9 @@ impl ModelsManager {
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let existing_presets = self.local_models.clone();
-        let mut merged_presets = Self::merge_presets(remote_presets, existing_presets);
-        merged_presets = self.filter_visible_models(merged_presets);
+        let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
+        let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
+        merged_presets = ModelPreset::with_auth(merged_presets, chatgpt_mode);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
         if !has_default {
@@ -273,40 +274,7 @@ impl ModelsManager {
         merged_presets
     }
 
-    fn filter_visible_models(&self, models: Vec<ModelPreset>) -> Vec<ModelPreset> {
-        let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
-        models
-            .into_iter()
-            .filter(|model| chatgpt_mode || model.supported_in_api)
-            .collect()
-    }
-
-    fn merge_presets(
-        remote_presets: Vec<ModelPreset>,
-        existing_presets: Vec<ModelPreset>,
-    ) -> Vec<ModelPreset> {
-        if remote_presets.is_empty() {
-            return existing_presets;
-        }
-
-        let remote_slugs: HashSet<&str> = remote_presets
-            .iter()
-            .map(|preset| preset.model.as_str())
-            .collect();
-
-        let mut merged_presets = remote_presets.clone();
-        for mut preset in existing_presets {
-            if remote_slugs.contains(preset.model.as_str()) {
-                continue;
-            }
-            preset.is_default = false;
-            merged_presets.push(preset);
-        }
-
-        merged_presets
-    }
-
-    async fn remote_models(&self, config: &Config) -> Vec<ModelInfo> {
+    async fn get_remote_models(&self, config: &Config) -> Vec<ModelInfo> {
         if config.features.enabled(Feature::RemoteModels) {
             self.remote_models.read().await.clone()
         } else {
@@ -465,7 +433,7 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("refresh succeeds");
-        let cached_remote = manager.remote_models(&config).await;
+        let cached_remote = manager.get_remote_models(&config).await;
         assert_eq!(cached_remote, remote_models);
 
         let available = manager
@@ -528,7 +496,7 @@ mod tests {
             .await
             .expect("first refresh succeeds");
         assert_eq!(
-            manager.remote_models(&config).await,
+            manager.get_remote_models(&config).await,
             remote_models,
             "remote cache should store fetched models"
         );
@@ -539,7 +507,7 @@ mod tests {
             .await
             .expect("cached refresh succeeds");
         assert_eq!(
-            manager.remote_models(&config).await,
+            manager.get_remote_models(&config).await,
             remote_models,
             "cache path should not mutate stored models"
         );
@@ -607,7 +575,7 @@ mod tests {
             .await
             .expect("second refresh succeeds");
         assert_eq!(
-            manager.remote_models(&config).await,
+            manager.get_remote_models(&config).await,
             updated_models,
             "stale cache should trigger refetch"
         );
