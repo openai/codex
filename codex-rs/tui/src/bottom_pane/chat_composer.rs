@@ -1,3 +1,62 @@
+//! The chat composer is the bottom-pane text input state machine.
+//!
+//! It is responsible for:
+//!
+//! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
+//! - Routing keys to the active popup (slash commands, file search, skill mentions).
+//! - Handling submit vs newline on Enter.
+//! - Turning raw key streams into explicit paste operations on platforms where terminals
+//!   don't provide reliable bracketed paste (notably Windows).
+//!
+//! # Key Event Routing
+//!
+//! Most key handling goes through [`ChatComposer::handle_key_event`], which dispatches to a
+//! popup-specific handler if a popup is visible and otherwise to
+//! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
+//! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
+//!
+//! # Non-bracketed Paste Bursts
+//!
+//! On some terminals (especially on Windows), pastes arrive as a rapid sequence of
+//! `KeyCode::Char` and `KeyCode::Enter` key events instead of a single paste event.
+//!
+//! To avoid misinterpreting these bursts as real typing (and to prevent transient UI effects like
+//! shortcut overlays toggling on a pasted `?`), we feed "plain" character events into
+//! [`PasteBurst`](super::paste_burst::PasteBurst), which buffers bursts and later flushes them
+//! through [`ChatComposer::handle_paste`].
+//!
+//! The burst detector intentionally treats ASCII and non-ASCII differently:
+//!
+//! - ASCII: we briefly hold the first fast char (flicker suppression) until we know whether the
+//!   stream is paste-like.
+//! - non-ASCII: we do not hold the first char (IME input would feel dropped), but we still allow
+//!   burst detection for actual paste streams.
+//!
+//! The burst detector can also be disabled (`disable_paste_burst`), which bypasses the state
+//! machine and treats the key stream as normal typing.
+//!
+//! For the detailed burst state machine, see `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
+//! For a narrative overview of the combined state machine, see `docs/tui-chat-composer.md`.
+//!
+//! # PasteBurst Integration Points
+//!
+//! The burst detector is consulted in a few specific places:
+//!
+//! - [`ChatComposer::handle_input_basic`]: flushes any due burst first, then intercepts plain char
+//!   input to either buffer it or insert normally.
+//! - [`ChatComposer::handle_non_ascii_char`]: handles the non-ASCII/IME path without holding the
+//!   first char, while still allowing paste detection via retro-capture.
+//! - [`ChatComposer::flush_paste_burst_if_due`]/[`ChatComposer::handle_paste_burst_flush`]: called
+//!   from UI ticks to turn a pending burst into either an explicit paste (`handle_paste`) or a
+//!   normal typed character.
+//!
+//! # Input Disabled Mode
+//!
+//! The composer can be temporarily read-only (`input_enabled = false`). In that mode it ignores
+//! edits and renders a placeholder prompt instead of the editable textarea. This is part of the
+//! overall state machine, since it affects which transitions are even possible from a given UI
+//! state.
+
 use crate::key_hint::has_ctrl_or_alt;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -122,7 +181,7 @@ pub(crate) struct ChatComposer {
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
     input_disabled_placeholder: Option<String>,
-    // Non-bracketed paste burst tracker.
+    /// Non-bracketed paste burst tracker (see `bottom_pane/paste_burst.rs`).
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
@@ -257,6 +316,24 @@ impl ChatComposer {
         true
     }
 
+    /// Integrate pasted text into the composer.
+    ///
+    /// Acts as the only place where paste text is integrated, both for:
+    ///
+    /// - Real/explicit paste events surfaced by the terminal, and
+    /// - Non-bracketed "paste bursts" that [`PasteBurst`](super::paste_burst::PasteBurst) buffers
+    ///   and later flushes here.
+    ///
+    /// Behavior:
+    ///
+    /// - If the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a placeholder
+    ///   element (expanded on submit) and stores the full text in `pending_pastes`.
+    /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
+    ///   trailing space so the user can keep typing naturally.
+    /// - Otherwise, inserts the pasted text directly into the textarea.
+    ///
+    /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
+    /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
@@ -297,6 +374,16 @@ impl ChatComposer {
         }
     }
 
+    /// Enable or disable paste-burst handling.
+    ///
+    /// `disable_paste_burst` is an escape hatch for terminals/platforms where the burst heuristic
+    /// is unwanted or has already been handled elsewhere.
+    ///
+    /// When enabling the flag we clear the burst classification window so subsequent input cannot
+    /// be incorrectly grouped into a previous burst.
+    ///
+    /// This does not flush any in-progress buffer; callers should avoid toggling this mid-burst
+    /// (or should flush first).
     pub(crate) fn set_disable_paste_burst(&mut self, disabled: bool) {
         let was_disabled = self.disable_paste_burst;
         self.disable_paste_burst = disabled;
@@ -417,7 +504,7 @@ impl ChatComposer {
         self.textarea.text().to_string()
     }
 
-    /// Attempt to start a burst by retro-capturing recent chars before the cursor.
+    /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
         let image_number = self.attached_images.len() + 1;
         let placeholder = local_image_label_text(image_number);
@@ -433,14 +520,31 @@ impl ChatComposer {
         images.into_iter().map(|img| img.path).collect()
     }
 
+    /// Flushes any due paste-burst state.
+    ///
+    /// Call this from a UI tick to turn paste-burst transient state into explicit textarea edits:
+    ///
+    /// - If a burst times out, flush it via `handle_paste(String)`.
+    /// - If only the first ASCII char was held (flicker suppression) and no burst followed, emit it
+    ///   as normal typed input.
+    ///
+    /// This also allows a single "held" ASCII char to render even when it turns out not to be part
+    /// of a paste burst.
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
         self.handle_paste_burst_flush(Instant::now())
     }
 
+    /// Returns whether the composer is currently in any paste-burst related transient state.
+    ///
+    /// This includes actively buffering, having a non-empty burst buffer, or holding the first
+    /// ASCII char for flicker suppression.
     pub(crate) fn is_in_paste_burst(&self) -> bool {
         self.paste_burst.is_active()
     }
 
+    /// Returns a delay that reliably exceeds the paste-burst timing threshold.
+    ///
+    /// Use this in tests to avoid boundary flakiness around the `PasteBurst` timeout.
     pub(crate) fn recommended_paste_flush_delay() -> Duration {
         PasteBurst::recommended_flush_delay()
     }
@@ -679,6 +783,20 @@ impl ChatComposer {
         p
     }
 
+    /// Handle non-ASCII character input (often IME) while still supporting paste-burst detection.
+    ///
+    /// This handler exists because non-ASCII input often comes from IMEs, where characters can
+    /// legitimately arrive in short bursts that should **not** be treated as paste.
+    ///
+    /// The key differences from the ASCII path:
+    ///
+    /// - We never hold the first character (`PasteBurst::on_plain_char_no_hold`), because holding a
+    ///   non-ASCII char can feel like dropped input.
+    /// - If a burst is detected, we may need to retroactively remove already-inserted text before
+    ///   the cursor and move it into the paste buffer (see `PasteBurst::decide_begin_buffer`).
+    ///
+    /// Because this path mixes "insert immediately" with "maybe retro-grab later", it must clamp
+    /// the cursor to a UTF-8 char boundary before slicing `textarea.text()`.
     #[inline]
     fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
         if let KeyEvent {
@@ -705,12 +823,13 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                     CharDecision::BeginBuffer { retro_chars } => {
+                        // For non-ASCII we inserted prior chars immediately, so if this turns out
+                        // to be paste-like we need to retroactively grab & remove the already-
+                        // inserted prefix from the textarea before buffering the burst.
                         let cur = self.textarea.cursor();
                         let txt = self.textarea.text();
                         let safe_cur = Self::clamp_to_char_boundary(txt, cur);
                         let before = &txt[..safe_cur];
-                        // If decision is to buffer, seed the paste burst buffer with the grabbed chars + new.
-                        // Otherwise, fall through to normal insertion below.
                         if let Some(grab) =
                             self.paste_burst
                                 .decide_begin_buffer(now, before, retro_chars as usize)
@@ -722,6 +841,8 @@ impl ChatComposer {
                             self.paste_burst.append_char_to_buffer(ch, now);
                             return (InputResult::None, true);
                         }
+                        // If decide_begin_buffer opted not to start buffering,
+                        // fall through to normal insertion below.
                     }
                     _ => unreachable!("on_plain_char_no_hold returned unexpected variant"),
                 }
@@ -1416,6 +1537,14 @@ impl ChatComposer {
         }
     }
 
+    /// Applies any due `PasteBurst` flush at time `now`.
+    ///
+    /// Converts [`PasteBurst::flush_if_due`] results into concrete textarea mutations.
+    ///
+    /// Callers:
+    ///
+    /// - UI ticks via [`ChatComposer::flush_paste_burst_if_due`], so held first-chars can render.
+    /// - Input handling via [`ChatComposer::handle_input_basic`], so a due burst does not lag.
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
         match self.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
@@ -1433,7 +1562,20 @@ impl ChatComposer {
         }
     }
 
-    /// Handle generic Input events that modify the textarea content.
+    /// Handles keys that mutate the textarea, including paste-burst detection.
+    ///
+    /// Acts as the lowest-level keypath for keys that mutate the textarea. It is also where plain
+    /// character streams are converted into explicit paste operations on terminals that do not
+    /// reliably provide bracketed paste.
+    ///
+    /// Ordering is important:
+    ///
+    /// - Always flush any *due* paste burst first so buffered text does not lag behind unrelated
+    ///   edits.
+    /// - Then handle the incoming key, intercepting only "plain" (no Ctrl/Alt) char input.
+    /// - For non-plain keys, flush via `flush_before_modified_input()` before applying the key;
+    ///   otherwise `clear_window_after_non_char()` can leave buffered text waiting without a
+    ///   timestamp to time out against.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
@@ -1453,6 +1595,10 @@ impl ChatComposer {
         }
 
         // Intercept plain Char inputs to optionally accumulate into a burst buffer.
+        //
+        // This is intentionally limited to "plain" (no Ctrl/Alt) chars so shortcuts keep their
+        // normal semantics, and so we can aggressively flush/clear any burst state when non-char
+        // keys are pressed.
         if let KeyEvent {
             code: KeyCode::Char(ch),
             modifiers,
