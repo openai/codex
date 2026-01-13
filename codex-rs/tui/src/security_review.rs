@@ -2262,10 +2262,12 @@ fn render_bug_sections(
         let base_owned = prune_bug_markdown_file_lines_for_reporting(base_raw);
         let base = base_owned.trim();
         let anchor_snippet = format!("<a id=\"bug-{}\"", snapshot.bug.summary_id);
-        let mut composed = if base.contains(&anchor_snippet) {
-            linkify_file_lines(base, git_link_info)
+        let linked = linkify_file_lines(base, git_link_info);
+        let linked =
+            strip_standalone_bug_anchor_lines(linked.as_str()).unwrap_or_else(|| linked.clone());
+        let mut composed = if linked.contains(&anchor_snippet) {
+            linked
         } else {
-            let linked = linkify_file_lines(base, git_link_info);
             rewrite_bug_markdown_heading_id(linked.as_str(), snapshot.bug.summary_id)
                 .unwrap_or(linked)
         };
@@ -12937,12 +12939,20 @@ fn rewrite_bug_markdown_heading_id(markdown: &str, summary_id: usize) -> Option<
     let mut changed = false;
     let mut updated_first_heading = false;
     for line in markdown.lines() {
+        if is_standalone_bug_anchor_line(line) {
+            changed = true;
+            continue;
+        }
         if !updated_first_heading {
             let trimmed = line.trim_start();
             if let Some(rest) = trimmed.strip_prefix("### ") {
                 // Drop any leading bracketed id like "[12] " from the heading text
                 let clean = rest
                     .trim_start()
+                    .strip_prefix("<a id=\"bug-")
+                    .and_then(|rest| rest.split_once("</a>"))
+                    .map(|(_, after)| after.trim_start())
+                    .unwrap_or(rest.trim_start())
                     .trim_start_matches('[')
                     .trim_start_matches(|c: char| c.is_ascii_digit())
                     .trim_start_matches(']')
@@ -12958,6 +12968,30 @@ fn rewrite_bug_markdown_heading_id(markdown: &str, summary_id: usize) -> Option<
             }
         }
         out.push(line.to_string());
+    }
+    if changed { Some(out.join("\n")) } else { None }
+}
+
+fn is_standalone_bug_anchor_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(rest) = trimmed.strip_prefix("<a id=\"bug-") else {
+        return false;
+    };
+    let Some(id) = rest.strip_suffix("\"></a>") else {
+        return false;
+    };
+    !id.is_empty() && id.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn strip_standalone_bug_anchor_lines(markdown: &str) -> Option<String> {
+    let mut changed = false;
+    let mut out: Vec<&str> = Vec::new();
+    for line in markdown.lines() {
+        if is_standalone_bug_anchor_line(line) {
+            changed = true;
+            continue;
+        }
+        out.push(line);
     }
     if changed { Some(out.join("\n")) } else { None }
 }
