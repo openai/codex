@@ -1308,6 +1308,7 @@ dependencies = [
  "image",
  "include_dir",
  "indexmap 2.12.0",
+ "indoc",
  "keyring",
  "landlock",
  "libc",

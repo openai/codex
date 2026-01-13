@@ -44,14 +44,7 @@ async fn responses_websocket_streams_request() {
 
     let harness = websocket_harness(&server).await;
     let mut session = harness.client.new_session();
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
-        }],
-    }];
+    let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut session, &prompt).await;
 
@@ -59,6 +52,7 @@ async fn responses_websocket_streams_request() {
     assert_eq!(connection.len(), 1);
     let body = connection.first().expect("missing request").body_json();
 
+    assert_eq!(body["type"].as_str(), Some("response.create"));
     assert_eq!(body["model"].as_str(), Some(MODEL));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
@@ -67,7 +61,7 @@ async fn responses_websocket_streams_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_reuses_connection() {
+async fn responses_websocket_appends_on_prefix() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
@@ -78,28 +72,75 @@ async fn responses_websocket_reuses_connection() {
 
     let harness = websocket_harness(&server).await;
     let mut session = harness.client.new_session();
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
-        }],
-    }];
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
 
-    for _ in 0..2 {
-        stream_until_complete(&mut session, &prompt).await;
-    }
+    stream_until_complete(&mut session, &prompt_one).await;
+    stream_until_complete(&mut session, &prompt_two).await;
 
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
-    let body = connection.first().expect("missing request").body_json();
+    let first = connection.first().expect("missing request").body_json();
+    let second = connection.get(1).expect("missing request").body_json();
 
-    assert_eq!(body["model"].as_str(), Some(MODEL));
-    assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
+    assert_eq!(first["type"].as_str(), Some("response.create"));
+    assert_eq!(first["model"].as_str(), Some(MODEL));
+    assert_eq!(first["stream"], serde_json::Value::Bool(true));
+    assert_eq!(first["input"].as_array().map(Vec::len), Some(1));
+    let expected_append = serde_json::json!({
+        "type": "response.append",
+        "input": serde_json::to_value(&prompt_two.input[1..]).expect("serialize append items"),
+    });
+    assert_eq!(second, expected_append);
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_creates_on_non_prefix() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session();
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("different")]);
+
+    stream_until_complete(&mut session, &prompt_one).await;
+    stream_until_complete(&mut session, &prompt_two).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let second = connection.get(1).expect("missing request").body_json();
+
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["model"].as_str(), Some(MODEL));
+    assert_eq!(second["stream"], serde_json::Value::Bool(true));
+    assert_eq!(
+        second["input"],
+        serde_json::to_value(&prompt_two.input).unwrap()
+    );
+
+    server.shutdown().await;
+}
+
+fn message_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText { text: text.into() }],
+    }
+}
+
+fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
+    let mut prompt = Prompt::default();
+    prompt.input = input;
+    prompt
 }
 
 fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {

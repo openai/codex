@@ -1,9 +1,8 @@
 ---
 source: tui/src/app.rs
-assertion_line: 1579
 expression: model_migration_copy_to_plain_text(&copy)
 ---
-Codex just got an upgrade. Introducing gpt-5.2-codex.
+**Codex just got an upgrade. Introducing gpt-5.2-codex.**
 
 Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about gpt-5.2-codex at https://openai.com/index/introducing-gpt-5-2-codex
 
