@@ -10,6 +10,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -52,11 +53,7 @@ impl ToolHandler for GrepFilesHandler {
             }
         };
 
-        let args: GrepFilesArgs = serde_json::from_str(&arguments).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to parse function arguments: {err:?}"
-            ))
-        })?;
+        let args: GrepFilesArgs = parse_arguments(&arguments)?;
 
         let pattern = args.pattern.trim();
         if pattern.is_empty() {

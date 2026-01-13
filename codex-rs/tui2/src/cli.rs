@@ -32,6 +32,23 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_show_all: bool,
 
+    // Internal controls set by the top-level `codex fork` subcommand.
+    // These are not exposed as user flags on the base `codex` command.
+    #[clap(skip)]
+    pub fork_picker: bool,
+
+    #[clap(skip)]
+    pub fork_last: bool,
+
+    /// Internal: fork a specific recorded session by id (UUID). Set by the
+    /// top-level `codex fork <SESSION_ID>` wrapper; not exposed as a public flag.
+    #[clap(skip)]
+    pub fork_session_id: Option<String>,
+
+    /// Internal: show all sessions (disables cwd filtering and shows CWD column).
+    #[clap(skip)]
+    pub fork_show_all: bool,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
@@ -85,6 +102,11 @@ pub struct Cli {
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
 
+    /// Disable alternate screen mode for better scrollback in terminal multiplexers like Zellij.
+    /// This runs the TUI in inline mode, preserving terminal scrollback history.
+    #[arg(long = "no-alt-screen", default_value_t = false)]
+    pub no_alt_screen: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
@@ -98,6 +120,10 @@ impl From<codex_tui::Cli> for Cli {
             resume_last: cli.resume_last,
             resume_session_id: cli.resume_session_id,
             resume_show_all: cli.resume_show_all,
+            fork_picker: cli.fork_picker,
+            fork_last: cli.fork_last,
+            fork_session_id: cli.fork_session_id,
+            fork_show_all: cli.fork_show_all,
             model: cli.model,
             oss: cli.oss,
             oss_provider: cli.oss_provider,
@@ -109,6 +135,7 @@ impl From<codex_tui::Cli> for Cli {
             cwd: cli.cwd,
             web_search: cli.web_search,
             add_dir: cli.add_dir,
+            no_alt_screen: cli.no_alt_screen,
             config_overrides: cli.config_overrides,
         }
     }

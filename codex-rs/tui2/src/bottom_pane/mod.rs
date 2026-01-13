@@ -32,6 +32,7 @@ mod prompt_args;
 mod skill_popup;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
+pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 mod paste_burst;
@@ -253,6 +254,16 @@ impl BottomPane {
     /// Replace the composer text with `text`.
     pub(crate) fn set_composer_text(&mut self, text: String) {
         self.composer.set_text_content(text);
+        self.request_redraw();
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_composer_input_enabled(
+        &mut self,
+        enabled: bool,
+        placeholder: Option<String>,
+    ) {
+        self.composer.set_input_enabled(enabled, placeholder);
         self.request_redraw();
     }
 
@@ -518,16 +529,9 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn attach_image(
-        &mut self,
-        path: PathBuf,
-        width: u32,
-        height: u32,
-        format_label: &str,
-    ) {
+    pub(crate) fn attach_image(&mut self, path: PathBuf) {
         if self.view_stack.is_empty() {
-            self.composer
-                .attach_image(path, width, height, format_label);
+            self.composer.attach_image(path);
             self.request_redraw();
         }
     }

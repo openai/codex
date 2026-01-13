@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::codex_delegate::run_codex_conversation_one_shot;
+use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -46,6 +46,12 @@ impl SessionTask for ReviewTask {
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        let _ = session
+            .session
+            .services
+            .otel_manager
+            .counter("codex.task.review", 1, &[]);
+
         // Start sub-codex conversation and get the receiver for events.
         let output = match start_review_conversation(
             session.clone(),
@@ -77,22 +83,17 @@ async fn start_review_conversation(
 ) -> Option<async_channel::Receiver<Event>> {
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
-    // Run with only reviewer rubric — drop outer user_instructions
-    sub_agent_config.user_instructions = None;
-    // Avoid loading project docs; reviewer only needs findings
-    sub_agent_config.project_doc_max_bytes = 0;
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
     sub_agent_config
         .features
-        .disable(crate::features::Feature::WebSearchRequest)
-        .disable(crate::features::Feature::ViewImageTool);
+        .disable(crate::features::Feature::WebSearchRequest);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
 
     sub_agent_config.model = Some(config.review_model.clone());
-    (run_codex_conversation_one_shot(
+    (run_codex_thread_one_shot(
         sub_agent_config,
         session.auth_manager(),
         session.models_manager(),
@@ -133,7 +134,7 @@ async fn process_review_events(
             })
             | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
             | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
-            EventMsg::TaskComplete(task_complete) => {
+            EventMsg::TurnComplete(task_complete) => {
                 // Parse review output from the last agent message (if present).
                 let out = task_complete
                     .last_agent_message
@@ -153,7 +154,7 @@ async fn process_review_events(
             }
         }
     }
-    // Channel closed without TaskComplete: treat as interrupted.
+    // Channel closed without TurnComplete: treat as interrupted.
     None
 }
 

@@ -96,13 +96,13 @@ impl Sandboxable for UnifiedExecRuntime<'_> {
 impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     type ApprovalKey = UnifiedExecApprovalKey;
 
-    fn approval_key(&self, req: &UnifiedExecRequest) -> Self::ApprovalKey {
-        UnifiedExecApprovalKey {
+    fn approval_keys(&self, req: &UnifiedExecRequest) -> Vec<Self::ApprovalKey> {
+        vec![UnifiedExecApprovalKey {
             command: req.command.clone(),
             cwd: req.cwd.clone(),
             tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,
-        }
+        }]
     }
 
     fn start_approval_async<'b>(
@@ -110,7 +110,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         req: &'b UnifiedExecRequest,
         ctx: ApprovalCtx<'b>,
     ) -> BoxFuture<'b, ReviewDecision> {
-        let key = self.approval_key(req);
+        let keys = self.approval_keys(req);
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -121,7 +121,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         Box::pin(async move {
-            with_cached_approval(&session.services, key, || async move {
+            with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 session
                     .request_command_approval(
                         turn,

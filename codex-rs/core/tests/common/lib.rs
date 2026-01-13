@@ -1,8 +1,10 @@
 #![expect(clippy::expect_used)]
 
+use codex_utils_cargo_bin::CargoBinError;
+use codex_utils_cargo_bin::find_resource;
 use tempfile::TempDir;
 
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -150,7 +152,16 @@ pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
 /// single JSON template be reused by multiple tests that each need a unique
 /// `response_id`.
 pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> String {
-    let raw = std::fs::read_to_string(path).expect("read fixture template");
+    let p = path.as_ref();
+    let full_path = match find_resource!(p) {
+        Ok(p) => p,
+        Err(err) => panic!(
+            "failed to find fixture template at {:?}: {err}",
+            path.as_ref()
+        ),
+    };
+
+    let raw = std::fs::read_to_string(full_path).expect("read fixture template");
     let replaced = raw.replace("__ID__", id);
     let events: Vec<serde_json::Value> =
         serde_json::from_str(&replaced).expect("parse JSON fixture");
@@ -170,10 +181,7 @@ pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> 
         .collect()
 }
 
-pub async fn wait_for_event<F>(
-    codex: &CodexConversation,
-    predicate: F,
-) -> codex_core::protocol::EventMsg
+pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> codex_core::protocol::EventMsg
 where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
@@ -181,7 +189,7 @@ where
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
 }
 
-pub async fn wait_for_event_match<T, F>(codex: &CodexConversation, matcher: F) -> T
+pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
 where
     F: Fn(&codex_core::protocol::EventMsg) -> Option<T>,
 {
@@ -190,7 +198,7 @@ where
 }
 
 pub async fn wait_for_event_with_timeout<F>(
-    codex: &CodexConversation,
+    codex: &CodexThread,
     mut predicate: F,
     wait_time: tokio::time::Duration,
 ) -> codex_core::protocol::EventMsg
@@ -236,6 +244,10 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
     let args = format_with_current_shell_non_login(command);
     shlex::try_join(args.iter().map(String::as_str))
         .expect("serialize current shell command without login")
+}
+
+pub fn stdio_server_bin() -> Result<String, CargoBinError> {
+    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
 }
 
 pub mod fs_wait {

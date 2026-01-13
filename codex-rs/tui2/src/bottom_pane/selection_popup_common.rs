@@ -24,6 +24,17 @@ pub(crate) struct GenericDisplayRow {
     pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
 }
 
+pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {
+    use crate::wrapping::RtOptions;
+    use crate::wrapping::word_wrap_line;
+
+    let width = width.max(1) as usize;
+    let opts = RtOptions::new(width)
+        .initial_indent(Line::from(""))
+        .subsequent_indent(Line::from(""));
+    word_wrap_line(line, opts)
+}
+
 fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))

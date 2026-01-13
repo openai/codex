@@ -18,11 +18,13 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
+use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use toml::Value as TomlValue;
@@ -51,13 +53,14 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let conversation_manager = Arc::new(ConversationManager::new(
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::VSCode,
         ));
         let codex_message_processor = CodexMessageProcessor::new(
             auth_manager,
-            conversation_manager,
+            thread_manager,
             outgoing.clone(),
             codex_linux_sandbox_exe,
             Arc::clone(&config),
@@ -120,6 +123,27 @@ impl MessageProcessor {
                         title: _title,
                         version,
                     } = params.client_info;
+                    if let Err(error) = set_default_originator(name.clone()) {
+                        match error {
+                            SetOriginatorError::InvalidHeaderValue => {
+                                let error = JSONRPCErrorError {
+                                    code: INVALID_REQUEST_ERROR_CODE,
+                                    message: format!(
+                                        "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                                    ),
+                                    data: None,
+                                };
+                                self.outgoing.send_error(request_id, error).await;
+                                return;
+                            }
+                            SetOriginatorError::AlreadyInitialized => {
+                                // No-op. This is expected to happen if the originator is already set via env var.
+                                // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+                                // this will be an unexpected state and we can return a JSON-RPC error indicating
+                                // internal server error.
+                            }
+                        }
+                    }
                     let user_agent_suffix = format!("{name}; {version}");
                     if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                         *suffix = Some(user_agent_suffix);
@@ -156,6 +180,12 @@ impl MessageProcessor {
             }
             ClientRequest::ConfigBatchWrite { request_id, params } => {
                 self.handle_config_batch_write(request_id, params).await;
+            }
+            ClientRequest::ConfigRequirementsRead {
+                request_id,
+                params: _,
+            } => {
+                self.handle_config_requirements_read(request_id).await;
             }
             other => {
                 self.codex_message_processor.process_request(other).await;
@@ -205,6 +235,13 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         match self.config_api.batch_write(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_config_requirements_read(&self, request_id: RequestId) {
+        match self.config_api.config_requirements_read().await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }

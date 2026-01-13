@@ -16,7 +16,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
 
-/// Transcript of conversation history
+/// Transcript of thread history
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
@@ -67,26 +67,26 @@ impl ContextManager {
         }
     }
 
-    pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
+    /// Returns the history prepared for sending to the model. This applies a proper
+    /// normalization and drop un-suited items.
+    pub(crate) fn for_prompt(mut self) -> Vec<ResponseItem> {
         self.normalize_history();
-        self.contents()
+        self.items
+            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+        self.items
     }
 
-    // Returns the history prepared for sending to the model.
-    // With extra response items filtered out and GhostCommits removed.
-    pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
-        let mut history = self.get_history();
-        Self::remove_ghost_snapshots(&mut history);
-        history
+    /// Returns raw items in the history.
+    pub(crate) fn raw_items(&self) -> &[ResponseItem] {
+        &self.items
     }
 
     // Estimate token usage using byte-based heuristics from the truncation helpers.
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
-        let model_family = turn_context.client.get_model_family();
-        let base_tokens =
-            i64::try_from(approx_token_count(model_family.base_instructions.as_str()))
-                .unwrap_or(i64::MAX);
+        let model_info = turn_context.client.get_model_info();
+        let base_instructions = model_info.base_instructions.as_str();
+        let base_tokens = i64::try_from(approx_token_count(base_instructions)).unwrap_or(i64::MAX);
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
             acc + match item {
@@ -169,9 +169,7 @@ impl ContextManager {
             return;
         }
 
-        // Keep behavior consistent with call sites that previously operated on `get_history()`:
-        // normalize first (call/output invariants), then truncate based on the normalized view.
-        let snapshot = self.get_history();
+        let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
         let Some(&first_user_idx) = user_positions.first() else {
             self.replace(snapshot);
@@ -251,15 +249,6 @@ impl ContextManager {
         normalize::remove_orphan_outputs(&mut self.items);
     }
 
-    /// Returns a clone of the contents in the transcript.
-    fn contents(&self) -> Vec<ResponseItem> {
-        self.items.clone()
-    }
-
-    fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
-        items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
-    }
-
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         let policy_with_serialization_budget = policy.mul(1.2);
         match item {
@@ -333,7 +322,7 @@ fn is_session_prefix(text: &str) -> bool {
     lowered.starts_with("<environment_context>")
 }
 
-fn is_user_turn_boundary(item: &ResponseItem) -> bool {
+pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
     let ResponseItem::Message { role, content, .. } = item else {
         return false;
     };

@@ -95,7 +95,6 @@ function detectPackageManager() {
     return "bun";
   }
 
-
   if (
     __dirname.includes(".bun/install/global") ||
     __dirname.includes(".bun\\install\\global")

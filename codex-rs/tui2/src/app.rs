@@ -1,5 +1,9 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+#[cfg(target_os = "windows")]
+use crate::app_event::WindowsSandboxEnableMode;
+#[cfg(target_os = "windows")]
+use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
@@ -15,7 +19,7 @@ use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
-use crate::resume_picker::ResumeSelection;
+use crate::resume_picker::SessionSelection;
 use crate::transcript_copy_action::TranscriptCopyAction;
 use crate::transcript_copy_action::TranscriptCopyFeedback;
 use crate::transcript_copy_ui::TranscriptCopyUi;
@@ -40,7 +44,7 @@ use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
@@ -56,7 +60,7 @@ use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
 use codex_core::terminal::terminal_info;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -91,7 +95,7 @@ use crate::history_cell::UpdateAvailableHistoryCell;
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
-    pub conversation_id: Option<ConversationId>,
+    pub conversation_id: Option<ThreadId>,
     pub update_action: Option<UpdateAction>,
     /// ANSI-styled transcript lines to print after the TUI exits.
     ///
@@ -105,7 +109,7 @@ impl From<AppExitInfo> for codex_tui::AppExitInfo {
     fn from(info: AppExitInfo) -> Self {
         codex_tui::AppExitInfo {
             token_usage: info.token_usage,
-            conversation_id: info.conversation_id,
+            thread_id: info.conversation_id,
             update_action: info.update_action.map(Into::into),
         }
     }
@@ -113,7 +117,7 @@ impl From<AppExitInfo> for codex_tui::AppExitInfo {
 
 fn session_summary(
     token_usage: TokenUsage,
-    conversation_id: Option<ConversationId>,
+    conversation_id: Option<ThreadId>,
 ) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
@@ -320,7 +324,7 @@ async fn handle_model_migration_prompt_if_needed(
 }
 
 pub(crate) struct App {
-    pub(crate) server: Arc<ConversationManager>,
+    pub(crate) server: Arc<ThreadManager>,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -387,7 +391,7 @@ impl App {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
-            self.server.remove_conversation(&conversation_id).await;
+            self.server.remove_thread(&conversation_id).await;
         }
     }
 
@@ -399,7 +403,7 @@ impl App {
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
-        resume_selection: ResumeSelection,
+        session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
     ) -> Result<AppExitInfo> {
@@ -407,11 +411,12 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let conversation_manager = Arc::new(ConversationManager::new(
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::Cli,
         ));
-        let mut model = conversation_manager
+        let mut model = thread_manager
             .get_models_manager()
             .get_model(&config.model, &config)
             .await;
@@ -420,7 +425,7 @@ impl App {
             &mut config,
             model.as_str(),
             &app_event_tx,
-            conversation_manager.get_models_manager(),
+            thread_manager.get_models_manager(),
         )
         .await;
         if let Some(exit_info) = exit_info {
@@ -431,8 +436,8 @@ impl App {
         }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-        let mut chat_widget = match resume_selection {
-            ResumeSelection::StartFresh | ResumeSelection::Exit => {
+        let mut chat_widget = match session_selection {
+            SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -441,23 +446,20 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: conversation_manager.get_models_manager(),
+                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
                     model: model.clone(),
                 };
-                ChatWidget::new(init, conversation_manager.clone())
+                ChatWidget::new(init, thread_manager.clone())
             }
-            ResumeSelection::Resume(path) => {
-                let resumed = conversation_manager
-                    .resume_conversation_from_rollout(
-                        config.clone(),
-                        path.clone(),
-                        auth_manager.clone(),
-                    )
+            SessionSelection::Resume(path) => {
+                let resumed = thread_manager
+                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
                     .await
                     .wrap_err_with(|| {
-                        format!("Failed to resume session from {}", path.display())
+                        let path_display = path.display();
+                        format!("Failed to resume session from {path_display}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -467,16 +469,35 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: conversation_manager.get_models_manager(),
+                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
                     model: model.clone(),
                 };
-                ChatWidget::new_from_existing(
-                    init,
-                    resumed.conversation,
-                    resumed.session_configured,
-                )
+                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
+            }
+            SessionSelection::Fork(path) => {
+                let forked = thread_manager
+                    .fork_thread(usize::MAX, config.clone(), path.clone())
+                    .await
+                    .wrap_err_with(|| {
+                        let path_display = path.display();
+                        format!("Failed to fork session from {path_display}")
+                    })?;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                    models_manager: thread_manager.get_models_manager(),
+                    feedback: feedback.clone(),
+                    is_first_run,
+                    model: model.clone(),
+                };
+                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
         };
 
@@ -503,7 +524,7 @@ impl App {
         let copy_selection_shortcut = crate::transcript_copy_ui::detect_copy_selection_shortcut();
 
         let mut app = Self {
-            server: conversation_manager.clone(),
+            server: thread_manager.clone(),
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
@@ -1393,14 +1414,14 @@ impl App {
                 )
                 .await?
                 {
-                    ResumeSelection::Resume(path) => {
+                    SessionSelection::Resume(path) => {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.conversation_id(),
                         );
                         match self
                             .server
-                            .resume_conversation_from_rollout(
+                            .resume_thread_from_rollout(
                                 self.config.clone(),
                                 path.clone(),
                                 self.auth_manager.clone(),
@@ -1424,7 +1445,7 @@ impl App {
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
-                                    resumed.conversation,
+                                    resumed.thread,
                                     resumed.session_configured,
                                 );
                                 if let Some(summary) = summary {
@@ -1441,14 +1462,84 @@ impl App {
                                 }
                             }
                             Err(err) => {
+                                let path_display = path.display();
                                 self.chat_widget.add_error_message(format!(
-                                    "Failed to resume session from {}: {err}",
-                                    path.display()
+                                    "Failed to resume session from {path_display}: {err}"
                                 ));
                             }
                         }
                     }
-                    ResumeSelection::Exit | ResumeSelection::StartFresh => {}
+                    SessionSelection::Exit
+                    | SessionSelection::StartFresh
+                    | SessionSelection::Fork(_) => {}
+                }
+
+                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenForkPicker => {
+                match crate::resume_picker::run_fork_picker(
+                    tui,
+                    &self.config.codex_home,
+                    &self.config.model_provider_id,
+                    false,
+                )
+                .await?
+                {
+                    SessionSelection::Fork(path) => {
+                        let summary = session_summary(
+                            self.chat_widget.token_usage(),
+                            self.chat_widget.conversation_id(),
+                        );
+                        match self
+                            .server
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                            .await
+                        {
+                            Ok(forked) => {
+                                self.shutdown_current_conversation().await;
+                                let init = crate::chatwidget::ChatWidgetInit {
+                                    config: self.config.clone(),
+                                    frame_requester: tui.frame_requester(),
+                                    app_event_tx: self.app_event_tx.clone(),
+                                    initial_prompt: None,
+                                    initial_images: Vec::new(),
+                                    enhanced_keys_supported: self.enhanced_keys_supported,
+                                    auth_manager: self.auth_manager.clone(),
+                                    models_manager: self.server.get_models_manager(),
+                                    feedback: self.feedback.clone(),
+                                    is_first_run: false,
+                                    model: self.current_model.clone(),
+                                };
+                                self.chat_widget = ChatWidget::new_from_existing(
+                                    init,
+                                    forked.thread,
+                                    forked.session_configured,
+                                );
+                                if let Some(summary) = summary {
+                                    let mut lines: Vec<Line<'static>> =
+                                        vec![summary.usage_line.clone().into()];
+                                    if let Some(command) = summary.resume_command {
+                                        let spans = vec![
+                                            "To continue this session, run ".into(),
+                                            command.cyan(),
+                                        ];
+                                        lines.push(spans.into());
+                                    }
+                                    self.chat_widget.add_plain_history_lines(lines);
+                                }
+                            }
+                            Err(err) => {
+                                let path_display = path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to fork session from {path_display}: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    SessionSelection::Exit
+                    | SessionSelection::StartFresh
+                    | SessionSelection::Resume(_) => {}
                 }
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
@@ -1576,19 +1667,91 @@ impl App {
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
-            AppEvent::EnableWindowsSandboxForAgentMode { preset } => {
+            AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
+                self.chat_widget.clear_windows_sandbox_setup_status();
+                self.chat_widget
+                    .open_windows_sandbox_fallback_prompt(preset, reason);
+            }
+            AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
                 #[cfg(target_os = "windows")]
                 {
+                    let policy = preset.sandbox.clone();
+                    let policy_cwd = self.config.cwd.clone();
+                    let command_cwd = policy_cwd.clone();
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    let codex_home = self.config.codex_home.clone();
+                    let tx = self.app_event_tx.clone();
+
+                    // If the elevated setup already ran on this machine, don't prompt for
+                    // elevation again - just flip the config to use the elevated path.
+                    if codex_core::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path())
+                    {
+                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset,
+                            mode: WindowsSandboxEnableMode::Elevated,
+                        });
+                        return Ok(true);
+                    }
+
+                    self.chat_widget.show_windows_sandbox_setup_status();
+                    tokio::task::spawn_blocking(move || {
+                        let result = codex_core::windows_sandbox::run_elevated_setup(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                        );
+                        let event = match result {
+                            Ok(()) => AppEvent::EnableWindowsSandboxForAgentMode {
+                                preset: preset.clone(),
+                                mode: WindowsSandboxEnableMode::Elevated,
+                            },
+                            Err(err) => {
+                                tracing::error!(
+                                    error = %err,
+                                    "failed to run elevated Windows sandbox setup"
+                                );
+                                AppEvent::OpenWindowsSandboxFallbackPrompt {
+                                    preset,
+                                    reason: WindowsSandboxFallbackReason::ElevationFailed,
+                                }
+                            }
+                        };
+                        tx.send(event);
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = preset;
+                }
+            }
+            AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.chat_widget.clear_windows_sandbox_setup_status();
                     let profile = self.active_profile.as_deref();
                     let feature_key = Feature::WindowsSandbox.key();
+                    let elevated_key = Feature::WindowsSandboxElevated.key();
+                    let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
                     match ConfigEditsBuilder::new(&self.config.codex_home)
                         .with_profile(profile)
                         .set_feature_enabled(feature_key, true)
+                        .set_feature_enabled(elevated_key, elevated_enabled)
                         .apply()
                         .await
                     {
                         Ok(()) => {
                             self.config.set_windows_sandbox_globally(true);
+                            self.config
+                                .set_windows_elevated_sandbox_globally(elevated_enabled);
+                            self.chat_widget
+                                .set_feature_enabled(Feature::WindowsSandbox, true);
+                            self.chat_widget.set_feature_enabled(
+                                Feature::WindowsSandboxElevated,
+                                elevated_enabled,
+                            );
                             self.chat_widget.clear_forced_auto_mode_downgrade();
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
@@ -1617,7 +1780,14 @@ impl App {
                                 self.app_event_tx
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
                                 self.chat_widget.add_info_message(
-                                    "Enabled experimental Windows sandbox.".to_string(),
+                                    match mode {
+                                        WindowsSandboxEnableMode::Elevated => {
+                                            "Enabled elevated agent sandbox.".to_string()
+                                        }
+                                        WindowsSandboxEnableMode::Legacy => {
+                                            "Enabled non-elevated agent sandbox.".to_string()
+                                        }
+                                    },
                                     None,
                                 );
                             }
@@ -1635,7 +1805,7 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, mode);
                 }
             }
             AppEvent::PersistModelSelection { model, effort } => {
@@ -2087,14 +2257,14 @@ mod tests {
     use crate::tui::scrolling::TranscriptLineMeta;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
-    use codex_core::ConversationManager;
+    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
-    use codex_protocol::ConversationId;
+    use codex_protocol::ThreadId;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -2107,7 +2277,7 @@ mod tests {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = "gpt-5.2-codex".to_string();
-        let server = Arc::new(ConversationManager::with_models_provider(
+        let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ));
@@ -2159,7 +2329,7 @@ mod tests {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = "gpt-5.2-codex".to_string();
-        let server = Arc::new(ConversationManager::with_models_provider(
+        let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ));
@@ -2404,7 +2574,7 @@ mod tests {
 
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
-                session_id: ConversationId::new(),
+                session_id: ThreadId::new(),
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -2442,7 +2612,7 @@ mod tests {
 
         assert_eq!(user_count(&app.transcript_cells), 2);
 
-        app.backtrack.base_id = Some(ConversationId::new());
+        app.backtrack.base_id = Some(ThreadId::new());
         app.backtrack.primed = true;
         app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
 
@@ -2697,7 +2867,7 @@ mod tests {
     async fn new_session_requests_shutdown_for_previous_conversation() {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let event = SessionConfiguredEvent {
             session_id: conversation_id,
             model: "gpt-test".to_string(),
@@ -2763,8 +2933,7 @@ mod tests {
             total_tokens: 12,
             ..Default::default()
         };
-        let conversation =
-            ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
         let summary = session_summary(usage, Some(conversation)).expect("summary");
         assert_eq!(

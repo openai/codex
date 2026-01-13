@@ -20,7 +20,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::get_responses_request_bodies;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -240,7 +239,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             saw_exec_end = true;
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -348,7 +347,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     assert_eq!(begin_event.cwd, cwd.path());
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     Ok(())
 }
@@ -425,7 +424,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
         "exec_command cwd should resolve relative workdir against turn cwd",
     );
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     Ok(())
 }
@@ -472,7 +471,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -502,9 +501,9 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
         "exec_command cwd should reflect the requested workdir override"
     );
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
 
     Ok(())
@@ -593,7 +592,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
         "expected aggregated output to contain marker"
     );
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 
@@ -665,7 +664,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
         "delta chunk missing expected text: {text:?}",
     );
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 
@@ -744,7 +743,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
                     break;
                 }
             }
-            EventMsg::TaskComplete(_) => {
+            EventMsg::TurnComplete(_) => {
                 task_completed = true;
                 if task_completed && end_event.is_some() {
                     break;
@@ -860,7 +859,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
             EventMsg::TerminalInteraction(ev) if ev.call_id == open_call_id => {
                 terminal_interaction = Some(ev);
             }
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }
@@ -1007,7 +1006,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             EventMsg::ExecCommandEnd(ev) if ev.call_id == open_call_id => {
                 end_event = Some(ev);
             }
-            EventMsg::TaskComplete(_) => {
+            EventMsg::TurnComplete(_) => {
                 task_completed = true;
             }
             _ => {}
@@ -1149,7 +1148,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
         match event_msg {
             EventMsg::ExecCommandBegin(event) => begin_events.push(event),
             EventMsg::ExecCommandEnd(event) => end_events.push(event),
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }
@@ -1218,7 +1217,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1237,12 +1236,14 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let metadata = outputs
@@ -1484,7 +1485,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1503,12 +1504,14 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
@@ -1610,7 +1613,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
             ev_completed("resp-4"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1629,12 +1632,14 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -1801,7 +1806,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
 
     assert_eq!(end_event.exit_code, 0);
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 
@@ -1889,7 +1894,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
         let msg = wait_for_event(&codex, |_| true).await;
         match msg {
             EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => end_event = Some(ev),
-            EventMsg::TaskComplete(_) => task_complete = true,
+            EventMsg::TurnComplete(_) => task_complete = true,
             _ => {}
         }
         if task_complete && end_event.is_some() {
@@ -1965,7 +1970,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             ev_completed("resp-3"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1984,12 +1989,14 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -2095,7 +2102,7 @@ PY
             ev_completed("resp-3"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2116,15 +2123,17 @@ PY
     // This is a worst case scenario for the truncate logic.
     wait_for_event_with_timeout(
         &codex,
-        |event| matches!(event, EventMsg::TaskComplete(_)),
+        |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(10),
     )
     .await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -2204,7 +2213,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             ev_completed("resp-3"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2225,15 +2234,17 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     loop {
         let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
+        if matches!(event.msg, EventMsg::TurnComplete(_)) {
             break;
         }
     }
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -2295,7 +2306,7 @@ PY
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2314,12 +2325,14 @@ PY
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let large_output = outputs.get(call_id).expect("missing large output summary");
@@ -2371,7 +2384,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2391,12 +2404,14 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs.get(call_id).expect("missing output");
@@ -2471,7 +2486,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             ev_completed("resp-3"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2490,12 +2505,14 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let startup_output = outputs
@@ -2561,7 +2578,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2580,12 +2597,14 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs.get(call_id).expect("missing output");
@@ -2708,7 +2727,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let requests = response_mock.requests();
     assert!(

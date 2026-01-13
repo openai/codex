@@ -25,7 +25,7 @@ fn sse_incomplete() -> String {
 }
 
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -101,6 +101,6 @@ async fn retries_on_early_close() {
         .await
         .unwrap();
 
-    // Wait until TaskComplete (should succeed after retry).
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    // Wait until TurnComplete (should succeed after retry).
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }

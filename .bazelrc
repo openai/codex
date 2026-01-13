@@ -1,0 +1,45 @@
+common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
+
+common --disk_cache=~/.cache/bazel-disk-cache
+common --repo_contents_cache=~/.cache/bazel-repo-contents-cache
+common --repository_cache=~/.cache/bazel-repo-cache
+
+common --experimental_platform_in_output_dir
+
+common --enable_platform_specific_config
+# TODO(zbarsky): We need to untangle these libc constraints to get linux remote builds working.
+common:linux --host_platform=//:local
+common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
+common --@toolchains_llvm_bootstrapped//config:experimental_stub_libgcc_s
+
+# We need to use the sh toolchain on windows so we don't send host bash paths to the linux executor.
+common:windows --@rules_rust//rust/settings:experimental_use_sh_toolchain_for_bootstrap_process_wrapper
+
+# TODO(zbarsky): rules_rust doesn't implement this flag properly with remote exec...
+# common --@rules_rust//rust/settings:pipelined_compilation
+
+common --incompatible_strict_action_env
+# Not ideal, but We need to allow dotslash to be found
+common --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+common --test_output=errors
+common --bes_results_url=https://app.buildbuddy.io/invocation/
+common --bes_backend=grpcs://remote.buildbuddy.io
+common --remote_cache=grpcs://remote.buildbuddy.io
+common --remote_download_toplevel
+common --nobuild_runfile_links
+common --remote_timeout=3600
+common --noexperimental_throttle_remote_action_building
+common --experimental_remote_execution_keepalive
+common --grpc_keepalive_time=30s
+
+# This limits both in-flight executions and concurrent downloads. Even with high number
+# of jobs execution will still be limited by CPU cores, so this just pays a bit of
+# memory in exchange for higher download concurrency.
+common --jobs=30
+
+common:remote --extra_execution_platforms=//:rbe
+common:remote --remote_executor=grpcs://remote.buildbuddy.io
+common:remote --jobs=800
+

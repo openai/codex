@@ -66,10 +66,11 @@ pub(crate) async fn spawn_child_async(
 
     #[cfg(unix)]
     unsafe {
+        let set_process_group = matches!(stdio_policy, StdioPolicy::RedirectForShellTool);
         #[cfg(target_os = "linux")]
         let parent_pid = libc::getpid();
         cmd.pre_exec(move || {
-            if libc::setpgid(0, 0) == -1 {
+            if set_process_group && libc::setpgid(0, 0) == -1 {
                 return Err(std::io::Error::last_os_error());
             }
 

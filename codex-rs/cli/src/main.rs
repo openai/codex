@@ -14,9 +14,11 @@ use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
+use codex_cli::login::run_login_with_device_code_fallback_to_browser;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
+use codex_core::env::is_headless_environment;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
@@ -117,6 +119,9 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
+    /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
+    Fork(ForkCommand),
+
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
@@ -148,6 +153,25 @@ struct ResumeCommand {
     session_id: Option<String>,
 
     /// Continue the most recent session without showing the picker.
+    #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
+    last: bool,
+
+    /// Show all sessions (disables cwd filtering and shows CWD column).
+    #[arg(long = "all", default_value_t = false)]
+    all: bool,
+
+    #[clap(flatten)]
+    config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct ForkCommand {
+    /// Conversation/session id (UUID). When provided, forks this session.
+    /// If omitted, use --last to pick the most recent recorded session.
+    #[arg(value_name = "SESSION_ID")]
+    session_id: Option<String>,
+
+    /// Fork the most recent session without showing the picker.
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 
@@ -283,7 +307,7 @@ struct StdioToUdsCommand {
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
-        conversation_id,
+        thread_id: conversation_id,
         ..
     } = exit_info;
 
@@ -418,14 +442,6 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     }
 }
 
-/// As early as possible in the process lifecycle, apply hardening measures. We
-/// skip this in debug builds to avoid interfering with debugging.
-#[ctor::ctor]
-#[cfg(not(debug_assertions))]
-fn pre_main_hardening() {
-    codex_process_hardening::pre_main_hardening();
-}
-
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
@@ -514,6 +530,23 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
         }
+        Some(Subcommand::Fork(ForkCommand {
+            session_id,
+            last,
+            all,
+            config_overrides,
+        })) => {
+            interactive = finalize_fork_interactive(
+                interactive,
+                root_config_overrides.clone(),
+                session_id,
+                last,
+                all,
+                config_overrides,
+            );
+            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
+            handle_app_exit(exit_info)?;
+        }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
                 &mut login_cli.config_overrides,
@@ -539,6 +572,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                    } else if is_headless_environment() {
+                        run_login_with_device_code_fallback_to_browser(
+                            login_cli.config_overrides,
+                            login_cli.issuer_base_url,
+                            login_cli.client_id,
+                        )
+                        .await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
@@ -724,7 +764,7 @@ fn finalize_resume_interactive(
     interactive.resume_show_all = show_all;
 
     // Merge resume-scoped flags and overrides with highest precedence.
-    merge_resume_cli_flags(&mut interactive, resume_cli);
+    merge_interactive_cli_flags(&mut interactive, resume_cli);
 
     // Propagate any root-level config overrides (e.g. `-c key=value`).
     prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
@@ -732,51 +772,77 @@ fn finalize_resume_interactive(
     interactive
 }
 
-/// Merge flags provided to `codex resume` so they take precedence over any
-/// root-level flags. Only overrides fields explicitly set on the resume-scoped
+/// Build the final `TuiCli` for a `codex fork` invocation.
+fn finalize_fork_interactive(
+    mut interactive: TuiCli,
+    root_config_overrides: CliConfigOverrides,
+    session_id: Option<String>,
+    last: bool,
+    show_all: bool,
+    fork_cli: TuiCli,
+) -> TuiCli {
+    // Start with the parsed interactive CLI so fork shares the same
+    // configuration surface area as `codex` without additional flags.
+    let fork_session_id = session_id;
+    interactive.fork_picker = fork_session_id.is_none() && !last;
+    interactive.fork_last = last;
+    interactive.fork_session_id = fork_session_id;
+    interactive.fork_show_all = show_all;
+
+    // Merge fork-scoped flags and overrides with highest precedence.
+    merge_interactive_cli_flags(&mut interactive, fork_cli);
+
+    // Propagate any root-level config overrides (e.g. `-c key=value`).
+    prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
+
+    interactive
+}
+
+/// Merge flags provided to `codex resume`/`codex fork` so they take precedence over any
+/// root-level flags. Only overrides fields explicitly set on the subcommand-scoped
 /// CLI. Also appends `-c key=value` overrides with highest precedence.
-fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
-    if let Some(model) = resume_cli.model {
+fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli) {
+    if let Some(model) = subcommand_cli.model {
         interactive.model = Some(model);
     }
-    if resume_cli.oss {
+    if subcommand_cli.oss {
         interactive.oss = true;
     }
-    if let Some(profile) = resume_cli.config_profile {
+    if let Some(profile) = subcommand_cli.config_profile {
         interactive.config_profile = Some(profile);
     }
-    if let Some(sandbox) = resume_cli.sandbox_mode {
+    if let Some(sandbox) = subcommand_cli.sandbox_mode {
         interactive.sandbox_mode = Some(sandbox);
     }
-    if let Some(approval) = resume_cli.approval_policy {
+    if let Some(approval) = subcommand_cli.approval_policy {
         interactive.approval_policy = Some(approval);
     }
-    if resume_cli.full_auto {
+    if subcommand_cli.full_auto {
         interactive.full_auto = true;
     }
-    if resume_cli.dangerously_bypass_approvals_and_sandbox {
+    if subcommand_cli.dangerously_bypass_approvals_and_sandbox {
         interactive.dangerously_bypass_approvals_and_sandbox = true;
     }
-    if let Some(cwd) = resume_cli.cwd {
+    if let Some(cwd) = subcommand_cli.cwd {
         interactive.cwd = Some(cwd);
     }
-    if resume_cli.web_search {
+    if subcommand_cli.web_search {
         interactive.web_search = true;
     }
-    if !resume_cli.images.is_empty() {
-        interactive.images = resume_cli.images;
+    if !subcommand_cli.images.is_empty() {
+        interactive.images = subcommand_cli.images;
     }
-    if !resume_cli.add_dir.is_empty() {
-        interactive.add_dir.extend(resume_cli.add_dir);
+    if !subcommand_cli.add_dir.is_empty() {
+        interactive.add_dir.extend(subcommand_cli.add_dir);
     }
-    if let Some(prompt) = resume_cli.prompt {
+    if let Some(prompt) = subcommand_cli.prompt {
         interactive.prompt = Some(prompt);
     }
 
     interactive
         .config_overrides
         .raw_overrides
-        .extend(resume_cli.config_overrides.raw_overrides);
+        .extend(subcommand_cli.config_overrides.raw_overrides);
 }
 
 fn print_completion(cmd: CompletionCommand) {
@@ -790,10 +856,10 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use codex_core::protocol::TokenUsage;
-    use codex_protocol::ConversationId;
+    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
 
-    fn finalize_from_args(args: &[&str]) -> TuiCli {
+    fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let MultitoolCli {
             interactive,
@@ -822,6 +888,28 @@ mod tests {
         )
     }
 
+    fn finalize_fork_from_args(args: &[&str]) -> TuiCli {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let MultitoolCli {
+            interactive,
+            config_overrides: root_overrides,
+            subcommand,
+            feature_toggles: _,
+        } = cli;
+
+        let Subcommand::Fork(ForkCommand {
+            session_id,
+            last,
+            all,
+            config_overrides: fork_cli,
+        }) = subcommand.expect("fork present")
+        else {
+            unreachable!()
+        };
+
+        finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+    }
+
     fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,
@@ -830,9 +918,7 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
-            conversation_id: conversation
-                .map(ConversationId::from_string)
-                .map(Result::unwrap),
+            thread_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
             update_action: None,
         }
     }
@@ -841,7 +927,7 @@ mod tests {
     fn format_exit_messages_skips_zero_usage() {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
-            conversation_id: None,
+            thread_id: None,
             update_action: None,
         };
         let lines = format_exit_messages(exit_info, false);
@@ -872,7 +958,8 @@ mod tests {
 
     #[test]
     fn resume_model_flag_applies_when_no_root_flags() {
-        let interactive = finalize_from_args(["codex", "resume", "-m", "gpt-5.1-test"].as_ref());
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "-m", "gpt-5.1-test"].as_ref());
 
         assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.resume_picker);
@@ -882,7 +969,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_none_and_not_last() {
-        let interactive = finalize_from_args(["codex", "resume"].as_ref());
+        let interactive = finalize_resume_from_args(["codex", "resume"].as_ref());
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -891,7 +978,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_last() {
-        let interactive = finalize_from_args(["codex", "resume", "--last"].as_ref());
+        let interactive = finalize_resume_from_args(["codex", "resume", "--last"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -900,7 +987,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_with_session_id() {
-        let interactive = finalize_from_args(["codex", "resume", "1234"].as_ref());
+        let interactive = finalize_resume_from_args(["codex", "resume", "1234"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
@@ -909,14 +996,14 @@ mod tests {
 
     #[test]
     fn resume_all_flag_sets_show_all() {
-        let interactive = finalize_from_args(["codex", "resume", "--all"].as_ref());
+        let interactive = finalize_resume_from_args(["codex", "resume", "--all"].as_ref());
         assert!(interactive.resume_picker);
         assert!(interactive.resume_show_all);
     }
 
     #[test]
     fn resume_merges_option_flags_and_full_auto() {
-        let interactive = finalize_from_args(
+        let interactive = finalize_resume_from_args(
             [
                 "codex",
                 "resume",
@@ -973,7 +1060,7 @@ mod tests {
 
     #[test]
     fn resume_merges_dangerously_bypass_flag() {
-        let interactive = finalize_from_args(
+        let interactive = finalize_resume_from_args(
             [
                 "codex",
                 "resume",
@@ -985,6 +1072,40 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn fork_picker_logic_none_and_not_last() {
+        let interactive = finalize_fork_from_args(["codex", "fork"].as_ref());
+        assert!(interactive.fork_picker);
+        assert!(!interactive.fork_last);
+        assert_eq!(interactive.fork_session_id, None);
+        assert!(!interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_picker_logic_last() {
+        let interactive = finalize_fork_from_args(["codex", "fork", "--last"].as_ref());
+        assert!(!interactive.fork_picker);
+        assert!(interactive.fork_last);
+        assert_eq!(interactive.fork_session_id, None);
+        assert!(!interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_picker_logic_with_session_id() {
+        let interactive = finalize_fork_from_args(["codex", "fork", "1234"].as_ref());
+        assert!(!interactive.fork_picker);
+        assert!(!interactive.fork_last);
+        assert_eq!(interactive.fork_session_id.as_deref(), Some("1234"));
+        assert!(!interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_all_flag_sets_show_all() {
+        let interactive = finalize_fork_from_args(["codex", "fork", "--all"].as_ref());
+        assert!(interactive.fork_picker);
+        assert!(interactive.fork_show_all);
     }
 
     #[test]

@@ -1,0 +1,20 @@
+FROM ubuntu:24.04
+
+# TODO(mbolin): Published to docker.io/mbolin491/codex-bazel:latest for
+# initial debugging, but we should publish to a more proper location.
+#
+# docker buildx create --use
+# docker buildx build --platform linux/amd64,linux/arm64 -f .github/workflows/Dockerfile.bazel -t mbolin491/codex-bazel:latest --push .
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl git python3 ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install dotslash.
+RUN curl -LSfs "https://github.com/facebook/dotslash/releases/download/v0.5.8/dotslash-ubuntu-22.04.$(uname -m).tar.gz" | tar fxz - -C /usr/local/bin
+
+# Ubuntu 24.04 ships with user 'ubuntu' already created with UID 1000.
+USER ubuntu
+
+WORKDIR /workspace

@@ -3,14 +3,16 @@ use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server;
-use app_test_support::create_mock_chat_completions_server_unchecked;
+use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
-use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -39,6 +41,76 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const TEST_ORIGINATOR: &str = "codex_vscode";
+
+#[tokio::test]
+async fn turn_start_sends_originator_header() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: TEST_ORIGINATOR.to_string(),
+            title: Some("Codex VS Code Extension".to_string()),
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    assert!(!requests.is_empty());
+    for request in requests {
+        let originator = request
+            .headers
+            .get("originator")
+            .expect("originator header missing");
+        assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
+    }
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
@@ -49,7 +121,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         create_final_assistant_message_sse_response("Done")?,
         create_final_assistant_message_sse_response("Done")?,
     ];
-    let server = create_mock_chat_completions_server_unchecked(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -156,7 +228,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     ];
     // Use the unchecked variant because the request payload includes a LocalImage
     // which the strict matcher does not currently cover.
-    let server = create_mock_chat_completions_server_unchecked(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -232,7 +304,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         )?,
         create_final_assistant_message_sse_response("done 2")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     // Default approval is untrusted to force elicitation on first turn.
     create_config_toml(codex_home.as_path(), &server.uri(), "untrusted")?;
 
@@ -356,7 +428,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
         )?,
         create_final_assistant_message_sse_response("done")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(codex_home.as_path(), &server.uri(), "untrusted")?;
 
     let mut mcp = McpProcess::new(codex_home.as_path()).await?;
@@ -426,7 +498,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(CommandExecutionRequestApprovalResponse {
-            decision: ApprovalDecision::Decline,
+            decision: CommandExecutionApprovalDecision::Decline,
         })?,
     )
     .await?;
@@ -502,7 +574,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         )?,
         create_final_assistant_message_sse_response("done second")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(&codex_home, &server.uri(), "untrusted")?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
@@ -553,6 +625,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
     )
     .await??;
+    mcp.clear_message_buffer();
 
     // second turn with workspace-write and second_cwd, ensure exec begins in second_cwd
     let second_turn = mcp
@@ -635,7 +708,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         create_apply_patch_sse_response(patch, "patch-call")?,
         create_final_assistant_message_sse_response("patch applied")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(&codex_home, &server.uri(), "untrusted")?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
@@ -722,7 +795,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(FileChangeRequestApprovalResponse {
-            decision: ApprovalDecision::Accept,
+            decision: FileChangeApprovalDecision::Accept,
         })?,
     )
     .await?;
@@ -783,6 +856,190 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let patch_1 = r#"*** Begin Patch
+*** Add File: README.md
++new line
+*** End Patch
+"#;
+    let patch_2 = r#"*** Begin Patch
+*** Update File: README.md
+@@
+-new line
++updated line
+*** End Patch
+"#;
+
+    let responses = vec![
+        create_apply_patch_sse_response(patch_1, "patch-call-1")?,
+        create_final_assistant_message_sse_response("patch 1 applied")?,
+        create_apply_patch_sse_response(patch_2, "patch-call-2")?,
+        create_final_assistant_message_sse_response("patch 2 applied")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    // First turn: expect FileChangeRequestApproval, respond with AcceptForSession, and verify the file exists.
+    let turn_1_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "apply patch 1".into(),
+            }],
+            cwd: Some(workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let turn_1_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_1_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn: turn_1 } = to_response::<TurnStartResponse>(turn_1_resp)?;
+
+    let started_file_change_1 = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::FileChange { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange { id, status, .. } = started_file_change_1 else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call-1");
+    assert_eq!(status, PatchApplyStatus::InProgress);
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::FileChangeRequestApproval { request_id, params } = server_req else {
+        panic!("expected FileChangeRequestApproval request")
+    };
+    assert_eq!(params.item_id, "patch-call-1");
+    assert_eq!(params.thread_id, thread.id);
+    assert_eq!(params.turn_id, turn_1.id);
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(FileChangeRequestApprovalResponse {
+            decision: FileChangeApprovalDecision::AcceptForSession,
+        })?,
+    )
+    .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/completed"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
+    let readme_path = workspace.join("README.md");
+    assert_eq!(std::fs::read_to_string(&readme_path)?, "new line\n");
+
+    // Second turn: apply a patch to the same file. Approval should be skipped due to AcceptForSession.
+    let turn_2_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "apply patch 2".into(),
+            }],
+            cwd: Some(workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_2_req)),
+    )
+    .await??;
+
+    let started_file_change_2 = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::FileChange { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange { id, status, .. } = started_file_change_2 else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call-2");
+    assert_eq!(status, PatchApplyStatus::InProgress);
+
+    // If the server incorrectly emits FileChangeRequestApproval, the helper below will error
+    // (it bails on unexpected JSONRPCMessage::Request), causing the test to fail.
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/completed"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
+    assert_eq!(std::fs::read_to_string(readme_path)?, "updated line\n");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -801,7 +1058,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         create_apply_patch_sse_response(patch, "patch-call")?,
         create_final_assistant_message_sse_response("patch declined")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(&codex_home, &server.uri(), "untrusted")?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
@@ -888,7 +1145,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(FileChangeRequestApprovalResponse {
-            decision: ApprovalDecision::Decline,
+            decision: FileChangeApprovalDecision::Decline,
         })?,
     )
     .await?;
@@ -939,7 +1196,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
         create_exec_command_sse_response("uexec-1")?,
         create_final_assistant_message_sse_response("done")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     let config_toml = codex_home.path().join("config.toml");
@@ -1078,7 +1335,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "chat"
+wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
+use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
@@ -23,10 +23,11 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::load_default_config_for_test;
-use crate::responses::get_responses_request_bodies;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
 use crate::wait_for_event;
+use wiremock::Match;
+use wiremock::matchers::path_regex;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
@@ -138,34 +139,30 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let conversation_manager = ConversationManager::with_models_provider_and_home(
+        let thread_manager = ThreadManager::with_models_provider_and_home(
             auth.clone(),
             config.model_provider.clone(),
             config.codex_home.clone(),
         );
-        let conversation_manager = Arc::new(conversation_manager);
+        let thread_manager = Arc::new(thread_manager);
 
         let new_conversation = match resume_from {
             Some(path) => {
                 let auth_manager = codex_core::AuthManager::from_auth_for_testing(auth);
-                conversation_manager
-                    .resume_conversation_from_rollout(config.clone(), path, auth_manager)
+                thread_manager
+                    .resume_thread_from_rollout(config.clone(), path, auth_manager)
                     .await?
             }
-            None => {
-                conversation_manager
-                    .new_conversation(config.clone())
-                    .await?
-            }
+            None => thread_manager.start_thread(config.clone()).await?,
         };
 
         Ok(TestCodex {
             home,
             cwd,
             config,
-            codex: new_conversation.conversation,
+            codex: new_conversation.thread,
             session_configured: new_conversation.session_configured,
-            conversation_manager,
+            thread_manager,
         })
     }
 
@@ -208,10 +205,10 @@ impl TestCodexBuilder {
 pub struct TestCodex {
     pub home: Arc<TempDir>,
     pub cwd: Arc<TempDir>,
-    pub codex: Arc<CodexConversation>,
+    pub codex: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
-    pub conversation_manager: Arc<ConversationManager>,
+    pub thread_manager: Arc<ThreadManager>,
 }
 
 impl TestCodex {
@@ -268,7 +265,7 @@ impl TestCodex {
             .await?;
 
         wait_for_event(&self.codex, |event| {
-            matches!(event, EventMsg::TaskComplete(_))
+            matches!(event, EventMsg::TurnComplete(_))
         })
         .await;
         Ok(())
@@ -326,7 +323,18 @@ impl TestCodexHarness {
     }
 
     pub async fn request_bodies(&self) -> Vec<Value> {
-        get_responses_request_bodies(&self.server).await
+        let path_matcher = path_regex(".*/responses$");
+        self.server
+            .received_requests()
+            .await
+            .expect("mock server should not fail")
+            .into_iter()
+            .filter(|req| path_matcher.matches(req))
+            .map(|req| {
+                req.body_json::<Value>()
+                    .expect("request body to be valid JSON")
+            })
+            .collect()
     }
 
     pub async fn function_call_output_value(&self, call_id: &str) -> Value {
