@@ -35,6 +35,8 @@ Priority order in the UI layer:
 
 1. Active modal/view gets the first chance to consume (`BottomPane::on_ctrl_c`).
    - If the modal handles it, the quit flow stops.
+   - When a modal/popup handles Ctrl+C, the quit shortcut is cleared so dismissing a modal cannot
+     accidentally prime a subsequent Ctrl+C to quit.
 2. If the user has already armed Ctrl+C and the 1 second window has not expired, the second Ctrl+C
    triggers shutdown-first quit immediately.
 3. Otherwise, `ChatWidget` arms Ctrl+C and shows the quit hint (`ctrl + c again to quit`) for

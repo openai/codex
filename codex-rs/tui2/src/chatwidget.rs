@@ -3551,8 +3551,15 @@ impl ChatWidget {
     /// quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
+        let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
-            self.arm_quit_shortcut(key);
+            if modal_or_popup_active {
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+                self.bottom_pane.clear_quit_shortcut_hint();
+            } else {
+                self.arm_quit_shortcut(key);
+            }
             return;
         }
 
