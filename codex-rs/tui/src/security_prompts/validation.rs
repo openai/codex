@@ -1,4 +1,4 @@
-pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
+pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
 pub(crate) const VALIDATION_PLAN_PROMPT_TEMPLATE: &str = r#"
 Validate that this bug exists.
 
@@ -18,6 +18,11 @@ For each finding listed in Context, emit exactly one JSON line keyed by its `id_
 - If you cannot validate safely (missing build instructions, unclear harness, requires complex dependencies), emit `tool:"none"` with a short `reason`.
 
 For python validations, the script must include both a CONTROL case and a TRIGGER case, and print the exact commands/inputs used with clear section headers.
+
+Exit codes for python validations:
+- Exit 0 only when the bug is observed.
+- Exit 1 when the target runs but the bug is NOT observed ("not validated").
+- Exit 2 when you cannot validate due to environment/build/platform issues ("not able to validate").
 
 Crash/memory-safety findings:
 - Use `crash_poc_category` from Context when present:

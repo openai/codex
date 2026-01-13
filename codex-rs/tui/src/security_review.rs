@@ -91,11 +91,14 @@ use url::Url;
 
 const VALIDATION_SUMMARY_GRAPHEMES: usize = 96;
 const VALIDATION_OUTPUT_GRAPHEMES: usize = 480;
+const VALIDATION_REPORT_OUTPUT_MAX_BYTES: usize = 512 * 1024;
 const VALIDATION_MAX_FINDINGS: usize = 8;
 const VALIDATION_PLAN_CONCURRENCY: usize = 8;
 const VALIDATION_REFINE_CONCURRENCY: usize = 8;
 const VALIDATION_EXEC_CONCURRENCY: usize = 8;
 const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
+const VALIDATION_BUILD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const VALIDATION_POC_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
 const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles.";
@@ -2234,7 +2237,12 @@ fn build_bug_records(
     (bugs, snapshots)
 }
 
-fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLinkInfo>) -> String {
+fn render_bug_sections(
+    snapshots: &[BugSnapshot],
+    git_link_info: Option<&GitLinkInfo>,
+    repo_root: Option<&Path>,
+    output_root: Option<&Path>,
+) -> String {
     let mut sections: Vec<String> = Vec::new();
     let mut ordered: Vec<&BugSnapshot> = snapshots.iter().collect();
     ordered.sort_by(|a, b| match (a.bug.risk_rank, b.bug.risk_rank) {
@@ -2408,16 +2416,14 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
         if !artifacts.is_empty() {
             composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
         }
-        if let Some(snippet) = snapshot
-            .bug
-            .validation
-            .output_snippet
-            .as_ref()
-            .filter(|snippet| !snippet.is_empty())
-        {
-            let label = if expects_asan { "ASan trace" } else { "Output" };
-            composed.push_str(&format!("- **{label}:**\n```\n"));
-            composed.push_str(snippet.trim());
+        if let Some(output) = build_validation_output_block(
+            &snapshot.bug.validation,
+            repo_root,
+            output_root,
+            expects_asan,
+        ) {
+            composed.push_str("- **Validation Output:**\n```\n");
+            composed.push_str(output.trim());
             composed.push_str("\n```\n");
         }
         if let Some(control_snippet) = snapshot
@@ -4539,7 +4545,12 @@ pub async fn run_security_review(
                     bugs_for_result = snapshot_bugs(&loaded);
                     bug_summary_table = make_bug_summary_table_from_bugs(&bugs_for_result);
                     report_sections_prefix = loaded.report_sections_prefix.clone();
-                    bugs_markdown = build_bugs_markdown(&loaded, git_link_info.as_ref());
+                    bugs_markdown = build_bugs_markdown(
+                        &loaded,
+                        git_link_info.as_ref(),
+                        Some(repo_path.as_path()),
+                        Some(request.output_root.as_path()),
+                    );
                     snapshot = Some(loaded);
                     skip_bug_analysis = true;
                 }
@@ -5139,7 +5150,12 @@ pub async fn run_security_review(
             bugs: bug_snapshots,
         };
 
-        bugs_markdown = build_bugs_markdown(&built_snapshot, git_link_info.as_ref());
+        bugs_markdown = build_bugs_markdown(
+            &built_snapshot,
+            git_link_info.as_ref(),
+            Some(repo_path.as_path()),
+            Some(request.output_root.as_path()),
+        );
         snapshot = Some(built_snapshot);
     }
 
@@ -8530,7 +8546,7 @@ mod bug_dedupe_tests {
         assert_eq!(ids, vec![1, 2, 3]);
 
         snapshot.bugs.reverse();
-        let markdown = build_bugs_markdown(&snapshot, None);
+        let markdown = build_bugs_markdown(&snapshot, None, None, None);
         let high = markdown
             .find("### [1] High last by old rank")
             .expect("high heading");
@@ -8600,9 +8616,51 @@ mod bug_dedupe_tests {
             ],
         };
 
-        let markdown = build_bugs_markdown(&snapshot, None);
+        let markdown = build_bugs_markdown(&snapshot, None, None, None);
         assert!(markdown.contains("High bug"));
         assert!(!markdown.contains("Ignored bug"));
+    }
+}
+
+#[cfg(test)]
+mod validation_classification_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn python_exit_code_2_maps_to_unable_to_validate() {
+        let status = classify_python_validation_status(false, Some(2), false, "", "some failure");
+        assert_eq!(status, BugValidationStatus::UnableToValidate);
+    }
+
+    #[test]
+    fn python_build_failures_map_to_unable_to_validate() {
+        let status = classify_python_validation_status(
+            false,
+            Some(1),
+            false,
+            "",
+            "error: could not compile `foo`",
+        );
+        assert_eq!(status, BugValidationStatus::UnableToValidate);
+    }
+
+    #[test]
+    fn python_expect_asan_requires_signature() {
+        let status = classify_python_validation_status(true, Some(0), true, "ok", "");
+        assert_eq!(status, BugValidationStatus::Failed);
+    }
+
+    #[test]
+    fn python_expect_asan_passes_when_signature_present_even_if_nonzero() {
+        let status = classify_python_validation_status(
+            true,
+            Some(1),
+            false,
+            "AddressSanitizer: heap-buffer-overflow",
+            "",
+        );
+        assert_eq!(status, BugValidationStatus::Passed);
     }
 }
 
@@ -15009,6 +15067,257 @@ fn contains_asan_signature(text: &str) -> bool {
         || lower.contains("use-after-free")
 }
 
+fn resolve_validation_display_path(
+    display_path: &str,
+    repo_root: Option<&Path>,
+) -> Option<PathBuf> {
+    let display_path = display_path.trim();
+    if display_path.is_empty() {
+        return None;
+    }
+
+    if let Some(tail) = display_path
+        .strip_prefix("~/")
+        .or_else(|| display_path.strip_prefix("~\\"))
+    {
+        return home_dir().map(|dir| dir.join(tail));
+    }
+
+    let path = PathBuf::from(display_path);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        repo_root.map(|root| root.join(path))
+    }
+}
+
+fn is_within_output_root(path: &Path, output_root: &Path) -> bool {
+    let Ok(candidate) = path.canonicalize() else {
+        return false;
+    };
+    let Ok(root) = output_root.canonicalize() else {
+        return false;
+    };
+    candidate.starts_with(root)
+}
+
+fn read_report_output_prefix(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes: Vec<u8> = Vec::new();
+    let max = VALIDATION_REPORT_OUTPUT_MAX_BYTES;
+    file.take((max + 1) as u64).read_to_end(&mut bytes).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let truncated = bytes.len() > max;
+    if truncated {
+        bytes.truncate(max);
+    }
+
+    let mut text = String::from_utf8_lossy(&bytes).to_string();
+    if text.trim().is_empty() {
+        return None;
+    }
+    if truncated {
+        text.push_str("\n\n… (truncated; see artifacts for full output)");
+    }
+    Some(text)
+}
+
+fn read_validation_artifact_for_report(
+    display_path: Option<&String>,
+    repo_root: Option<&Path>,
+    output_root: Option<&Path>,
+) -> Option<String> {
+    let display_path = display_path?;
+    let path = resolve_validation_display_path(display_path, repo_root)?;
+    let output_root = output_root?;
+    if !is_within_output_root(&path, output_root) {
+        return None;
+    }
+    read_report_output_prefix(&path)
+}
+
+fn build_validation_output_block(
+    validation: &BugValidationState,
+    repo_root: Option<&Path>,
+    output_root: Option<&Path>,
+    expects_asan: bool,
+) -> Option<String> {
+    let summary = validation
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty());
+
+    let stderr = read_validation_artifact_for_report(
+        validation.stderr_path.as_ref(),
+        repo_root,
+        output_root,
+    )
+    .and_then(|text| {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let stdout = read_validation_artifact_for_report(
+        validation.stdout_path.as_ref(),
+        repo_root,
+        output_root,
+    )
+    .and_then(|text| {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    let mut sections: Vec<String> = Vec::new();
+
+    if matches!(validation.status, BugValidationStatus::UnableToValidate)
+        && let Some(summary) = summary
+    {
+        sections.push(format!("Explanation: {summary}"));
+    }
+
+    match (stderr.as_ref(), stdout.as_ref()) {
+        (Some(stderr), Some(stdout)) => {
+            sections.push(format!("== STDERR ==\n{stderr}\n\n== STDOUT ==\n{stdout}"));
+        }
+        _ => {
+            let output = if expects_asan {
+                stderr.as_ref().or(stdout.as_ref())
+            } else if matches!(validation.status, BugValidationStatus::Passed) {
+                stdout.as_ref().or(stderr.as_ref())
+            } else {
+                stderr.as_ref().or(stdout.as_ref())
+            };
+            if let Some(output) = output {
+                sections.push(output.to_string());
+            }
+        }
+    }
+
+    if sections.is_empty() {
+        if let Some(snippet) = validation
+            .output_snippet
+            .as_deref()
+            .map(str::trim)
+            .filter(|snippet| !snippet.is_empty())
+        {
+            sections.push(snippet.to_string());
+        } else if matches!(validation.status, BugValidationStatus::UnableToValidate)
+            && let Some(summary) = summary
+        {
+            sections.push(format!("Explanation: {summary}"));
+        }
+    }
+
+    if sections.is_empty() {
+        None
+    } else {
+        Some(sections.join("\n\n"))
+    }
+}
+
+fn looks_like_build_failure(stdout: &str, stderr: &str) -> bool {
+    let stdout_lower = stdout.to_ascii_lowercase();
+    let stderr_lower = stderr.to_ascii_lowercase();
+    let sources = [stdout_lower.as_str(), stderr_lower.as_str()];
+
+    let tool_missing = [
+        "command not found: cargo",
+        "cargo: command not found",
+        "command not found: rustc",
+        "rustc: command not found",
+        "command not found: make",
+        "make: command not found",
+        "command not found: go",
+        "go: command not found",
+        "command not found: npm",
+        "npm: command not found",
+    ];
+
+    let compile_failures = [
+        "error: could not compile",
+        "could not compile",
+        "failed to compile",
+        "failed to run custom build command",
+        "linker ",
+        "linking with",
+        "ld: library not found",
+        "collect2: error",
+        "cmake error",
+        "ninja: build stopped",
+        "make: ***",
+    ];
+
+    let platform_mismatch = [
+        "unsupported platform",
+        "not supported on this platform",
+        "only supported on",
+        "requires macos",
+        "requires windows",
+        "requires linux",
+    ];
+
+    tool_missing
+        .iter()
+        .chain(compile_failures.iter())
+        .chain(platform_mismatch.iter())
+        .any(|needle| sources.iter().any(|source| source.contains(needle)))
+}
+
+fn classify_python_validation_status(
+    expect_asan: bool,
+    exit_code: Option<i32>,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+) -> BugValidationStatus {
+    let unable =
+        matches!(exit_code, Some(2)) || (!success && looks_like_build_failure(stdout, stderr));
+    if unable {
+        return BugValidationStatus::UnableToValidate;
+    }
+
+    let observed_asan =
+        expect_asan && (contains_asan_signature(stdout) || contains_asan_signature(stderr));
+    if expect_asan {
+        if observed_asan {
+            BugValidationStatus::Passed
+        } else {
+            BugValidationStatus::Failed
+        }
+    } else if success {
+        BugValidationStatus::Passed
+    } else {
+        BugValidationStatus::Failed
+    }
+}
+
+enum CommandOutput {
+    Output(std::process::Output),
+    TimedOut,
+}
+
+async fn command_output_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<CommandOutput, std::io::Error> {
+    command.kill_on_drop(true);
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(result) => result.map(CommandOutput::Output),
+        Err(_) => Ok(CommandOutput::TimedOut),
+    }
+}
+
 async fn write_validation_output_files(
     work_dir: &Path,
     repo_path: &Path,
@@ -15034,6 +15343,8 @@ async fn write_validation_output_files(
 fn build_bugs_markdown(
     snapshot: &SecurityReviewSnapshot,
     git_link_info: Option<&GitLinkInfo>,
+    repo_root: Option<&Path>,
+    output_root: Option<&Path>,
 ) -> String {
     let report_bugs: Vec<BugSnapshot> = snapshot
         .bugs
@@ -15051,7 +15362,7 @@ fn build_bugs_markdown(
     if let Some(table) = make_bug_summary_table_from_bugs(&bugs) {
         sections.push(table);
     }
-    let details = render_bug_sections(&report_bugs, git_link_info);
+    let details = render_bug_sections(&report_bugs, git_link_info, repo_root, output_root);
     if !details.trim().is_empty() {
         sections.push(details);
     }
@@ -15319,28 +15630,28 @@ async fn execute_bug_command(
             }
             validation.repro_steps.push(format!("Run: `{cmd}`"));
 
-            match command.output().await {
-                Ok(output) => {
+            match command_output_with_timeout(command, VALIDATION_POC_TIMEOUT).await {
+                Ok(CommandOutput::Output(output)) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                     let success = output.status.success();
                     let duration_label = fmt_elapsed_compact(duration.as_secs());
+                    let exit_code = output.status.code();
                     let observed_asan = plan.expect_asan
                         && (contains_asan_signature(&stdout) || contains_asan_signature(&stderr));
-                    validation.status = if plan.expect_asan {
-                        if observed_asan {
-                            BugValidationStatus::Passed
-                        } else {
-                            BugValidationStatus::Failed
-                        }
-                    } else if success {
-                        BugValidationStatus::Passed
-                    } else {
-                        BugValidationStatus::Failed
-                    };
+                    validation.status = classify_python_validation_status(
+                        plan.expect_asan,
+                        exit_code,
+                        success,
+                        &stdout,
+                        &stderr,
+                    );
 
-                    if plan.expect_asan {
+                    if matches!(validation.status, BugValidationStatus::UnableToValidate) {
+                        let summary_line = summarize_process_output(false, &stdout, &stderr);
+                        validation.summary = Some(format!("{summary_line} · {duration_label}"));
+                    } else if plan.expect_asan {
                         if observed_asan {
                             validation.summary =
                                 Some(format!("ASan signature observed · {duration_label}"));
@@ -15388,6 +15699,25 @@ async fn execute_bug_command(
                         "{}: python exited with status {}",
                         label, output.status
                     ));
+                }
+                Ok(CommandOutput::TimedOut) => {
+                    let duration = start.elapsed();
+                    let duration_label = fmt_elapsed_compact(duration.as_secs());
+                    validation.status = BugValidationStatus::Failed;
+                    validation.summary = Some(format!("Timed out after 60m · {duration_label}"));
+                    let timeout_note = format!("Timed out after 60m ({duration_label}).");
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        "",
+                        &timeout_note,
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
+                    logs.push(format!("{label}: python timed out after 60m"));
                 }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
@@ -15634,7 +15964,12 @@ pub(crate) async fn verify_bugs(
     }
 
     let git_link_info = build_git_link_info(&batch.repo_path).await;
-    let bugs_markdown = build_bugs_markdown(&snapshot, git_link_info.as_ref());
+    let bugs_markdown = build_bugs_markdown(
+        &snapshot,
+        git_link_info.as_ref(),
+        Some(batch.repo_path.as_path()),
+        batch.work_dir.parent(),
+    );
 
     tokio_fs::write(&batch.bugs_path, bugs_markdown.as_bytes())
         .await
@@ -16305,7 +16640,12 @@ async fn write_validation_snapshot_and_reports(
         })?;
 
     let git_link_info = build_git_link_info(&batch.repo_path).await;
-    let bugs_markdown = build_bugs_markdown(snapshot, git_link_info.as_ref());
+    let bugs_markdown = build_bugs_markdown(
+        snapshot,
+        git_link_info.as_ref(),
+        Some(batch.repo_path.as_path()),
+        batch.snapshot_path.parent().and_then(Path::parent),
+    );
     tokio_fs::write(&batch.bugs_path, bugs_markdown.as_bytes())
         .await
         .map_err(|err| BugVerificationFailure {
@@ -16691,6 +17031,280 @@ async fn run_asan_validation(
     if batch.requests.is_empty() {
         logs.push("No validation checks to execute.".to_string());
     } else {
+        #[derive(Clone, Debug)]
+        struct ValidationBuildFailure {
+            command: String,
+            summary: String,
+            stdout_path: String,
+            stderr_path: String,
+            output_snippet: Option<String>,
+        }
+
+        async fn run_validation_build_preflight(
+            repo_root: &Path,
+            work_dir: &Path,
+            progress_sender: &Option<AppEventSender>,
+            logs: &mut Vec<String>,
+        ) -> Option<ValidationBuildFailure> {
+            fn has_build_script(package_json: &Value) -> bool {
+                package_json
+                    .get("scripts")
+                    .and_then(Value::as_object)
+                    .and_then(|scripts| scripts.get("build"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.trim().is_empty())
+            }
+
+            fn file_stem_for_command(program: &str, args: &[String]) -> String {
+                let mut stem = format!("preflight_{program}");
+                for arg in args.iter().take(3) {
+                    stem.push('_');
+                    stem.push_str(arg);
+                }
+                stem.chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                    .collect()
+            }
+
+            let has_cargo = repo_root.join("Cargo.toml").exists();
+            let has_go = repo_root.join("go.mod").exists();
+            let has_package_json = repo_root.join("package.json").exists();
+
+            let mut attempts: Vec<Vec<(String, Vec<String>)>> = Vec::new();
+            if has_cargo {
+                attempts.push(vec![(
+                    "cargo".to_string(),
+                    vec!["build".to_string(), "--locked".to_string()],
+                )]);
+                attempts.push(vec![("cargo".to_string(), vec!["build".to_string()])]);
+            } else if has_go {
+                attempts.push(vec![(
+                    "go".to_string(),
+                    vec!["build".to_string(), "./...".to_string()],
+                )]);
+            } else if has_package_json {
+                let package_json = tokio_fs::read_to_string(repo_root.join("package.json"))
+                    .await
+                    .ok()
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+                if package_json.as_ref().is_some_and(has_build_script) {
+                    let install_cmd = if repo_root.join("package-lock.json").exists() {
+                        vec!["ci".to_string()]
+                    } else {
+                        vec!["install".to_string()]
+                    };
+                    attempts.push(vec![
+                        ("npm".to_string(), install_cmd),
+                        (
+                            "npm".to_string(),
+                            vec!["run".to_string(), "build".to_string()],
+                        ),
+                    ]);
+                }
+            }
+
+            if attempts.is_empty() {
+                return None;
+            }
+
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                "Validation preflight: compiling the target (up to 60m)...".to_string(),
+            );
+
+            let preflight_started = Instant::now();
+            let mut last_failure: Option<ValidationBuildFailure> = None;
+            for attempt in attempts {
+                let mut attempt_failure: Option<ValidationBuildFailure> = None;
+                for (program, args) in &attempt {
+                    let mut command = Command::new(program);
+                    command.args(args).current_dir(repo_root);
+                    let command_label = format!(
+                        "{} {}",
+                        program,
+                        args.iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                    push_progress_log(
+                        progress_sender,
+                        &None,
+                        logs,
+                        format!("Run: `{command_label}`"),
+                    );
+
+                    let remaining =
+                        VALIDATION_BUILD_TIMEOUT.saturating_sub(preflight_started.elapsed());
+                    if remaining.is_zero() {
+                        let timeout_note = "Timed out after 60m.".to_string();
+                        let file_stem = file_stem_for_command(program, args);
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            work_dir,
+                            repo_root,
+                            &file_stem,
+                            "build",
+                            "",
+                            &timeout_note,
+                        )
+                        .await;
+                        attempt_failure = Some(ValidationBuildFailure {
+                            command: command_label,
+                            summary: timeout_note,
+                            stdout_path,
+                            stderr_path,
+                            output_snippet: None,
+                        });
+                        break;
+                    }
+
+                    let start = Instant::now();
+                    match command_output_with_timeout(command, remaining).await {
+                        Ok(CommandOutput::Output(output)) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                            let success = output.status.success();
+                            if !success {
+                                let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                                let summary_line =
+                                    summarize_process_output(false, &stdout, &stderr);
+                                let summary = format!("{summary_line} · {duration_label}");
+                                let snippet = if stderr.trim().is_empty() {
+                                    stdout.trim()
+                                } else {
+                                    stderr.trim()
+                                };
+                                let output_snippet = if snippet.is_empty() {
+                                    None
+                                } else {
+                                    Some(truncate_text(snippet, VALIDATION_OUTPUT_GRAPHEMES))
+                                };
+                                let file_stem = file_stem_for_command(program, args);
+                                let (stdout_path, stderr_path) = write_validation_output_files(
+                                    work_dir, repo_root, &file_stem, "build", &stdout, &stderr,
+                                )
+                                .await;
+                                attempt_failure = Some(ValidationBuildFailure {
+                                    command: command_label,
+                                    summary,
+                                    stdout_path,
+                                    stderr_path,
+                                    output_snippet,
+                                });
+                                break;
+                            }
+                        }
+                        Ok(CommandOutput::TimedOut) => {
+                            let timeout_note = "Timed out after 60m.".to_string();
+                            let file_stem = file_stem_for_command(program, args);
+                            let (stdout_path, stderr_path) = write_validation_output_files(
+                                work_dir,
+                                repo_root,
+                                &file_stem,
+                                "build",
+                                "",
+                                &timeout_note,
+                            )
+                            .await;
+                            attempt_failure = Some(ValidationBuildFailure {
+                                command: command_label,
+                                summary: timeout_note,
+                                stdout_path,
+                                stderr_path,
+                                output_snippet: None,
+                            });
+                            break;
+                        }
+                        Err(err) => {
+                            let message = format!("Failed to run `{command_label}`: {err}");
+                            let file_stem = file_stem_for_command(program, args);
+                            let (stdout_path, stderr_path) = write_validation_output_files(
+                                work_dir, repo_root, &file_stem, "build", "", &message,
+                            )
+                            .await;
+                            attempt_failure = Some(ValidationBuildFailure {
+                                command: command_label,
+                                summary: message,
+                                stdout_path,
+                                stderr_path,
+                                output_snippet: None,
+                            });
+                            break;
+                        }
+                    }
+                }
+
+                if attempt_failure.is_none() {
+                    push_progress_log(
+                        progress_sender,
+                        &None,
+                        logs,
+                        "Validation preflight succeeded.".to_string(),
+                    );
+                    return None;
+                }
+
+                last_failure = attempt_failure;
+            }
+
+            last_failure
+        }
+
+        if let Some(build_failure) = run_validation_build_preflight(
+            batch.repo_path.as_path(),
+            &batch.work_dir,
+            &progress_sender,
+            &mut logs,
+        )
+        .await
+        {
+            let note = format!(
+                "Validation preflight failed; recording UnableToValidate statuses: {}",
+                build_failure.summary
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(note.clone()));
+            }
+            logs.push(note);
+
+            for request in &batch.requests {
+                if let Some(index) = find_bug_index(&snapshot, request.id) {
+                    let validation = &mut snapshot.bugs[index].bug.validation;
+                    if !matches!(validation.status, BugValidationStatus::Pending) {
+                        continue;
+                    }
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    validation.tool = Some("python".to_string());
+                    validation.target = None;
+                    validation.summary = Some(
+                        format!(
+                            "Unable to validate (build failed): {}. Command: `{}`.",
+                            build_failure.summary, build_failure.command
+                        )
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string(),
+                    );
+                    if let Some(snippet) = build_failure.output_snippet.as_ref() {
+                        validation.output_snippet = Some(snippet.clone());
+                    }
+                    validation
+                        .repro_steps
+                        .push(format!("Run: `{}`", build_failure.command));
+                    validation.stdout_path = Some(build_failure.stdout_path.clone());
+                    validation.stderr_path = Some(build_failure.stderr_path.clone());
+                    validation.run_at = Some(run_at);
+                }
+            }
+
+            let _ = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await;
+            return Ok(());
+        }
+
         if let Some(tx) = progress_sender.as_ref() {
             tx.send(AppEvent::SecurityReviewLog(
                 "Executing validation checks...".to_string(),
