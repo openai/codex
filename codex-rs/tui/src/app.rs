@@ -20,7 +20,7 @@ use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
-use crate::resume_picker::ResumeSelection;
+use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -340,7 +340,7 @@ impl App {
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
-        resume_selection: ResumeSelection,
+        session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
     ) -> Result<AppExitInfo> {
@@ -373,8 +373,8 @@ impl App {
         }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-        let mut chat_widget = match resume_selection {
-            ResumeSelection::StartFresh | ResumeSelection::Exit => {
+        let mut chat_widget = match session_selection {
+            SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -390,12 +390,13 @@ impl App {
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
-            ResumeSelection::Resume(path) => {
+            SessionSelection::Resume(path) => {
                 let resumed = thread_manager
                     .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
                     .await
                     .wrap_err_with(|| {
-                        format!("Failed to resume session from {}", path.display())
+                        let path_display = path.display();
+                        format!("Failed to resume session from {path_display}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -411,6 +412,29 @@ impl App {
                     model: model.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
+            }
+            SessionSelection::Fork(path) => {
+                let forked = thread_manager
+                    .fork_thread(usize::MAX, config.clone(), path.clone())
+                    .await
+                    .wrap_err_with(|| {
+                        let path_display = path.display();
+                        format!("Failed to fork session from {path_display}")
+                    })?;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                    models_manager: thread_manager.get_models_manager(),
+                    feedback: feedback.clone(),
+                    is_first_run,
+                    model: model.clone(),
+                };
+                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
         };
 
@@ -592,7 +616,7 @@ impl App {
                 )
                 .await?
                 {
-                    ResumeSelection::Resume(path) => {
+                    SessionSelection::Resume(path) => {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.thread_id(),
@@ -641,14 +665,85 @@ impl App {
                                 }
                             }
                             Err(err) => {
+                                let path_display = path.display();
                                 self.chat_widget.add_error_message(format!(
-                                    "Failed to resume session from {}: {err}",
-                                    path.display()
+                                    "Failed to resume session from {path_display}: {err}"
                                 ));
                             }
                         }
                     }
-                    ResumeSelection::Exit | ResumeSelection::StartFresh => {}
+                    SessionSelection::Exit
+                    | SessionSelection::StartFresh
+                    | SessionSelection::Fork(_) => {}
+                }
+
+                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenForkPicker => {
+                match crate::resume_picker::run_fork_picker(
+                    tui,
+                    &self.config.codex_home,
+                    &self.config.model_provider_id,
+                    false,
+                )
+                .await?
+                {
+                    SessionSelection::Fork(path) => {
+                        let summary = session_summary(
+                            self.chat_widget.token_usage(),
+                            self.chat_widget.thread_id(),
+                        );
+                        match self
+                            .server
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                            .await
+                        {
+                            Ok(forked) => {
+                                self.shutdown_current_thread().await;
+                                let init = crate::chatwidget::ChatWidgetInit {
+                                    config: self.config.clone(),
+                                    frame_requester: tui.frame_requester(),
+                                    app_event_tx: self.app_event_tx.clone(),
+                                    initial_prompt: None,
+                                    initial_images: Vec::new(),
+                                    enhanced_keys_supported: self.enhanced_keys_supported,
+                                    auth_manager: self.auth_manager.clone(),
+                                    models_manager: self.server.get_models_manager(),
+                                    feedback: self.feedback.clone(),
+                                    is_first_run: false,
+                                    model: self.current_model.clone(),
+                                };
+                                self.chat_widget = ChatWidget::new_from_existing(
+                                    init,
+                                    forked.thread,
+                                    forked.session_configured,
+                                );
+                                self.current_model = model_info.slug.clone();
+                                if let Some(summary) = summary {
+                                    let mut lines: Vec<Line<'static>> =
+                                        vec![summary.usage_line.clone().into()];
+                                    if let Some(command) = summary.resume_command {
+                                        let spans = vec![
+                                            "To continue this session, run ".into(),
+                                            command.cyan(),
+                                        ];
+                                        lines.push(spans.into());
+                                    }
+                                    self.chat_widget.add_plain_history_lines(lines);
+                                }
+                            }
+                            Err(err) => {
+                                let path_display = path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to fork session from {path_display}: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    SessionSelection::Exit
+                    | SessionSelection::StartFresh
+                    | SessionSelection::Resume(_) => {}
                 }
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.

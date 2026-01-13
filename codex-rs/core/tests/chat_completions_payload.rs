@@ -98,7 +98,8 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         summary,
         conversation_id,
         SessionSource::Exec,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = input;
