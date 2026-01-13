@@ -280,6 +280,15 @@ pub struct Config {
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
+    /// Optional template for the MCP OAuth `redirect_uri`.
+    ///
+    /// By default Codex uses a `http://127.0.0.1:{port}/callback` style URL that only works
+    /// when Codex and the browser run on the same machine. When this field is set, `{port}`
+    /// will be replaced with the actual callback port and the resulting URL will be sent as
+    /// `redirect_uri` to the MCP server, allowing non-localhost callbacks on remotes, when
+    /// used in conjunction with port forwarding.
+    pub mcp_oauth_callback_url_template: Option<String>,
+
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
@@ -848,10 +857,18 @@ pub struct ConfigToml {
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
-
     /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
+
+    /// Optional template for the MCP OAuth `redirect_uri`.
+    ///
+    /// By default Codex uses a `http://127.0.0.1:{port}/callback` style URL that only works
+    /// when Codex and the browser run on the same machine. When this field is set, `{port}`
+    /// will be replaced with the actual callback port and the resulting URL will be sent as
+    /// `redirect_uri` to the MCP server, allowing non-localhost callbacks on remotes, when
+    /// used in conjunction with port forwarding.
+    pub mcp_oauth_callback_url_template: Option<String>,
 
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
@@ -1491,6 +1508,7 @@ impl Config {
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
+            mcp_oauth_callback_url_template: cfg.mcp_oauth_callback_url_template,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
@@ -3597,6 +3615,7 @@ model_verbosity = "high"
                 mcp_servers: Constrained::allow_any(HashMap::new()),
                 mcp_oauth_credentials_store_mode: Default::default(),
                 mcp_oauth_callback_port: None,
+                mcp_oauth_callback_url_template: None,
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
@@ -3684,6 +3703,7 @@ model_verbosity = "high"
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
+            mcp_oauth_callback_url_template: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -3786,6 +3806,7 @@ model_verbosity = "high"
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
+            mcp_oauth_callback_url_template: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -3874,6 +3895,7 @@ model_verbosity = "high"
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
+            mcp_oauth_callback_url_template: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -4212,6 +4234,41 @@ mcp_oauth_callback_port = 5678
         )?;
 
         assert_eq!(config.mcp_oauth_callback_port, Some(5678));
+        Ok(())
+    }
+
+    #[test]
+    fn config_toml_deserializes_mcp_oauth_callback_url_template() {
+        let toml =
+            r#"mcp_oauth_callback_url_template = "https://example.com/proxy/{port}/callback""#;
+        let cfg: ConfigToml = toml::from_str(toml)
+            .expect("TOML deserialization should succeed for callback URL template");
+        assert_eq!(
+            cfg.mcp_oauth_callback_url_template,
+            Some("https://example.com/proxy/{port}/callback".to_string())
+        );
+    }
+
+    #[test]
+    fn config_loads_mcp_oauth_callback_url_template_from_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let toml = r#"
+model = "gpt-5.1"
+mcp_oauth_callback_url_template = "https://example.com/proxy/{port}/callback"
+"#;
+        let cfg: ConfigToml = toml::from_str(toml)
+            .expect("TOML deserialization should succeed for callback URL template");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.mcp_oauth_callback_url_template,
+            Some("https://example.com/proxy/{port}/callback".to_string())
+        );
         Ok(())
     }
 
