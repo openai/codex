@@ -2135,17 +2135,6 @@ impl ChatWidget {
             self.add_to_history(history_cell::new_user_prompt(message.to_string()));
         }
 
-        // If steer is enabled and a task is running, show hint about queuing with Tab
-        if self.config.features.enabled(Feature::Steer) && self.bottom_pane.is_task_running() {
-            use crate::key_hint;
-            use ratatui::text::Line;
-            let hint_line = Line::from(vec![
-                "You can queue messages by pressing ".dim(),
-                key_hint::plain(KeyCode::Tab).into(),
-            ]);
-            self.add_to_history(history_cell::PlainHistoryCell::new(vec![hint_line]));
-        }
-
         self.needs_final_message_separator = false;
     }
 
