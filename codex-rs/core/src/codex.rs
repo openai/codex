@@ -682,7 +682,7 @@ impl Session {
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
             default_shell.shell_snapshot =
-                ShellSnapshot::try_new(&config.codex_home, &default_shell)
+                ShellSnapshot::try_new(&config.codex_home, conversation_id, &default_shell)
                     .await
                     .map(Arc::new);
         }
