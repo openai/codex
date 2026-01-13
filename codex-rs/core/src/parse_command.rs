@@ -1622,33 +1622,92 @@ fn skip_flag_values<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<&'a
 }
 
 fn first_non_flag_operand(args: &[String], flags_with_vals: &[&str]) -> Option<String> {
-    let candidates = skip_flag_values(args, flags_with_vals);
-    candidates
+    positional_operands(args, flags_with_vals)
         .into_iter()
-        .find(|arg| !arg.starts_with('-'))
+        .next()
         .cloned()
 }
 
 fn single_non_flag_operand(args: &[String], flags_with_vals: &[&str]) -> Option<String> {
-    let candidates = skip_flag_values(args, flags_with_vals);
-    let mut iter = candidates.into_iter().filter(|arg| !arg.starts_with('-'));
-    let first = iter.next()?;
-    if iter.next().is_some() {
+    let mut operands = positional_operands(args, flags_with_vals).into_iter();
+    let first = operands.next()?;
+    if operands.next().is_some() {
         return None;
     }
     Some(first.clone())
 }
 
+fn positional_operands<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<&'a String> {
+    let mut out = Vec::new();
+    let mut after_double_dash = false;
+    let mut skip_next = false;
+    for (i, arg) in args.iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if after_double_dash {
+            out.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            after_double_dash = true;
+            continue;
+        }
+        if arg.starts_with("--") && arg.contains('=') {
+            continue;
+        }
+        if flags_with_vals.contains(&arg.as_str()) {
+            if i + 1 < args.len() {
+                skip_next = true;
+            }
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        out.push(arg);
+    }
+    out
+}
+
 fn parse_grep_like(main_cmd: &[String], args: &[String]) -> ParsedCommand {
     let args_no_connector = trim_at_connector(args);
-    let non_flags: Vec<&String> = args_no_connector
-        .iter()
-        .filter(|p| !p.starts_with('-'))
-        .collect();
+    let mut operands = Vec::new();
+    let mut after_double_dash = false;
+    let mut iter = args_no_connector.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if after_double_dash {
+            operands.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            after_double_dash = true;
+            continue;
+        }
+        match arg.as_str() {
+            "-e" | "--regexp" => {
+                if let Some(pat) = iter.next() {
+                    operands.push(pat);
+                }
+                continue;
+            }
+            "-f" | "--file" | "-m" | "--max-count" | "-C" | "--context" | "-A"
+            | "--after-context" | "-B" | "--before-context" => {
+                iter.next();
+                continue;
+            }
+            _ => {}
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        operands.push(arg);
+    }
     // Do not shorten the query: grep patterns may legitimately contain slashes
     // and should be preserved verbatim. Only paths should be shortened.
-    let query = non_flags.first().cloned().map(String::from);
-    let path = non_flags.get(1).map(|s| short_display_path(s));
+    let query = operands.first().cloned().map(String::from);
+    let path = operands.get(1).map(|s| short_display_path(s));
     ParsedCommand::Search {
         cmd: shlex_join(main_cmd),
         query,
