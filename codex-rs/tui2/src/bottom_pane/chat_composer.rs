@@ -3280,9 +3280,12 @@ mod tests {
             .paste_burst
             .begin_with_retro_grabbed(String::new(), Instant::now());
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        for ch in ['h', 'i'] {
+            composer.paste_burst.force_active_for_test(Instant::now());
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
 
+        composer.paste_burst.force_active_for_test(Instant::now());
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(
@@ -3291,6 +3294,7 @@ mod tests {
         );
 
         for ch in ['t', 'h', 'e', 'r', 'e'] {
+            composer.paste_burst.force_active_for_test(Instant::now());
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
 
@@ -5341,6 +5345,7 @@ mod tests {
 
         let count = LARGE_PASTE_CHAR_THRESHOLD + 1; // > threshold to trigger placeholder
         for _ in 0..count {
+            composer.paste_burst.force_active_for_test(Instant::now());
             let _ =
                 composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         }

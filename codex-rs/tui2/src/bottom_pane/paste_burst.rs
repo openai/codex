@@ -347,6 +347,15 @@ impl PasteBurst {
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
     }
 
+    #[cfg(test)]
+    pub(crate) fn force_active_for_test(&mut self, now: Instant) {
+        self.active = true;
+        self.pending_first_char = None;
+        self.last_plain_char_time = Some(now);
+        self.consecutive_plain_char_burst = PASTE_BURST_MIN_CHARS;
+        self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+    }
+
     /// Append a char into the burst buffer.
     pub fn append_char_to_buffer(&mut self, ch: char, now: Instant) {
         self.buffer.push(ch);
