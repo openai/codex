@@ -4772,6 +4772,11 @@ function applyGlobalNotification(
         title: "Thread started",
         text: lines.join("\n") || "(no details)",
       });
+
+      if (cwd && effectiveBackendKey) {
+        void refreshMcpConfiguredServersForBackend(effectiveBackendKey, cwd);
+      }
+
       chatView?.refresh();
       return;
     }
@@ -4887,6 +4892,33 @@ function applyGlobalNotification(
       chatView?.refresh();
       return;
     }
+  }
+}
+
+async function refreshMcpConfiguredServersForBackend(
+  backendKey: string,
+  cwd: string,
+): Promise<void> {
+  if (!backendManager) return;
+
+  try {
+    const response = await backendManager.listMcpServerStatus(backendKey, cwd);
+    const nextNames = response.data.map((s) => s.name).filter(Boolean);
+
+    const previous = mcpStatusByBackendKey.get(backendKey) ?? new Map();
+    const next = new Map<string, string>();
+    for (const name of nextNames) {
+      next.set(name, previous.get(name) ?? "configured");
+    }
+
+    mcpStatusByBackendKey.set(backendKey, next);
+    updateThreadStartedBlocks();
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.stack || e.message : `Unknown error: ${String(e)}`;
+    outputChannel?.appendLine(
+      `[mcp] Failed to list configured MCP servers (backend=${backendKey}, cwd=${cwd}): ${msg}`,
+    );
   }
 }
 

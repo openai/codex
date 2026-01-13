@@ -26,6 +26,8 @@ import type { ThreadRewindParams } from "../generated/v2/ThreadRewindParams";
 import type { ThreadRewindResponse } from "../generated/v2/ThreadRewindResponse";
 import type { ThreadListParams } from "../generated/v2/ThreadListParams";
 import type { ThreadListResponse } from "../generated/v2/ThreadListResponse";
+import type { ListMcpServerStatusParams } from "../generated/v2/ListMcpServerStatusParams";
+import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerStatusResponse";
 import type { GetAccountParams } from "../generated/v2/GetAccountParams";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
@@ -212,6 +214,15 @@ export class BackendProcess implements vscode.Disposable {
       },
     };
     return this.rpc.request<ThreadListResponse>(request);
+  }
+
+  public async mcpServerStatusList(
+    params: ListMcpServerStatusParams,
+  ): Promise<ListMcpServerStatusResponse> {
+    return this.rpc.request<ListMcpServerStatusResponse>({
+      method: "mcpServerStatus/list",
+      params,
+    });
   }
 
   public async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {

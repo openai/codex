@@ -21,6 +21,7 @@ import type { SkillsListEntry } from "../generated/v2/SkillsListEntry";
 import type { Thread } from "../generated/v2/Thread";
 import type { AnyServerNotification } from "./types";
 import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchResponse";
+import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerStatusResponse";
 
 type ModelSettings = {
   model: string | null;
@@ -197,6 +198,23 @@ export class BackendManager implements vscode.Disposable {
       startPromise.finally(() => this.startInFlight.delete(key)),
     );
     await startPromise;
+  }
+
+  public async listMcpServerStatus(
+    backendKey: string,
+    cwd: string,
+  ): Promise<ListMcpServerStatusResponse> {
+    const proc = this.processes.get(backendKey);
+    if (!proc) {
+      throw new Error(
+        `Backend process not running for backendKey=${backendKey} (cannot list MCP servers)`,
+      );
+    }
+    return await this.withTimeout(
+      "mcpServerStatus/list",
+      proc.mcpServerStatusList({ cursor: null, limit: null, cwd }),
+      30_000,
+    );
   }
 
   private async withTimeout<T>(

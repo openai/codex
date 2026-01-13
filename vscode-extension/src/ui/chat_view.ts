@@ -202,7 +202,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   >();
   private readonly pendingAskUserQuestionsByKey = new Map<
     string,
-    { resolve: (resp: AskUserQuestionResponse) => void; reject: (err: unknown) => void }
+    {
+      resolve: (resp: AskUserQuestionResponse) => void;
+      reject: (err: unknown) => void;
+    }
   >();
 
   public insertIntoInput(text: string): void {
@@ -260,12 +263,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       );
     }
 
-    const withTimeout = async <T>(p: Promise<T>, timeoutMs: number): Promise<T> => {
+    const withTimeout = async <T>(
+      p: Promise<T>,
+      timeoutMs: number,
+    ): Promise<T> => {
       if (timeoutMs <= 0) return await p;
       return await Promise.race([
         p,
         new Promise<T>((_, reject) => {
-          setTimeout(() => reject(new Error("Timed out waiting for chat view")), timeoutMs);
+          setTimeout(
+            () => reject(new Error("Timed out waiting for chat view")),
+            timeoutMs,
+          );
         }),
       ]);
     };
@@ -278,7 +287,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     const p = new Promise<AskUserQuestionResponse>((resolve, reject) => {
-      this.pendingAskUserQuestionsByKey.set(args.requestKey, { resolve, reject });
+      this.pendingAskUserQuestionsByKey.set(args.requestKey, {
+        resolve,
+        reject,
+      });
     });
 
     try {
@@ -1017,35 +1029,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.statePostDirty = false;
     this.statePostInFlight = true;
     const seq = (this.lastStatePostSeq += 1);
-	    if (this.stateAckTimeout) clearTimeout(this.stateAckTimeout);
-	    // If the webview stops acknowledging state updates (e.g. render stuck),
-	    // do not deadlock future refreshes; keep going.
-	    this.stateAckTimeout = setTimeout(() => {
-	      this.stateAckTimeout = null;
-	      if (!this.view) return;
-	      if (!this.statePostInFlight) return;
-	      this.statePostInFlight = false;
-	      if (this.statePostDirty) this.postControlState();
-	    }, 2000);
+    if (this.stateAckTimeout) clearTimeout(this.stateAckTimeout);
+    // If the webview stops acknowledging state updates (e.g. render stuck),
+    // do not deadlock future refreshes; surface the issue and keep going.
+    this.stateAckTimeout = setTimeout(() => {
+      this.stateAckTimeout = null;
+      if (!this.view) return;
+      if (!this.statePostInFlight) return;
+      this.statePostInFlight = false;
+      this.onUiError(
+        `Webview did not acknowledge state update (seq=${String(seq)}) within 2000ms; continuing.`,
+      );
+      if (this.statePostDirty) this.postControlState();
+    }, 2000);
     const full = this.getState();
-	    const controlState = {
-	      globalBlocks: full.globalBlocks,
-	      capabilities: full.capabilities,
-	      workspaceColorOverrides: full.workspaceColorOverrides,
-	      sessions: full.sessions,
-	      activeSession: full.activeSession,
-	      unreadSessionIds: full.unreadSessionIds,
-	      runningSessionIds: full.runningSessionIds,
-	      latestDiff: full.latestDiff,
-	      sending: full.sending,
-	      reloading: full.reloading,
-	      statusText: full.statusText,
-	      statusTooltip: full.statusTooltip,
-	      modelState: full.modelState,
-	      models: full.models,
-	      approvals: full.approvals,
-	      customPrompts: full.customPrompts,
-	    };
+    const controlState = {
+      globalBlocks: full.globalBlocks,
+      capabilities: full.capabilities,
+      workspaceColorOverrides: full.workspaceColorOverrides,
+      sessions: full.sessions,
+      activeSession: full.activeSession,
+      unreadSessionIds: full.unreadSessionIds,
+      runningSessionIds: full.runningSessionIds,
+      latestDiff: full.latestDiff,
+      sending: full.sending,
+      reloading: full.reloading,
+      statusText: full.statusText,
+      statusTooltip: full.statusTooltip,
+      modelState: full.modelState,
+      models: full.models,
+      approvals: full.approvals,
+      customPrompts: full.customPrompts,
+    };
     void this.view.webview
       .postMessage({ type: "controlState", seq, state: controlState })
       .then(undefined, (err) => {
