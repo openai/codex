@@ -127,31 +127,104 @@ impl GitInfoProvider for RealGitInfo {
     }
 }
 
-async fn resolve_git_ref(branch_override: Option<&String>) -> String {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitRefResolution {
+    Override,
+    CurrentBranch,
+    DefaultBranch,
+    Fallback,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedGitRef {
+    name: String,
+    resolution: GitRefResolution,
+}
+
+async fn resolve_git_ref(branch_override: Option<&String>) -> ResolvedGitRef {
     resolve_git_ref_with_git_info(branch_override, &RealGitInfo).await
 }
 
 async fn resolve_git_ref_with_git_info(
     branch_override: Option<&String>,
     git_info: &impl GitInfoProvider,
-) -> String {
+) -> ResolvedGitRef {
     if let Some(branch) = branch_override {
         let branch = branch.trim();
         if !branch.is_empty() {
-            return branch.to_string();
+            return ResolvedGitRef {
+                name: branch.to_string(),
+                resolution: GitRefResolution::Override,
+            };
         }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
         if let Some(branch) = git_info.current_branch_name(&cwd).await {
-            branch
+            ResolvedGitRef {
+                name: branch,
+                resolution: GitRefResolution::CurrentBranch,
+            }
         } else if let Some(branch) = git_info.default_branch_name(&cwd).await {
-            branch
+            ResolvedGitRef {
+                name: branch,
+                resolution: GitRefResolution::DefaultBranch,
+            }
         } else {
-            "main".to_string()
+            ResolvedGitRef {
+                name: "main".to_string(),
+                resolution: GitRefResolution::Fallback,
+            }
         }
     } else {
-        "main".to_string()
+        ResolvedGitRef {
+            name: "main".to_string(),
+            resolution: GitRefResolution::Fallback,
+        }
+    }
+}
+
+fn is_missing_git_ref_error(err: &codex_cloud_tasks_client::CloudTaskError) -> bool {
+    let msg = err.to_string();
+    msg.contains("Provided git ref") && msg.contains("does not exist")
+}
+
+async fn create_task_with_git_ref_fallback(
+    backend: &dyn codex_cloud_tasks_client::CloudBackend,
+    env_id: &str,
+    prompt: &str,
+    git_ref: ResolvedGitRef,
+    qa_mode: bool,
+    best_of_n: usize,
+) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask> {
+    match backend
+        .create_task(env_id, prompt, &git_ref.name, qa_mode, best_of_n)
+        .await
+    {
+        Ok(created) => Ok(created),
+        Err(main_err) => {
+            // If we couldn't determine the branch locally, try the other common default branch
+            // name before giving up.
+            if git_ref.resolution == GitRefResolution::Fallback
+                && git_ref.name == "main"
+                && is_missing_git_ref_error(&main_err)
+            {
+                append_error_log(format!(
+                    "new_task: git ref fallback 'main' failed; retrying with 'master': {main_err}"
+                ));
+                match backend
+                    .create_task(env_id, prompt, "master", qa_mode, best_of_n)
+                    .await
+                {
+                    Ok(created) => Ok(created),
+                    Err(master_err) => Err(codex_cloud_tasks_client::CloudTaskError::Msg(format!(
+                        "failed to create cloud task on git refs 'main' and 'master'. main error: {main_err}; master error: {master_err}"
+                    ))),
+                }
+            } else {
+                Err(main_err)
+            }
+        }
     }
 }
 
@@ -166,11 +239,11 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let prompt = resolve_query_input(query)?;
     let env_id = resolve_environment_id(&ctx, &environment).await?;
     let git_ref = resolve_git_ref(branch.as_ref()).await;
-    let created = codex_cloud_tasks_client::CloudBackend::create_task(
+    let created = create_task_with_git_ref_fallback(
         &*ctx.backend,
         &env_id,
         &prompt,
-        &git_ref,
+        git_ref,
         false,
         attempts,
     )
@@ -1416,7 +1489,15 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                 tokio::spawn(async move {
                                                     let git_ref = resolve_git_ref(None).await;
 
-                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, &git_ref, false, best_of_n).await;
+                                                    let result = create_task_with_git_ref_fallback(
+                                                        &*backend,
+                                                        &env,
+                                                        &text,
+                                                        git_ref,
+                                                        false,
+                                                        best_of_n,
+                                                    )
+                                                    .await;
                                                     let evt = match result {
                                                         Ok(ok) => app::AppEvent::NewTaskSubmitted(Ok(ok)),
                                                         Err(e) => app::AppEvent::NewTaskSubmitted(Err(format!("{e}"))),
@@ -2047,6 +2128,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use std::sync::Mutex;
 
     struct StubGitInfo {
         default_branch: Option<String>,
@@ -2081,7 +2163,8 @@ mod tests {
         )
         .await;
 
-        assert_eq!(git_ref, "feature/override");
+        assert_eq!(git_ref.name, "feature/override");
+        assert_eq!(git_ref.resolution, GitRefResolution::Override);
     }
 
     #[tokio::test]
@@ -2092,7 +2175,8 @@ mod tests {
         )
         .await;
 
-        assert_eq!(git_ref, "feature/spaces");
+        assert_eq!(git_ref.name, "feature/spaces");
+        assert_eq!(git_ref.resolution, GitRefResolution::Override);
     }
 
     #[tokio::test]
@@ -2106,7 +2190,8 @@ mod tests {
         )
         .await;
 
-        assert_eq!(git_ref, "feature/current");
+        assert_eq!(git_ref.name, "feature/current");
+        assert_eq!(git_ref.resolution, GitRefResolution::CurrentBranch);
     }
 
     #[tokio::test]
@@ -2117,14 +2202,168 @@ mod tests {
         )
         .await;
 
-        assert_eq!(git_ref, "develop");
+        assert_eq!(git_ref.name, "develop");
+        assert_eq!(git_ref.resolution, GitRefResolution::CurrentBranch);
     }
 
     #[tokio::test]
     async fn falls_back_to_main_when_no_git_info_is_available() {
         let git_ref = resolve_git_ref_with_git_info(None, &StubGitInfo::new(None, None)).await;
 
-        assert_eq!(git_ref, "main");
+        assert_eq!(git_ref.name, "main");
+        assert_eq!(git_ref.resolution, GitRefResolution::Fallback);
+    }
+
+    #[derive(Default)]
+    struct BranchFailingBackend {
+        create_calls: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_cloud_tasks_client::CloudBackend for BranchFailingBackend {
+        async fn list_tasks(
+            &self,
+            _env: Option<&str>,
+        ) -> codex_cloud_tasks_client::Result<Vec<TaskSummary>> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "list_tasks",
+            ))
+        }
+
+        async fn get_task_summary(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<TaskSummary> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "get_task_summary",
+            ))
+        }
+
+        async fn get_task_diff(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<Option<String>> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "get_task_diff",
+            ))
+        }
+
+        async fn get_task_messages(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<Vec<String>> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "get_task_messages",
+            ))
+        }
+
+        async fn get_task_text(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::TaskText> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "get_task_text",
+            ))
+        }
+
+        async fn list_sibling_attempts(
+            &self,
+            _task: TaskId,
+            _turn_id: String,
+        ) -> codex_cloud_tasks_client::Result<Vec<codex_cloud_tasks_client::TurnAttempt>> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "list_sibling_attempts",
+            ))
+        }
+
+        async fn apply_task_preflight(
+            &self,
+            _id: TaskId,
+            _diff_override: Option<String>,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::ApplyOutcome> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "apply_task_preflight",
+            ))
+        }
+
+        async fn apply_task(
+            &self,
+            _id: TaskId,
+            _diff_override: Option<String>,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::ApplyOutcome> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "apply_task",
+            ))
+        }
+
+        async fn create_task(
+            &self,
+            _env_id: &str,
+            _prompt: &str,
+            git_ref: &str,
+            _qa_mode: bool,
+            _best_of_n: usize,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask> {
+            self.create_calls
+                .lock()
+                .expect("create_calls lock poisoned")
+                .push(git_ref.to_string());
+
+            if git_ref == "main" {
+                Err(codex_cloud_tasks_client::CloudTaskError::Msg(
+                    "Provided git ref main does not exist".to_string(),
+                ))
+            } else {
+                Ok(codex_cloud_tasks_client::CreatedTask {
+                    id: TaskId("task-1".to_string()),
+                })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_master_when_fallback_main_is_missing() {
+        let backend = BranchFailingBackend::default();
+        let git_ref = ResolvedGitRef {
+            name: "main".to_string(),
+            resolution: GitRefResolution::Fallback,
+        };
+
+        let created =
+            create_task_with_git_ref_fallback(&backend, "env-1", "prompt", git_ref, false, 1)
+                .await
+                .expect("expected retry to succeed");
+
+        assert_eq!(created.id.0, "task-1");
+        assert_eq!(
+            *backend
+                .create_calls
+                .lock()
+                .expect("create_calls lock poisoned"),
+            vec!["main".to_string(), "master".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_when_git_ref_was_explicitly_resolved() {
+        let backend = BranchFailingBackend::default();
+        let git_ref = ResolvedGitRef {
+            name: "main".to_string(),
+            resolution: GitRefResolution::CurrentBranch,
+        };
+
+        let err = create_task_with_git_ref_fallback(&backend, "env-1", "prompt", git_ref, false, 1)
+            .await
+            .expect_err("expected main failure to be returned");
+
+        assert_eq!(err.to_string(), "Provided git ref main does not exist");
+        assert_eq!(
+            *backend
+                .create_calls
+                .lock()
+                .expect("create_calls lock poisoned"),
+            vec!["main".to_string()]
+        );
     }
 
     #[test]
