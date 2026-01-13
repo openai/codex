@@ -154,9 +154,13 @@ impl ModelsManager {
     /// Refresh models if the provided ETag differs from the cached ETag.
     ///
     /// Uses `Online` strategy to fetch latest models when ETags differ.
+    /// If ETags match, renews the cache TTL to extend its validity.
     pub(crate) async fn refresh_if_new_etag(&self, etag: String, config: &Config) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
+            if let Err(err) = self.cache_manager.renew_cache_ttl().await {
+                error!("failed to renew cache TTL: {err}");
+            }
             return;
         }
         if let Err(err) = self
