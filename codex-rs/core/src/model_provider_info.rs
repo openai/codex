@@ -42,6 +42,10 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     Responses,
 
+    /// Experimental: Responses API over WebSocket transport.
+    #[serde(rename = "responses_websocket")]
+    ResponsesWebsocket,
+
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
     #[default]
     Chat,
@@ -156,6 +160,7 @@ impl ModelProviderInfo {
             query_params: self.query_params.clone(),
             wire: match self.wire_api {
                 WireApi::Responses => ApiWireApi::Responses,
+                WireApi::ResponsesWebsocket => ApiWireApi::Responses,
                 WireApi::Chat => ApiWireApi::Chat,
             },
             headers,

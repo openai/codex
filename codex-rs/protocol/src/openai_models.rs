@@ -54,6 +54,7 @@ pub struct ModelUpgrade {
     pub migration_config_key: String,
     pub model_link: Option<String>,
     pub upgrade_copy: Option<String>,
+    pub migration_markdown: Option<String>,
 }
 
 /// Metadata describing a Codex-supported model.
@@ -234,6 +235,7 @@ impl From<ModelInfo> for ModelPreset {
                 // todo(aibrahim): add the model link here.
                 model_link: None,
                 upgrade_copy: None,
+                migration_markdown: None,
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
             supported_in_api: info.supported_in_api,

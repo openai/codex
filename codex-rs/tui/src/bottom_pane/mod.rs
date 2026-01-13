@@ -145,6 +145,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_steer_enabled(&mut self, enabled: bool) {
+        self.composer.set_steer_enabled(enabled);
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
     }
