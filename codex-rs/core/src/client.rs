@@ -326,7 +326,7 @@ impl ModelClientSession {
 
     fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
         // Checks whether the current request input is an incremental append to the previous request.
-        // If items in the new request contain all the items from the previous request we build 
+        // If items in the new request contain all the items from the previous request we build
         // a response.append request otherwise we start with a fresh response.create request.
         let previous_len = self.websocket_last_items.len();
         let can_append = previous_len > 0
