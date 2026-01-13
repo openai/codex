@@ -104,17 +104,16 @@ pub async fn run_main(
             std::sync::Arc::new(config),
         )
         .await;
-            while let Some(msg) = incoming_rx.recv().await {
-                match msg {
-                    JSONRPCMessage::Request(r) => processor.process_request(r).await,
-                    JSONRPCMessage::Response(r) => processor.process_response(r).await,
-                    JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                    JSONRPCMessage::Error(e) => processor.process_error(e),
-                }
+        while let Some(msg) = incoming_rx.recv().await {
+            match msg {
+                JSONRPCMessage::Request(r) => processor.process_request(r).await,
+                JSONRPCMessage::Response(r) => processor.process_response(r).await,
+                JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
+                JSONRPCMessage::Error(e) => processor.process_error(e),
             }
-
-            info!("processor task exited (channel closed)");
         }
+
+        info!("processor task exited (channel closed)");
     });
 
     // Task: write outgoing messages to stdout.

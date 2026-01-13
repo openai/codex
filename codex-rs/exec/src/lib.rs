@@ -304,8 +304,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
-    let thread_manager = ThreadManager::new(config.clone(), auth_manager.clone(), SessionSource::Exec)
-        .await;
+    let thread_manager =
+        ThreadManager::new(config.clone(), auth_manager.clone(), SessionSource::Exec).await;
     let default_model = thread_manager
         .get_models_manager()
         .get_default_model(&config.model, &config, RefreshStrategy::default())
