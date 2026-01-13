@@ -1,7 +1,42 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: visual
+expression: term.backend().vt100().screen().contents()
 ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 •     -- Indented code block (4 spaces)
       SELECT *
       FROM "users"
