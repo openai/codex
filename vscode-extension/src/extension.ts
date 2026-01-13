@@ -98,7 +98,10 @@ function formatUnknownError(err: unknown): string {
     const record = err as Record<string, unknown>;
     const msg = record["message"];
     const code = record["code"];
-    if (typeof msg === "string" && (typeof code === "string" || typeof code === "number")) {
+    if (
+      typeof msg === "string" &&
+      (typeof code === "string" || typeof code === "number")
+    ) {
       return `code=${String(code)} message=${msg}`;
     }
     if (typeof msg === "string") return msg;
@@ -540,36 +543,43 @@ export function activate(context: vscode.ExtensionContext): void {
   // It's a helper for local/dev workflows (e.g. taking docs screenshots) without requiring
   // an actual backend request.
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine._dev.askUserQuestionDemo", async () => {
-      if (!chatView) throw new Error("chatView is not initialized");
-      await showCodexMineViewContainer();
-      await vscode.commands.executeCommand("codexMine.chatView.focus");
-      chatView.reveal();
+    vscode.commands.registerCommand(
+      "codexMine._dev.askUserQuestionDemo",
+      async () => {
+        if (!chatView) throw new Error("chatView is not initialized");
+        await showCodexMineViewContainer();
+        await vscode.commands.executeCommand("codexMine.chatView.focus");
+        chatView.reveal();
 
-      const response = await chatView.promptAskUserQuestion({
-        requestKey: `demo:${Date.now()}`,
-        request: {
-          title: "Codex question",
-          questions: [
-            {
-              id: "context",
-              prompt: "Which context should I include?",
-              type: "multi_select",
-              allow_other: true,
-              required: false,
-              options: [
-                { label: "Workspace files", value: "files", recommended: true },
-                { label: "Open editors", value: "editors" },
-                { label: "Terminal output", value: "terminal" },
-              ],
-            },
-          ],
-        },
-      });
-      void vscode.window.showInformationMessage(
-        `AskUserQuestion demo result: ${JSON.stringify(response)}`,
-      );
-    }),
+        const response = await chatView.promptAskUserQuestion({
+          requestKey: `demo:${Date.now()}`,
+          request: {
+            title: "Codex question",
+            questions: [
+              {
+                id: "context",
+                prompt: "Which context should I include?",
+                type: "multi_select",
+                allow_other: true,
+                required: false,
+                options: [
+                  {
+                    label: "Workspace files",
+                    value: "files",
+                    recommended: true,
+                  },
+                  { label: "Open editors", value: "editors" },
+                  { label: "Terminal output", value: "terminal" },
+                ],
+              },
+            ],
+          },
+        });
+        void vscode.window.showInformationMessage(
+          `AskUserQuestion demo result: ${JSON.stringify(response)}`,
+        );
+      },
+    ),
   );
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(
@@ -594,10 +604,10 @@ export function activate(context: vscode.ExtensionContext): void {
   chatView = new ChatViewProvider(
     context,
     () => buildChatState(),
-	    async (text, images = [], rewind = null) => {
-	      if (!backendManager) throw new Error("backendManager is not initialized");
-	      if (!sessions) throw new Error("sessions is not initialized");
-	      const bm = backendManager;
+    async (text, images = [], rewind = null) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+      const bm = backendManager;
 
       const session = activeSessionId
         ? sessions.getById(activeSessionId)
@@ -895,7 +905,9 @@ export function activate(context: vscode.ExtensionContext): void {
             ? String((args as any).workspaceFolderUri)
             : "";
         if (!workspaceFolderUri) {
-          void vscode.window.showErrorMessage("workspaceFolderUri が不正です。");
+          void vscode.window.showErrorMessage(
+            "workspaceFolderUri が不正です。",
+          );
           return;
         }
 
@@ -3024,7 +3036,10 @@ function setActiveSession(
   ensureRuntime(sessionId);
   if (markRead) unreadSessionIds.delete(sessionId);
   if (extensionContext) {
-    void extensionContext.workspaceState.update(LAST_ACTIVE_SESSION_KEY, sessionId);
+    void extensionContext.workspaceState.update(
+      LAST_ACTIVE_SESSION_KEY,
+      sessionId,
+    );
   }
   // If a hidden tab session is selected (e.g. via Sessions tree), show it again.
   if (hiddenTabSessionIds.delete(sessionId)) {
@@ -3634,7 +3649,10 @@ function buildChatState(): ChatViewState {
     coreText && suffix.length > 0
       ? `${coreText} • ${suffix.join(" • ")}`
       : coreText || (suffix.length > 0 ? suffix.join(" • ") : null);
-  const statusTooltipParts = [hydrationBlockedText, globalRateLimitStatusTooltip]
+  const statusTooltipParts = [
+    hydrationBlockedText,
+    globalRateLimitStatusTooltip,
+  ]
     .filter(Boolean)
     .join("\n\n");
   return {
@@ -4225,7 +4243,10 @@ function scheduleAssistantDeltaFlush(
   }, 16);
 }
 
-function flushPendingAssistantDeltas(sessionId: string, rt: SessionRuntime): void {
+function flushPendingAssistantDeltas(
+  sessionId: string,
+  rt: SessionRuntime,
+): void {
   if (rt.pendingAssistantDeltaFlushTimer) {
     clearTimeout(rt.pendingAssistantDeltaFlushTimer);
     rt.pendingAssistantDeltaFlushTimer = null;
@@ -4249,7 +4270,8 @@ function flushPendingAssistantDeltas(sessionId: string, rt: SessionRuntime): voi
     // Do not force `streaming=true` here. This function can run after a turn is
     // completed (timer flush), and re-enabling streaming would keep the webview
     // in the <pre> fast-path and skip Markdown rendering for the final message.
-    const isStreaming = rt.streamingAssistantItemIds.has(id) || rt.activeTurnId !== null;
+    const isStreaming =
+      rt.streamingAssistantItemIds.has(id) || rt.activeTurnId !== null;
     (b as any).streaming = isStreaming;
     sessionPanels?.appendAssistantDelta(sessionId, delta);
     chatView?.postBlockAppend(sessionId, id, "assistantText", delta, {
@@ -4584,7 +4606,8 @@ function formatAskUserQuestionSummary(
       : "Codex question";
 
   const answers =
-    typeof (response as any)?.answers === "object" && (response as any).answers !== null
+    typeof (response as any)?.answers === "object" &&
+    (response as any).answers !== null
       ? ((response as any).answers as Record<string, unknown>)
       : {};
 
@@ -4665,7 +4688,10 @@ function formatAskUserQuestionSummary(
     const rendered = (() => {
       if (rawAnswer === null || rawAnswer === undefined) return "—";
       if (Array.isArray(rawAnswer)) {
-        const parts = rawAnswer.map((v) => String(v)).map((s) => s.trim()).filter(Boolean);
+        const parts = rawAnswer
+          .map((v) => String(v))
+          .map((s) => s.trim())
+          .filter(Boolean);
         return parts.length > 0 ? parts.join(", ") : "—";
       }
       const s = String(rawAnswer).trim();
@@ -4989,7 +5015,9 @@ function updateThreadStartedBlocks(): void {
     if (!b) continue;
     if (b.type !== "info" || b.title !== "Thread started") continue;
     const cwdPrefix = "global:threadStarted:cwd:";
-    const cwd = b.id.startsWith(cwdPrefix) ? b.id.slice(cwdPrefix.length) : null;
+    const cwd = b.id.startsWith(cwdPrefix)
+      ? b.id.slice(cwdPrefix.length)
+      : null;
     const backendKey = cwd ? backendKeyForCwd(cwd) : null;
     const summary = backendKey ? formatMcpStatusSummary(backendKey) : null;
     const lines = b.text

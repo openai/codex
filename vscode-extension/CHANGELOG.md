@@ -11,6 +11,8 @@
   - Chat のグループ見出しを右クリック/二本指タップして色を選択（QuickPick）
   - 「自動」を選ぶと手動設定を解除
 - 改善: Chat 上部 UI の視認性調整（ボタン/ラベルのサイズ、ラベルの省略表示）
+- 修正: セッション開始時の `MCP servers` 表示が他プロジェクトと混ざることがある問題を修正
+  - セッションの `cwd` に対して `mcpServerStatus/list` を問い合わせ、設定上有効なMCPのみを表示
 - 追加: AskUserQuestion（`ask_user_question` tool）の UI をサポート（デフォルト無効。`config.toml` で明示的に有効化した場合のみモデルへ露出）
   - 推奨: `[features].ask_user_question_tool = true`（互換: `[tools].ask_user_question = true`）
   - 質問カードの表示と回答の送信

@@ -71,7 +71,10 @@ export class BackendManager implements vscode.Disposable {
     | ((session: Session, req: V2ApprovalRequest) => Promise<ApprovalDecision>)
     | null = null;
   public onAskUserQuestionRequest:
-    | ((session: Session, req: V2AskUserQuestionRequest) => Promise<AskUserQuestionResponse>)
+    | ((
+        session: Session,
+        req: V2AskUserQuestionRequest,
+      ) => Promise<AskUserQuestionResponse>)
     | null = null;
   public onServerEvent:
     | ((
@@ -100,7 +103,11 @@ export class BackendManager implements vscode.Disposable {
     const proc = this.processes.get(key);
     if (!proc) return;
     this.output.appendLine(`Stopping backend for ${folder.uri.fsPath}`);
-    this.terminateBackend(key, proc, { reason: "stop", code: null, signal: null });
+    this.terminateBackend(key, proc, {
+      reason: "stop",
+      code: null,
+      signal: null,
+    });
   }
 
   public getActiveTurnId(threadId: string): string | null {
@@ -390,9 +397,7 @@ export class BackendManager implements vscode.Disposable {
     return this.sessions.pick(backendKey);
   }
 
-  public async resumeSession(
-    session: Session,
-  ): Promise<ThreadResumeResponse> {
+  public async resumeSession(session: Session): Promise<ThreadResumeResponse> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
       throw new Error(
@@ -533,8 +538,7 @@ export class BackendManager implements vscode.Disposable {
     session: Session,
     text: string,
     images: Array<
-      | { kind: "imageUrl"; url: string }
-      | { kind: "localImage"; path: string }
+      { kind: "imageUrl"; url: string } | { kind: "localImage"; path: string }
     >,
     modelSettings: ModelSettings | null | undefined,
   ): Promise<void> {
@@ -652,7 +656,11 @@ export class BackendManager implements vscode.Disposable {
     const params: ThreadCompactParams = { threadId: session.threadId };
     this.output.appendLine(`\n>> (${session.title}) /compact`);
     this.output.append(`<< (${session.title}) `);
-    await this.withTimeout("thread/compact", proc.threadCompact(params), 10_000);
+    await this.withTimeout(
+      "thread/compact",
+      proc.threadCompact(params),
+      10_000,
+    );
   }
 
   private toReasoningEffort(effort: string | null): ReasoningEffort | null {

@@ -225,8 +225,9 @@ function main(): void {
     if (!e) throw new Error(`Webview DOM element missing: #${id}`);
     return e as T;
   };
-  const maybeGet = <T extends HTMLElement = HTMLElement>(id: string): T | null =>
-    (document.getElementById(id) as T | null) ?? null;
+  const maybeGet = <T extends HTMLElement = HTMLElement>(
+    id: string,
+  ): T | null => (document.getElementById(id) as T | null) ?? null;
 
   const titleEl = mustGet("title");
   const statusTextEl = mustGet("statusText");
@@ -294,15 +295,13 @@ function main(): void {
   );
   placeholderObserver.observe(inputRowEl);
 
-  let askUserQuestionState:
-    | {
-        requestKey: string;
-        request: AskUserQuestionRequest;
-        index: number;
-        answers: Record<string, unknown>;
-        otherTextById: Record<string, string>;
-      }
-    | null = null;
+  let askUserQuestionState: {
+    requestKey: string;
+    request: AskUserQuestionRequest;
+    index: number;
+    answers: Record<string, unknown>;
+    otherTextById: Record<string, string>;
+  } | null = null;
   let askUserQuestionError: string | null = null;
 
   const disableComposer = (disabled: boolean): void => {
@@ -321,7 +320,9 @@ function main(): void {
     inputEl.focus();
   };
 
-  const postAskUserQuestionResponse = (response: AskUserQuestionResponse): void => {
+  const postAskUserQuestionResponse = (
+    response: AskUserQuestionResponse,
+  ): void => {
     const st = askUserQuestionState;
     if (!st) return;
     vscode.postMessage({
@@ -345,7 +346,9 @@ function main(): void {
         ? st.request.title.trim()
         : "Codex question";
 
-    const questions = Array.isArray(st.request.questions) ? st.request.questions : [];
+    const questions = Array.isArray(st.request.questions)
+      ? st.request.questions
+      : [];
     const q = questions[st.index] ?? null;
     if (!q || typeof q.id !== "string" || typeof q.prompt !== "string") {
       postAskUserQuestionResponse({ cancelled: true, answers: st.answers });
@@ -459,8 +462,12 @@ function main(): void {
       const input = document.createElement("textarea");
       input.className = "askInput";
       input.rows = 3;
-      input.placeholder = typeof q.placeholder === "string" ? q.placeholder : "";
-      input.value = typeof st.answers[q.id] === "string" ? (st.answers[q.id] as string) : "";
+      input.placeholder =
+        typeof q.placeholder === "string" ? q.placeholder : "";
+      input.value =
+        typeof st.answers[q.id] === "string"
+          ? (st.answers[q.id] as string)
+          : "";
       input.addEventListener("input", () => setError(null));
       card.appendChild(input);
 
@@ -475,12 +482,17 @@ function main(): void {
       });
     } else if (q.type === "single_select") {
       const selected =
-        typeof st.answers[q.id] === "string" ? (st.answers[q.id] as string) : null;
+        typeof st.answers[q.id] === "string"
+          ? (st.answers[q.id] as string)
+          : null;
 
       const rawOptions = Array.isArray(q.options) ? q.options : [];
       const options = rawOptions
         .slice()
-        .sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)));
+        .sort(
+          (a, b) =>
+            Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)),
+        );
 
       const makeOptionRow = (opt: AskUserQuestionOption): HTMLLabelElement => {
         const row = document.createElement("label");
@@ -501,7 +513,9 @@ function main(): void {
         const meta = document.createElement("div");
         const label = document.createElement("div");
         label.className = "askOptionLabel";
-        label.textContent = opt.recommended ? `${opt.label} (Recommended)` : opt.label;
+        label.textContent = opt.recommended
+          ? `${opt.label} (Recommended)`
+          : opt.label;
         meta.appendChild(label);
         if (opt.description) {
           const d = document.createElement("div");
@@ -528,7 +542,9 @@ function main(): void {
         otherInput = renderOtherInputIfNeeded(
           card,
           () => selected === otherSentinel,
-          typeof q.placeholder === "string" ? q.placeholder : "Type your answer…",
+          typeof q.placeholder === "string"
+            ? q.placeholder
+            : "Type your answer…",
         );
       }
 
@@ -564,7 +580,10 @@ function main(): void {
       const rawOptions = Array.isArray(q.options) ? q.options : [];
       const options = rawOptions
         .slice()
-        .sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)));
+        .sort(
+          (a, b) =>
+            Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)),
+        );
 
       const makeOptionRow = (opt: AskUserQuestionOption): HTMLLabelElement => {
         const row = document.createElement("label");
@@ -586,7 +605,9 @@ function main(): void {
         const meta = document.createElement("div");
         const label = document.createElement("div");
         label.className = "askOptionLabel";
-        label.textContent = opt.recommended ? `${opt.label} (Recommended)` : opt.label;
+        label.textContent = opt.recommended
+          ? `${opt.label} (Recommended)`
+          : opt.label;
         meta.appendChild(label);
         if (opt.description) {
           const d = document.createElement("div");
@@ -613,7 +634,9 @@ function main(): void {
         otherInput = renderOtherInputIfNeeded(
           card,
           () => selected.has(otherSentinel),
-          typeof q.placeholder === "string" ? q.placeholder : "Type your answer…",
+          typeof q.placeholder === "string"
+            ? q.placeholder
+            : "Type your answer…",
         );
       }
 
@@ -625,7 +648,11 @@ function main(): void {
         }
 
         if (allowOther && selected.has(otherSentinel)) {
-          const other = (otherInput?.value ?? st.otherTextById[q.id] ?? "").trim();
+          const other = (
+            otherInput?.value ??
+            st.otherTextById[q.id] ??
+            ""
+          ).trim();
           if (other) out.push(other);
         }
 
@@ -3860,11 +3887,14 @@ function main(): void {
     };
     if (anyMsg.type === "toast") {
       const kind =
-        anyMsg.kind === "success" || anyMsg.kind === "error" ? anyMsg.kind : "info";
+        anyMsg.kind === "success" || anyMsg.kind === "error"
+          ? anyMsg.kind
+          : "info";
       const message = typeof anyMsg.message === "string" ? anyMsg.message : "";
       if (!message) return;
       const timeoutMs =
-        typeof anyMsg.timeoutMs === "number" && Number.isFinite(anyMsg.timeoutMs)
+        typeof anyMsg.timeoutMs === "number" &&
+        Number.isFinite(anyMsg.timeoutMs)
           ? Math.max(0, Math.trunc(anyMsg.timeoutMs))
           : 2500;
       showToast(kind, message, timeoutMs);
@@ -3926,7 +3956,10 @@ function main(): void {
         } else {
           const cachedBlocks = blocksBySessionId.get(activeId);
           if (cachedBlocks) {
-            state = { ...(state as any), blocks: cachedBlocks } as ChatViewState;
+            state = {
+              ...(state as any),
+              blocks: cachedBlocks,
+            } as ChatViewState;
             pendingBlocksState = state;
             scheduleBlocksRender();
           }
@@ -3956,7 +3989,9 @@ function main(): void {
     }
     if (anyMsg.type === "askUserQuestionStart") {
       const requestKey =
-        typeof (anyMsg as any).requestKey === "string" ? (anyMsg as any).requestKey : null;
+        typeof (anyMsg as any).requestKey === "string"
+          ? (anyMsg as any).requestKey
+          : null;
       if (!requestKey) return;
       const request = (anyMsg as any).request as AskUserQuestionRequest;
       if (!request || typeof request !== "object") return;
@@ -4329,9 +4364,9 @@ function main(): void {
       : null;
     if (fileLink) {
       const file = fileLink.getAttribute("data-open-file") || "";
-      const cwd = (fileLink.closest("[data-cwd]") as HTMLElement | null)?.getAttribute(
-        "data-cwd",
-      );
+      const cwd = (
+        fileLink.closest("[data-cwd]") as HTMLElement | null
+      )?.getAttribute("data-cwd");
       if (file && (me.ctrlKey || me.metaKey)) {
         e.preventDefault();
         vscode.postMessage({ type: "openFile", path: file, cwd: cwd || null });
@@ -4365,9 +4400,15 @@ function main(): void {
     );
     if (explicitFileRefRe.test(decoded)) {
       const normalized = decoded.replace(/^\/+/, "");
-      const cwd = (a.closest("[data-cwd]") as HTMLElement | null)?.getAttribute("data-cwd");
+      const cwd = (a.closest("[data-cwd]") as HTMLElement | null)?.getAttribute(
+        "data-cwd",
+      );
       e.preventDefault();
-      vscode.postMessage({ type: "openFile", path: normalized, cwd: cwd || null });
+      vscode.postMessage({
+        type: "openFile",
+        path: normalized,
+        cwd: cwd || null,
+      });
       return;
     }
 
@@ -4377,9 +4418,15 @@ function main(): void {
       if (scheme === "file") {
         const without = decoded.replace(/^file:(\/\/)?/, "");
         const normalized = without.replace(/^\/+/, "");
-        const cwd = (a.closest("[data-cwd]") as HTMLElement | null)?.getAttribute("data-cwd");
+        const cwd = (
+          a.closest("[data-cwd]") as HTMLElement | null
+        )?.getAttribute("data-cwd");
         e.preventDefault();
-        vscode.postMessage({ type: "openFile", path: normalized, cwd: cwd || null });
+        vscode.postMessage({
+          type: "openFile",
+          path: normalized,
+          cwd: cwd || null,
+        });
         return;
       }
       // Unknown/unsupported schemes are delegated to VS Code's openExternal.
@@ -4390,9 +4437,15 @@ function main(): void {
 
     // Treat "/path" as workspace-root relative (GitHub-style links).
     const normalized = decoded.replace(/^\/+/, "");
-    const cwd = (a.closest("[data-cwd]") as HTMLElement | null)?.getAttribute("data-cwd");
+    const cwd = (a.closest("[data-cwd]") as HTMLElement | null)?.getAttribute(
+      "data-cwd",
+    );
     e.preventDefault();
-    vscode.postMessage({ type: "openFile", path: normalized, cwd: cwd || null });
+    vscode.postMessage({
+      type: "openFile",
+      path: normalized,
+      cwd: cwd || null,
+    });
   });
 
   // Handshake

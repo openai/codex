@@ -14,7 +14,9 @@ export class SessionTreeDataProvider
   public constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly sessions: SessionStore,
-    private readonly getWorkspaceColorIndex: (workspaceFolderUri: string) => number,
+    private readonly getWorkspaceColorIndex: (
+      workspaceFolderUri: string,
+    ) => number,
   ) {}
 
   public dispose(): void {
