@@ -1766,6 +1766,7 @@ mod handlers {
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
+    use crate::rollout::session_index;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -2138,7 +2139,6 @@ mod handlers {
     }
 
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
-        use crate::rollout::session_index;
         let name = name.trim().to_string();
         if name.is_empty() {
             let event = Event {
