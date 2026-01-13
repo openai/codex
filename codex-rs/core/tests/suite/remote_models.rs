@@ -225,9 +225,7 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
     let models_manager = test.thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, slug, &test.config).await;
 
-    let model_info = models_manager
-        .get_model_info(slug, &test.config)
-        .await;
+    let model_info = models_manager.get_model_info(slug, &test.config).await;
     assert_eq!(
         model_info.truncation_policy,
         TruncationPolicyConfig::bytes(12_000)
@@ -273,9 +271,7 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     let models_manager = test.thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, slug, &test.config).await;
 
-    let model_info = models_manager
-        .get_model_info(slug, &test.config)
-        .await;
+    let model_info = models_manager.get_model_info(slug, &test.config).await;
     assert_eq!(
         model_info.truncation_policy,
         TruncationPolicyConfig::bytes(200)
@@ -423,7 +419,9 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         provider,
     );
 
-    let available = manager.list_models(&config, RefreshStrategy::OnlineIfUncached).await;
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
     let remote = available
         .iter()
         .find(|model| model.model == "remote-alpha")
@@ -544,10 +542,14 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
         provider,
     );
 
-    let selected = manager.get_model(&None, &config, RefreshStrategy::OnlineIfUncached).await;
+    let selected = manager
+        .get_model(&None, &config, RefreshStrategy::OnlineIfUncached)
+        .await;
     assert_eq!(selected, "gpt-5.2-codex");
 
-    let available = manager.list_models(&config, RefreshStrategy::OnlineIfUncached).await;
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
     let hidden = available
         .iter()
         .find(|model| model.model == "codex-auto-balanced")
@@ -565,7 +567,9 @@ async fn wait_for_model_available(
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {
-            let guard = manager.list_models(config, RefreshStrategy::OnlineIfUncached).await;
+            let guard = manager
+                .list_models(config, RefreshStrategy::OnlineIfUncached)
+                .await;
             guard.iter().find(|model| model.model == slug).cloned()
         } {
             return model;

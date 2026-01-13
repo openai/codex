@@ -82,7 +82,10 @@ impl ModelsManager {
         config: &Config,
         refresh_strategy: RefreshStrategy,
     ) -> Vec<ModelPreset> {
-        if let Err(err) = self.refresh_available_models(config, refresh_strategy).await {
+        if let Err(err) = self
+            .refresh_available_models(config, refresh_strategy)
+            .await
+        {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.remote_models(config).await;
@@ -97,21 +100,7 @@ impl ModelsManager {
         Ok(self.build_available_models(remote_models))
     }
 
-    /// Look up model metadata, applying remote overrides and config adjustments.
-    pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
-        let remote = self
-            .remote_models(config)
-            .await
-            .into_iter()
-            .find(|m| m.slug == model);
-        let model = if let Some(remote) = remote {
-            remote
-        } else {
-            model_info::find_model_info_for_slug(model)
-        };
-        model_info::with_config_overrides(model, config)
-    }
-
+    // todo(aibrahim): should be visible to core only and sent on session_configured event
     /// Get the model identifier to use, refreshing according to the specified strategy.
     ///
     /// If `model` is provided, returns it directly. Otherwise selects the default based on
@@ -125,7 +114,10 @@ impl ModelsManager {
         if let Some(model) = model.as_ref() {
             return model.to_string();
         }
-        if let Err(err) = self.refresh_available_models(config, refresh_strategy).await {
+        if let Err(err) = self
+            .refresh_available_models(config, refresh_strategy)
+            .await
+        {
             error!("failed to refresh available models: {err}");
         }
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
@@ -144,10 +136,25 @@ impl ModelsManager {
         OPENAI_DEFAULT_API_MODEL.to_string()
     }
 
+    /// Look up model metadata, applying remote overrides and config adjustments.
+    pub(crate) async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
+        let remote = self
+            .remote_models(config)
+            .await
+            .into_iter()
+            .find(|m| m.slug == model);
+        let model = if let Some(remote) = remote {
+            remote
+        } else {
+            model_info::find_model_info_for_slug(model)
+        };
+        model_info::with_config_overrides(model, config)
+    }
+
     /// Refresh models if the provided ETag differs from the cached ETag.
     ///
     /// Uses `Online` strategy to fetch latest models when ETags differ.
-    pub async fn refresh_if_new_etag(&self, etag: String, config: &Config) {
+    pub(crate) async fn refresh_if_new_etag(&self, etag: String, config: &Config) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             return;
@@ -460,7 +467,9 @@ mod tests {
         let cached_remote = manager.remote_models(&config).await;
         assert_eq!(cached_remote, remote_models);
 
-        let available = manager.list_models(&config, RefreshStrategy::OnlineIfUncached).await;
+        let available = manager
+            .list_models(&config, RefreshStrategy::OnlineIfUncached)
+            .await;
         let high_idx = available
             .iter()
             .position(|model| model.model == "priority-high")

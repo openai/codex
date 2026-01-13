@@ -143,7 +143,10 @@ impl ThreadManager {
         config: &Config,
         refresh_strategy: crate::models_manager::manager::RefreshStrategy,
     ) -> Vec<ModelPreset> {
-        self.state.models_manager.list_models(config, refresh_strategy).await
+        self.state
+            .models_manager
+            .list_models(config, refresh_strategy)
+            .await
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {

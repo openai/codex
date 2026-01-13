@@ -255,7 +255,11 @@ impl Codex {
 
         let config = Arc::new(config);
         let model = models_manager
-            .get_model(&config.model, &config, crate::models_manager::manager::RefreshStrategy::default())
+            .get_model(
+                &config.model,
+                &config,
+                crate::models_manager::manager::RefreshStrategy::default(),
+            )
             .await;
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
