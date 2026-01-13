@@ -381,15 +381,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " for newline",
     },
     ShortcutDescriptor {
-        id: ShortcutId::QueueMessage,
-        bindings: &[ShortcutBinding {
-            key: key_hint::ctrl(KeyCode::Char('k')),
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " to queue message",
-    },
-    ShortcutDescriptor {
         id: ShortcutId::QueueMessageTab,
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Tab),
