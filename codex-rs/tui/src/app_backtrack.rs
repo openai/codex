@@ -1,3 +1,16 @@
+//! Backtracking and transcript overlay event routing.
+//!
+//! This file owns backtrack mode (Esc/Enter navigation in the transcript overlay) and also
+//! mediates a key rendering boundary for the transcript overlay.
+//!
+//! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
+//! tail derived from the current in-flight `ChatWidget.active_cell`.
+//!
+//! That live tail is kept in sync during `TuiEvent::Draw` handling for `Overlay::Transcript` by
+//! asking `ChatWidget` for an active-cell cache key and transcript lines and by passing them into
+//! `TranscriptOverlay::sync_live_tail`. This preserves the invariant that the overlay reflects
+//! both committed history and in-flight activity without changing flush or coalescing behavior.
+
 use std::any::TypeId;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -216,12 +229,20 @@ impl App {
         }
     }
 
-    /// Forward any event to the overlay and close it if done.
+    /// Forwards an event to the overlay and closes it if done.
+    ///
+    /// The transcript overlay draw path is special because the overlay should match the main
+    /// viewport while the active cell is still streaming or mutating.
+    ///
+    /// `TranscriptOverlay` owns committed transcript cells, while `ChatWidget` owns the current
+    /// in-flight active cell (often a coalesced exec/tool group). During draws we append that
+    /// in-flight cell as a cached, render-only live tail so `Ctrl+T` does not appear to "lose" tool
+    /// calls until a later flush boundary.
+    ///
+    /// This logic lives here (instead of inside the overlay widget) because `ChatWidget` is the
+    /// source of truth for the active cell and its cache invalidation key, and because `App` owns
+    /// overlay lifecycle and frame scheduling for animations.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        // Transcript overlay draws are special: include a live, in-flight tail so the
-        // overlay matches the main viewport while the active cell is still streaming.
-        // This path also drives tail animations and closes the overlay immediately
-        // once it reports completion.
         if let TuiEvent::Draw = &event
             && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {

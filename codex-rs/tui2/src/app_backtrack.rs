@@ -1,3 +1,16 @@
+//! Backtracking and transcript overlay event routing.
+//!
+//! This file owns backtrack mode (Esc/Enter navigation in the transcript overlay) and also
+//! mediates a key rendering boundary for the transcript overlay.
+//!
+//! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
+//! tail derived from the current in-flight `ChatWidget.active_cell`.
+//!
+//! That live tail is kept in sync during `TuiEvent::Draw` handling for `Overlay::Transcript` by
+//! asking `ChatWidget` for an active-cell cache key and transcript lines and by passing them into
+//! `TranscriptOverlay::sync_live_tail`. This preserves the invariant that the overlay reflects
+//! both committed history and in-flight activity without changing flush or coalescing behavior.
+
 use std::any::TypeId;
 use std::path::PathBuf;
 use std::sync::Arc;

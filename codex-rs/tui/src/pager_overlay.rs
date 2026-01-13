@@ -1,3 +1,20 @@
+//! Overlay UIs rendered in an alternate screen.
+//!
+//! This module implements the pager-style overlays used by the TUI, including the transcript
+//! overlay (`Ctrl+T`) that renders a full history view separate from the main viewport.
+//!
+//! The transcript overlay renders committed transcript cells plus an optional render-only live tail
+//! derived from the current in-flight active cell. Because rebuilding wrapped `Line`s on every draw
+//! can be expensive, that live tail is cached and only recomputed when its cache key changes, which
+//! is derived from the terminal width (wrapping), an active-cell revision (in-place mutations), the
+//! stream-continuation flag (spacing), and an animation tick (time-based spinner/shimmer output).
+//!
+//! The transcript overlay live tail is kept in sync by `App` during draws: `App` supplies an
+//! `ActiveCellTranscriptKey` and a function to compute the active cell transcript lines, and
+//! `TranscriptOverlay::sync_live_tail` uses the key to decide when the cached tail must be
+//! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell
+//! mutates in place or when its transcript output is time-dependent.
+
 use std::io::Result;
 use std::sync::Arc;
 use std::time::Duration;
@@ -402,7 +419,12 @@ impl Renderable for CellRenderable {
 }
 
 pub(crate) struct TranscriptOverlay {
+    /// Pager UI state and the renderables currently displayed.
+    ///
+    /// The invariant is that `view.renderables` is `render_cells(cells)` plus an optional trailing
+    /// live-tail renderable appended after the committed cells.
     view: PagerView,
+    /// Committed transcript cells (does not include the live tail).
     cells: Vec<Arc<dyn HistoryCell>>,
     highlight_cell: Option<usize>,
     /// Cache key for the render-only live tail appended after committed cells.
@@ -426,6 +448,10 @@ struct LiveTailKey {
 }
 
 impl TranscriptOverlay {
+    /// Creates a transcript overlay for a fixed set of committed cells.
+    ///
+    /// This overlay does not own the "active cell"; callers may optionally append a live tail via
+    /// `sync_live_tail` during draws to reflect in-flight activity.
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
@@ -482,6 +508,10 @@ impl TranscriptOverlay {
     /// then the tail is reattached. If the tail previously had no leading
     /// spacing because it was the only renderable, we add the missing inset
     /// when the first committed cell arrives.
+    ///
+    /// This expects `cell` to be a committed transcript cell (not the in-flight active cell). If
+    /// the overlay was scrolled to bottom before insertion, it remains pinned to bottom after the
+    /// insertion to preserve the "follow along" behavior.
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
         let had_prior_cells = !self.cells.is_empty();
@@ -512,6 +542,14 @@ impl TranscriptOverlay {
     ///
     /// Recomputes the tail only when the cache key changes, preserving scroll
     /// position and dropping the tail if there is nothing to render.
+    ///
+    /// The overlay owns committed transcript cells while the live tail is derived from the current
+    /// active cell, which can mutate in place while streaming. `App` calls this during
+    /// `TuiEvent::Draw` for `Overlay::Transcript`, passing a key that changes when the active cell
+    /// mutates or animates so the cached tail stays fresh.
+    ///
+    /// Passing a key that does not change on in-place active-cell mutations will freeze the tail in
+    /// `Ctrl+T` while the main viewport continues to update.
     pub(crate) fn sync_live_tail(
         &mut self,
         width: u16,
@@ -556,6 +594,10 @@ impl TranscriptOverlay {
         }
     }
 
+    /// Returns whether the underlying pager view is currently pinned to the bottom.
+    ///
+    /// The `App` draw loop uses this to decide whether to schedule animation frames for the live
+    /// tail; if the user has scrolled up, we avoid driving animation work that they cannot see.
     pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
         self.view.is_scrolled_to_bottom()
     }
@@ -568,6 +610,11 @@ impl TranscriptOverlay {
         }
     }
 
+    /// Removes and returns the cached live-tail renderable, if present.
+    ///
+    /// The live tail is represented as a single optional renderable appended after the committed
+    /// cell renderables, so this relies on the live tail always being the final entry in
+    /// `view.renderables` when present.
     fn take_live_tail_renderable(&mut self) -> Option<Box<dyn Renderable>> {
         (self.view.renderables.len() > self.cells.len()).then(|| self.view.renderables.pop())?
     }
