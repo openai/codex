@@ -2271,6 +2271,8 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         composer.set_text_content("draft text".to_string());
         assert_eq!(composer.clear_for_ctrl_c(), Some("draft text".to_string()));
@@ -2297,6 +2299,8 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
@@ -2337,6 +2341,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Force an active paste burst so this test doesn't depend on tight timing.
         composer
@@ -2370,6 +2375,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
         assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
@@ -2544,6 +2550,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
         assert!(composer.is_in_paste_burst());
@@ -2573,6 +2580,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
 
@@ -2644,6 +2652,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Force an active burst so this test doesn't depend on tight timing.
         composer
@@ -2683,6 +2692,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         let needs_redraw = composer.handle_paste("hello".to_string());
         assert!(needs_redraw);
@@ -2712,6 +2722,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Ensure composer is empty and press Enter.
         assert!(composer.textarea.text().is_empty());
@@ -2739,6 +2750,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
         let needs_redraw = composer.handle_paste(large.clone());
@@ -2774,6 +2786,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.handle_paste(large);
         assert_eq!(composer.pending_pastes.len(), 1);
@@ -2870,6 +2883,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Type "/mo" humanlike so paste-burst doesn’t interfere.
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
@@ -2898,6 +2912,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
 
         match &composer.active_popup {
@@ -2929,6 +2944,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Type "/res" humanlike so paste-burst doesn’t interfere.
         type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);

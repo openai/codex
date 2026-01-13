@@ -372,7 +372,7 @@ async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
-    let bottom = BottomPane::new(BottomPaneParams {
+    let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
         has_input_focus: true,
@@ -382,6 +382,7 @@ async fn make_chatwidget_manual(
         animations_enabled: cfg.animations,
         skills: None,
     });
+    bottom.set_steer_enabled(true);
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
     let widget = ChatWidget {
