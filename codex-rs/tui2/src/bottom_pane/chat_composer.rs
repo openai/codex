@@ -916,15 +916,7 @@ impl ChatComposer {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
-        if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
 
         let ActivePopup::Skill(popup) = &mut self.active_popup else {
             unreachable!();
