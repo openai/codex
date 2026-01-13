@@ -361,7 +361,7 @@ async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
-    let bottom = BottomPane::new(BottomPaneParams {
+    let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
         has_input_focus: true,
@@ -371,6 +371,7 @@ async fn make_chatwidget_manual(
         animations_enabled: cfg.animations,
         skills: None,
     });
+    bottom.set_steer_enabled(true);
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
     let widget = ChatWidget {
@@ -378,6 +379,7 @@ async fn make_chatwidget_manual(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_cell: None,
+        active_cell_revision: 0,
         config: cfg,
         model: resolved_model.clone(),
         auth_manager: auth_manager.clone(),
@@ -1008,7 +1010,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
         assert_eq!(chat.bottom_pane.composer_text(), "repeat me");
 
         // Queue the prompt while the task is running.
-        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     }
 
     assert_eq!(chat.queued_user_messages.len(), 3);
@@ -1030,7 +1032,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     chat.bottom_pane
         .set_composer_text("queued submission".to_string());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
@@ -1300,6 +1302,15 @@ async fn slash_resume_opens_picker() {
     chat.dispatch_command(SlashCommand::Resume);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_fork_opens_picker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Fork);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenForkPicker));
 }
 
 #[tokio::test]
