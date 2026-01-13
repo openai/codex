@@ -354,12 +354,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 ))
             }
         };
-        let conversation_manager =
-            ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
-        let default_model = conversation_manager
-            .get_models_manager()
-            .get_model(&config.model, &config)
-            .await;
         let request = SecurityReviewRequest {
             repo_path: default_cwd.clone(),
             include_paths,
@@ -381,7 +375,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .security_review_models
                 .bugs
                 .clone()
-                .unwrap_or(default_model),
+                .unwrap_or_default(),
             validation_model: config
                 .security_review_models
                 .validation

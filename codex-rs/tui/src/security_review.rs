@@ -128,8 +128,10 @@ const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
 const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
-const FILE_TRIAGE_MODEL: &str = "gpt-5-codex-mini";
+const FILE_TRIAGE_MODEL: &str = "gpt-5-codex";
 const SPEC_GENERATION_MODEL: &str = "gpt-5.2";
+const BUG_MODEL: &str = "gpt-5.2";
+const DEFAULT_VALIDATION_MODEL: &str = "gpt-5.2";
 const THREAT_MODEL_MODEL: &str = "gpt-5-codex";
 const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
 // prompts moved to `security_prompts.rs`
@@ -3387,7 +3389,7 @@ pub async fn run_security_review(
 
     request.model = request.model.trim().to_string();
     if request.model.is_empty() {
-        request.model = request.config.review_model.clone();
+        request.model = BUG_MODEL.to_string();
     }
 
     request.triage_model = request.triage_model.trim().to_string();
@@ -3402,7 +3404,7 @@ pub async fn run_security_review(
 
     request.validation_model = request.validation_model.trim().to_string();
     if request.validation_model.is_empty() {
-        request.validation_model = request.model.clone();
+        request.validation_model = DEFAULT_VALIDATION_MODEL.to_string();
     }
 
     request.writing_model = request.writing_model.trim().to_string();
@@ -3415,7 +3417,8 @@ pub async fn run_security_review(
         .config
         .security_review_reasoning_efforts
         .file_triage
-        .or(global_reasoning_effort);
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::Medium));
     let spec_reasoning_effort = request
         .config
         .security_review_reasoning_efforts
@@ -3426,17 +3429,20 @@ pub async fn run_security_review(
         .config
         .security_review_reasoning_efforts
         .bugs
-        .or(global_reasoning_effort);
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::XHigh));
     let validation_reasoning_effort = request
         .config
         .security_review_reasoning_efforts
         .validation
-        .or(global_reasoning_effort);
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::XHigh));
     let writing_reasoning_effort = request
         .config
         .security_review_reasoning_efforts
         .writing
-        .or(global_reasoning_effort);
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::High));
 
     let mut progress_sender = request.progress_sender.clone();
     let log_sink = request.log_sink.clone();
@@ -19031,4 +19037,4 @@ fn human_readable_bytes(bytes: usize) -> String {
     }
 }
 
-const MARKDOWN_FIX_MODEL: &str = "gpt-5.1";
+const MARKDOWN_FIX_MODEL: &str = "gpt-5.2";

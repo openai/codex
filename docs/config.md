@@ -72,27 +72,28 @@ Codex security reviews run a multi-step pipeline (file triage, spec generation, 
 ```toml
 [security_review.models]
 # Current hardcoded defaults:
-file_triage = "gpt-5-codex-mini"
+file_triage = "gpt-5-codex"
 spec = "gpt-5.2"
-bugs = "gpt-5.1-codex-max"
-validation = "gpt-5.1-codex-max"
-writing = "gpt-5.1"
+bugs = "gpt-5.2"
+validation = "gpt-5.2"
+writing = "gpt-5.2"
 ```
 
 ### security_review.reasoning_effort
 
-You can also override the reasoning effort used for each security review step. Values are the same as `model_reasoning_effort` (see below). When a per-step value is omitted, the step inherits `model_reasoning_effort` (if set); otherwise it uses the model/provider default. The spec step defaults to `"high"` when neither value is set.
+You can also override the reasoning effort used for each security review step. Values are the same as `model_reasoning_effort` (see below). When a per-step value is omitted, the step inherits `model_reasoning_effort` (if set); otherwise it uses the hardcoded defaults below.
 
 Note: `gpt-5-codex*` models only accept `"low"`, `"medium"`, and `"high"`; other values behave as if the setting was omitted.
 
 ```toml
 [security_review.reasoning_effort]
-# Example overrides (omit any key to inherit `model_reasoning_effort`)
+# Omit any key to inherit `model_reasoning_effort`.
+# Spec defaults to "high" if neither is set.
 file_triage = "medium"
-spec = "high"          # default when omitted
-bugs = "medium"
-validation = "medium"
-writing = "minimal"
+spec = "high"
+bugs = "xhigh"
+validation = "xhigh"
+writing = "high"
 ```
 
 ### model_providers
