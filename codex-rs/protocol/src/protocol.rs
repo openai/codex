@@ -592,7 +592,7 @@ pub enum EventMsg {
     SessionConfigured(SessionConfiguredEvent),
 
     /// Updated session metadata (e.g., thread name changes).
-    SessionMetaUpdated(SessionMetaUpdatedEvent),
+    ThreadNameUpdated(ThreadNameUpdatedEvent),
 
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
@@ -1863,7 +1863,7 @@ pub struct SessionConfiguredEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SessionMetaUpdatedEvent {
+pub struct ThreadNameUpdatedEvent {
     pub session_id: ThreadId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

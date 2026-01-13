@@ -1780,8 +1780,8 @@ mod handlers {
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
-    use codex_protocol::protocol::SessionMetaUpdatedEvent;
     use codex_protocol::protocol::SkillsListEntry;
+    use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
@@ -2190,7 +2190,7 @@ mod handlers {
 
         sess.send_event_raw(Event {
             id: sub_id,
-            msg: EventMsg::SessionMetaUpdated(SessionMetaUpdatedEvent {
+            msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
                 session_id: sess.conversation_id,
                 thread_name: Some(name),
             }),

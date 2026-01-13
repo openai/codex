@@ -469,7 +469,7 @@ impl ChatWidget {
         }
     }
 
-    fn on_session_meta_updated(&mut self, event: codex_core::protocol::SessionMetaUpdatedEvent) {
+    fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.session_id) {
             self.thread_name = event.thread_name;
         }
@@ -2095,7 +2095,7 @@ impl ChatWidget {
         for msg in events {
             if matches!(
                 msg,
-                EventMsg::SessionConfigured(_) | EventMsg::SessionMetaUpdated(_)
+                EventMsg::SessionConfigured(_) | EventMsg::ThreadNameUpdated(_)
             ) {
                 continue;
             }
@@ -2132,7 +2132,7 @@ impl ChatWidget {
 
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
-            EventMsg::SessionMetaUpdated(e) => self.on_session_meta_updated(e),
+            EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)

@@ -202,7 +202,7 @@ async fn forward_events(
                     } => {}
                     Event {
                         id: _,
-                        msg: EventMsg::SessionMetaUpdated(_),
+                        msg: EventMsg::ThreadNameUpdated(_),
                     } => {}
                     Event {
                         id,

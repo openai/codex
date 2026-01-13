@@ -27,22 +27,21 @@ fn write_minimal_rollout(codex_home: &Path, subdir: &str, filename_ts: &str, id:
     let file = sessions.join(format!("rollout-{filename_ts}-{id}.jsonl"));
     let mut f = std::fs::File::create(&file).unwrap();
     // Minimal first line: session_meta with the id so content search can find it
-    let payload = serde_json::json!({
-        "id": id,
-        "timestamp": "2024-01-01T00:00:00Z",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test",
-        "cli_version": "test",
-        "model_provider": "test-provider"
-    });
     writeln!(
         f,
         "{}",
         serde_json::json!({
             "timestamp": "2024-01-01T00:00:00.000Z",
             "type": "session_meta",
-            "payload": payload
+            "payload": {
+                "id": id,
+                "timestamp": "2024-01-01T00:00:00Z",
+                "instructions": null,
+                "cwd": ".",
+                "originator": "test",
+                "cli_version": "test",
+                "model_provider": "test-provider"
+            }
         })
     )
     .unwrap();
