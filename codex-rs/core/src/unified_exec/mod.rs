@@ -130,8 +130,6 @@ impl Default for UnifiedExecProcessManager {
 
 struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
-    session_ref: Arc<Session>,
-    turn_ref: Arc<TurnContext>,
     call_id: String,
     process_id: String,
     command: Vec<String>,
