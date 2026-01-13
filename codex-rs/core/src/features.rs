@@ -96,6 +96,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
+    Steer,
 }
 
 impl Feature {
@@ -417,6 +419,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Tui2,
         key: "tui2",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Steer,
+        key: "steer",
         stage: Stage::Experimental,
         default_enabled: false,
     },

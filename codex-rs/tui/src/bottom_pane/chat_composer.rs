@@ -133,6 +133,7 @@ pub(crate) struct ChatComposer {
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
+    steer_enabled: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -183,6 +184,7 @@ impl ChatComposer {
             context_window_used_tokens: None,
             skills: None,
             dismissed_skill_popup_token: None,
+            steer_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -191,6 +193,10 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    pub fn set_steer_enabled(&mut self, enabled: bool) {
+        self.steer_enabled = enabled;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -1234,15 +1240,15 @@ impl ChatComposer {
         // If the first line is a bare built-in slash command (no args),
         // dispatch it even when the slash popup isn't visible. This preserves
         // the workflow: type a prefix ("/di"), press Tab to complete to
-        // "/diff ", then press Enter/Ctrl+K to run it. Tab moves the cursor beyond
+        // "/diff ", then press Enter/Ctrl+Shift+Q to run it. Tab moves the cursor beyond
         // the '/name' token and our caret-based heuristic hides the popup,
-        // but Enter/Ctrl+K should still dispatch the command rather than submit
+        // but Enter/Ctrl+Shift+Q should still dispatch the command rather than submit
         // literal text.
         if let Some(result) = self.try_dispatch_bare_slash_command() {
             return (result, true);
         }
 
-        // If we're in a paste-like burst capture, treat Enter/Ctrl+K as part of the burst
+        // If we're in a paste-like burst capture, treat Enter/Ctrl+Shift+Q as part of the burst
         // and accumulate it rather than submitting or inserting immediately.
         // Do not treat as paste inside a slash-command context.
         let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
@@ -1260,7 +1266,7 @@ impl ChatComposer {
             }
         }
 
-        // During a paste-like burst, treat Enter/Ctrl+K as a newline instead of submit.
+        // During a paste-like burst, treat Enter/Ctrl+Shift+Q as a newline instead of submit.
         let now = Instant::now();
         if self
             .paste_burst
@@ -1300,8 +1306,7 @@ impl ChatComposer {
             && let Some((_n, cmd)) = built_in_slash_commands()
                 .into_iter()
                 .filter(|(_, cmd)| {
-                    windows_degraded_sandbox_active()
-                        || *cmd != SlashCommand::ElevateSandbox
+                    windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
                 })
                 .find(|(n, _)| *n == name)
         {
@@ -1394,16 +1399,22 @@ impl ChatComposer {
                 self.handle_input_basic(key_event)
             }
             KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            } => self.handle_submission(true),
+            } =>
+            {
+                self.handle_submission(true)
+            }
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => self.handle_submission(false),
+            } => {
+                let should_queue = !self.steer_enabled;
+                self.handle_submission(should_queue)
+            },
             input => self.handle_input_basic(input),
         }
     }

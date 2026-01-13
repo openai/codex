@@ -1482,6 +1482,7 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        widget.bottom_pane.set_steer_enabled(widget.config.features.enabled(Feature::Steer));
 
         widget
     }
@@ -1568,6 +1569,7 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        widget.bottom_pane.set_steer_enabled(widget.config.features.enabled(Feature::Steer));
 
         widget
     }
@@ -1645,13 +1647,12 @@ impl ChatWidget {
                         self.submit_user_message(user_message);
                     }
                     InputResult::Queued(text) => {
-                        // Ctrl+K always queues the message
+                        // Tab/Ctrl+K queues the message if a task is running, otherwise submits immediately
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
-                        self.queued_user_messages.push_back(user_message);
-                        self.refresh_queued_user_messages();
+                        self.queue_user_message(user_message);
                     }
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
@@ -1985,7 +1986,6 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
-    #[allow(dead_code)] // Used in tests
     fn queue_user_message(&mut self, user_message: UserMessage) {
         if self.bottom_pane.is_task_running() {
             self.queued_user_messages.push_back(user_message);
@@ -2061,6 +2061,18 @@ impl ChatWidget {
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
+        
+        // If steer is enabled and a task is running, show hint about queuing with Tab
+        if self.config.features.enabled(Feature::Steer) && self.bottom_pane.is_task_running() {
+            use crate::key_hint;
+            use ratatui::text::Line;
+            let hint_line = Line::from(vec![
+                "You can queue messages by pressing ".dim(),
+                key_hint::plain(KeyCode::Tab).into(),
+            ]);
+            self.add_to_history(history_cell::PlainHistoryCell::new(vec![hint_line]));
+        }
+        
         self.needs_final_message_separator = false;
     }
 
@@ -3579,6 +3591,9 @@ impl ChatWidget {
             self.config.features.enable(feature);
         } else {
             self.config.features.disable(feature);
+        }
+        if feature == Feature::Steer {
+            self.bottom_pane.set_steer_enabled(enabled);
         }
     }
 
