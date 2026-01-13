@@ -33,8 +33,6 @@ codex_rust_crate(
     test_tags = ["no-sandbox"],
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
-        "//codex-rs/rmcp-client:test_stdio_server",
-        "//codex-rs/rmcp-client:test_streamable_http_server",
         "//codex-rs/cli:codex",
     ],
 )

@@ -14,6 +14,7 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 codex-keyring-store = { workspace = true }
+codex-mcp-test-server = { workspace = true }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }

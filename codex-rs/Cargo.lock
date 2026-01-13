@@ -1286,6 +1286,7 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
+ "codex-mcp-test-server",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1591,6 +1592,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-mcp-test-server"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-ollama"
 version = "0.0.0"
 dependencies = [
@@ -1692,6 +1705,7 @@ dependencies = [
  "anyhow",
  "axum",
  "codex-keyring-store",
+ "codex-mcp-test-server",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "dirs",

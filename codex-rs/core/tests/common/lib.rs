@@ -247,7 +247,8 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
 }
 
 pub fn stdio_server_bin() -> Result<String, CargoBinError> {
-    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
+    codex_utils_cargo_bin::cargo_bin("core_test_stdio_server")
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 pub mod fs_wait {

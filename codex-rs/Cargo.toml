@@ -26,6 +26,7 @@ members = [
     "lmstudio",
     "login",
     "mcp-server",
+    "mcp-test-server",
     "mcp-types",
     "ollama",
     "process-hardening",
@@ -84,6 +85,7 @@ codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
+codex-mcp-test-server = { path = "mcp-test-server" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
