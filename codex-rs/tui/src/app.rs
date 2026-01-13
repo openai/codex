@@ -201,6 +201,7 @@ async fn handle_model_migration_prompt_if_needed(
         migration_config_key,
         model_link,
         upgrade_copy,
+        migration_markdown,
     }) = upgrade
     {
         if migration_prompt_hidden(config, migration_config_key.as_str()) {
@@ -234,6 +235,7 @@ async fn handle_model_migration_prompt_if_needed(
             &target_model,
             model_link.clone(),
             upgrade_copy.clone(),
+            migration_markdown.clone(),
             heading_label,
             target_description,
             can_opt_out,
@@ -541,7 +543,7 @@ impl App {
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
                     // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
                     let pasted = pasted.replace("\r", "\n");
-                    self.chat_widget.handle_paste(pasted);
+                    self.chat_widget.handle_paste_event(pasted);
                 }
                 TuiEvent::Draw => {
                     self.chat_widget.maybe_post_pending_notification(tui);
@@ -810,9 +812,6 @@ impl App {
                     emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
                 self.chat_widget.handle_codex_event(event);
-            }
-            AppEvent::ConversationHistory(ev) => {
-                self.on_conversation_history_for_backtrack(tui, ev).await?;
             }
             AppEvent::ExitRequest => {
                 return Ok(false);
@@ -1435,8 +1434,9 @@ impl App {
                 && self.backtrack.nth_user_message != usize::MAX
                 && self.chat_widget.composer_is_empty() =>
             {
-                // Delegate to helper for clarity; preserves behavior.
-                self.confirm_backtrack_from_main();
+                if let Some(selection) = self.confirm_backtrack_from_main() {
+                    self.apply_backtrack_selection(tui, selection);
+                }
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -1507,6 +1507,7 @@ mod tests {
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ThreadId;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1598,6 +1599,9 @@ mod tests {
     fn model_migration_copy_to_plain_text(
         copy: &crate::model_migration::ModelMigrationCopy,
     ) -> String {
+        if let Some(markdown) = copy.markdown.as_ref() {
+            return markdown.clone();
+        }
         let mut s = String::new();
         for span in &copy.heading {
             s.push_str(&span.content);
@@ -1680,6 +1684,7 @@ mod tests {
             migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
             model_link: None,
             upgrade_copy: None,
+            migration_markdown: None,
         });
         available.retain(|preset| preset.model != "gpt-5-codex");
         available.push(current.clone());
@@ -1735,6 +1740,7 @@ mod tests {
             &upgrade.id,
             upgrade.model_link.clone(),
             upgrade.upgrade_copy.clone(),
+            upgrade.migration_markdown.clone(),
             target.display_name.clone(),
             target_description,
             can_opt_out,
@@ -1768,7 +1774,7 @@ mod tests {
 
     #[tokio::test]
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
-        let mut app = make_test_app().await;
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
@@ -1804,9 +1810,8 @@ mod tests {
             )) as Arc<dyn HistoryCell>
         };
 
-        // Simulate the transcript after trimming for a fork, replaying history, and
-        // appending the edited turn. The session header separates the retained history
-        // from the forked thread's replayed turns.
+        // Simulate a transcript with duplicated history (e.g., from prior backtracks)
+        // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
             user_cell("first question"),
@@ -1822,15 +1827,44 @@ mod tests {
 
         assert_eq!(user_count(&app.transcript_cells), 2);
 
-        app.backtrack.base_id = Some(ThreadId::new());
+        let base_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: base_id,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: PathBuf::new(),
+            }),
+        });
+
+        app.backtrack.base_id = Some(base_id);
         app.backtrack.primed = true;
         app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
 
-        app.confirm_backtrack_from_main();
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        assert_eq!(selection.nth_user_message, 1);
+        assert_eq!(selection.prefill, "follow-up (edited)");
 
-        let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
-        assert_eq!(nth, 1);
-        assert_eq!(prefill, "follow-up (edited)");
+        app.apply_backtrack_rollback(selection);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
     }
 
     #[tokio::test]

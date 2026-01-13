@@ -1,13 +1,9 @@
 use crate::auth::AuthProvider;
-use crate::common::Prompt as ApiPrompt;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
-use crate::endpoint::responses::ResponsesOptions;
+use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::requests::ResponsesRequest;
-use crate::requests::ResponsesRequestBuilder;
-use crate::requests::responses::Compression;
 use crate::sse::responses::ResponsesStreamEvent;
 use crate::sse::responses::process_responses_event;
 use codex_client::TransportError;
@@ -28,7 +24,6 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
 use tracing::trace;
-use tracing::warn;
 use url::Url;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -53,19 +48,15 @@ impl ResponsesWebsocketConnection {
 
     pub async fn stream_request(
         &self,
-        request: ResponsesRequest,
+        request: ResponsesWsRequest,
     ) -> Result<ResponseStream, ApiError> {
-        if request.compression == Compression::Zstd {
-            warn!(
-                "request compression is not supported for websocket streaming; sending uncompressed payload"
-            );
-        }
-
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
         let stream = Arc::clone(&self.stream);
         let idle_timeout = self.idle_timeout;
-        let request_body = request.body;
+        let request_body = serde_json::to_value(&request).map_err(|err| {
+            ApiError::Stream(format!("failed to encode websocket request: {err}"))
+        })?;
 
         tokio::spawn(async move {
             let mut guard = stream.lock().await;
@@ -122,58 +113,6 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             stream,
             self.provider.stream_idle_timeout,
         ))
-    }
-
-    pub async fn stream_prompt(
-        &self,
-        model: &str,
-        prompt: &ApiPrompt,
-        options: ResponsesOptions,
-    ) -> Result<ResponseStream, ApiError> {
-        let ResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key,
-            text,
-            store_override,
-            conversation_id,
-            session_source,
-            extra_headers,
-            compression,
-        } = options;
-
-        // TODO (pakrym): share with HTTP based Responses API client
-        let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
-            .tools(&prompt.tools)
-            .parallel_tool_calls(prompt.parallel_tool_calls)
-            .reasoning(reasoning)
-            .include(include)
-            .prompt_cache_key(prompt_cache_key)
-            .text(text)
-            .conversation(conversation_id)
-            .session_source(session_source)
-            .store_override(store_override)
-            .extra_headers(extra_headers)
-            .compression(compression)
-            .build(&self.provider)?;
-
-        let connection = self.connect(request.headers.clone()).await?;
-        connection.stream_request(request).await
-    }
-
-    pub async fn stream(
-        &self,
-        body: Value,
-        extra_headers: HeaderMap,
-        compression: Compression,
-    ) -> Result<ResponseStream, ApiError> {
-        let request = ResponsesRequest {
-            body,
-            headers: extra_headers,
-            compression,
-        };
-        let connection = self.connect(request.headers.clone()).await?;
-        connection.stream_request(request).await
     }
 }
 
