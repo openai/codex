@@ -1482,7 +1482,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
-        widget.bottom_pane.set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget
+            .bottom_pane
+            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
 
         widget
     }
@@ -1569,7 +1571,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
-        widget.bottom_pane.set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget
+            .bottom_pane
+            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
 
         widget
     }
@@ -2061,7 +2065,7 @@ impl ChatWidget {
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
-        
+
         // If steer is enabled and a task is running, show hint about queuing with Tab
         if self.config.features.enabled(Feature::Steer) && self.bottom_pane.is_task_running() {
             use crate::key_hint;
@@ -2072,7 +2076,7 @@ impl ChatWidget {
             ]);
             self.add_to_history(history_cell::PlainHistoryCell::new(vec![hint_line]));
         }
-        
+
         self.needs_final_message_separator = false;
     }
 

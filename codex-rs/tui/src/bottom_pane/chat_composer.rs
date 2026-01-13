@@ -1403,10 +1403,7 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            } =>
-            {
-                self.handle_submission(true)
-            }
+            } => self.handle_submission(true),
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -1414,7 +1411,7 @@ impl ChatComposer {
             } => {
                 let should_queue = !self.steer_enabled;
                 self.handle_submission(should_queue)
-            },
+            }
             input => self.handle_input_basic(input),
         }
     }
