@@ -77,7 +77,25 @@ pub fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::config_schema_json;
-    use pretty_assertions::assert_eq;
+    use serde_json::Map;
+    use serde_json::Value;
+    use similar::TextDiff;
+
+    fn canonicalize(value: &Value) -> Value {
+        match value {
+            Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
+            Value::Object(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                let mut sorted = Map::with_capacity(map.len());
+                for (key, child) in entries {
+                    sorted.insert(key.clone(), canonicalize(child));
+                }
+                Value::Object(sorted)
+            }
+            _ => value.clone(),
+        }
+    }
 
     #[test]
     fn config_schema_matches_fixture() {
@@ -89,9 +107,21 @@ mod tests {
         let schema_json = config_schema_json().expect("serialize config schema");
         let schema_value: serde_json::Value =
             serde_json::from_slice(&schema_json).expect("decode schema json");
-        assert_eq!(
-            fixture_value, schema_value,
-            "Current schema for `config.toml` doesn't match the fixture. Run `just write-config-schema` to overwrite with your changes."
-        );
+        let fixture_value = canonicalize(&fixture_value);
+        let schema_value = canonicalize(&schema_value);
+        if fixture_value != schema_value {
+            let expected =
+                serde_json::to_string_pretty(&fixture_value).expect("serialize fixture json");
+            let actual =
+                serde_json::to_string_pretty(&schema_value).expect("serialize schema json");
+            let diff = TextDiff::from_lines(&expected, &actual)
+                .unified_diff()
+                .header("fixture", "generated")
+                .to_string();
+            panic!(
+                "Current schema for `config.toml` doesn't match the fixture. \
+Run `just write-config-schema` to overwrite with your changes.\n\n{diff}"
+            );
+        }
     }
 }
