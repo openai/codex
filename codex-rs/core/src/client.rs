@@ -13,6 +13,7 @@ use codex_api::ReqwestTransport;
 use codex_api::ResponseStream as ApiResponseStream;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
+use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
 use codex_api::common::Reasoning;
@@ -57,8 +58,8 @@ use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
-#[derive(Debug, Clone)]
-pub struct ModelClient {
+#[derive(Debug)]
+struct ModelClientState {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
     model_info: ModelInfo,
@@ -68,6 +69,16 @@ pub struct ModelClient {
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelClient {
+    state: Arc<ModelClientState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelClientSession {
+    state: Arc<ModelClientState>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -84,20 +95,30 @@ impl ModelClient {
         session_source: SessionSource,
     ) -> Self {
         Self {
-            config,
-            auth_manager,
-            model_info,
-            otel_manager,
-            provider,
-            conversation_id,
-            effort,
-            summary,
-            session_source,
+            state: Arc::new(ModelClientState {
+                config,
+                auth_manager,
+                model_info,
+                otel_manager,
+                provider,
+                conversation_id,
+                effort,
+                summary,
+                session_source,
+            }),
         }
     }
 
+    pub fn new_session(&self) -> ModelClientSession {
+        ModelClientSession {
+            state: Arc::clone(&self.state),
+        }
+    }
+}
+
+impl ModelClient {
     pub fn get_model_context_window(&self) -> Option<i64> {
-        let model_info = self.get_model_info();
+        let model_info = &self.state.model_info;
         let effective_context_window_percent = model_info.effective_context_window_percent;
         model_info.context_window.map(|context_window| {
             context_window.saturating_mul(effective_context_window_percent) / 100
@@ -105,36 +126,207 @@ impl ModelClient {
     }
 
     pub fn config(&self) -> Arc<Config> {
-        Arc::clone(&self.config)
+        Arc::clone(&self.state.config)
     }
 
     pub fn provider(&self) -> &ModelProviderInfo {
-        &self.provider
+        &self.state.provider
     }
 
+    pub fn get_provider(&self) -> ModelProviderInfo {
+        self.state.provider.clone()
+    }
+
+    pub fn get_otel_manager(&self) -> OtelManager {
+        self.state.otel_manager.clone()
+    }
+
+    pub fn get_session_source(&self) -> SessionSource {
+        self.state.session_source.clone()
+    }
+
+    /// Returns the currently configured model slug.
+    pub fn get_model(&self) -> String {
+        self.state.model_info.slug.clone()
+    }
+
+    pub fn get_model_info(&self) -> ModelInfo {
+        self.state.model_info.clone()
+    }
+
+    /// Returns the current reasoning effort setting.
+    pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        self.state.effort
+    }
+
+    /// Returns the current reasoning summary setting.
+    pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
+        self.state.summary
+    }
+
+    pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
+        self.state.auth_manager.clone()
+    }
+
+    /// Compacts the current conversation history using the Compact endpoint.
+    ///
+    /// This is a unary call (no streaming) that returns a new list of
+    /// `ResponseItem`s representing the compacted transcript.
+    pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
+        if prompt.input.is_empty() {
+            return Ok(Vec::new());
+        }
+        let auth_manager = self.state.auth_manager.clone();
+        let auth = match auth_manager.as_ref() {
+            Some(manager) => manager.auth().await,
+            None => None,
+        };
+        let api_provider = self
+            .state
+            .provider
+            .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        let request_telemetry = self.build_request_telemetry();
+        let client = ApiCompactClient::new(transport, api_provider, api_auth)
+            .with_telemetry(Some(request_telemetry));
+
+        let instructions = prompt
+            .get_full_instructions(&self.state.model_info)
+            .into_owned();
+        let payload = ApiCompactionInput {
+            model: &self.state.model_info.slug,
+            input: &prompt.input,
+            instructions: &instructions,
+        };
+
+        let mut extra_headers = ApiHeaderMap::new();
+        if let SessionSource::SubAgent(sub) = &self.state.session_source {
+            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
+                label.clone()
+            } else {
+                serde_json::to_value(sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
+            };
+            if let Ok(val) = HeaderValue::from_str(&subagent) {
+                extra_headers.insert("x-openai-subagent", val);
+            }
+        }
+
+        client
+            .compact_input(&payload, extra_headers)
+            .await
+            .map_err(map_api_error)
+    }
+}
+
+impl ModelClientSession {
     /// Streams a single model turn using either the Responses or Chat
     /// Completions wire API, depending on the configured provider.
     ///
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        match self.provider.wire_api {
+        match self.state.provider.wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
+            WireApi::ResponsesWebsocket => self.stream_responses_websocket(prompt).await,
             WireApi::Chat => {
                 let api_stream = self.stream_chat_completions(prompt).await?;
 
-                if self.config.show_raw_agent_reasoning {
+                if self.state.config.show_raw_agent_reasoning {
                     Ok(map_response_stream(
                         api_stream.streaming_mode(),
-                        self.otel_manager.clone(),
+                        self.state.otel_manager.clone(),
                     ))
                 } else {
                     Ok(map_response_stream(
                         api_stream.aggregate(),
-                        self.otel_manager.clone(),
+                        self.state.otel_manager.clone(),
                     ))
                 }
             }
+        }
+    }
+
+    fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
+        let model_info = self.state.model_info.clone();
+        let instructions = prompt.get_full_instructions(&model_info).into_owned();
+        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
+        Ok(build_api_prompt(prompt, instructions, tools_json))
+    }
+
+    fn build_responses_options(
+        &self,
+        prompt: &Prompt,
+        compression: Compression,
+    ) -> ApiResponsesOptions {
+        let model_info = &self.state.model_info;
+
+        let default_reasoning_effort = model_info.default_reasoning_level;
+        let reasoning = if model_info.supports_reasoning_summaries {
+            Some(Reasoning {
+                effort: self.state.effort.or(default_reasoning_effort),
+                summary: if self.state.summary == ReasoningSummaryConfig::None {
+                    None
+                } else {
+                    Some(self.state.summary)
+                },
+            })
+        } else {
+            None
+        };
+
+        let include = if reasoning.is_some() {
+            vec!["reasoning.encrypted_content".to_string()]
+        } else {
+            Vec::new()
+        };
+
+        let verbosity = if model_info.support_verbosity {
+            self.state
+                .config
+                .model_verbosity
+                .or(model_info.default_verbosity)
+        } else {
+            if self.state.config.model_verbosity.is_some() {
+                warn!(
+                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                    model_info.slug
+                );
+            }
+            None
+        };
+
+        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+        let conversation_id = self.state.conversation_id.to_string();
+
+        ApiResponsesOptions {
+            reasoning,
+            include,
+            prompt_cache_key: Some(conversation_id.clone()),
+            text,
+            store_override: None,
+            conversation_id: Some(conversation_id),
+            session_source: Some(self.state.session_source.clone()),
+            extra_headers: beta_feature_headers(&self.state.config),
+            compression,
+        }
+    }
+
+    fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
+        if self
+            .state
+            .config
+            .features
+            .enabled(Feature::EnableRequestCompression)
+            && auth.is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+            && self.state.provider.is_openai()
+        {
+            Compression::Zstd
+        } else {
+            Compression::None
         }
     }
 
@@ -149,13 +341,13 @@ impl ModelClient {
             ));
         }
 
-        let auth_manager = self.auth_manager.clone();
-        let model_info = self.get_model_info();
+        let auth_manager = self.state.auth_manager.clone();
+        let model_info = self.state.model_info.clone();
         let instructions = prompt.get_full_instructions(&model_info).into_owned();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
-        let conversation_id = self.conversation_id.to_string();
-        let session_source = self.session_source.clone();
+        let conversation_id = self.state.conversation_id.to_string();
+        let session_source = self.state.session_source.clone();
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -166,9 +358,10 @@ impl ModelClient {
                 None => None,
             };
             let api_provider = self
+                .state
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
+            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let client = ApiChatClient::new(transport, api_provider, api_auth)
@@ -176,7 +369,7 @@ impl ModelClient {
 
             let stream_result = client
                 .stream_prompt(
-                    &self.get_model(),
+                    &self.state.model_info.slug,
                     &api_prompt,
                     Some(conversation_id.clone()),
                     Some(session_source.clone()),
@@ -203,52 +396,14 @@ impl ModelClient {
     async fn stream_responses_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             warn!(path, "Streaming from fixture");
-            let stream = codex_api::stream_from_fixture(path, self.provider.stream_idle_timeout())
-                .map_err(map_api_error)?;
-            return Ok(map_response_stream(stream, self.otel_manager.clone()));
+            let stream =
+                codex_api::stream_from_fixture(path, self.state.provider.stream_idle_timeout())
+                    .map_err(map_api_error)?;
+            return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
         }
 
-        let auth_manager = self.auth_manager.clone();
-        let model_info = self.get_model_info();
-        let instructions = prompt.get_full_instructions(&model_info).into_owned();
-        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
-
-        let default_reasoning_effort = model_info.default_reasoning_level;
-        let reasoning = if model_info.supports_reasoning_summaries {
-            Some(Reasoning {
-                effort: self.effort.or(default_reasoning_effort),
-                summary: if self.summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
-                    Some(self.summary)
-                },
-            })
-        } else {
-            None
-        };
-
-        let include: Vec<String> = if reasoning.is_some() {
-            vec!["reasoning.encrypted_content".to_string()]
-        } else {
-            vec![]
-        };
-
-        let verbosity = if model_info.support_verbosity {
-            self.config.model_verbosity.or(model_info.default_verbosity)
-        } else {
-            if self.config.model_verbosity.is_some() {
-                warn!(
-                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
-                    model_info.slug
-                );
-            }
-            None
-        };
-
-        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let api_prompt = build_api_prompt(prompt, instructions.clone(), tools_json);
-        let conversation_id = self.conversation_id.to_string();
-        let session_source = self.session_source.clone();
+        let auth_manager = self.state.auth_manager.clone();
+        let api_prompt = self.build_responses_request(prompt)?;
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -259,47 +414,26 @@ impl ModelClient {
                 None => None,
             };
             let api_provider = self
+                .state
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
+            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let compression = if self
-                .config
-                .features
-                .enabled(Feature::EnableRequestCompression)
-                && auth
-                    .as_ref()
-                    .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
-                && self.provider.is_openai()
-            {
-                Compression::Zstd
-            } else {
-                Compression::None
-            };
+            let compression = self.responses_request_compression(auth.as_ref());
 
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-            let options = ApiResponsesOptions {
-                reasoning: reasoning.clone(),
-                include: include.clone(),
-                prompt_cache_key: Some(conversation_id.clone()),
-                text: text.clone(),
-                store_override: None,
-                conversation_id: Some(conversation_id.clone()),
-                session_source: Some(session_source.clone()),
-                extra_headers: beta_feature_headers(&self.config),
-                compression,
-            };
+            let options = self.build_responses_options(prompt, compression);
 
             let stream_result = client
-                .stream_prompt(&self.get_model(), &api_prompt, options)
+                .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
                 .await;
 
             match stream_result {
                 Ok(stream) => {
-                    return Ok(map_response_stream(stream, self.otel_manager.clone()));
+                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
                 }
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
@@ -312,106 +446,61 @@ impl ModelClient {
         }
     }
 
-    pub fn get_provider(&self) -> ModelProviderInfo {
-        self.provider.clone()
-    }
+    /// Streams a turn via the Responses API over WebSocket transport.
+    async fn stream_responses_websocket(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        let auth_manager = self.state.auth_manager.clone();
+        let api_prompt = self.build_responses_request(prompt)?;
 
-    pub fn get_otel_manager(&self) -> OtelManager {
-        self.otel_manager.clone()
-    }
-
-    pub fn get_session_source(&self) -> SessionSource {
-        self.session_source.clone()
-    }
-
-    /// Returns the currently configured model slug.
-    pub fn get_model(&self) -> String {
-        self.model_info.slug.clone()
-    }
-
-    pub fn get_model_info(&self) -> ModelInfo {
-        self.model_info.clone()
-    }
-
-    /// Returns the current reasoning effort setting.
-    pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        self.effort
-    }
-
-    /// Returns the current reasoning summary setting.
-    pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
-        self.summary
-    }
-
-    pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
-        self.auth_manager.clone()
-    }
-
-    /// Compacts the current conversation history using the Compact endpoint.
-    ///
-    /// This is a unary call (no streaming) that returns a new list of
-    /// `ResponseItem`s representing the compacted transcript.
-    pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
-        if prompt.input.is_empty() {
-            return Ok(Vec::new());
-        }
-        let auth_manager = self.auth_manager.clone();
-        let auth = match auth_manager.as_ref() {
-            Some(manager) => manager.auth().await,
-            None => None,
-        };
-        let api_provider = self
-            .provider
-            .to_api_provider(auth.as_ref().map(|a| a.mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
-        let request_telemetry = self.build_request_telemetry();
-        let client = ApiCompactClient::new(transport, api_provider, api_auth)
-            .with_telemetry(Some(request_telemetry));
-
-        let instructions = prompt
-            .get_full_instructions(&self.get_model_info())
-            .into_owned();
-        let payload = ApiCompactionInput {
-            model: &self.get_model(),
-            input: &prompt.input,
-            instructions: &instructions,
-        };
-
-        let mut extra_headers = ApiHeaderMap::new();
-        if let SessionSource::SubAgent(sub) = &self.session_source {
-            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
-                label.clone()
-            } else {
-                serde_json::to_value(sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(super::auth::AuthManager::unauthorized_recovery);
+        loop {
+            let auth = match auth_manager.as_ref() {
+                Some(manager) => manager.auth().await,
+                None => None,
             };
-            if let Ok(val) = HeaderValue::from_str(&subagent) {
-                extra_headers.insert("x-openai-subagent", val);
+            let api_provider = self
+                .state
+                .provider
+                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+            let compression = self.responses_request_compression(auth.as_ref());
+
+            let options = self.build_responses_options(prompt, compression);
+            let client = ApiWebSocketResponsesClient::new(api_provider, api_auth);
+
+            let stream_result = client
+                .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
+                .await;
+
+            match stream_result {
+                Ok(stream) => {
+                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
+                }
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UNAUTHORIZED =>
+                {
+                    handle_unauthorized(status, &mut auth_recovery).await?;
+                    continue;
+                }
+                Err(err) => return Err(map_api_error(err)),
             }
         }
-
-        client
-            .compact_input(&payload, extra_headers)
-            .await
-            .map_err(map_api_error)
     }
-}
 
-impl ModelClient {
     /// Builds request and SSE telemetry for streaming API calls (Chat/Responses).
     fn build_streaming_telemetry(&self) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
-        let telemetry = Arc::new(ApiTelemetry::new(self.otel_manager.clone()));
+        let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
         let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
         (request_telemetry, sse_telemetry)
     }
+}
 
+impl ModelClient {
     /// Builds request telemetry for unary API calls (e.g., Compact endpoint).
     fn build_request_telemetry(&self) -> Arc<dyn RequestTelemetry> {
-        let telemetry = Arc::new(ApiTelemetry::new(self.otel_manager.clone()));
+        let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
         request_telemetry
     }

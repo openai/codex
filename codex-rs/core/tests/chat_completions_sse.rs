@@ -99,7 +99,8 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         summary,
         conversation_id,
         SessionSource::Exec,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {

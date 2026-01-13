@@ -78,6 +78,7 @@ use tracing::warn;
 use crate::ModelProviderInfo;
 use crate::WireApi;
 use crate::client::ModelClient;
+use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::compact::collect_user_messages;
@@ -2672,12 +2673,15 @@ async fn run_model_turn(
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
+    let client_session = turn_context.client.new_session();
+
     let mut retries = 0;
     loop {
         let err = match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
+            &client_session,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -2769,6 +2773,7 @@ async fn try_run_turn(
     router: Arc<ToolRouter>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    client_session: &ModelClientSession,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
@@ -2797,9 +2802,7 @@ async fn try_run_turn(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = turn_context
-        .client
-        .clone()
+    let mut stream = client_session
         .stream(prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
