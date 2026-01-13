@@ -1228,6 +1228,113 @@ impl ChatComposer {
         Some(text)
     }
 
+    /// Common logic for handling message submission/queuing.
+    /// Returns the appropriate InputResult based on `should_queue`.
+    fn handle_submission(&mut self, should_queue: bool) -> (InputResult, bool) {
+        // If the first line is a bare built-in slash command (no args),
+        // dispatch it even when the slash popup isn't visible. This preserves
+        // the workflow: type a prefix ("/di"), press Tab to complete to
+        // "/diff ", then press Enter/Ctrl+K to run it. Tab moves the cursor beyond
+        // the '/name' token and our caret-based heuristic hides the popup,
+        // but Enter/Ctrl+K should still dispatch the command rather than submit
+        // literal text.
+        if let Some(result) = self.try_dispatch_bare_slash_command() {
+            return (result, true);
+        }
+
+        // If we're in a paste-like burst capture, treat Enter/Ctrl+K as part of the burst
+        // and accumulate it rather than submitting or inserting immediately.
+        // Do not treat as paste inside a slash-command context.
+        let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
+            || self
+                .textarea
+                .text()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .starts_with('/');
+        if self.paste_burst.is_active() && !in_slash_context {
+            let now = Instant::now();
+            if self.paste_burst.append_newline_if_active(now) {
+                return (InputResult::None, true);
+            }
+        }
+
+        // During a paste-like burst, treat Enter/Ctrl+K as a newline instead of submit.
+        let now = Instant::now();
+        if self
+            .paste_burst
+            .newline_should_insert_instead_of_submit(now)
+            && !in_slash_context
+        {
+            self.textarea.insert_str("\n");
+            self.paste_burst.extend_window(now);
+            return (InputResult::None, true);
+        }
+
+        let original_input = self.textarea.text().to_string();
+        if let Some(result) = self.try_dispatch_slash_command_with_args() {
+            return (result, true);
+        }
+
+        if let Some(text) = self.prepare_submission_text() {
+            if should_queue {
+                (InputResult::Queued(text), true)
+            } else {
+                // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
+                (InputResult::Submitted(text), true)
+            }
+        } else {
+            // Restore text if submission was suppressed
+            self.textarea.set_text(&original_input);
+            (InputResult::None, true)
+        }
+    }
+
+    /// Check if the first line is a bare slash command (no args) and dispatch it.
+    /// Returns Some(InputResult) if a command was dispatched, None otherwise.
+    fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
+        let first_line = self.textarea.text().lines().next().unwrap_or("");
+        if let Some((name, rest)) = parse_slash_name(first_line)
+            && rest.is_empty()
+            && let Some((_n, cmd)) = built_in_slash_commands()
+                .into_iter()
+                .filter(|(_, cmd)| {
+                    windows_degraded_sandbox_active()
+                        || *cmd != SlashCommand::ElevateSandbox
+                })
+                .find(|(n, _)| *n == name)
+        {
+            self.textarea.set_text("");
+            Some(InputResult::Command(cmd))
+        } else {
+            None
+        }
+    }
+
+    /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
+    /// Returns Some(InputResult) if a command was dispatched, None otherwise.
+    fn try_dispatch_slash_command_with_args(&mut self) -> Option<InputResult> {
+        let original_input = self.textarea.text().to_string();
+        let input_starts_with_space = original_input.starts_with(' ');
+
+        if !input_starts_with_space {
+            let text = self.textarea.text().to_string();
+            if let Some((name, rest)) = parse_slash_name(&text)
+                && !rest.is_empty()
+                && !name.contains('/')
+                && let Some((_n, cmd)) = built_in_slash_commands()
+                    .into_iter()
+                    .find(|(command_name, _)| *command_name == name)
+                && cmd == SlashCommand::Review
+            {
+                self.textarea.set_text("");
+                return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
+            }
+        }
+        None
+    }
+
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
@@ -1291,136 +1398,12 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
-                // Ctrl+K queues the message instead of submitting immediately
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, rest)) = parse_slash_name(first_line)
-                    && rest.is_empty()
-                    && let Some((_n, cmd)) = built_in_slash_commands()
-                        .into_iter()
-                        .filter(|(_, cmd)| {
-                            windows_degraded_sandbox_active()
-                                || *cmd != SlashCommand::ElevateSandbox
-                        })
-                        .find(|(n, _)| *n == name)
-                {
-                    self.textarea.set_text("");
-                    return (InputResult::Command(cmd), true);
-                }
-
-                let original_input = self.textarea.text().to_string();
-                let input_starts_with_space = original_input.starts_with(' ');
-
-                // Handle slash command with args (e.g., /review args)
-                if !input_starts_with_space {
-                    let text = self.textarea.text().to_string();
-                    if let Some((name, rest)) = parse_slash_name(&text)
-                        && !rest.is_empty()
-                        && !name.contains('/')
-                        && let Some((_n, cmd)) = built_in_slash_commands()
-                            .into_iter()
-                            .find(|(command_name, _)| *command_name == name)
-                        && cmd == SlashCommand::Review
-                    {
-                        self.textarea.set_text("");
-                        return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
-                    }
-                }
-
-                if let Some(text) = self.prepare_submission_text() {
-                    (InputResult::Queued(text), true)
-                } else {
-                    // Restore text if submission was suppressed
-                    self.textarea.set_text(&original_input);
-                    (InputResult::None, true)
-                }
-            }
+            } => self.handle_submission(true),
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => {
-                // Enter always sends messages immediately (bypasses queue check)
-                // If the first line is a bare built-in slash command (no args),
-                // dispatch it even when the slash popup isn't visible. This preserves
-                // the workflow: type a prefix ("/di"), press Tab to complete to
-                // "/diff ", then press Enter to run it. Tab moves the cursor beyond
-                // the '/name' token and our caret-based heuristic hides the popup,
-                // but Enter should still dispatch the command rather than submit
-                // literal text.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, rest)) = parse_slash_name(first_line)
-                    && rest.is_empty()
-                    && let Some((_n, cmd)) = built_in_slash_commands()
-                        .into_iter()
-                        .filter(|(_, cmd)| {
-                            windows_degraded_sandbox_active()
-                                || *cmd != SlashCommand::ElevateSandbox
-                        })
-                        .find(|(n, _)| *n == name)
-                {
-                    self.textarea.set_text("");
-                    return (InputResult::Command(cmd), true);
-                }
-
-                // If we're in a paste-like burst capture, treat Enter as part of the burst
-                // and accumulate it rather than submitting or inserting immediately.
-                // Do not treat Enter as paste inside a slash-command context.
-                let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
-                    || self
-                        .textarea
-                        .text()
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .starts_with('/');
-                if self.paste_burst.is_active() && !in_slash_context {
-                    let now = Instant::now();
-                    if self.paste_burst.append_newline_if_active(now) {
-                        return (InputResult::None, true);
-                    }
-                }
-
-                // During a paste-like burst, treat Enter as a newline instead of submit.
-                let now = Instant::now();
-                if self
-                    .paste_burst
-                    .newline_should_insert_instead_of_submit(now)
-                    && !in_slash_context
-                {
-                    self.textarea.insert_str("\n");
-                    self.paste_burst.extend_window(now);
-                    return (InputResult::None, true);
-                }
-
-                let original_input = self.textarea.text().to_string();
-                let input_starts_with_space = original_input.starts_with(' ');
-
-                // Handle slash command with args (e.g., /review args)
-                if !input_starts_with_space {
-                    let text = self.textarea.text().to_string();
-                    if let Some((name, rest)) = parse_slash_name(&text)
-                        && !rest.is_empty()
-                        && !name.contains('/')
-                        && let Some((_n, cmd)) = built_in_slash_commands()
-                            .into_iter()
-                            .find(|(command_name, _)| *command_name == name)
-                        && cmd == SlashCommand::Review
-                    {
-                        self.textarea.set_text("");
-                        return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
-                    }
-                }
-
-                if let Some(text) = self.prepare_submission_text() {
-                    // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
-                    (InputResult::Submitted(text), true)
-                } else {
-                    // Restore text if submission was suppressed
-                    self.textarea.set_text(&original_input);
-                    (InputResult::None, true)
-                }
-            }
+            } => self.handle_submission(false),
             input => self.handle_input_basic(input),
         }
     }
