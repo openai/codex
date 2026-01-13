@@ -14,6 +14,8 @@ use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
 use tokio::time::timeout;
 use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 use super::cache;
 use super::cache::ModelsCache;
@@ -35,6 +37,7 @@ const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
 const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
+const CODEX_AUTO_PREFIX: &str = "codex-auto-";
 
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
@@ -122,17 +125,25 @@ impl ModelsManager {
         Ok(())
     }
 
-    pub async fn list_models(&self, config: &Config) -> Vec<ModelPreset> {
+    pub async fn list_models(
+        &self,
+        config: &Config,
+        include_codex_auto_models: bool,
+    ) -> Vec<ModelPreset> {
         if let Err(err) = self.refresh_available_models_with_cache(config).await {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.remote_models(config).await;
-        self.build_available_models(remote_models)
+        self.build_available_models(remote_models, include_codex_auto_models)
     }
 
-    pub fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError> {
+    pub fn try_list_models(
+        &self,
+        config: &Config,
+        include_codex_auto_models: bool,
+    ) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.try_get_remote_models(config)?;
-        Ok(self.build_available_models(remote_models))
+        Ok(self.build_available_models(remote_models, include_codex_auto_models))
     }
 
     /// Look up the requested model metadata while applying remote metadata overrides.
@@ -162,7 +173,7 @@ impl ModelsManager {
         let remote_models = self.remote_models(config).await;
         if auth_mode == Some(AuthMode::ChatGPT) {
             let has_auto_balanced = self
-                .build_available_models(remote_models)
+                .build_available_models(remote_models, true)
                 .iter()
                 .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL && model.show_in_picker);
             if has_auto_balanced {
@@ -249,7 +260,11 @@ impl ModelsManager {
     }
 
     /// Merge remote model metadata into picker-ready presets, preserving existing entries.
-    fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
+    fn build_available_models(
+        &self,
+        mut remote_models: Vec<ModelInfo>,
+        include_codex_auto_models: bool,
+    ) -> Vec<ModelPreset> {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
@@ -257,19 +272,77 @@ impl ModelsManager {
         let mut merged_presets = Self::merge_presets(remote_presets, existing_presets);
         merged_presets = self.filter_visible_models(merged_presets);
 
-        let has_default = merged_presets.iter().any(|preset| preset.is_default);
-        if !has_default {
-            if let Some(default) = merged_presets
-                .iter_mut()
-                .find(|preset| preset.show_in_picker)
-            {
-                default.is_default = true;
-            } else if let Some(default) = merged_presets.first_mut() {
-                default.is_default = true;
-            }
+        if !include_codex_auto_models {
+            merged_presets.retain(|preset| !preset.model.starts_with(CODEX_AUTO_PREFIX));
         }
 
+        self.apply_default_model(&mut merged_presets);
+
         merged_presets
+    }
+
+    fn preferred_default_model(&self, models: &[ModelPreset]) -> Option<&'static str> {
+        let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
+        if !chatgpt_mode {
+            return None;
+        }
+        let has_auto_balanced = models
+            .iter()
+            .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL);
+        if has_auto_balanced {
+            return None;
+        }
+        Some(OPENAI_DEFAULT_CHATGPT_MODEL)
+    }
+
+    fn apply_default_model(&self, models: &mut Vec<ModelPreset>) {
+        if models.is_empty() {
+            return;
+        }
+
+        let preferred_default = self.preferred_default_model(models);
+        let default_index = if let Some(preferred_default) = preferred_default {
+            if let Some(index) = models
+                .iter()
+                .position(|model| model.model == preferred_default)
+            {
+                if index != 0 {
+                    let preferred = models.remove(index);
+                    models.insert(0, preferred);
+                }
+                Some(0)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let default_index = default_index.unwrap_or_else(|| {
+            let default_count = models.iter().filter(|model| model.is_default).count();
+            if default_count == 1 {
+                models
+                    .iter()
+                    .position(|model| model.is_default)
+                    .unwrap_or(0)
+            } else {
+                if default_count == 0 {
+                    info!("no default model found; setting the first model as default");
+                } else {
+                    warn!(
+                        "multiple default models found ({default_count}); setting the first model as default",
+                    );
+                }
+                0
+            }
+        });
+
+        for model in models.iter_mut() {
+            model.is_default = false;
+        }
+        if let Some(model) = models.get_mut(default_index) {
+            model.is_default = true;
+        }
     }
 
     fn filter_visible_models(&self, models: Vec<ModelPreset>) -> Vec<ModelPreset> {
@@ -440,7 +513,7 @@ mod tests {
         let cached_remote = manager.remote_models(&config).await;
         assert_eq!(cached_remote, remote_models);
 
-        let available = manager.list_models(&config).await;
+        let available = manager.list_models(&config, true).await;
         let high_idx = available
             .iter()
             .position(|model| model.model == "priority-high")
@@ -453,10 +526,12 @@ mod tests {
             high_idx < low_idx,
             "higher priority should be listed before lower priority"
         );
-        assert!(
-            available[high_idx].is_default,
-            "highest priority should be default"
-        );
+        let default_model = available
+            .iter()
+            .find(|model| model.is_default)
+            .expect("default model should be present");
+        assert_eq!(default_model.model, OPENAI_DEFAULT_CHATGPT_MODEL);
+        assert!(!available[high_idx].is_default);
         assert!(!available[low_idx].is_default);
         assert_eq!(
             models_mock.requests().len(),
@@ -641,7 +716,7 @@ mod tests {
             .expect("second refresh succeeds");
 
         let available = manager
-            .try_list_models(&config)
+            .try_list_models(&config, true)
             .expect("models should be available");
         assert!(
             available.iter().any(|preset| preset.model == "remote-new"),
@@ -676,11 +751,11 @@ mod tests {
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
         let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
 
-        let expected_hidden = ModelPreset::from(hidden_model.clone());
-        let mut expected_visible = ModelPreset::from(visible_model.clone());
-        expected_visible.is_default = true;
+        let mut expected_hidden = ModelPreset::from(hidden_model.clone());
+        expected_hidden.is_default = true;
+        let expected_visible = ModelPreset::from(visible_model.clone());
 
-        let available = manager.build_available_models(vec![hidden_model, visible_model]);
+        let available = manager.build_available_models(vec![hidden_model, visible_model], true);
 
         assert_eq!(available, vec![expected_hidden, expected_visible]);
     }

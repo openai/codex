@@ -875,6 +875,10 @@ pub struct ModelListParams {
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
     pub limit: Option<u32>,
+
+    /// Determines whether to include codex-auto-* models in the response.
+    /// Defaults to false.
+    pub include_codex_auto_models: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

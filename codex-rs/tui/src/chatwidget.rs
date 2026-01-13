@@ -2379,7 +2379,10 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models(&self.config).ok()?;
+        let models = self
+            .models_manager
+            .try_list_models(&self.config, true)
+            .ok()?;
         models
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
@@ -2485,16 +2488,18 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
-        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
-            Ok(models) => models,
-            Err(_) => {
-                self.add_info_message(
-                    "Models are being updated; please try /model again in a moment.".to_string(),
-                    None,
-                );
-                return;
-            }
-        };
+        let presets: Vec<ModelPreset> =
+            match self.models_manager.try_list_models(&self.config, true) {
+                Ok(models) => models,
+                Err(_) => {
+                    self.add_info_message(
+                        "Models are being updated; please try /model again in a moment."
+                            .to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
         self.open_model_popup_with_presets(presets);
     }
 
