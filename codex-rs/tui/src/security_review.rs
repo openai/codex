@@ -16333,6 +16333,9 @@ fn build_validation_findings_context(
     let mut selected: Vec<&BugSnapshot> = Vec::new();
     let mut seen: HashSet<usize> = HashSet::new();
     for item in &required {
+        if selected.len() >= VALIDATION_MAX_FINDINGS {
+            break;
+        }
         if seen.insert(item.bug.summary_id) {
             selected.push(*item);
         }
