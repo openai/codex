@@ -9,17 +9,22 @@ doctest = false
 name = "codex_core"
 path = "src/lib.rs"
 
+[[bin]]
+name = "codex-write-config-schema"
+path = "src/bin/config_schema.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+arc-swap = "1.7.1"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
-arc-swap = "1.7.1"
 base64 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
@@ -45,8 +50,8 @@ eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 include_dir = { workspace = true }
-indoc = { workspace = true }
 indexmap = { workspace = true }
+indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
 mcp-types = { workspace = true }
@@ -56,6 +61,7 @@ rand = { workspace = true }
 regex = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -123,8 +129,12 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-core = { path = ".", default-features = false, features = ["deterministic_process_ids"] }
-codex-otel = { workspace = true, features = ["disable-default-metrics-exporter"] }
+codex-core = { path = ".", default-features = false, features = [
+    "deterministic_process_ids",
+] }
+codex-otel = { workspace = true, features = [
+    "disable-default-metrics-exporter",
+] }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
