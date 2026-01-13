@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { useAppStore } from "./store";
 
-export function VscodeChatPane(props: { rootId: string | null }) {
+export type VscodeChatPaneHandle = {
+  refreshState: () => void;
+};
+
+export const VscodeChatPane = forwardRef<VscodeChatPaneHandle, { rootId: string | null }>(
+  function VscodeChatPane(props, ref) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const workspaceSettings = useAppStore((s) => s.workspaceSettings);
 
@@ -17,6 +22,18 @@ export function VscodeChatPane(props: { rootId: string | null }) {
     void workspaceSettings;
   }, [workspaceSettings]);
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      refreshState: () => {
+        const win = iframeRef.current?.contentWindow ?? null;
+        if (!win) return;
+        win.postMessage({ type: "codexMine.refreshState" }, window.location.origin);
+      },
+    }),
+    [],
+  );
+
   if (!src) return <div className="empty">root がありません。先に Add folder してください。</div>;
 
   return (
@@ -28,5 +45,5 @@ export function VscodeChatPane(props: { rootId: string | null }) {
       sandbox="allow-scripts allow-forms allow-same-origin"
     />
   );
-}
-
+  },
+);

@@ -1,12 +1,12 @@
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { EditorPane } from "./EditorPane";
 import { Explorer } from "./Explorer";
 import { createChatSession, getWorkspace, patchWorkspaceSettings } from "./api";
 import { AddRootModal } from "./AddRootModal";
 import { useAppStore } from "./store";
-import { VscodeChatPane } from "./VscodeChatPane";
+import { VscodeChatPane, type VscodeChatPaneHandle } from "./VscodeChatPane";
 
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(false);
@@ -42,6 +42,8 @@ export function App() {
   });
   const [rootPickerOpen, setRootPickerOpen] = useState(false);
   const [rootPickerMode, setRootPickerMode] = useState<"switch" | "newSession">("switch");
+
+  const chatRef = useRef<VscodeChatPaneHandle | null>(null);
 
   const statusText = useMemo(() => {
     if (rootsLoading) return "ワークスペース読み込み中…";
@@ -134,7 +136,7 @@ export function App() {
 
       <div className="workbench">
         {isNarrow ? (
-          <VscodeChatPane rootId={activeRoot?.id ?? null} />
+          <VscodeChatPane ref={chatRef} rootId={activeRoot?.id ?? null} />
         ) : (
           <Allotment>
             <Allotment.Pane preferredSize={320} minSize={260}>
@@ -147,7 +149,7 @@ export function App() {
               <EditorPane />
             </Allotment.Pane>
             <Allotment.Pane preferredSize={520} minSize={360}>
-              <VscodeChatPane rootId={activeRoot?.id ?? null} />
+              <VscodeChatPane ref={chatRef} rootId={activeRoot?.id ?? null} />
             </Allotment.Pane>
           </Allotment>
         )}
@@ -315,9 +317,13 @@ export function App() {
                   key={r.id}
                   className="dirRow"
                   onClick={async () => {
+                    const prevRootId = activeRoot?.id ?? null;
                     if (rootPickerMode === "newSession") {
                       try {
                         await createChatSession(r.id);
+                        if (prevRootId === r.id) {
+                          chatRef.current?.refreshState();
+                        }
                       } catch (e) {
                         setRootsError(e instanceof Error ? e.message : String(e));
                       }

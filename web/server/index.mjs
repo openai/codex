@@ -799,6 +799,19 @@ app.get("/webview/chat", async (req, res) => {
     window.dispatchEvent(new MessageEvent("message", { data: { type: "toast", kind: "error", message: "webview: 接続が切れました（再読み込みしてください）", timeoutMs: 0 } }));
   });
 
+  window.addEventListener("message", (ev) => {
+    try {
+      if (ev.origin !== location.origin) return;
+      const d = ev.data;
+      if (!d || typeof d !== "object") return;
+      if (d.type === "codexMine.refreshState") {
+        send({ type: "webview.refresh" });
+      }
+    } catch {
+      // ignore
+    }
+  });
+
   globalThis.acquireVsCodeApi = () => ({
     postMessage: (msg) => {
       try {
@@ -1377,6 +1390,11 @@ wssWebview.on("connection", async (ws, req) => {
 
         // 未実装: resumeFromHistory, reloadSession, openDiff, showStatus, sessionMenu, rename 等
         wsSend(ws, { type: "toast", kind: "info", message: `未実装のUIメッセージ: ${String(inner.type)}`, timeoutMs: 2500 });
+        return;
+      }
+
+      if (msg.type === "webview.refresh") {
+        await sendFullState();
         return;
       }
 
