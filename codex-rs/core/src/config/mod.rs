@@ -433,7 +433,7 @@ impl ConfigBuilder {
         // AbsolutePathBufGuard here.
         let config_toml: ConfigToml = merged_toml
             .try_into()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            .map_err(|e: toml::de::Error| enhance_config_error(e, &config_layer_stack))?;
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
@@ -490,10 +490,11 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
-        tracing::error!("Failed to deserialize overridden config: {e}");
-        e
-    })?;
+    let cfg = deserialize_config_toml_with_base(merged_toml, codex_home, &config_layer_stack)
+        .map_err(|e| {
+            tracing::error!("Failed to deserialize overridden config: {e}");
+            e
+        })?;
 
     Ok(cfg)
 }
@@ -501,13 +502,14 @@ pub async fn load_config_as_toml_with_cli_overrides(
 fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
+    layer_stack: &ConfigLayerStack,
 ) -> std::io::Result<ConfigToml> {
     // This guard ensures that any relative paths that is deserialized into an
     // [AbsolutePathBuf] is resolved against `config_base_dir`.
     let _guard = AbsolutePathBufGuard::new(config_base_dir);
     root_value
         .try_into()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        .map_err(|e: toml::de::Error| enhance_config_error(e, layer_stack))
 }
 
 pub async fn load_global_mcp_servers(
@@ -1588,6 +1590,60 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
     let mut p = cfg.codex_home.clone();
     p.push("log");
     Ok(p)
+}
+
+/// Enhances config deserialization errors with source file information and suggestions.
+fn enhance_config_error(error: toml::de::Error, layer_stack: &ConfigLayerStack) -> std::io::Error {
+    use codex_app_server_protocol::ConfigLayerSource;
+    use regex::Regex;
+
+    let error_msg = error.to_string();
+
+    // Try to extract field name from error message like "unknown variant `x`, expected ... in `field_name`"
+    let field_pattern = Regex::new(r"in `([^`]+)`").ok();
+    let field_name = field_pattern
+        .and_then(|re| re.captures(&error_msg))
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string());
+
+    // Try to find which config file this field came from using origins
+    let origins = layer_stack.origins();
+    let source_from_origins = field_name.as_ref().and_then(|field| {
+        origins.get(field).map(|meta| match &meta.name {
+            ConfigLayerSource::User { file } => format!("in {}", file.as_path().display()),
+            ConfigLayerSource::Project { dot_codex_folder } => {
+                format!("in {}/config.toml", dot_codex_folder.as_path().display())
+            }
+            ConfigLayerSource::System { file } => format!("in {}", file.as_path().display()),
+            ConfigLayerSource::SessionFlags => "from command line flags".to_string(),
+            ConfigLayerSource::Mdm { .. } => "from MDM configuration".to_string(),
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
+                format!("in {}", file.as_path().display())
+            }
+            ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
+                "from managed configuration".to_string()
+            }
+        })
+    });
+
+    // Fallback: iterate through all layers to find any user config file
+    let source_info = source_from_origins.or_else(|| {
+        for layer in layer_stack.layers_high_to_low() {
+            if let ConfigLayerSource::User { file } = &layer.name {
+                return Some(format!("Check your config at {}", file.as_path().display()));
+            }
+        }
+        None
+    });
+
+    // Build enhanced error message
+    let enhanced_msg = if let Some(source) = source_info {
+        format!("{}\n  {}", error_msg, source)
+    } else {
+        error_msg
+    };
+
+    std::io::Error::new(std::io::ErrorKind::InvalidData, enhanced_msg)
 }
 
 #[cfg(test)]
