@@ -2200,6 +2200,7 @@ impl ChatWidget {
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
+        // Avoid toggling running state for replayed history events on resume.
         if !from_replay && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(true);
         }
