@@ -46,7 +46,6 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
-use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use codex_protocol::models::local_image_label_text;
@@ -460,6 +459,23 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+        let expanded_line = if matches!(key_event.code, KeyCode::Enter) {
+            let mut line = self
+                .textarea
+                .text()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string();
+            for (placeholder, actual) in &self.pending_pastes {
+                if line.contains(placeholder) {
+                    line = line.replace(placeholder, actual);
+                }
+            }
+            Some(line)
+        } else {
+            None
+        };
         let ActivePopup::Command(popup) = &mut self.active_popup else {
             unreachable!();
         };
@@ -500,14 +516,20 @@ impl ChatComposer {
             } => {
                 // Ensure popup filtering/selection reflects the latest composer text
                 // before applying completion.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                popup.on_composer_text_change(first_line.to_string());
+                let text = self.textarea.text();
+                let first_line_end = text.find('\n').unwrap_or(text.len());
+                let cursor = self.textarea.cursor().min(first_line_end);
+                let first_line = &text[..first_line_end];
+                let prefix = &text[..cursor];
+                popup.on_composer_text_change(prefix.to_string());
                 if let Some(sel) = popup.selected_item() {
                     let mut cursor_target: Option<usize> = None;
                     match sel {
                         CommandItem::Builtin(cmd) => {
                             if cmd == SlashCommand::Skills {
-                                self.textarea.set_text("");
+                                if self.textarea.text().trim() == format!("/{}", cmd.command()) {
+                                    self.textarea.set_text("");
+                                }
                                 return (InputResult::Command(cmd), true);
                             }
 
@@ -549,16 +571,17 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
+                let expanded_line = expanded_line.as_deref().unwrap_or("").to_string();
                 // If the current line starts with a custom prompt name and includes
                 // positional args for a numeric-style template, expand and submit
                 // immediately regardless of the popup selection.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, _rest)) = parse_slash_name(first_line)
+                if let Some((name, _rest)) = parse_slash_name(&expanded_line)
                     && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
                     && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
                     && let Some(expanded) =
-                        expand_if_numeric_with_positional_args(prompt, first_line)
+                        expand_if_numeric_with_positional_args(prompt, &expanded_line)
                 {
+                    self.pending_pastes.clear();
                     self.textarea.set_text("");
                     return (InputResult::Submitted(expanded), true);
                 }
@@ -566,17 +589,20 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
-                            self.textarea.set_text("");
+                            if self.textarea.text().trim() == format!("/{}", cmd.command()) {
+                                self.textarea.set_text("");
+                            }
                             return (InputResult::Command(cmd), true);
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
                                 match prompt_selection_action(
                                     prompt,
-                                    first_line,
+                                    &expanded_line,
                                     PromptSelectionMode::Submit,
                                 ) {
                                     PromptSelectionAction::Submit { text } => {
+                                        self.pending_pastes.clear();
                                         self.textarea.set_text("");
                                         return (InputResult::Submitted(text), true);
                                     }
@@ -1683,10 +1709,9 @@ impl ChatComposer {
         }
     }
 
-    /// If the cursor is currently within a slash command on the first line,
-    /// extract the command name and the rest of the line after it.
-    /// Returns None if the cursor is outside a slash command.
-    fn slash_command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)> {
+    /// If the first line starts with a slash, extract the command name and the
+    /// rest of the line after it.
+    fn slash_command_prefix(first_line: &str) -> Option<(&str, &str)> {
         if !first_line.starts_with('/') {
             return None;
         }
@@ -1696,10 +1721,6 @@ impl ChatComposer {
             .find(char::is_whitespace)
             .map(|idx| name_start + idx)
             .unwrap_or_else(|| first_line.len());
-
-        if cursor > name_end {
-            return None;
-        }
 
         let name = &first_line[name_start..name_end];
         let rest_start = first_line[name_end..]
@@ -1718,22 +1739,7 @@ impl ChatComposer {
         if name.is_empty() {
             return rest_after_name.is_empty();
         }
-
-        let builtin_match = built_in_slash_commands()
-            .into_iter()
-            .filter(|(_, cmd)| {
-                windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
-            })
-            .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
-
-        if builtin_match {
-            return true;
-        }
-
-        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
-        self.custom_prompts
-            .iter()
-            .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
+        true
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -1746,16 +1752,24 @@ impl ChatComposer {
             }
             return;
         }
-        // Determine whether the caret is inside the initial '/name' token on the first line.
+        // Determine whether the caret is on the first line and the line starts with '/'.
         let text = self.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
         let first_line = &text[..first_line_end];
         let cursor = self.textarea.cursor();
         let caret_on_first_line = cursor <= first_line_end;
+        let prefix_end = if caret_on_first_line {
+            cursor.max(1).min(first_line_end)
+        } else {
+            first_line_end
+        };
+        let first_line_prefix = &text[..prefix_end];
 
         let is_editing_slash_command_name = caret_on_first_line
-            && Self::slash_command_under_cursor(first_line, cursor)
-                .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
+            && !(cursor <= 1 && first_line.starts_with("/ "))
+            && (first_line_prefix == "/"
+                || Self::slash_command_prefix(first_line_prefix)
+                    .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest)));
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -1769,7 +1783,7 @@ impl ChatComposer {
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
                 if is_editing_slash_command_name {
-                    popup.on_composer_text_change(first_line.to_string());
+                    popup.on_composer_text_change(first_line_prefix.to_string());
                 } else {
                     self.active_popup = ActivePopup::None;
                 }
@@ -1779,7 +1793,7 @@ impl ChatComposer {
                     let skills_enabled = self.skills_enabled();
                     let mut command_popup =
                         CommandPopup::new(self.custom_prompts.clone(), skills_enabled);
-                    command_popup.on_composer_text_change(first_line.to_string());
+                    command_popup.on_composer_text_change(first_line_prefix.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
             }
@@ -4314,13 +4328,35 @@ mod tests {
             "'/ac' should activate slash popup via fuzzy match"
         );
 
-        // Case 4: invalid prefix "/zzz" – still allowed to open popup if it
-        // matches no built-in command; our current logic will not open popup.
-        // Verify that explicitly.
+        // Case 4: unmatched prefix "/zzz" still opens the popup.
         composer.set_text_content("/zzz".to_string());
         assert!(
-            matches!(composer.active_popup, ActivePopup::None),
-            "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/zzz' should activate slash popup even without a match"
+        );
+    }
+
+    #[test]
+    fn slash_popup_activated_for_prefix_with_args() {
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("/review please summarize".to_string());
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.sync_popups();
+
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "slash popup should stay open when args follow the command name"
         );
     }
 
