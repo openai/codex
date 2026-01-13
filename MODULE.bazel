@@ -89,6 +89,14 @@ crate.annotation(
 
 inject_repo(crate, "openssl")
 
+# Avoid requiring CMake on remote runners; use the cc builder for aws-lc-sys.
+crate.annotation(
+    crate = "aws-lc-sys",
+    build_script_env = {
+        "AWS_LC_SYS_CMAKE_BUILDER": "0",
+    },
+)
+
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",
