@@ -101,6 +101,24 @@ enum PromptSelectionAction {
     Submit { text: String },
 }
 
+struct FirstLineContext {
+    text: String,
+    first_line_end: usize,
+    cursor: usize,
+    caret_on_first_line: bool,
+    prefix_end: usize,
+}
+
+impl FirstLineContext {
+    fn first_line(&self) -> &str {
+        &self.text[..self.first_line_end]
+    }
+
+    fn prefix(&self) -> &str {
+        &self.text[..self.prefix_end]
+    }
+}
+
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -146,6 +164,47 @@ enum ActivePopup {
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
+    fn first_line_context(&self) -> FirstLineContext {
+        let text = self.textarea.text().to_string();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let cursor = self.textarea.cursor().min(text.len());
+        let caret_on_first_line = cursor <= first_line_end;
+        let prefix_end = if caret_on_first_line {
+            cursor.max(1).min(first_line_end)
+        } else {
+            first_line_end
+        };
+
+        FirstLineContext {
+            text,
+            first_line_end,
+            cursor,
+            caret_on_first_line,
+            prefix_end,
+        }
+    }
+
+    fn slash_popup_prefix<'a>(&self, ctx: &'a FirstLineContext) -> Option<&'a str> {
+        if !ctx.caret_on_first_line {
+            return None;
+        }
+        if ctx.cursor <= 1 && ctx.first_line().starts_with("/ ") {
+            return None;
+        }
+        if ctx.prefix() == "/"
+            || Self::slash_command_prefix(ctx.prefix())
+                .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest))
+        {
+            return Some(ctx.prefix());
+        }
+
+        None
+    }
+
+    fn should_clear_after_command(&self, cmd: SlashCommand) -> bool {
+        self.textarea.text().trim() == format!("/{}", cmd.command())
+    }
+
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -542,6 +601,7 @@ impl ChatComposer {
         } else {
             None
         };
+        let ctx_for_tab = matches!(key_event.code, KeyCode::Tab).then(|| self.first_line_context());
         let ActivePopup::Command(popup) = &mut self.active_popup else {
             unreachable!();
         };
@@ -582,18 +642,15 @@ impl ChatComposer {
             } => {
                 // Ensure popup filtering/selection reflects the latest composer text
                 // before applying completion.
-                let text = self.textarea.text();
-                let first_line_end = text.find('\n').unwrap_or(text.len());
-                let cursor = self.textarea.cursor().min(first_line_end);
-                let first_line = &text[..first_line_end];
-                let prefix = &text[..cursor];
-                popup.on_composer_text_change(prefix.to_string());
+                let ctx = ctx_for_tab.as_ref().expect("tab context must exist");
+                let first_line = ctx.first_line();
+                popup.on_composer_text_change(ctx.prefix().to_string());
                 if let Some(sel) = popup.selected_item() {
                     let mut cursor_target: Option<usize> = None;
                     match sel {
                         CommandItem::Builtin(cmd) => {
                             if cmd == SlashCommand::Skills {
-                                if self.textarea.text().trim() == format!("/{}", cmd.command()) {
+                                if self.should_clear_after_command(cmd) {
                                     self.textarea.set_text("");
                                 }
                                 return (InputResult::Command(cmd), true);
@@ -655,7 +712,7 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
-                            if self.textarea.text().trim() == format!("/{}", cmd.command()) {
+                            if self.should_clear_after_command(cmd) {
                                 self.textarea.set_text("");
                             }
                             return (InputResult::Command(cmd), true);
@@ -1774,24 +1831,8 @@ impl ChatComposer {
             }
             return;
         }
-        // Determine whether the caret is on the first line and the line starts with '/'.
-        let text = self.textarea.text();
-        let first_line_end = text.find('\n').unwrap_or(text.len());
-        let first_line = &text[..first_line_end];
-        let cursor = self.textarea.cursor();
-        let caret_on_first_line = cursor <= first_line_end;
-        let prefix_end = if caret_on_first_line {
-            cursor.max(1).min(first_line_end)
-        } else {
-            first_line_end
-        };
-        let first_line_prefix = &text[..prefix_end];
-
-        let is_editing_slash_command_name = caret_on_first_line
-            && !(cursor <= 1 && first_line.starts_with("/ "))
-            && (first_line_prefix == "/"
-                || Self::slash_command_prefix(first_line_prefix)
-                    .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest)));
+        let ctx = self.first_line_context();
+        let slash_prefix = self.slash_popup_prefix(&ctx);
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -1804,18 +1845,18 @@ impl ChatComposer {
         }
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
-                if is_editing_slash_command_name {
-                    popup.on_composer_text_change(first_line_prefix.to_string());
+                if let Some(prefix) = slash_prefix {
+                    popup.on_composer_text_change(prefix.to_string());
                 } else {
                     self.active_popup = ActivePopup::None;
                 }
             }
             _ => {
-                if is_editing_slash_command_name {
+                if let Some(prefix) = slash_prefix {
                     let skills_enabled = self.skills_enabled();
                     let mut command_popup =
                         CommandPopup::new(self.custom_prompts.clone(), skills_enabled);
-                    command_popup.on_composer_text_change(first_line_prefix.to_string());
+                    command_popup.on_composer_text_change(prefix.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
             }
