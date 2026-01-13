@@ -47,7 +47,7 @@ pub(crate) struct MessageProcessor {
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(
+    pub(crate) async fn new(
         outgoing: OutgoingMessageSender,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
@@ -58,11 +58,9 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
-            auth_manager,
-            SessionSource::Mcp,
-        ));
+        let thread_manager = Arc::new(
+            ThreadManager::new((*config).clone(), auth_manager, SessionSource::Mcp).await,
+        );
         Self {
             outgoing,
             initialized: false,

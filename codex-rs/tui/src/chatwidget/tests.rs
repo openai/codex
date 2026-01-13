@@ -394,7 +394,9 @@ async fn make_chatwidget_manual(
         config: cfg,
         model: resolved_model.clone(),
         auth_manager: auth_manager.clone(),
-        models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
+        models_manager: Arc::new(
+            ModelsManager::new(cfg.clone(), auth_manager).await,
+        ),
         session_header: SessionHeader::new(resolved_model),
         initial_user_message: None,
         token_info: None,
@@ -432,13 +434,12 @@ async fn make_chatwidget_manual(
     (widget, rx, op_rx)
 }
 
-fn set_chatgpt_auth(chat: &mut ChatWidget) {
+async fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.models_manager = Arc::new(ModelsManager::new(
-        chat.config.codex_home.clone(),
-        chat.auth_manager.clone(),
-    ));
+    chat.models_manager = Arc::new(
+        ModelsManager::new(chat.config.clone(), chat.auth_manager.clone()).await,
+    );
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
@@ -2220,7 +2221,7 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 async fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
 
-    set_chatgpt_auth(&mut chat);
+    set_chatgpt_auth(&mut chat).await;
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -2234,7 +2235,7 @@ async fn model_reasoning_selection_popup_snapshot() {
 async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
 
-    set_chatgpt_auth(&mut chat);
+    set_chatgpt_auth(&mut chat).await;
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -2248,7 +2249,7 @@ async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
 async fn reasoning_popup_shows_extra_high_with_space() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
 
-    set_chatgpt_auth(&mut chat);
+    set_chatgpt_auth(&mut chat).await;
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);

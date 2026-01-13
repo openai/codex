@@ -65,19 +65,18 @@ pub(crate) struct ThreadManagerState {
 }
 
 impl ThreadManager {
-    pub fn new(
-        codex_home: PathBuf,
+    pub async fn new(
+        config: Config,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
     ) -> Self {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
-                models_manager: Arc::new(ModelsManager::new(
-                    codex_home.clone(),
-                    auth_manager.clone(),
-                )),
-                skills_manager: Arc::new(SkillsManager::new(codex_home)),
+                models_manager: Arc::new(
+                    ModelsManager::new(config.clone(), auth_manager.clone()).await,
+                ),
+                skills_manager: Arc::new(SkillsManager::new(config.codex_home.clone())),
                 auth_manager,
                 session_source,
                 #[cfg(any(test, feature = "test-support"))]

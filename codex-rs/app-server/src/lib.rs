@@ -129,7 +129,7 @@ pub async fn run_main(
         .try_init();
 
     // Task: process incoming messages.
-    let processor_handle = tokio::spawn({
+    let processor_handle = tokio::spawn(async move {
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
@@ -140,8 +140,8 @@ pub async fn run_main(
             cli_overrides,
             loader_overrides,
             feedback.clone(),
-        );
-        async move {
+        )
+        .await;
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {
                     JSONRPCMessage::Request(r) => processor.process_request(r).await,

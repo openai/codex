@@ -60,18 +60,26 @@ pub struct ModelsManager {
 impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager`.
     ///
-    /// Uses `codex_home` to store cached model metadata and initializes with built-in presets.
-    pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
-        let cache_path = codex_home.join(MODEL_CACHE_FILE);
+    /// Uses `config.codex_home` to store cached model metadata and initializes with built-in presets.
+    /// Refreshes available models using the default strategy.
+    pub async fn new(config: Config, auth_manager: Arc<AuthManager>) -> Self {
+        let cache_path = config.codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        Self {
+        let manager = Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
             provider: ModelProviderInfo::create_openai_provider(),
+        };
+        if let Err(err) = manager
+            .refresh_available_models(&config, RefreshStrategy::default())
+            .await
+        {
+            error!("failed to refresh available models during initialization: {err}");
         }
+        manager
     }
 
     /// List all available models, refreshing according to the specified strategy.

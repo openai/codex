@@ -96,14 +96,14 @@ pub async fn run_main(
         })?;
 
     // Task: process incoming messages.
-    let processor_handle = tokio::spawn({
+    let processor_handle = tokio::spawn(async move {
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),
-        );
-        async move {
+        )
+        .await;
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {
                     JSONRPCMessage::Request(r) => processor.process_request(r).await,

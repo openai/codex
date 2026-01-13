@@ -365,11 +365,9 @@ impl App {
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
 
-        let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
-            auth_manager.clone(),
-            SessionSource::Cli,
-        ));
+        let thread_manager = Arc::new(
+            ThreadManager::new(config.clone(), auth_manager.clone(), SessionSource::Cli).await,
+        );
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, &config, RefreshStrategy::default())
