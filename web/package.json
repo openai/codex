@@ -10,6 +10,7 @@
     "start": "node server/index.mjs"
   },
   "dependencies": {
+    "@openai/codex-sdk": "workspace:*",
     "@monaco-editor/react": "^4.6.0",
     "allotment": "^1.20.2",
     "clsx": "^2.1.1",
@@ -17,6 +18,7 @@
     "mime": "^4.0.6",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "ws": "^8.18.0",
     "zustand": "^4.5.5"
   },
   "devDependencies": {

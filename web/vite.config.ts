@@ -6,7 +6,16 @@ export default defineConfig({
   server: {
     host: process.env.VITE_HOST ?? "0.0.0.0",
     proxy: {
-      "/api": "http://localhost:3000",
+      "/api": {
+        target: "http://localhost:3000",
+        ws: true,
+      },
+      "/webview": {
+        target: "http://localhost:3000",
+      },
+      "/_ext": {
+        target: "http://localhost:3000",
+      },
     },
   },
 });

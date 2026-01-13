@@ -3,9 +3,10 @@ import "allotment/dist/style.css";
 import { useEffect, useMemo, useState } from "react";
 import { EditorPane } from "./EditorPane";
 import { Explorer } from "./Explorer";
-import { getWorkspace } from "./api";
+import { createChatSession, getWorkspace, patchWorkspaceSettings } from "./api";
 import { AddRootModal } from "./AddRootModal";
 import { useAppStore } from "./store";
+import { VscodeChatPane } from "./VscodeChatPane";
 
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(false);
@@ -24,12 +25,23 @@ export function App() {
   const rootsLoading = useAppStore((s) => s.rootsLoading);
   const rootsError = useAppStore((s) => s.rootsError);
   const setRoots = useAppStore((s) => s.setRoots);
+  const workspaceSettings = useAppStore((s) => s.workspaceSettings);
+  const setWorkspaceSettings = useAppStore((s) => s.setWorkspaceSettings);
   const setRootsLoading = useAppStore((s) => s.setRootsLoading);
   const setRootsError = useAppStore((s) => s.setRootsError);
 
   const [addOpen, setAddOpen] = useState(false);
   const isNarrow = useMediaQuery("(max-width: 820px)");
-  const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<"explorer" | "viewer">("explorer");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const [activeRootId, setActiveRootId] = useState<string | null>(() => {
+    const v = localStorage.getItem("webActiveRootId");
+    return v && v.length > 0 ? v : null;
+  });
+  const [rootPickerOpen, setRootPickerOpen] = useState(false);
+  const [rootPickerMode, setRootPickerMode] = useState<"switch" | "newSession">("switch");
 
   const statusText = useMemo(() => {
     if (rootsLoading) return "ワークスペース読み込み中…";
@@ -37,12 +49,24 @@ export function App() {
     return `roots: ${roots.length}`;
   }, [roots.length, rootsError, rootsLoading]);
 
+  const activeRoot =
+    (activeRootId ? roots.find((r) => r.id === activeRootId) : null) ?? roots.at(0) ?? null;
+  const cliLabel = workspaceSettings?.cliCommand ?? "codex-mine";
+
+  useEffect(() => {
+    if (!activeRoot) return;
+    localStorage.setItem("webActiveRootId", activeRoot.id);
+    if (activeRootId !== activeRoot.id) setActiveRootId(activeRoot.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRoot?.id]);
+
   async function refreshWorkspace() {
     setRootsLoading(true);
     setRootsError(undefined);
     try {
       const ws = await getWorkspace();
       setRoots(ws.roots);
+      setWorkspaceSettings(ws.settings ?? null);
     } catch (e) {
       setRootsError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -55,44 +79,62 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const onMessage = (ev: MessageEvent) => {
+      if (ev.origin !== window.location.origin) return;
+      const data = ev.data as any;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "codexMine.newSessionPickFolder") {
+        setRootPickerMode("newSession");
+        setRootPickerOpen(true);
+        return;
+      }
+      if (data.type === "codexMine.openSettings") {
+        setSettingsOpen(true);
+        return;
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
   return (
     <div className="app">
       <div className="titlebar">
-        <span className="title">Workspace Viewer (Read Only)</span>
-        {isNarrow ? (
-          <button className="btn" onClick={() => setMobileExplorerOpen(true)}>
-            Explorer
+        <div className="titlebarLeft">
+          {isNarrow ? (
+            <button className="iconBtn" onClick={() => setDrawerOpen(true)} aria-label="Menu">
+              ☰
+            </button>
+          ) : null}
+          <button
+            className="titleBtn"
+            onClick={() => {
+              setRootPickerMode("switch");
+              setRootPickerOpen(true);
+            }}
+            title="root を選択"
+          >
+            <span className="title">
+              {activeRoot ? `${activeRoot.label} (${cliLabel})` : "no root"}
+            </span>
           </button>
-        ) : null}
-        <button className="btn" onClick={() => setAddOpen(true)}>
-          Add Folder
-        </button>
-        <button className="btn" onClick={() => void refreshWorkspace()}>
-          Refresh
-        </button>
+        </div>
+        <div className="titlebarActions">
+          <button
+            className="iconBtn"
+            onClick={() => setSettingsOpen((v) => !v)}
+            aria-label="Settings"
+            title="Settings"
+          >
+            ⚙
+          </button>
+        </div>
       </div>
 
       <div className="workbench">
         {isNarrow ? (
-          <div style={{ height: "100%", minHeight: 0 }}>
-            <EditorPane />
-            {mobileExplorerOpen ? (
-              <div
-                className="mobileDrawerBackdrop"
-                onClick={(e) => {
-                  if (e.target === e.currentTarget) setMobileExplorerOpen(false);
-                }}
-              >
-                <div className="mobileDrawer">
-                  <Explorer
-                    onOpenAdd={() => setAddOpen(true)}
-                    onWorkspaceChanged={() => void refreshWorkspace()}
-                    onFileOpened={() => setMobileExplorerOpen(false)}
-                  />
-                </div>
-              </div>
-            ) : null}
-          </div>
+          <VscodeChatPane rootId={activeRoot?.id ?? null} />
         ) : (
           <Allotment>
             <Allotment.Pane preferredSize={320} minSize={260}>
@@ -103,6 +145,9 @@ export function App() {
             </Allotment.Pane>
             <Allotment.Pane>
               <EditorPane />
+            </Allotment.Pane>
+            <Allotment.Pane preferredSize={520} minSize={360}>
+              <VscodeChatPane rootId={activeRoot?.id ?? null} />
             </Allotment.Pane>
           </Allotment>
         )}
@@ -118,6 +163,177 @@ export function App() {
             await refreshWorkspace();
           }}
         />
+      ) : null}
+
+      {isNarrow && drawerOpen ? (
+        <div
+          className="drawerBackdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDrawerOpen(false);
+          }}
+        >
+          <div className="drawer">
+            <div className="drawerHeader">
+              <div className="drawerTabs">
+                <button
+                  className={drawerTab === "explorer" ? "drawerTab active" : "drawerTab"}
+                  onClick={() => setDrawerTab("explorer")}
+                >
+                  Explorer
+                </button>
+                <button
+                  className={drawerTab === "viewer" ? "drawerTab active" : "drawerTab"}
+                  onClick={() => setDrawerTab("viewer")}
+                >
+                  Viewer
+                </button>
+              </div>
+              <button className="iconBtn" onClick={() => setDrawerOpen(false)} aria-label="Close">
+                ×
+              </button>
+            </div>
+            <div className="drawerBody">
+              {drawerTab === "explorer" ? (
+                <Explorer
+                  onOpenAdd={() => setAddOpen(true)}
+                  onWorkspaceChanged={() => void refreshWorkspace()}
+                  onFileOpened={() => {
+                    setDrawerTab("viewer");
+                  }}
+                />
+              ) : (
+                <EditorPane />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {settingsOpen ? (
+        <div
+          className="menuBackdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSettingsOpen(false);
+          }}
+        >
+          <div className="menu">
+            <div className="menuSectionTitle">CLI</div>
+            <div className="menuSection">
+              <button
+                className={cliLabel === "codex-mine" ? "segBtn active" : "segBtn"}
+                onClick={async () => {
+                  try {
+                    await patchWorkspaceSettings({ cliCommand: "codex-mine" });
+                    setWorkspaceSettings({ cliCommand: "codex-mine" });
+                    setSettingsOpen(false);
+                    await refreshWorkspace();
+                  } catch (e) {
+                    setRootsError(e instanceof Error ? e.message : String(e));
+                  }
+                }}
+              >
+                codex-mine
+              </button>
+              <button
+                className={cliLabel === "codex" ? "segBtn active" : "segBtn"}
+                onClick={async () => {
+                  try {
+                    await patchWorkspaceSettings({ cliCommand: "codex" });
+                    setWorkspaceSettings({ cliCommand: "codex" });
+                    setSettingsOpen(false);
+                    await refreshWorkspace();
+                  } catch (e) {
+                    setRootsError(e instanceof Error ? e.message : String(e));
+                  }
+                }}
+              >
+                codex
+              </button>
+              <div className="menuHint">
+                切替すると app-server を再起動します（実行中の turn は中断される可能性があります）。
+              </div>
+            </div>
+            <div className="menuSep" />
+            <button
+              className="menuItem"
+              onClick={() => {
+                setSettingsOpen(false);
+                setRootPickerMode("switch");
+                setRootPickerOpen(true);
+              }}
+            >
+              Switch root
+            </button>
+            <button
+              className="menuItem"
+              onClick={() => {
+                setSettingsOpen(false);
+                setAddOpen(true);
+              }}
+            >
+              Add folder
+            </button>
+            <button
+              className="menuItem"
+              onClick={() => {
+                setSettingsOpen(false);
+                void refreshWorkspace();
+              }}
+            >
+              Refresh workspace
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {rootPickerOpen ? (
+        <div
+          className="modalBackdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRootPickerOpen(false);
+          }}
+        >
+          <div className="modal">
+            <div className="modalHeader">
+              <div className="modalTitle">root を選択</div>
+              <button className="btn" onClick={() => setRootPickerOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="modalBody">
+              {roots.length === 0 ? (
+                <div className="empty">root がありません。先に Add folder してください。</div>
+              ) : null}
+              {rootPickerMode === "newSession" ? (
+                <div className="empty">New session を作成する root を選択してください。</div>
+              ) : null}
+              {roots.map((r) => (
+                <div
+                  key={r.id}
+                  className="dirRow"
+                  onClick={async () => {
+                    setActiveRootId(r.id);
+                    localStorage.setItem("webActiveRootId", r.id);
+                    setRootPickerOpen(false);
+                    if (rootPickerMode === "newSession") {
+                      try {
+                        await createChatSession(r.id);
+                      } catch (e) {
+                        setRootsError(e instanceof Error ? e.message : String(e));
+                      }
+                    }
+                  }}
+                  title={r.absPath}
+                >
+                  <span style={{ color: r.id === activeRoot?.id ? "#0e639c" : "#9da5b4" }}>
+                    {r.id === activeRoot?.id ? "●" : "○"}
+                  </span>
+                  <span>{r.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

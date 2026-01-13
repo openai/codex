@@ -73,7 +73,11 @@ export class BackendManager implements vscode.Disposable {
     | ((session: Session, req: V2AskUserQuestionRequest) => Promise<AskUserQuestionResponse>)
     | null = null;
   public onServerEvent:
-    | ((session: Session | null, n: AnyServerNotification) => void)
+    | ((
+        backendKey: string,
+        session: Session | null,
+        n: AnyServerNotification,
+      ) => void)
     | null = null;
   public onBackendTerminated:
     | ((backendKey: string, info: BackendTermination) => void)
@@ -682,12 +686,12 @@ export class BackendManager implements vscode.Disposable {
   }
 
   private onServerNotification(
-    _backendKey: string,
+    backendKey: string,
     n: AnyServerNotification,
   ): void {
     const session =
       "params" in n ? this.sessionFromParams((n as any).params) : null;
-    this.onServerEvent?.(session, n);
+    this.onServerEvent?.(backendKey, session, n);
 
     const p = (n as any).params as any;
 

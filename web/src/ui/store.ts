@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { TreeEntry, WorkspaceRoot } from "./api";
+import type { TreeEntry, WorkspaceRoot, WorkspaceSettings } from "./api";
 
 export type OpenTab = {
   id: string; // `${rootId}:${path}`
@@ -24,6 +24,7 @@ type State = {
   roots: WorkspaceRoot[];
   rootsLoading: boolean;
   rootsError?: string;
+  workspaceSettings?: WorkspaceSettings | null;
 
   openTabs: OpenTab[];
   activeTabId?: string;
@@ -32,6 +33,7 @@ type State = {
   files: Record<string, FileState>; // key: `${rootId}:${filePath}`
 
   setRoots: (roots: WorkspaceRoot[]) => void;
+  setWorkspaceSettings: (settings: WorkspaceSettings | null) => void;
   setRootsLoading: (loading: boolean) => void;
   setRootsError: (error?: string) => void;
 
@@ -46,6 +48,7 @@ type State = {
 export const useAppStore = create<State>((set) => ({
   roots: [],
   rootsLoading: false,
+  workspaceSettings: null,
 
   openTabs: [],
 
@@ -53,6 +56,7 @@ export const useAppStore = create<State>((set) => ({
   files: {},
 
   setRoots: (roots) => set({ roots }),
+  setWorkspaceSettings: (workspaceSettings) => set({ workspaceSettings }),
   setRootsLoading: (rootsLoading) => set({ rootsLoading }),
   setRootsError: (rootsError) => set({ rootsError }),
 

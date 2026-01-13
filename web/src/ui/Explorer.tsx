@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { useEffect, useMemo, useState } from "react";
-import { getTree, removeRoot, renameRoot, type TreeEntry } from "./api";
+import { getTree, removeRoot, renameRoot, setRootCliCommand, type TreeEntry } from "./api";
 import { useAppStore } from "./store";
 
 function joinPosix(a: string, b: string) {
@@ -76,14 +76,32 @@ export function Explorer(props: {
 
         {sortedRoots.map((root) => (
           <div key={root.id} className="rootRow">
-            <div className="rootTop">
-              <div className="rootTitle">{root.label}</div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button
-                  className="btn"
-                  onClick={async () => {
-                    try {
-                      const next = prompt("label を入力", root.label);
+              <div className="rootTop">
+                <div className="rootTitle">{root.label}</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <select
+                    className="rootSelect"
+                    value={root.cliCommand}
+                    onChange={async (e) => {
+                      try {
+                        const v = e.target.value === "codex" ? "codex" : "codex-mine";
+                        await setRootCliCommand(root.id, v);
+                        await props.onWorkspaceChanged();
+                      } catch (err) {
+                        alert(err instanceof Error ? err.message : String(err));
+                      }
+                    }}
+                    aria-label="CLI"
+                    title="CLI"
+                  >
+                    <option value="codex-mine">codex-mine</option>
+                    <option value="codex">codex</option>
+                  </select>
+                  <button
+                    className="btn"
+                    onClick={async () => {
+                      try {
+                        const next = prompt("label を入力", root.label);
                       if (next == null) return;
                       await renameRoot(root.id, next);
                       await props.onWorkspaceChanged();

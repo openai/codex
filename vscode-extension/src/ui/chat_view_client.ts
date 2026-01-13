@@ -1412,6 +1412,12 @@ function main(): void {
       kind: "slash",
     },
     {
+      insert: "/init ",
+      label: "/init",
+      detail: "Create AGENTS.md",
+      kind: "slash",
+    },
+    {
       insert: "/resume ",
       label: "/resume",
       detail: "Resume from history",

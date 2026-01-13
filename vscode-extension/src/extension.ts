@@ -38,6 +38,7 @@ import { SessionTreeDataProvider } from "./ui/session_tree";
 
 const REWIND_STEP_TIMEOUT_MS = 120_000;
 const LAST_ACTIVE_SESSION_KEY = "codexMine.lastActiveSessionId.v1";
+const DEFAULT_PROJECT_DOC_FILENAME = "AGENTS.md";
 
 let backendManager: BackendManager | null = null;
 let sessions: SessionStore | null = null;
@@ -48,6 +49,7 @@ let sessionPanels: SessionPanelManager | null = null;
 let activeSessionId: string | null = null;
 let extensionContext: vscode.ExtensionContext | null = null;
 let outputChannel: vscode.OutputChannel | null = null;
+let initPromptCache: string | null = null;
 
 type StressUiJob = {
   sessionId: string;
@@ -116,6 +118,20 @@ function formatUnknownError(err: unknown): string {
 function requireExtensionContext(): vscode.ExtensionContext {
   if (!extensionContext) throw new Error("extensionContext is not initialized");
   return extensionContext;
+}
+
+async function getInitPrompt(
+  context: vscode.ExtensionContext,
+): Promise<string> {
+  if (initPromptCache !== null) return initPromptCache;
+  const uri = vscode.Uri.joinPath(
+    context.extensionUri,
+    "resources",
+    "prompt_for_init_command.md",
+  );
+  const bytes = await vscode.workspace.fs.readFile(uri);
+  initPromptCache = Buffer.from(bytes).toString("utf8");
+  return initPromptCache;
 }
 
 function imageCacheDirFsPath(context: vscode.ExtensionContext): string {
@@ -345,7 +361,7 @@ const WORKSPACE_COLOR_PALETTE = [
   "#c9d1d9", // グレー
 ] as const;
 let workspaceColorOverrides: Record<string, number> = {};
-const mcpStatusByServer = new Map<string, string>();
+const mcpStatusByBackendKey = new Map<string, Map<string, string>>();
 const cliVariantByBackendKey = new Map<
   string,
   "unknown" | "codex" | "codex-mine"
@@ -438,9 +454,9 @@ export function activate(context: vscode.ExtensionContext): void {
   backendManager = new BackendManager(output, sessions);
   backendManager.onBackendTerminated = (backendKey, info) =>
     handleBackendTerminated(backendKey, info);
-  backendManager.onServerEvent = (session, n) => {
-    if (session) applyServerNotification(session.id, n);
-    else applyGlobalNotification(n);
+  backendManager.onServerEvent = (backendKey, session, n) => {
+    if (session) applyServerNotification(backendKey, session.id, n);
+    else applyGlobalNotification(backendKey, n);
   };
   backendManager.onSessionAdded = (s) => {
     saveSessions(context, sessions!);
@@ -2096,6 +2112,10 @@ function handleBackendTerminated(
 ): void {
   if (!sessions) return;
 
+  if (mcpStatusByBackendKey.delete(backendKey)) {
+    updateThreadStartedBlocks();
+  }
+
   const affectedSessions = sessions.list(backendKey);
   if (affectedSessions.length === 0) return;
 
@@ -2574,6 +2594,70 @@ async function handleSlashCommand(
     await vscode.commands.executeCommand("codexMine.showStatus");
     return true;
   }
+  if (cmd === "init") {
+    if (arg) {
+      upsertBlock(session.id, {
+        id: newLocalId("initError"),
+        type: "error",
+        title: "Slash command error",
+        text: "/init does not take arguments.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const folder = resolveWorkspaceFolderForSession(session);
+    if (!folder) {
+      upsertBlock(session.id, {
+        id: newLocalId("initNoFolder"),
+        type: "error",
+        title: "Init failed",
+        text: "このセッションに紐づく workspace folder が見つかりません。",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const initTarget = path.join(
+      folder.uri.fsPath,
+      DEFAULT_PROJECT_DOC_FILENAME,
+    );
+
+    let exists = false;
+    try {
+      await fs.stat(initTarget);
+      exists = true;
+    } catch (err) {
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        (err as any).code === "ENOENT"
+      ) {
+        exists = false;
+      } else {
+        throw err;
+      }
+    }
+
+    if (exists) {
+      upsertBlock(session.id, {
+        id: newLocalId("initSkip"),
+        type: "info",
+        title: "Init skipped",
+        text: `${DEFAULT_PROJECT_DOC_FILENAME} が既に存在するため、上書き防止のため /init をスキップしました。`,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const prompt = await getInitPrompt(context);
+    await sendUserInput(session, prompt, [], getSessionModelState());
+    return true;
+  }
   if (cmd === "compact") {
     if (arg) {
       upsertBlock(session.id, {
@@ -2717,6 +2801,7 @@ async function handleSlashCommand(
           ? "- /compact: Compact context"
           : "- /compact: (codex-mine のみ対応)",
         "- /new: New session",
+        "- /init: Create AGENTS.md",
         "- /resume: Resume from history",
         "- /status: Show status",
         "- /diff: Open Latest Diff",
@@ -3591,6 +3676,7 @@ function normalizeSessionTitle(title: string): string {
 }
 
 function applyServerNotification(
+  backendKey: string,
   sessionId: string,
   n: AnyServerNotification,
 ): void {
@@ -3906,7 +3992,7 @@ function applyServerNotification(
     }
     default:
       if (n.method.startsWith("codex/event/")) {
-        applyCodexEvent(rt, sessionId, n.method, (n as any).params);
+        applyCodexEvent(rt, sessionId, backendKey, n.method, (n as any).params);
         chatView?.refresh();
         return;
       }
@@ -4607,7 +4693,10 @@ function removeGlobalWhere(pred: (b: ChatBlock) => boolean): void {
   }
 }
 
-function applyGlobalNotification(n: AnyServerNotification): void {
+function applyGlobalNotification(
+  backendKey: string,
+  n: AnyServerNotification,
+): void {
   switch (n.method) {
     case "rawResponseItem/completed":
       // Internal-only (Codex Cloud). Avoid flooding "Other events (debug)".
@@ -4656,13 +4745,13 @@ function applyGlobalNotification(n: AnyServerNotification): void {
       if (cwd) lines.push(`Working directory: \`${cwd}\``);
       if (cliVersion) lines.push(`CLI version: \`${cliVersion}\``);
       if (originUrl) lines.push(`Git origin: ${originUrl}`);
-      const mcpLine = formatMcpStatusSummary();
-      if (mcpLine) lines.push(mcpLine);
 
-      const backendKey = backendKeyForCwd(cwd);
-      if (backendKey) {
+      const effectiveBackendKey = backendKeyForCwd(cwd) ?? backendKey;
+      if (effectiveBackendKey) {
+        const mcpLine = formatMcpStatusSummary(effectiveBackendKey);
+        if (mcpLine) lines.push(mcpLine);
         const next = inferCliVariantFromCliVersion(cliVersion);
-        cliVariantByBackendKey.set(backendKey, next);
+        cliVariantByBackendKey.set(effectiveBackendKey, next);
       }
 
       // De-dupe: `New` creates a new thread and emits `thread/started` again, but for the same cwd we only
@@ -4786,7 +4875,7 @@ function applyGlobalNotification(n: AnyServerNotification): void {
     }
     default: {
       if (n.method.startsWith("codex/event/")) {
-        applyGlobalCodexEvent(n.method, (n as any).params);
+        applyGlobalCodexEvent(backendKey, n.method, (n as any).params);
         chatView?.refresh();
         return;
       }
@@ -4829,11 +4918,20 @@ function appendUnhandledGlobalEvent(title: string, params: unknown): void {
   });
 }
 
-function formatMcpStatusSummary(): string | null {
-  if (mcpStatusByServer.size === 0) return null;
+function getMcpStatusMap(backendKey: string): Map<string, string> {
+  const existing = mcpStatusByBackendKey.get(backendKey);
+  if (existing) return existing;
+  const next = new Map<string, string>();
+  mcpStatusByBackendKey.set(backendKey, next);
+  return next;
+}
+
+function formatMcpStatusSummary(backendKey: string): string | null {
+  const status = mcpStatusByBackendKey.get(backendKey);
+  if (!status || status.size === 0) return null;
   const icon = (state: string): string =>
     state === "ready" ? "✓" : state === "starting" ? "…" : "•";
-  const lines = [...mcpStatusByServer.entries()].map(
+  const lines = [...status.entries()].map(
     ([server, state]) => `${icon(state)} ${server}`,
   );
   return ["MCP servers:", ...lines].join("\n");
@@ -4853,12 +4951,15 @@ function formatSessionConfigForDisplay(
 }
 
 function updateThreadStartedBlocks(): void {
-  const summary = formatMcpStatusSummary();
   let changed = false;
   for (let i = 0; i < globalRuntime.blocks.length; i++) {
     const b = globalRuntime.blocks[i];
     if (!b) continue;
     if (b.type !== "info" || b.title !== "Thread started") continue;
+    const cwdPrefix = "global:threadStarted:cwd:";
+    const cwd = b.id.startsWith(cwdPrefix) ? b.id.slice(cwdPrefix.length) : null;
+    const backendKey = cwd ? backendKeyForCwd(cwd) : null;
+    const summary = backendKey ? formatMcpStatusSummary(backendKey) : null;
     const lines = b.text
       .split("\n")
       .filter(
@@ -4891,7 +4992,11 @@ function appendUnhandledEvent(
     `${block.text}\n${title}\n${formatParamsForDisplay(params)}\n`.trim();
 }
 
-function applyGlobalCodexEvent(method: string, params: unknown): void {
+function applyGlobalCodexEvent(
+  backendKey: string,
+  method: string,
+  params: unknown,
+): void {
   const p = params as any;
   const msg = p?.msg as any;
   const type = typeof msg?.type === "string" ? msg.type : null;
@@ -4971,7 +5076,7 @@ function applyGlobalCodexEvent(method: string, params: unknown): void {
       typeof (status as any).state === "string"
         ? (status as any).state
         : "unknown";
-    if (server !== "(unknown)") mcpStatusByServer.set(server, state);
+    if (server !== "(unknown)") getMcpStatusMap(backendKey).set(server, state);
     updateThreadStartedBlocks();
     return;
   }
@@ -4980,6 +5085,7 @@ function applyGlobalCodexEvent(method: string, params: unknown): void {
 function applyCodexEvent(
   rt: SessionRuntime,
   sessionId: string,
+  backendKey: string,
   method: string,
   params: unknown,
 ): void {
@@ -5041,7 +5147,7 @@ function applyCodexEvent(
         ? (status as any).state
         : "unknown";
     if (server !== "(unknown)") {
-      mcpStatusByServer.set(server, state);
+      getMcpStatusMap(backendKey).set(server, state);
       updateThreadStartedBlocks();
     }
     return;

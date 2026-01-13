@@ -1017,19 +1017,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.statePostDirty = false;
     this.statePostInFlight = true;
     const seq = (this.lastStatePostSeq += 1);
-    if (this.stateAckTimeout) clearTimeout(this.stateAckTimeout);
-    // If the webview stops acknowledging state updates (e.g. render stuck),
-    // do not deadlock future refreshes; surface the issue and keep going.
-    this.stateAckTimeout = setTimeout(() => {
-      this.stateAckTimeout = null;
-      if (!this.view) return;
-      if (!this.statePostInFlight) return;
-      this.statePostInFlight = false;
-      this.onUiError(
-        `Webview did not acknowledge state update (seq=${String(seq)}) within 2000ms; continuing.`,
-      );
-      if (this.statePostDirty) this.postControlState();
-    }, 2000);
+	    if (this.stateAckTimeout) clearTimeout(this.stateAckTimeout);
+	    // If the webview stops acknowledging state updates (e.g. render stuck),
+	    // do not deadlock future refreshes; keep going.
+	    this.stateAckTimeout = setTimeout(() => {
+	      this.stateAckTimeout = null;
+	      if (!this.view) return;
+	      if (!this.statePostInFlight) return;
+	      this.statePostInFlight = false;
+	      if (this.statePostDirty) this.postControlState();
+	    }, 2000);
     const full = this.getState();
 	    const controlState = {
 	      globalBlocks: full.globalBlocks,

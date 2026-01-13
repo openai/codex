@@ -73,8 +73,14 @@ The extension contributes a **Codex UI** activity bar container with:
 Supported commands (handled by the extension):
 
 - `/new` - create a new session
+- `/init` - generate an `AGENTS.md` (skips if it already exists)
+- `/resume` - resume from history
+- `/status` - show status
+- `/compact` - compact context (codex-mine backend only)
 - `/diff` - open latest diff
 - `/rename <title>` - rename session
+- `/skills` - browse skills
+- `/agents` - browse agents (codex-mine backend only)
 - `/help` - show help
 
 Custom prompts:
@@ -88,7 +94,7 @@ Custom prompts:
 - Prompt arguments are parsed with `shell-quote` (shlex-like quoting support)
 
 Unknown commands are passed through to the backend (no local error).
-Custom prompts only execute via `/prompts:<name>`; UI commands (`/new`, `/diff`, `/rename`, `/help`)
+Custom prompts only execute via `/prompts:<name>`; built-in commands (e.g. `/new`, `/init`, `/diff`, `/help`)
 keep their local behavior even if a prompt shares the same name.
 
 ## 7. Mentions
@@ -116,8 +122,9 @@ Mentions follow a CLI-like rule: `@...` must start on a whitespace boundary.
 The webview provides in-input suggestions for:
 
 - Slash commands, in this order:
-  1. Custom prompts from `$CODEX_HOME/prompts`
-  2. UI commands (`/new`, `/diff`, `/rename`, `/help`)
+  1. Built-in commands (e.g. `/compact` when using codex-mine)
+  2. Custom prompts from `$CODEX_HOME/prompts`
+  3. UI commands (`/new`, `/init`, `/resume`, `/status`, `/diff`, `/rename`, `/skills`, `/agents`, `/help`)
 - Mentions (`@selection`, file paths)
 
 ### 8.1 File suggestions
