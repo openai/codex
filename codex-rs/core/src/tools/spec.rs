@@ -311,11 +311,14 @@ Examples of valid command strings:
 - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
 - ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\\nprint('Hello, world!')\\\n'@ | python -"]
+
+Important: Always quote file paths containing spaces or special characters with single quotes in PowerShell."#
     } else {
         r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
+- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary.
+- Always quote file paths containing spaces or glob metacharacters (parentheses, brackets, asterisks, question marks) with double quotes."#
     }.to_string();
 
     ToolSpec::Function(ResponsesApiTool {
@@ -385,10 +388,13 @@ Examples of valid command strings:
 - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
 - ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+- running an inline Python script: "@'\\\nprint('Hello, world!')\\\n'@ | python -"
+
+Important: Always quote file paths containing spaces or special characters with single quotes in PowerShell."#
     } else {
         r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary.
+- Always quote file paths containing spaces or glob metacharacters (parentheses, brackets, asterisks, question marks) with double quotes."#
     }.to_string();
 
     ToolSpec::Function(ResponsesApiTool {

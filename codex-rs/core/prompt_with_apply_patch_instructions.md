@@ -263,6 +263,12 @@ When using the shell, you must adhere to the following guidelines:
 
 - When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much faster than alternatives like `grep`. (If the `rg` command is not found, then use alternatives.)
 - Do not use python scripts to attempt to output larger chunks of a file.
+- **Always quote file paths that contain spaces or special characters with double quotes.** For example:
+  - ✓ Correct: `sed -n '1,220p' "portal/app/(home)/_ui/ActivityList.tsx"`
+  - ✗ Wrong: `sed -n '1,220p' portal/app/(home)/_ui/ActivityList.tsx`
+  - ✓ Correct: `cat "src/routes/[id]/page.tsx"`
+  - ✗ Wrong: `cat src/routes/[id]/page.tsx`
+  - Special characters include: parentheses `()`, brackets `[]`, asterisks `*`, question marks `?`, spaces, and other glob metacharacters
 
 ## `update_plan`
 
