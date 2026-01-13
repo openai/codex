@@ -39,8 +39,9 @@ impl ShellSnapshot {
 
         // Clean the (unlikely) leaked snapshot files.
         let codex_home = codex_home.to_path_buf();
+        let cleanup_session_id = session_id;
         tokio::spawn(async move {
-            if let Err(err) = cleanup_stale_snapshots(&codex_home).await {
+            if let Err(err) = cleanup_stale_snapshots(&codex_home, cleanup_session_id).await {
                 tracing::warn!("Failed to clean up shell snapshots: {err:?}");
             }
         });
@@ -266,7 +267,8 @@ $envVars | ForEach-Object {
 
 /// Removes shell snapshots that either lack a matching session rollout file or
 /// whose rollouts have not been updated within the retention window.
-pub async fn cleanup_stale_snapshots(codex_home: &Path) -> Result<()> {
+/// The active session id is exempt from cleanup.
+pub async fn cleanup_stale_snapshots(codex_home: &Path, active_session_id: ThreadId) -> Result<()> {
     let snapshot_dir = codex_home.join(SNAPSHOT_DIR);
 
     let mut entries = match fs::read_dir(&snapshot_dir).await {
@@ -276,6 +278,7 @@ pub async fn cleanup_stale_snapshots(codex_home: &Path) -> Result<()> {
     };
 
     let now = SystemTime::now();
+    let active_session_id = active_session_id.to_string();
 
     while let Some(entry) = entries.next_entry().await? {
         if !entry.file_type().await?.is_file() {
@@ -293,6 +296,9 @@ pub async fn cleanup_stale_snapshots(codex_home: &Path) -> Result<()> {
                 continue;
             }
         };
+        if session_id == active_session_id {
+            continue;
+        }
 
         let rollout_path = find_thread_path_by_id_str(codex_home, session_id).await?;
         let Some(rollout_path) = rollout_path else {
@@ -526,7 +532,7 @@ mod tests {
         fs::write(&orphan_snapshot, "orphan").await?;
         fs::write(&invalid_snapshot, "invalid").await?;
 
-        cleanup_stale_snapshots(codex_home).await?;
+        cleanup_stale_snapshots(codex_home, ThreadId::new()).await?;
 
         assert_eq!(live_snapshot.exists(), true);
         assert_eq!(orphan_snapshot.exists(), false);
@@ -549,9 +555,30 @@ mod tests {
 
         set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
-        cleanup_stale_snapshots(codex_home).await?;
+        cleanup_stale_snapshots(codex_home, ThreadId::new()).await?;
 
         assert_eq!(stale_snapshot.exists(), false);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cleanup_stale_snapshots_skips_active_session() -> Result<()> {
+        let dir = tempdir()?;
+        let codex_home = dir.path();
+        let snapshot_dir = codex_home.join(SNAPSHOT_DIR);
+        fs::create_dir_all(&snapshot_dir).await?;
+
+        let active_session = ThreadId::new();
+        let active_snapshot = snapshot_dir.join(format!("{active_session}.sh"));
+        let rollout_path = write_rollout_stub(codex_home, active_session).await?;
+        fs::write(&active_snapshot, "active").await?;
+
+        set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
+
+        cleanup_stale_snapshots(codex_home, active_session).await?;
+
+        assert_eq!(active_snapshot.exists(), true);
         Ok(())
     }
 
