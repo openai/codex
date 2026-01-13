@@ -3548,10 +3548,14 @@ impl ChatWidget {
     /// is armed.
     ///
     /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
-    /// quit. The "second press" check currently runs before offering Ctrl+C to the bottom pane,
-    /// which means a second press can bypass modal handling.
+    /// quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
+        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            self.arm_quit_shortcut(key);
+            return;
+        }
+
         if self.quit_shortcut_active_for(key) {
             self.quit_shortcut_expires_at = None;
             self.quit_shortcut_key = None;
@@ -3560,10 +3564,6 @@ impl ChatWidget {
         }
 
         self.arm_quit_shortcut(key);
-
-        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
-            return;
-        }
 
         if self.is_cancellable_work_active() {
             self.submit_op(Op::Interrupt);
@@ -3583,7 +3583,7 @@ impl ChatWidget {
             return true;
         }
 
-        if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.can_launch_external_editor() {
+        if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active() {
             return false;
         }
 

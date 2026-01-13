@@ -517,6 +517,15 @@ impl BottomPane {
         self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
+    /// Returns true when the bottom pane has no active modal view and no active composer popup.
+    ///
+    /// This is the UI-level definition of "no modal/popup is active" for key routing decisions.
+    /// It intentionally does not include task state, since some actions are safe while a task is
+    /// running and some are not.
+    pub(crate) fn no_modal_or_popup_active(&self) -> bool {
+        self.can_launch_external_editor()
+    }
+
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
     }
