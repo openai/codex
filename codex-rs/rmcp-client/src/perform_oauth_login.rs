@@ -38,6 +38,7 @@ impl Drop for CallbackServerGuard {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_oauth_login(
     server_name: &str,
     server_url: &str,
@@ -46,6 +47,7 @@ pub async fn perform_oauth_login(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     callback_port: Option<u16>,
+    callback_url_template: Option<&str>,
 ) -> Result<()> {
     let headers = OauthHeaders {
         http_headers,
@@ -59,6 +61,7 @@ pub async fn perform_oauth_login(
         scopes,
         true,
         callback_port,
+        callback_url_template,
         None,
     )
     .await?
@@ -76,6 +79,7 @@ pub async fn perform_oauth_login_return_url(
     scopes: &[String],
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
+    callback_url_template: Option<&str>,
 ) -> Result<OauthLoginHandle> {
     let headers = OauthHeaders {
         http_headers,
@@ -89,6 +93,7 @@ pub async fn perform_oauth_login_return_url(
         scopes,
         false,
         callback_port,
+        callback_url_template,
         timeout_secs,
     )
     .await?;
@@ -248,6 +253,7 @@ impl OauthLoginFlow {
         scopes: &[String],
         launch_browser: bool,
         callback_port: Option<u16>,
+        callback_url_template: Option<&str>,
         timeout_secs: Option<i64>,
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
@@ -263,19 +269,25 @@ impl OauthLoginFlow {
             server: Arc::clone(&server),
         };
 
-        let redirect_uri = match server.server_addr() {
+        let (callback_port, default_callback_url) = match server.server_addr() {
             tiny_http::ListenAddr::IP(std::net::SocketAddr::V4(addr)) => {
                 let ip = addr.ip();
                 let port = addr.port();
-                format!("http://{ip}:{port}/callback")
+                (port, format!("http://{ip}:{port}/callback"))
             }
             tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => {
                 let ip = addr.ip();
                 let port = addr.port();
-                format!("http://[{ip}]:{port}/callback")
+                (port, format!("http://[{ip}]:{port}/callback"))
             }
             #[cfg(not(target_os = "windows"))]
             _ => return Err(anyhow!("unable to determine callback address")),
+        };
+
+        let redirect_uri = if let Some(template) = callback_url_template {
+            template.replace("{port}", &callback_port.to_string())
+        } else {
+            default_callback_url
         };
 
         let (tx, rx) = oneshot::channel();
