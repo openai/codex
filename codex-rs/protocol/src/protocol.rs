@@ -102,7 +102,7 @@ pub enum Op {
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
-        /// Must be a valid model slug for the [`crate::client::ModelClient`]
+        /// Must be a valid model slug for the configured client session
         /// associated with this conversation.
         model: String,
 
