@@ -42,6 +42,7 @@ mod model_overrides;
 mod model_tools;
 mod models_etag_responses;
 mod otel;
+mod pending_input;
 mod permissions_messages;
 mod prompt_caching;
 mod quota_exceeded;
