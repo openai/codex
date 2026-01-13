@@ -437,7 +437,9 @@ impl ConfigBuilder {
         // relative paths to absolute paths based on the parent folder of the
         // respective config file, so we should be safe to deserialize without
         // AbsolutePathBufGuard here.
-        let config_toml = deserialize_config_toml_lenient(merged_toml, None)?;
+        let config_toml = serde_path_to_error::deserialize(merged_toml).map_err(|err| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_inner())
+        })?;
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
@@ -494,7 +496,12 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let cfg = deserialize_config_toml_lenient(merged_toml, Some(codex_home)).map_err(|e| {
+    let cfg = {
+        let _guard = AbsolutePathBufGuard::new(codex_home);
+        serde_path_to_error::deserialize(merged_toml)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_inner()))
+    }
+    .map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
     })?;
@@ -515,21 +522,6 @@ fn deserialize_config_toml_with_base(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-fn deserialize_config_toml_lenient(
-    root_value: TomlValue,
-    config_base_dir: Option<&Path>,
-) -> std::io::Result<ConfigToml> {
-    let attempt = match config_base_dir {
-        Some(base_dir) => {
-            let _guard = AbsolutePathBufGuard::new(base_dir);
-            deserialize_config_toml_with_path(&root_value)
-        }
-        None => deserialize_config_toml_with_path(&root_value),
-    };
-
-    attempt.map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_inner()))
-}
-
 fn filter_mcp_servers_by_requirements(
     mcp_servers: &mut HashMap<String, McpServerConfig>,
     mcp_requirements: Option<&BTreeMap<String, McpServerRequirement>>,
@@ -546,12 +538,6 @@ fn filter_mcp_servers_by_requirements(
             server.enabled = false;
         }
     }
-}
-
-fn deserialize_config_toml_with_path(
-    value: &TomlValue,
-) -> Result<ConfigToml, serde_path_to_error::Error<toml::de::Error>> {
-    serde_path_to_error::deserialize(value.clone())
 }
 
 fn constrain_mcp_servers(
