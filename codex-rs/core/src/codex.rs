@@ -254,6 +254,8 @@ impl Codex {
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
 
         let config = Arc::new(config);
+        // todo(aibrahim): this should be done on models manager startup instead of here
+        let _ = models_manager.list_models(&config, crate::models_manager::manager::RefreshStrategy::default()).await;
         let model = models_manager
             .get_default_model(
                 &config.model,
