@@ -2673,7 +2673,7 @@ async fn run_model_turn(
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
-    let client_session = turn_context.client.new_session();
+    let mut client_session = turn_context.client.new_session();
 
     let mut retries = 0;
     loop {
@@ -2681,7 +2681,7 @@ async fn run_model_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
-            &client_session,
+            &mut client_session,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -2773,7 +2773,7 @@ async fn try_run_turn(
     router: Arc<ToolRouter>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    client_session: &ModelClientSession,
+    client_session: &mut ModelClientSession,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,

@@ -1171,7 +1171,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         SessionSource::Exec,
     );
 
-    let client = ModelClient::new(
+    let mut client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_info,
