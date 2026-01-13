@@ -195,7 +195,10 @@ export function App() {
             <div className="drawerBody">
               {drawerTab === "explorer" ? (
                 <Explorer
-                  onOpenAdd={() => setAddOpen(true)}
+                  onOpenAdd={() => {
+                    setDrawerOpen(false);
+                    setAddOpen(true);
+                  }}
                   onWorkspaceChanged={() => void refreshWorkspace()}
                   onFileOpened={() => {
                     setDrawerTab("viewer");
@@ -312,9 +315,6 @@ export function App() {
                   key={r.id}
                   className="dirRow"
                   onClick={async () => {
-                    setActiveRootId(r.id);
-                    localStorage.setItem("webActiveRootId", r.id);
-                    setRootPickerOpen(false);
                     if (rootPickerMode === "newSession") {
                       try {
                         await createChatSession(r.id);
@@ -322,6 +322,9 @@ export function App() {
                         setRootsError(e instanceof Error ? e.message : String(e));
                       }
                     }
+                    setActiveRootId(r.id);
+                    localStorage.setItem("webActiveRootId", r.id);
+                    setRootPickerOpen(false);
                   }}
                   title={r.absPath}
                 >

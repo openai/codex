@@ -5,6 +5,7 @@ export function AddRootModal(props: { onClose: () => void; onAdded: () => void }
   const [home, setHome] = useState<string>();
   const [path, setPath] = useState<string>();
   const [label, setLabel] = useState<string>("");
+  const [labelTouched, setLabelTouched] = useState(false);
 
   const [dirs, setDirs] = useState<Array<{ name: string; absPath: string }>>([]);
   const [loading, setLoading] = useState(false);
@@ -24,7 +25,9 @@ export function AddRootModal(props: { onClose: () => void; onAdded: () => void }
       const res = await browserList(p);
       setDirs(res.entries);
       setPath(res.path);
-      setLabel((prev) => prev || p.split("/").filter(Boolean).at(-1) || "");
+      if (!labelTouched) {
+        setLabel(res.path.split("/").filter(Boolean).at(-1) || "");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -66,7 +69,10 @@ export function AddRootModal(props: { onClose: () => void; onAdded: () => void }
             <input
               className="input"
               value={label}
-              onChange={(e) => setLabel(e.target.value)}
+              onChange={(e) => {
+                setLabelTouched(true);
+                setLabel(e.target.value);
+              }}
               placeholder="Label (任意)"
             />
             <button

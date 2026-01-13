@@ -289,6 +289,7 @@ input {
   background: rgba(0, 0, 0, 0.5);
   display: grid;
   place-items: center;
+  z-index: 1000;
 }
 
 .modal {
@@ -559,6 +560,7 @@ input {
   background: rgba(0, 0, 0, 0.55);
   display: grid;
   place-items: stretch;
+  z-index: 900;
 }
 
 .drawer {
@@ -612,6 +614,7 @@ input {
 .menuBackdrop {
   position: fixed;
   inset: 0;
+  z-index: 950;
 }
 
 .menu {
