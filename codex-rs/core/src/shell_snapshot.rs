@@ -588,10 +588,10 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_secs()
             .saturating_sub(age.as_secs());
-        let ts = libc::timespec {
-            tv_sec: now as libc::time_t,
-            tv_nsec: 0,
-        };
+        let tv_sec = now
+            .try_into()
+            .map_err(|_| anyhow!("Snapshot mtime is out of range for libc::timespec"))?;
+        let ts = libc::timespec { tv_sec, tv_nsec: 0 };
         let times = [ts, ts];
         let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
         let result = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
