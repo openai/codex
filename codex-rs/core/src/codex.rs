@@ -755,7 +755,7 @@ impl Session {
             .write()
             .await
             .initialize(
-                config.mcp_servers.clone(),
+                &config.mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
                 auth_statuses.clone(),
                 tx_event.clone(),
@@ -1739,7 +1739,7 @@ impl Session {
         let mut refreshed_manager = McpConnectionManager::default();
         refreshed_manager
             .initialize(
-                mcp_servers,
+                &mcp_servers,
                 store_mode,
                 auth_statuses,
                 self.get_tx_event(),

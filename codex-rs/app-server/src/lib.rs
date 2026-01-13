@@ -44,6 +44,7 @@ pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
+    default_analytics_enabled: bool,
 ) -> IoResult<()> {
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
@@ -96,7 +97,7 @@ pub async fn run_main(
         &config,
         env!("CARGO_PKG_VERSION"),
         Some("codex_app_server"),
-        false,
+        default_analytics_enabled,
     )
     .map_err(|e| {
         std::io::Error::new(
