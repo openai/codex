@@ -1674,6 +1674,7 @@ fn positional_operands<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<
 fn parse_grep_like(main_cmd: &[String], args: &[String]) -> ParsedCommand {
     let args_no_connector = trim_at_connector(args);
     let mut operands = Vec::new();
+    let mut pattern: Option<String> = None;
     let mut after_double_dash = false;
     let mut iter = args_no_connector.iter().peekable();
     while let Some(arg) = iter.next() {
@@ -1687,13 +1688,21 @@ fn parse_grep_like(main_cmd: &[String], args: &[String]) -> ParsedCommand {
         }
         match arg.as_str() {
             "-e" | "--regexp" => {
-                if let Some(pat) = iter.next() {
-                    operands.push(pat);
-                }
+                if let Some(pat) = iter.next()
+                    && pattern.is_none() {
+                        pattern = Some(pat.clone());
+                    }
                 continue;
             }
-            "-f" | "--file" | "-m" | "--max-count" | "-C" | "--context" | "-A"
-            | "--after-context" | "-B" | "--before-context" => {
+            "-f" | "--file" => {
+                if let Some(pat_file) = iter.next()
+                    && pattern.is_none() {
+                        pattern = Some(pat_file.clone());
+                    }
+                continue;
+            }
+            "-m" | "--max-count" | "-C" | "--context" | "-A" | "--after-context" | "-B"
+            | "--before-context" => {
                 iter.next();
                 continue;
             }
@@ -1706,8 +1715,10 @@ fn parse_grep_like(main_cmd: &[String], args: &[String]) -> ParsedCommand {
     }
     // Do not shorten the query: grep patterns may legitimately contain slashes
     // and should be preserved verbatim. Only paths should be shortened.
-    let query = operands.first().cloned().map(String::from);
-    let path = operands.get(1).map(|s| short_display_path(s));
+    let has_pattern = pattern.is_some();
+    let query = pattern.or_else(|| operands.first().cloned().map(String::from));
+    let path_index = if has_pattern { 0 } else { 1 };
+    let path = operands.get(path_index).map(|s| short_display_path(s));
     ParsedCommand::Search {
         cmd: shlex_join(main_cmd),
         query,
