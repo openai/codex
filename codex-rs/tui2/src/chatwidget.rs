@@ -2763,6 +2763,7 @@ impl ChatWidget {
                     .notices
                     .hide_full_access_warning
                     .unwrap_or(false);
+            let persist_preset = self.should_persist_approval_preset(&preset);
             let actions: Vec<SelectionAction> = if requires_confirmation {
                 let preset_clone = preset.clone();
                 vec![Box::new(move |tx| {
@@ -2809,7 +2810,7 @@ impl ChatWidget {
                         Self::approval_preset_actions(
                             preset.approval,
                             preset.sandbox.clone(),
-                            preset.id != "full-access",
+                            persist_preset,
                         )
                     }
                 }
@@ -2818,14 +2819,14 @@ impl ChatWidget {
                     Self::approval_preset_actions(
                         preset.approval,
                         preset.sandbox.clone(),
-                        preset.id != "full-access",
+                        persist_preset,
                     )
                 }
             } else {
                 Self::approval_preset_actions(
                     preset.approval,
                     preset.sandbox.clone(),
-                    preset.id != "full-access",
+                    persist_preset,
                 )
             };
             items.push(SelectionItem {
@@ -2882,6 +2883,16 @@ impl ChatWidget {
                 });
             }
         })]
+    }
+
+    fn should_persist_approval_preset(&self, preset: &ApprovalPreset) -> bool {
+        if preset.id != "full-access" {
+            return true;
+        }
+        self.config
+            .notices
+            .hide_full_access_warning
+            .unwrap_or(false)
     }
 
     fn preset_matches_current(
@@ -3066,7 +3077,7 @@ impl ChatWidget {
         }
         let persist_approval = preset
             .as_ref()
-            .is_some_and(|preset| preset.id != "full-access");
+            .is_some_and(|preset| self.should_persist_approval_preset(preset));
         if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
             accept_actions.extend(Self::approval_preset_actions(
                 approval,
