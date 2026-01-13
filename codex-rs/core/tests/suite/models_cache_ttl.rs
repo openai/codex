@@ -18,9 +18,6 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -67,7 +64,9 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 
     // Populate cache via initial refresh.
     let models_manager = test.thread_manager.get_models_manager();
-    let _ = models_manager.list_models(&config, RefreshStrategy::OnlineIfUncached).await;
+    let _ = models_manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
 
     let cache_path = config.codex_home.join(CACHE_FILE);
     let stale_time = Utc.timestamp_opt(0, 0).single().expect("valid epoch");
