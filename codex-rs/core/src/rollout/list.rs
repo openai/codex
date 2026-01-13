@@ -14,7 +14,6 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
-use super::session_index::find_thread_id_by_name;
 use crate::protocol::EventMsg;
 use codex_file_search as file_search;
 use codex_protocol::protocol::RolloutItem;
@@ -158,6 +157,7 @@ async fn traverse_directories_for_paths(
     provider_matcher: Option<&ProviderMatcher<'_>>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
+    let mut scanned_files = 0usize;
     let mut anchor_passed = anchor.is_none();
     let (anchor_ts, anchor_id) = match anchor {
         Some(c) => (c.ts, c.id),
@@ -165,65 +165,93 @@ async fn traverse_directories_for_paths(
     };
     let mut more_matches_available = false;
 
-    let (files, reached_scan_cap) = newest_rollout_files(&root).await?;
-    let mut scanned_files = 0usize;
+    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
 
-    for (ts, sid, path) in files.into_iter() {
-        scanned_files += 1;
-        if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
-            more_matches_available = true;
+    'outer: for (_year, year_path) in year_dirs.iter() {
+        if scanned_files >= MAX_SCAN_FILES {
             break;
         }
-        if !anchor_passed {
-            if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
-                anchor_passed = true;
-            } else {
-                continue;
+        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
+        for (_month, month_path) in month_dirs.iter() {
+            if scanned_files >= MAX_SCAN_FILES {
+                break 'outer;
             }
-        }
-        if items.len() == page_size {
-            more_matches_available = true;
-            break;
-        }
-        // Read head and detect message events; stop once meta + user are found.
-        let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
-            .await
-            .unwrap_or_default();
-        if !allowed_sources.is_empty()
-            && !summary
-                .source
-                .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
-        {
-            continue;
-        }
-        if let Some(matcher) = provider_matcher
-            && !matcher.matches(summary.model_provider.as_deref())
-        {
-            continue;
-        }
-        // Apply filters: must have session meta and at least one user message event
-        if summary.saw_session_meta && summary.saw_user_event {
-            let HeadTailSummary {
-                head,
-                created_at,
-                mut updated_at,
-                ..
-            } = summary;
-            if updated_at.is_none() {
-                updated_at = file_modified_rfc3339(&path)
-                    .await
-                    .unwrap_or(None)
-                    .or_else(|| created_at.clone());
+            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
+            for (_day, day_path) in day_dirs.iter() {
+                if scanned_files >= MAX_SCAN_FILES {
+                    break 'outer;
+                }
+                let mut day_files = collect_files(day_path, |name_str, path| {
+                    if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+                        return None;
+                    }
+
+                    parse_timestamp_uuid_from_filename(name_str)
+                        .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
+                })
+                .await?;
+                // Stable ordering within the same second: (timestamp desc, uuid desc)
+                day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
+                for (ts, sid, _name_str, path) in day_files.into_iter() {
+                    scanned_files += 1;
+                    if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
+                        more_matches_available = true;
+                        break 'outer;
+                    }
+                    if !anchor_passed {
+                        if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
+                            anchor_passed = true;
+                        } else {
+                            continue;
+                        }
+                    }
+                    if items.len() == page_size {
+                        more_matches_available = true;
+                        break 'outer;
+                    }
+                    // Read head and detect message events; stop once meta + user are found.
+                    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
+                        .await
+                        .unwrap_or_default();
+                    if !allowed_sources.is_empty()
+                        && !summary
+                            .source
+                            .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+                    {
+                        continue;
+                    }
+                    if let Some(matcher) = provider_matcher
+                        && !matcher.matches(summary.model_provider.as_deref())
+                    {
+                        continue;
+                    }
+                    // Apply filters: must have session meta and at least one user message event
+                    if summary.saw_session_meta && summary.saw_user_event {
+                        let HeadTailSummary {
+                            head,
+                            created_at,
+                            mut updated_at,
+                            ..
+                        } = summary;
+                        if updated_at.is_none() {
+                            updated_at = file_modified_rfc3339(&path)
+                                .await
+                                .unwrap_or(None)
+                                .or_else(|| created_at.clone());
+                        }
+                        items.push(ThreadItem {
+                            path,
+                            head,
+                            created_at,
+                            updated_at,
+                        });
+                    }
+                }
             }
-            items.push(ThreadItem {
-                path,
-                head,
-                created_at,
-                updated_at,
-            });
         }
     }
 
+    let reached_scan_cap = scanned_files >= MAX_SCAN_FILES;
     if reached_scan_cap && !items.is_empty() {
         more_matches_available = true;
     }
@@ -310,51 +338,6 @@ where
         }
     }
     Ok(collected)
-}
-
-async fn newest_rollout_files(
-    root: &Path,
-) -> io::Result<(Vec<(OffsetDateTime, Uuid, PathBuf)>, bool)> {
-    let mut files = Vec::new();
-    let mut reached_scan_cap = false;
-    let year_dirs = collect_dirs_desc(root, |s| s.parse::<u16>().ok()).await?;
-
-    'outer: for (_year, year_path) in year_dirs.iter() {
-        if files.len() >= MAX_SCAN_FILES {
-            break;
-        }
-        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
-        for (_month, month_path) in month_dirs.iter() {
-            if files.len() >= MAX_SCAN_FILES {
-                break 'outer;
-            }
-            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
-            for (_day, day_path) in day_dirs.iter() {
-                if files.len() >= MAX_SCAN_FILES {
-                    break 'outer;
-                }
-                let mut day_files = collect_files(day_path, |name_str, path| {
-                    if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
-                        return None;
-                    }
-
-                    parse_timestamp_uuid_from_filename(name_str)
-                        .map(|(ts, id)| (ts, id, path.to_path_buf()))
-                })
-                .await?;
-                day_files.sort_by_key(|(ts, id, _path)| (Reverse(*ts), Reverse(*id)));
-                for (ts, sid, path) in day_files.into_iter() {
-                    files.push((ts, sid, path));
-                    if files.len() >= MAX_SCAN_FILES {
-                        reached_scan_cap = true;
-                        break 'outer;
-                    }
-                }
-            }
-        }
-    }
-
-    Ok((files, reached_scan_cap))
 }
 
 fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
@@ -477,18 +460,6 @@ async fn file_modified_rfc3339(path: &Path) -> io::Result<Option<String>> {
     };
     let dt = OffsetDateTime::from(modified);
     Ok(dt.format(&Rfc3339).ok())
-}
-
-/// Locate a recorded thread rollout file by thread name using newest-first ordering.
-/// Returns `Ok(Some(path))` if found, `Ok(None)` if not present.
-pub async fn find_thread_path_by_name_str(
-    codex_home: &Path,
-    name: &str,
-) -> io::Result<Option<PathBuf>> {
-    let Some(thread_id) = find_thread_id_by_name(codex_home, name).await? else {
-        return Ok(None);
-    };
-    find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing
