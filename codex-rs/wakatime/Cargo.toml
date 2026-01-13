@@ -1,0 +1,14 @@
+[package]
+name = "codex-wakatime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WakaTime integration for Codex CLI"
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["process", "sync", "time", "rt"] }
+tracing = { workspace = true }
+dirs = { workspace = true }

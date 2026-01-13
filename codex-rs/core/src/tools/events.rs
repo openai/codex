@@ -439,6 +439,19 @@ async fn emit_patch_end(
     stderr: String,
     success: bool,
 ) {
+    // Send WakaTime heartbeats for successful file writes
+    if success {
+        if let Some(wakatime) = ctx.session.services.wakatime.as_ref() {
+            for (path, change) in &changes {
+                // Determine if this is a write operation (not a delete)
+                let is_write = !matches!(change, FileChange::Delete { .. });
+                if is_write {
+                    wakatime.on_file_activity(path, true, None).await;
+                }
+            }
+        }
+    }
+
     ctx.session
         .send_event(
             ctx.turn,

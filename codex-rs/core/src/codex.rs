@@ -688,6 +688,31 @@ impl Session {
         }
         let state = SessionState::new(session_configuration.clone());
 
+        // Initialize WakaTime tracker if enabled
+        let wakatime = {
+            let project_name = config
+                .wakatime_project
+                .clone()
+                .or_else(|| {
+                    session_configuration
+                        .cwd
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                })
+                .unwrap_or_else(|| "codex-session".to_string());
+
+            let wakatime_config = codex_wakatime::WakaTimeConfig {
+                enabled: config.wakatime_enabled,
+                cli_path: config.wakatime_cli_path.clone().unwrap_or_else(|| {
+                    dirs::home_dir()
+                        .map(|h| h.join(".wakatime").join("wakatime-cli"))
+                        .unwrap_or_else(|| std::path::PathBuf::from("wakatime-cli"))
+                }),
+                project: config.wakatime_project.clone(),
+            };
+            codex_wakatime::WakaTimeTracker::new(&wakatime_config, &project_name)
+        };
+
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -703,6 +728,7 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            wakatime,
         };
 
         let sess = Arc::new(Session {
@@ -3692,6 +3718,7 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            wakatime: None, // Disabled in tests
         };
 
         let turn_context = Session::make_turn_context(
@@ -3787,6 +3814,7 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            wakatime: None, // Disabled in tests
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

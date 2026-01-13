@@ -1294,6 +1294,7 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-string",
+ "codex-wakatime",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
@@ -1948,6 +1949,15 @@ dependencies = [
 [[package]]
 name = "codex-utils-string"
 version = "0.0.0"
+
+[[package]]
+name = "codex-wakatime"
+version = "0.0.0"
+dependencies = [
+ "dirs",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "codex-windows-sandbox"

@@ -699,6 +699,18 @@ impl Default for ShellEnvironmentPolicy {
     }
 }
 
+/// WakaTime integration settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct WakaTimeConfigToml {
+    /// Enable WakaTime integration. Defaults to false (opt-in).
+    pub enabled: Option<bool>,
+    /// Path to the wakatime-cli binary. Defaults to ~/.wakatime/wakatime-cli.
+    pub cli_path: Option<PathBuf>,
+    /// Project name override. If not set, uses the git project name.
+    pub project: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -31,6 +31,7 @@ codex-git = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-wakatime = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }

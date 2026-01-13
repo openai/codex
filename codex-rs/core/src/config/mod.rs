@@ -376,6 +376,11 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+
+    /// WakaTime integration settings.
+    pub wakatime_enabled: bool,
+    pub wakatime_cli_path: Option<std::path::PathBuf>,
+    pub wakatime_project: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -848,6 +853,9 @@ pub struct ConfigToml {
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
+
+    /// WakaTime integration configuration.
+    pub wakatime: Option<crate::config::types::WakaTimeConfigToml>,
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
@@ -1483,6 +1491,13 @@ impl Config {
                     metrics_exporter: OtelExporterKind::Statsig,
                 }
             },
+            wakatime_enabled: cfg
+                .wakatime
+                .as_ref()
+                .and_then(|w| w.enabled)
+                .unwrap_or(false),
+            wakatime_cli_path: cfg.wakatime.as_ref().and_then(|w| w.cli_path.clone()),
+            wakatime_project: cfg.wakatime.as_ref().and_then(|w| w.project.clone()),
         };
         Ok(config)
     }
@@ -3304,6 +3319,9 @@ model_verbosity = "high"
                 tui_scroll_invert: false,
                 tui_alternate_screen: AltScreenMode::Auto,
                 otel: OtelConfig::default(),
+                wakatime_enabled: false,
+                wakatime_cli_path: None,
+                wakatime_project: None,
             },
             o3_profile_config
         );
@@ -3391,6 +3409,9 @@ model_verbosity = "high"
             tui_scroll_invert: false,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
+            wakatime_enabled: false,
+            wakatime_cli_path: None,
+            wakatime_project: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -3493,6 +3514,9 @@ model_verbosity = "high"
             tui_scroll_invert: false,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
+            wakatime_enabled: false,
+            wakatime_cli_path: None,
+            wakatime_project: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -3581,6 +3605,9 @@ model_verbosity = "high"
             tui_scroll_invert: false,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
+            wakatime_enabled: false,
+            wakatime_cli_path: None,
+            wakatime_project: None,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
