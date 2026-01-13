@@ -59,6 +59,8 @@ pub struct ModelsManager {
 
 impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager`.
+    ///
+    /// Uses `codex_home` to store cached model metadata and initializes with built-in presets.
     pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
@@ -72,6 +74,9 @@ impl ModelsManager {
         }
     }
 
+    /// List all available models, refreshing according to the specified strategy.
+    ///
+    /// Returns model presets sorted by priority and filtered by auth mode and visibility.
     pub async fn list_models(
         &self,
         config: &Config,
@@ -84,12 +89,15 @@ impl ModelsManager {
         self.build_available_models(remote_models)
     }
 
+    /// Attempt to list models without blocking, using the current cached state.
+    ///
+    /// Returns an error if the internal lock cannot be acquired.
     pub fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.try_get_remote_models(config)?;
         Ok(self.build_available_models(remote_models))
     }
 
-    /// Look up the requested model metadata while applying remote metadata overrides.
+    /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
             .remote_models(config)
@@ -104,6 +112,10 @@ impl ModelsManager {
         model_info::with_config_overrides(model, config)
     }
 
+    /// Get the model identifier to use, refreshing according to the specified strategy.
+    ///
+    /// If `model` is provided, returns it directly. Otherwise selects the default based on
+    /// auth mode and available models (prefers `codex-auto-balanced` for ChatGPT auth).
     pub async fn get_model(
         &self,
         model: &Option<String>,
@@ -132,6 +144,9 @@ impl ModelsManager {
         OPENAI_DEFAULT_API_MODEL.to_string()
     }
 
+    /// Refresh models if the provided ETag differs from the cached ETag.
+    ///
+    /// Uses `Online` strategy to fetch latest models when ETags differ.
     pub async fn refresh_if_new_etag(&self, etag: String, config: &Config) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
@@ -300,7 +315,7 @@ impl ModelsManager {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    /// Construct a manager scoped to the provided `AuthManager` with a specific provider. Used for integration tests.
+    /// Construct a manager with a specific provider for testing.
     pub fn with_provider(
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
@@ -319,12 +334,13 @@ impl ModelsManager {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    /// Get model identifier without consulting remote state or cache.
     pub fn get_model_offline(model: Option<&str>) -> String {
         model.unwrap_or(OPENAI_DEFAULT_CHATGPT_MODEL).to_string()
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    /// Offline helper that builds a `ModelInfo` without consulting remote state.
+    /// Build `ModelInfo` without consulting remote state or cache.
     pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
         model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
     }
