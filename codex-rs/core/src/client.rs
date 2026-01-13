@@ -324,7 +324,9 @@ impl ModelClientSession {
         }
     }
 
-    fn websocket_append_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
+    fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
+        // Checks whether the current request input is an incremental append to the previous request.
+        // if so we build a response.append request otherwise we start with a fresh response.create request.
         let previous_len = self.websocket_last_items.len();
         let can_append = previous_len > 0
             && input_items.starts_with(&self.websocket_last_items)
@@ -341,7 +343,7 @@ impl ModelClientSession {
         api_prompt: &ApiPrompt,
         options: &ApiResponsesOptions,
     ) -> ResponsesWsRequest {
-        if let Some(append_items) = self.websocket_append_items(&api_prompt.input) {
+        if let Some(append_items) = self.get_incremental_items(&api_prompt.input) {
             return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
                 input: append_items,
             });
