@@ -642,7 +642,9 @@ impl ChatComposer {
             } => {
                 // Ensure popup filtering/selection reflects the latest composer text
                 // before applying completion.
-                let ctx = ctx_for_tab.as_ref().expect("tab context must exist");
+                let Some(ctx) = ctx_for_tab.as_ref() else {
+                    return (InputResult::None, true);
+                };
                 let first_line = ctx.first_line();
                 popup.on_composer_text_change(ctx.prefix().to_string());
                 if let Some(sel) = popup.selected_item() {
