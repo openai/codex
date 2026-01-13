@@ -123,7 +123,7 @@ mod send_input {
                 "Empty message can't be send to an agent".to_string(),
             ));
         }
-        let agent_id_for_err = agent_id.clone();
+        let agent_id_for_err = agent_id;
         let content = session
             .services
             .agent_control
@@ -178,7 +178,7 @@ mod wait {
             ms => ms.min(MAX_WAIT_TIMEOUT_MS),
         };
 
-        let agent_id_for_err = agent_id.clone();
+        let agent_id_for_err = agent_id;
         let mut status_rx = session
             .services
             .agent_control
@@ -246,7 +246,7 @@ pub mod close_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
-        let agent_id_for_err = agent_id.clone();
+        let agent_id_for_err = agent_id;
         let mut status_rx = session
             .services
             .agent_control
@@ -256,7 +256,7 @@ pub mod close_agent {
         let status = status_rx.borrow_and_update().clone();
 
         if !matches!(status, AgentStatus::Shutdown) {
-            let agent_id_for_err = agent_id.clone();
+            let agent_id_for_err = agent_id;
             let _ = session
                 .services
                 .agent_control
