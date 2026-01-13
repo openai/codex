@@ -264,9 +264,9 @@ impl TextArea {
             } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
             KeyEvent {
                 code: KeyCode::Backspace,
-                modifiers: KeyModifiers::ALT,
+                modifiers,
                 ..
-            } => self.delete_backward_word(),
+            } if modifiers.contains(KeyModifiers::ALT) => self.delete_backward_word(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -278,9 +278,9 @@ impl TextArea {
             } => self.delete_backward(1),
             KeyEvent {
                 code: KeyCode::Delete,
-                modifiers: KeyModifiers::ALT,
+                modifiers,
                 ..
-            }  => self.delete_forward_word(),
+            } if modifiers.contains(KeyModifiers::ALT) => self.delete_forward_word(),
             KeyEvent {
                 code: KeyCode::Delete,
                 ..
@@ -1556,6 +1556,18 @@ mod tests {
         let mut t = ta_with("hello world");
         t.set_cursor(t.text().len()); // cursor at the end
         t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn delete_backward_word_alt_shift_backspace() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         assert_eq!(t.text(), "hello ");
         assert_eq!(t.cursor(), 6);
     }
