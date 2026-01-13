@@ -229,7 +229,6 @@ pub(crate) struct CodexMessageProcessor {
     cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     listener_threads: HashMap<Uuid, ThreadId>,
-    auto_listener_suppressed: HashSet<ThreadId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
@@ -288,7 +287,6 @@ impl CodexMessageProcessor {
             cli_overrides,
             conversation_listeners: HashMap::new(),
             listener_threads: HashMap::new(),
-            auto_listener_suppressed: HashSet::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
@@ -1341,7 +1339,6 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_thread;
-                self.auto_listener_suppressed.insert(thread_id);
                 let response = NewConversationResponse {
                     conversation_id: thread_id,
                     model: session_configured.model,
@@ -1678,29 +1675,23 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
-    pub(crate) async fn refresh_thread_listeners(&mut self) {
-        let thread_ids = self.thread_manager.list_thread_ids().await;
-        if thread_ids.is_empty() {
+    pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
+        self.thread_manager.list_thread_ids().await
+    }
+
+    pub(crate) async fn ensure_thread_listener(&mut self, thread_id: ThreadId) {
+        if self.has_listener_for_thread(thread_id) {
             return;
         }
 
-        for thread_id in thread_ids {
-            if self.auto_listener_suppressed.contains(&thread_id) {
-                continue;
-            }
-            if self.has_listener_for_thread(thread_id) {
-                continue;
-            }
-
-            if let Err(err) = self
-                .attach_conversation_listener(thread_id, false, ApiVersion::V2)
-                .await
-            {
-                warn!(
-                    "failed to attach listener for thread {thread_id}: {message}",
-                    message = err.message
-                );
-            }
+        if let Err(err) = self
+            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
+            .await
+        {
+            warn!(
+                "failed to attach listener for thread {thread_id}: {message}",
+                message = err.message
+            );
         }
     }
 

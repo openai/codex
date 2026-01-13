@@ -158,11 +158,14 @@ pub async fn run_main(
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
-                            Ok(_thread_id) => {
-                                processor.refresh_thread_listeners().await;
+                            Ok(thread_id) => {
+                                processor.ensure_thread_listener(thread_id).await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                processor.refresh_thread_listeners().await;
+                                let thread_ids = processor.list_thread_ids().await;
+                                for thread_id in thread_ids {
+                                    processor.ensure_thread_listener(thread_id).await;
+                                }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                 listen_for_threads = false;

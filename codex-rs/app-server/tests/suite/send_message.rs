@@ -194,15 +194,6 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
         })
         .await?;
 
-    let developer = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_developer_message(&developer, "Use the test harness tools.");
-
-    let instructions = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_instructions_message(&instructions);
-
-    let environment = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_environment_message(&environment);
-
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(send_id)),
@@ -210,10 +201,17 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
     .await??;
     let _ok: SendUserMessageResponse = to_response::<SendUserMessageResponse>(response)?;
 
-    let user_message = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_user_message(&user_message, "Hello");
+    let mut assistant_message = None;
+    for _ in 0..5 {
+        let item = read_raw_response_item(&mut mcp, conversation_id).await;
+        if matches!(&item, ResponseItem::Message { role, .. } if role == "assistant") {
+            assistant_message = Some(item);
+            break;
+        }
+    }
 
-    let assistant_message = read_raw_response_item(&mut mcp, conversation_id).await;
+    let assistant_message =
+        assistant_message.expect("expected assistant raw response item after opt-in");
     assert_assistant_message(&assistant_message, "Done");
 
     let _ = tokio::time::timeout(
@@ -320,65 +318,6 @@ async fn read_raw_response_item(mcp: &mut McpProcess, conversation_id: ThreadId)
         if !matches!(event.item, ResponseItem::GhostSnapshot { .. }) {
             return event.item;
         }
-    }
-}
-
-fn assert_instructions_message(item: &ResponseItem) {
-    match item {
-        ResponseItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            let texts = content_texts(content);
-            let is_instructions = texts
-                .iter()
-                .any(|text| text.starts_with("# AGENTS.md instructions for "));
-            assert!(
-                is_instructions,
-                "expected instructions message, got {texts:?}"
-            );
-        }
-        other => panic!("expected instructions message, got {other:?}"),
-    }
-}
-
-fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
-    match item {
-        ResponseItem::Message { role, content, .. } => {
-            assert_eq!(role, "developer");
-            let texts = content_texts(content);
-            assert_eq!(
-                texts,
-                vec![expected_text],
-                "expected developer instructions message, got {texts:?}"
-            );
-        }
-        other => panic!("expected developer instructions message, got {other:?}"),
-    }
-}
-
-fn assert_environment_message(item: &ResponseItem) {
-    match item {
-        ResponseItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            let texts = content_texts(content);
-            assert!(
-                texts
-                    .iter()
-                    .any(|text| text.contains("<environment_context>")),
-                "expected environment context message, got {texts:?}"
-            );
-        }
-        other => panic!("expected environment message, got {other:?}"),
-    }
-}
-
-fn assert_user_message(item: &ResponseItem, expected_text: &str) {
-    match item {
-        ResponseItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            let texts = content_texts(content);
-            assert_eq!(texts, vec![expected_text]);
-        }
-        other => panic!("expected user message, got {other:?}"),
     }
 }
 

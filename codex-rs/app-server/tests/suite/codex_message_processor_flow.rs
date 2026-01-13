@@ -252,36 +252,58 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         .await??,
     )?;
 
-    // Expect an ExecCommandApproval request (elicitation)
+    // Expect an exec approval request (elicitation)
     let request = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::ExecCommandApproval { request_id, params } = request else {
-        panic!("expected ExecCommandApproval request, got: {request:?}");
-    };
+    match request {
+        ServerRequest::ExecCommandApproval { request_id, params } => {
+            assert_eq!(
+                ExecCommandApprovalParams {
+                    conversation_id,
+                    call_id: "call1".to_string(),
+                    command: format_with_current_shell("python3 -c 'print(42)'"),
+                    cwd: working_directory.clone(),
+                    reason: None,
+                    parsed_cmd: vec![ParsedCommand::Unknown {
+                        cmd: "python3 -c 'print(42)'".to_string()
+                    }],
+                },
+                params
+            );
 
-    assert_eq!(
-        ExecCommandApprovalParams {
-            conversation_id,
-            call_id: "call1".to_string(),
-            command: format_with_current_shell("python3 -c 'print(42)'"),
-            cwd: working_directory.clone(),
-            reason: None,
-            parsed_cmd: vec![ParsedCommand::Unknown {
-                cmd: "python3 -c 'print(42)'".to_string()
-            }],
-        },
-        params
-    );
+            // Approve so the first turn can complete
+            mcp.send_response(
+                request_id,
+                serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+            )
+            .await?;
+        }
+        ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
+            assert_eq!(params.thread_id, conversation_id.to_string());
+            assert_eq!(params.turn_id, "0");
+            assert_eq!(params.item_id, "call1");
+            assert_eq!(params.reason, None);
+            assert_eq!(
+                params.proposed_execpolicy_amendment,
+                Some(codex_app_server_protocol::ExecPolicyAmendment {
+                    command: vec![
+                        "python3".to_string(),
+                        "-c".to_string(),
+                        "print(42)".to_string()
+                    ],
+                })
+            );
 
-    // Approve so the first turn can complete
-    mcp.send_response(
-        request_id,
-        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
-    )
-    .await?;
+            mcp.send_response(request_id, serde_json::json!({ "decision": "accept" }))
+                .await?;
+        }
+        other => {
+            panic!("expected exec approval request, got: {other:?}");
+        }
+    }
 
     // Wait for first TurnComplete
     let _ = timeout(

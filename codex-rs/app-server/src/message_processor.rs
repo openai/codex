@@ -156,9 +156,12 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     self.initialized = true;
-                    self.codex_message_processor
-                        .refresh_thread_listeners()
-                        .await;
+                    let thread_ids = self.codex_message_processor.list_thread_ids().await;
+                    for thread_id in thread_ids {
+                        self.codex_message_processor
+                            .ensure_thread_listener(thread_id)
+                            .await;
+                    }
 
                     return;
                 }
@@ -208,12 +211,19 @@ impl MessageProcessor {
         self.codex_message_processor.thread_created_receiver()
     }
 
-    pub(crate) async fn refresh_thread_listeners(&mut self) {
+    pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
+        if !self.initialized {
+            return Vec::new();
+        }
+        self.codex_message_processor.list_thread_ids().await
+    }
+
+    pub(crate) async fn ensure_thread_listener(&mut self, thread_id: ThreadId) {
         if !self.initialized {
             return;
         }
         self.codex_message_processor
-            .refresh_thread_listeners()
+            .ensure_thread_listener(thread_id)
             .await;
     }
 
