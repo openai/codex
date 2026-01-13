@@ -258,7 +258,10 @@ impl ModelPreset {
     /// Merge remote presets with existing presets, preferring remote when slugs match.
     ///
     /// Remote presets take precedence. Existing presets not in remote are appended with `is_default` set to false.
-    pub fn merge(remote_presets: Vec<ModelPreset>, existing_presets: Vec<ModelPreset>) -> Vec<ModelPreset> {
+    pub fn merge(
+        remote_presets: Vec<ModelPreset>,
+        existing_presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
         if remote_presets.is_empty() {
             return existing_presets;
         }
