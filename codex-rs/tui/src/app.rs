@@ -947,7 +947,7 @@ impl App {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
                         });
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
