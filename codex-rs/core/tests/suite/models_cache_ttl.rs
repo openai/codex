@@ -16,6 +16,9 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -146,28 +149,36 @@ struct ModelsCache {
 }
 
 fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
-    serde_json::from_value(serde_json::json!({
-        "slug": slug,
-        "display_name": "Remote Test",
-        "description": "remote model",
-        "default_reasoning_level": "medium",
-        "supported_reasoning_levels": [{"effort": "low", "description": "low"}, {"effort": "medium", "description": "medium"}],
-        "shell_type": ConfigShellToolType::ShellCommand,
-        "visibility": ModelVisibility::List,
-        "minimal_client_version": [0, 1, 0],
-        "supported_in_api": true,
-        "priority": priority,
-        "upgrade": null,
-        "base_instructions": "base instructions",
-        "supports_reasoning_summaries": false,
-        "support_verbosity": false,
-        "default_verbosity": null,
-        "apply_patch_tool_type": null,
-        "truncation_policy": {"mode": "bytes", "limit": 10_000},
-        "supports_parallel_tool_calls": false,
-        "context_window": 272_000,
-        "effective_context_window_percent": 95,
-        "experimental_supported_tools": [],
-    }))
-    .expect("valid model")
+    ModelInfo {
+        slug: slug.to_string(),
+        display_name: "Remote Test".to_string(),
+        description: Some("remote model".to_string()),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Low,
+                description: "low".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "medium".to_string(),
+            },
+        ],
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        priority,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: Some(272_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    }
 }
