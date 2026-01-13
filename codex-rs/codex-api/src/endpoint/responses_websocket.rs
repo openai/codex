@@ -54,14 +54,9 @@ impl ResponsesWebsocketConnection {
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
         let stream = Arc::clone(&self.stream);
         let idle_timeout = self.idle_timeout;
-        let request_body = match serde_json::to_value(&request) {
-            Ok(text) => text,
-            Err(err) => {
-                return Err(ApiError::Stream(format!(
-                    "failed to encode websocket request: {err}"
-                )));
-            }
-        };
+        let request_body = serde_json::to_value(&request).map_err(|err| {
+            ApiError::Stream(format!("failed to encode websocket request: {err}"))
+        })?;
 
         tokio::spawn(async move {
             let mut guard = stream.lock().await;

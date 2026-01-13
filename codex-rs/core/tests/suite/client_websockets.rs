@@ -44,14 +44,7 @@ async fn responses_websocket_streams_request() {
 
     let harness = websocket_harness(&server).await;
     let mut session = harness.client.new_session();
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
-        }],
-    }];
+    let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut session, &prompt).await;
 
@@ -79,31 +72,8 @@ async fn responses_websocket_appends_on_prefix() {
 
     let harness = websocket_harness(&server).await;
     let mut session = harness.client.new_session();
-    let mut prompt_one = Prompt::default();
-    prompt_one.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
-        }],
-    }];
-    let mut prompt_two = Prompt::default();
-    prompt_two.input = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".into(),
-            content: vec![ContentItem::InputText {
-                text: "hello".into(),
-            }],
-        },
-        ResponseItem::Message {
-            id: None,
-            role: "user".into(),
-            content: vec![ContentItem::InputText {
-                text: "second".into(),
-            }],
-        },
-    ];
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
 
     stream_until_complete(&mut session, &prompt_one).await;
     stream_until_complete(&mut session, &prompt_two).await;
@@ -138,22 +108,8 @@ async fn responses_websocket_creates_on_non_prefix() {
 
     let harness = websocket_harness(&server).await;
     let mut session = harness.client.new_session();
-    let mut prompt_one = Prompt::default();
-    prompt_one.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
-        }],
-    }];
-    let mut prompt_two = Prompt::default();
-    prompt_two.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "different".into(),
-        }],
-    }];
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("different")]);
 
     stream_until_complete(&mut session, &prompt_one).await;
     stream_until_complete(&mut session, &prompt_two).await;
@@ -171,6 +127,20 @@ async fn responses_websocket_creates_on_non_prefix() {
     );
 
     server.shutdown().await;
+}
+
+fn message_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText { text: text.into() }],
+    }
+}
+
+fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
+    let mut prompt = Prompt::default();
+    prompt.input = input;
+    prompt
 }
 
 fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {

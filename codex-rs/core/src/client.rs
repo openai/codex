@@ -324,22 +324,27 @@ impl ModelClientSession {
         }
     }
 
+    fn websocket_append_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
+        let previous_len = self.websocket_last_items.len();
+        let can_append = previous_len > 0
+            && input_items.starts_with(&self.websocket_last_items)
+            && previous_len < input_items.len();
+        if can_append {
+            Some(input_items[previous_len..].to_vec())
+        } else {
+            None
+        }
+    }
+
     fn prepare_websocket_request(
         &self,
         api_prompt: &ApiPrompt,
         options: &ApiResponsesOptions,
     ) -> ResponsesWsRequest {
-        let previous = &self.websocket_last_items;
-        let input_items = &api_prompt.input;
-        if !previous.is_empty()
-            && input_items.starts_with(previous)
-            && previous.len() < input_items.len()
-        {
-            let append_items = input_items[previous.len()..].to_vec();
-            let append_payload = ResponseAppendWsRequest {
+        if let Some(append_items) = self.websocket_append_items(&api_prompt.input) {
+            return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
                 input: append_items,
-            };
-            return ResponsesWsRequest::ResponseAppend(append_payload);
+            });
         }
 
         let ApiResponsesOptions {
