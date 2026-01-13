@@ -5,7 +5,6 @@ use crate::common::ResponseStream;
 use crate::endpoint::responses::ResponsesOptions;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::provider::WireApi;
 use crate::requests::ResponsesRequest;
 use crate::requests::ResponsesRequestBuilder;
 use crate::requests::responses::Compression;
@@ -68,6 +67,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             compression,
         } = options;
 
+        // TODO (pakrym): share with HTTP based Responses API client
         let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
             .tools(&prompt.tools)
             .parallel_tool_calls(prompt.parallel_tool_calls)
@@ -85,13 +85,6 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         self.stream_request(request).await
     }
 
-    fn path(&self) -> &'static str {
-        match self.provider.wire {
-            WireApi::Responses | WireApi::Compact => "responses",
-            WireApi::Chat => "chat/completions",
-        }
-    }
-
     pub async fn stream(
         &self,
         body: Value,
@@ -104,7 +97,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             );
         }
 
-        let ws_url = Url::parse(&self.provider.url_for_path(self.path()))
+        let ws_url = Url::parse(&self.provider.url_for_path("responses"))
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
         let mut headers = self.provider.headers.clone();
         headers.extend(extra_headers);
@@ -120,7 +113,16 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         // TODO (pakrym): check models etags
 
         tokio::spawn(async move {
-            run_websocket_response_stream(connection.stream, tx_event, body, idle_timeout).await;
+            if let Err(err) = run_websocket_response_stream(
+                connection.stream,
+                tx_event.clone(),
+                body,
+                idle_timeout,
+            )
+            .await
+            {
+                let _ = tx_event.send(Err(err)).await;
+            }
         });
 
         Ok(ResponseStream { rx_event })
@@ -187,53 +189,43 @@ async fn run_websocket_response_stream(
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
     request_body: Value,
     idle_timeout: Duration,
-) {
+) -> Result<(), ApiError> {
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
         Err(err) => {
-            let _ = tx_event
-                .send(Err(ApiError::Stream(format!(
-                    "failed to encode websocket request: {err}"
-                ))))
-                .await;
             let _ = ws_stream.close(None).await;
-            return;
+            return Err(ApiError::Stream(format!(
+                "failed to encode websocket request: {err}"
+            )));
         }
     };
 
     if let Err(err) = ws_stream.send(Message::Text(request_text)).await {
-        let _ = tx_event
-            .send(Err(ApiError::Stream(format!(
-                "failed to send websocket request: {err}"
-            ))))
-            .await;
         let _ = ws_stream.close(None).await;
-        return;
+        return Err(ApiError::Stream(format!(
+            "failed to send websocket request: {err}"
+        )));
     }
 
     loop {
-        let response = tokio::time::timeout(idle_timeout, ws_stream.next()).await;
+        let response = tokio::time::timeout(idle_timeout, ws_stream.next())
+            .await
+            .map_err(|_| ApiError::Stream("idle timeout waiting for websocket".into()));
         let message = match response {
             Ok(Some(Ok(msg))) => msg,
             Ok(Some(Err(err))) => {
-                let _ = tx_event.send(Err(ApiError::Stream(err.to_string()))).await;
-                break;
+                let _ = ws_stream.close(None).await;
+                return Err(ApiError::Stream(err.to_string()));
             }
             Ok(None) => {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream(
-                        "stream closed before response.completed".into(),
-                    )))
-                    .await;
-                break;
+                let _ = ws_stream.close(None).await;
+                return Err(ApiError::Stream(
+                    "stream closed before response.completed".into(),
+                ));
             }
-            Err(_) => {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream(
-                        "idle timeout waiting for websocket".into(),
-                    )))
-                    .await;
-                break;
+            Err(err) => {
+                let _ = ws_stream.close(None).await;
+                return Err(err);
             }
         };
 
@@ -257,39 +249,32 @@ async fn run_websocket_response_stream(
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        let _ = tx_event.send(Err(error.into_api_error())).await;
-                        break;
+                        let _ = ws_stream.close(None).await;
+                        return Err(error.into_api_error());
                     }
                 }
             }
             Message::Binary(_) => {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream(
-                        "unexpected binary websocket event".into(),
-                    )))
-                    .await;
-                break;
+                let _ = ws_stream.close(None).await;
+                return Err(ApiError::Stream("unexpected binary websocket event".into()));
             }
             Message::Ping(payload) => {
                 if ws_stream.send(Message::Pong(payload)).await.is_err() {
-                    let _ = tx_event
-                        .send(Err(ApiError::Stream("websocket ping failed".into())))
-                        .await;
-                    break;
+                    let _ = ws_stream.close(None).await;
+                    return Err(ApiError::Stream("websocket ping failed".into()));
                 }
             }
             Message::Pong(_) => {}
             Message::Close(_) => {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream(
-                        "websocket closed before response.completed".into(),
-                    )))
-                    .await;
-                break;
+                let _ = ws_stream.close(None).await;
+                return Err(ApiError::Stream(
+                    "websocket closed before response.completed".into(),
+                ));
             }
             _ => {}
         }
     }
 
     let _ = ws_stream.close(None).await;
+    Ok(())
 }
