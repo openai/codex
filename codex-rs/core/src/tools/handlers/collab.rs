@@ -91,7 +91,7 @@ mod spawn {
             .agent_control
             .spawn_agent(config, args.message, true)
             .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+            .map_err(collab_spawn_error)?;
 
         Ok(ToolOutput::Function {
             content: format!("agent_id: {result}"),
@@ -123,17 +123,13 @@ mod send_input {
                 "Empty message can't be send to an agent".to_string(),
             ));
         }
+        let agent_id_for_err = agent_id;
         let content = session
             .services
             .agent_control
             .send_prompt(agent_id, args.message)
             .await
-            .map_err(|err| match err {
-                CodexErr::ThreadNotFound(id) => {
-                    FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
-                }
-                err => FunctionCallError::Fatal(err.to_string()),
-            })?;
+            .map_err(|err| collab_agent_error(agent_id_for_err, err))?;
 
         Ok(ToolOutput::Function {
             content,
@@ -182,17 +178,13 @@ mod wait {
             ms => ms.min(MAX_WAIT_TIMEOUT_MS),
         };
 
+        let agent_id_for_err = agent_id;
         let mut status_rx = session
             .services
             .agent_control
             .subscribe_status(agent_id)
             .await
-            .map_err(|err| match err {
-                CodexErr::ThreadNotFound(id) => {
-                    FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
-                }
-                err => FunctionCallError::Fatal(err.to_string()),
-            })?;
+            .map_err(|err| collab_agent_error(agent_id_for_err, err))?;
 
         // Get last known status.
         let mut status = status_rx.borrow_and_update().clone();
@@ -254,31 +246,23 @@ pub mod close_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
+        let agent_id_for_err = agent_id;
         let mut status_rx = session
             .services
             .agent_control
             .subscribe_status(agent_id)
             .await
-            .map_err(|err| match err {
-                CodexErr::ThreadNotFound(id) => {
-                    FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
-                }
-                err => FunctionCallError::Fatal(err.to_string()),
-            })?;
+            .map_err(|err| collab_agent_error(agent_id_for_err, err))?;
         let status = status_rx.borrow_and_update().clone();
 
         if !matches!(status, AgentStatus::Shutdown) {
+            let agent_id_for_err = agent_id;
             let _ = session
                 .services
                 .agent_control
                 .shutdown_agent(agent_id)
                 .await
-                .map_err(|err| match err {
-                    CodexErr::ThreadNotFound(id) => {
-                        FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
-                    }
-                    err => FunctionCallError::Fatal(err.to_string()),
-                })?;
+                .map_err(|err| collab_agent_error(agent_id_for_err, err))?;
         }
 
         let content = serde_json::to_string(&CloseAgentResult { status }).map_err(|err| {
@@ -296,6 +280,30 @@ pub mod close_agent {
 fn agent_id(id: &str) -> Result<ThreadId, FunctionCallError> {
     ThreadId::from_string(id)
         .map_err(|e| FunctionCallError::RespondToModel(format!("invalid agent id {id}: {e:?}")))
+}
+
+fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
+    match err {
+        CodexErr::UnsupportedOperation(_) => {
+            FunctionCallError::RespondToModel("collab manager unavailable".to_string())
+        }
+        err => FunctionCallError::RespondToModel(format!("collab spawn failed: {err}")),
+    }
+}
+
+fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
+    match err {
+        CodexErr::ThreadNotFound(id) => {
+            FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
+        }
+        CodexErr::InternalAgentDied => {
+            FunctionCallError::RespondToModel(format!("agent with id {agent_id} is closed"))
+        }
+        CodexErr::UnsupportedOperation(_) => {
+            FunctionCallError::RespondToModel("collab manager unavailable".to_string())
+        }
+        err => FunctionCallError::RespondToModel(format!("collab tool failed: {err}")),
+    }
 }
 
 fn build_agent_spawn_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
@@ -452,7 +460,7 @@ mod tests {
         };
         assert_eq!(
             err,
-            FunctionCallError::Fatal("unsupported operation: thread manager dropped".to_string())
+            FunctionCallError::RespondToModel("collab manager unavailable".to_string())
         );
     }
 
@@ -664,6 +672,9 @@ mod tests {
             .iter()
             .any(|(id, op)| *id == agent_id && matches!(op, Op::Shutdown));
         assert_eq!(submitted_shutdown, true);
+
+        let status_after = manager.agent_control().get_status(agent_id).await;
+        assert_eq!(status_after, AgentStatus::NotFound);
     }
 
     #[tokio::test]
