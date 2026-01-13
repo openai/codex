@@ -36,7 +36,7 @@ pub(crate) use review::ReviewTask;
 pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandTask;
 
-const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
+const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 500;
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
