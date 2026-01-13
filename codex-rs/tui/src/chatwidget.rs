@@ -470,7 +470,7 @@ impl ChatWidget {
     }
 
     fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {
-        if self.thread_id == Some(event.session_id) {
+        if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
         }
         self.request_redraw();

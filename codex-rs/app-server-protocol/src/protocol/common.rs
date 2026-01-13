@@ -117,6 +117,10 @@ client_request_definitions! {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
     },
+    ThreadSetName => "thread/name/set" {
+        params: v2::ThreadSetNameParams,
+        response: v2::ThreadSetNameResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
@@ -540,6 +544,7 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),

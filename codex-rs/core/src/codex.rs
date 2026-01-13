@@ -2198,7 +2198,7 @@ mod handlers {
         sess.send_event_raw(Event {
             id: sub_id,
             msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
-                session_id: sess.conversation_id,
+                thread_id: sess.conversation_id,
                 thread_name: Some(name),
             }),
         })
