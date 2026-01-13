@@ -450,13 +450,10 @@ fn test_parse_patch() {
 
     assert_eq!(
         parse_patch_text(
-            concat!(
-                "*** Begin Patch",
-                " ",
-                "\n*** Add File: foo\n+hi\n",
-                " ",
-                "*** End Patch"
-            ),
+            r#"*** Begin Patch
+*** Add File: foo
++hi
+ *** End Patch"#,
             ParseMode::Strict
         )
         .unwrap()
@@ -468,9 +465,9 @@ fn test_parse_patch() {
     );
     assert_eq!(
         parse_patch_text(
-            "*** Begin Patch\n\
-             *** Update File: test.py\n\
-             *** End Patch",
+            r#"*** Begin Patch
+*** Update File: test.py
+*** End Patch"#,
             ParseMode::Strict
         ),
         Err(InvalidHunkError {
@@ -480,8 +477,8 @@ fn test_parse_patch() {
     );
     assert_eq!(
         parse_patch_text(
-            "*** Begin Patch\n\
-             *** End Patch",
+            r#"*** Begin Patch
+*** End Patch"#,
             ParseMode::Strict
         )
         .unwrap()
@@ -490,17 +487,17 @@ fn test_parse_patch() {
     );
     assert_eq!(
         parse_patch_text(
-            "*** Begin Patch\n\
-             *** Add File: path/add.py\n\
-             +abc\n\
-             +def\n\
-             *** Delete File: path/delete.py\n\
-             *** Update File: path/update.py\n\
-             *** Move to: path/update2.py\n\
-             @@ def f():\n\
-             -    pass\n\
-             +    return 123\n\
-             *** End Patch",
+            r#"*** Begin Patch
+*** Add File: path/add.py
++abc
++def
+*** Delete File: path/delete.py
+*** Update File: path/update.py
+*** Move to: path/update2.py
+@@ def f():
+-    pass
++    return 123
+*** End Patch"#,
             ParseMode::Strict
         )
         .unwrap()
@@ -528,13 +525,13 @@ fn test_parse_patch() {
     // Update hunk followed by another hunk (Add File).
     assert_eq!(
         parse_patch_text(
-            "*** Begin Patch\n\
-             *** Update File: file.py\n\
-             @@\n\
-             +line\n\
-             *** Add File: other.py\n\
-             +content\n\
-             *** End Patch",
+            r#"*** Begin Patch
+*** Update File: file.py
+@@
++line
+*** Add File: other.py
++content
+*** End Patch"#,
             ParseMode::Strict
         )
         .unwrap()

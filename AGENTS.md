@@ -12,6 +12,7 @@ In the codex-rs folder where the rust code lives:
 - Always inline format! args when possible per https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
+- For multiline string literals, particularly for tests, prefer raw strings (`r#`) to help with readability over string literals full of `\n` metacharacters.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
 
