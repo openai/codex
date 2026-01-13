@@ -97,14 +97,6 @@ crate.annotation(
     },
 )
 
-crate.annotation(
-    crate = "rama-crypto",
-    patch_args = ["-p1"],
-    patches = [
-        "//patches:rama-crypto-no-bindgen.patch",
-    ],
-)
-
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",

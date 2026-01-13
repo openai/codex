@@ -1,0 +1,39 @@
+[package]
+name = "rama-crypto"
+description = "All crypto logic used by rama"
+version = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+keywords = ["cyrpto", "security", "certificates", "network", "rama"]
+categories = ["asynchronous", "network-programming", "web-programming"]
+authors = { workspace = true }
+rust-version = { workspace = true }
+
+[package.metadata.cargo-public-api-crates]
+allowed = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+
+[dependencies]
+aws-lc-rs = { workspace = true }
+base64 = { workspace = true }
+rama-core = { workspace = true }
+rama-utils = { workspace = true }
+rcgen = { workspace = true }
+rustls-pki-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+x509-parser = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-test = { workspace = true }
+
+[lints]
+workspace = true
