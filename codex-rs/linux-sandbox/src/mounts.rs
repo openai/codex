@@ -35,6 +35,12 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
         bind_mount_read_only(target.as_path())?;
     }
 
+    // Drop ambient capabilities acquired from the user namespace so the
+    // sandboxed command cannot remount or create new bind mounts.
+    if !is_running_as_root() {
+        drop_caps()?;
+    }
+
     Ok(())
 }
 
@@ -139,6 +145,32 @@ fn write_user_namespace_maps() -> Result<()> {
     let gid = unsafe { libc::getgid() };
     write_proc_file("/proc/self/uid_map", format!("0 {uid} 1\n"))?;
     write_proc_file("/proc/self/gid_map", format!("0 {gid} 1\n"))?;
+    Ok(())
+}
+
+/// Drop all capabilities in the current user namespace.
+fn drop_caps() -> Result<()> {
+    let mut header = libc::__user_cap_header_struct {
+        version: libc::_LINUX_CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let data = [
+        libc::__user_cap_data_struct {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
+        },
+        libc::__user_cap_data_struct {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
+        },
+    ];
+
+    let result = unsafe { libc::capset(&mut header, data.as_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
     Ok(())
 }
 
