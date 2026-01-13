@@ -154,6 +154,22 @@ mod tests {
     }
 
     #[test]
+    fn resume_command_with_only_id() {
+        let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let command = resume_command(None, Some(thread_id));
+        assert_eq!(
+            command,
+            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+        );
+    }
+
+    #[test]
+    fn resume_command_with_no_name_or_id() {
+        let command = resume_command(None, None);
+        assert_eq!(command, None);
+    }
+
+    #[test]
     fn resume_command_quotes_thread_name_when_needed() {
         let command = resume_command(Some("-starts-with-dash"), None);
         assert_eq!(
