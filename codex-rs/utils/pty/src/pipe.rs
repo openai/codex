@@ -22,7 +22,7 @@ use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
 use crate::process::SpawnedProcess;
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use libc;
 
 struct PipeChildTerminator {
@@ -37,12 +37,7 @@ impl ChildTerminator for PipeChildTerminator {
 
 #[cfg(unix)]
 fn kill_process(pid: u32) -> io::Result<()> {
-    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
+    crate::process_group::kill_process_group_by_pid(pid)
 }
 
 #[cfg(windows)]
@@ -100,6 +95,17 @@ pub async fn spawn_process(
     #[cfg(unix)]
     if let Some(arg0) = arg0 {
         command.arg0(arg0);
+    }
+    #[cfg(target_os = "linux")]
+    let parent_pid = unsafe { libc::getpid() };
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(move || {
+            crate::process_group::set_process_group()?;
+            #[cfg(target_os = "linux")]
+            crate::process_group::set_parent_death_signal(parent_pid)?;
+            Ok(())
+        });
     }
     #[cfg(not(unix))]
     let _ = arg0;

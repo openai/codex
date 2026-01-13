@@ -1,5 +1,6 @@
 pub mod pipe;
 mod process;
+pub mod process_group;
 pub mod pty;
 #[cfg(test)]
 mod tests;
