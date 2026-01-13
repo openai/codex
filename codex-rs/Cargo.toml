@@ -46,7 +46,6 @@ members = [
     "utils/pty",
     "utils/readiness",
     "utils/string",
-    "vendor/rama-tls-rustls",
     "codex-client",
     "codex-api",
 ]
@@ -302,7 +301,6 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-rama-tls-rustls = { path = "vendor/rama-tls-rustls" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
