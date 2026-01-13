@@ -21,6 +21,7 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -30,6 +31,7 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+use tracing::warn;
 
 /// Represents a newly created Codex thread (formerly called a conversation), including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -144,6 +146,27 @@ impl ThreadManager {
         self.state.threads.read().await.keys().copied().collect()
     }
 
+    pub async fn refresh_mcp_servers(&self, refresh_config: McpServerRefreshConfig) {
+        let threads = self
+            .state
+            .threads
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for thread in threads {
+            if let Err(err) = thread
+                .submit(Op::RefreshMcpServers {
+                    config: refresh_config.clone(),
+                })
+                .await
+            {
+                warn!("failed to request MCP server refresh: {err}");
+            }
+        }
+    }
+
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         self.state.get_thread(thread_id).await
     }
@@ -226,6 +249,7 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    /// Fetch a thread by ID or return ThreadNotFound.
     pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         let threads = self.threads.read().await;
         threads
@@ -234,6 +258,7 @@ impl ThreadManagerState {
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
     }
 
+    /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         #[cfg(any(test, feature = "test-support"))]
@@ -245,7 +270,12 @@ impl ThreadManagerState {
         thread.submit(op).await
     }
 
-    #[allow(dead_code)] // Used by upcoming multi-agent tooling.
+    /// Remove a thread from the manager by ID, returning it when present.
+    pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
+        self.threads.write().await.remove(thread_id)
+    }
+
+    /// Spawn a new thread with no history using a provided config.
     pub(crate) async fn spawn_new_thread(
         &self,
         config: Config,
@@ -260,6 +290,7 @@ impl ThreadManagerState {
         .await
     }
 
+    /// Spawn a new thread with optional history and register it with the manager.
     pub(crate) async fn spawn_thread(
         &self,
         config: Config,
@@ -427,6 +458,7 @@ mod tests {
             RolloutItem::ResponseItem(items[0].clone()),
             RolloutItem::ResponseItem(items[1].clone()),
             RolloutItem::ResponseItem(items[2].clone()),
+            RolloutItem::ResponseItem(items[3].clone()),
         ];
 
         assert_eq!(

@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use anyhow::bail;
 use reqwest::ClientBuilder;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
@@ -44,6 +45,7 @@ pub async fn perform_oauth_login(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    callback_port: Option<u16>,
 ) -> Result<()> {
     let headers = OauthHeaders {
         http_headers,
@@ -56,6 +58,7 @@ pub async fn perform_oauth_login(
         headers,
         scopes,
         true,
+        callback_port,
         None,
     )
     .await?
@@ -63,6 +66,7 @@ pub async fn perform_oauth_login(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_oauth_login_return_url(
     server_name: &str,
     server_url: &str,
@@ -71,6 +75,7 @@ pub async fn perform_oauth_login_return_url(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     timeout_secs: Option<i64>,
+    callback_port: Option<u16>,
 ) -> Result<OauthLoginHandle> {
     let headers = OauthHeaders {
         http_headers,
@@ -83,6 +88,7 @@ pub async fn perform_oauth_login_return_url(
         headers,
         scopes,
         false,
+        callback_port,
         timeout_secs,
     )
     .await?;
@@ -188,7 +194,21 @@ struct OauthLoginFlow {
     timeout: Duration,
 }
 
+fn resolve_callback_port(callback_port: Option<u16>) -> Result<Option<u16>> {
+    if let Some(config_port) = callback_port {
+        if config_port == 0 {
+            bail!(
+                "invalid MCP OAuth callback port `{config_port}`: port must be between 1 and 65535"
+            );
+        }
+        return Ok(Some(config_port));
+    }
+
+    Ok(None)
+}
+
 impl OauthLoginFlow {
+    #[allow(clippy::too_many_arguments)]
     async fn new(
         server_name: &str,
         server_url: &str,
@@ -196,11 +216,18 @@ impl OauthLoginFlow {
         headers: OauthHeaders,
         scopes: &[String],
         launch_browser: bool,
+        callback_port: Option<u16>,
         timeout_secs: Option<i64>,
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
 
-        let server = Arc::new(Server::http("127.0.0.1:0").map_err(|err| anyhow!(err))?);
+        let callback_port = resolve_callback_port(callback_port)?;
+        let bind_addr = match callback_port {
+            Some(port) => format!("127.0.0.1:{port}"),
+            None => "127.0.0.1:0".to_string(),
+        };
+
+        let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
         let guard = CallbackServerGuard {
             server: Arc::clone(&server),
         };
