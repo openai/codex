@@ -1,3 +1,62 @@
+//! The chat composer is the bottom-pane text input state machine.
+//!
+//! It is responsible for:
+//!
+//! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
+//! - Routing keys to the active popup (slash commands, file search, skill mentions).
+//! - Handling submit vs newline on Enter.
+//! - Turning raw key streams into explicit paste operations on platforms where terminals
+//!   don't provide reliable bracketed paste (notably Windows).
+//!
+//! # Key Event Routing
+//!
+//! Most key handling goes through [`ChatComposer::handle_key_event`], which dispatches to a
+//! popup-specific handler if a popup is visible and otherwise to
+//! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
+//! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
+//!
+//! # Non-bracketed Paste Bursts
+//!
+//! On some terminals (especially on Windows), pastes arrive as a rapid sequence of
+//! `KeyCode::Char` and `KeyCode::Enter` key events instead of a single paste event.
+//!
+//! To avoid misinterpreting these bursts as real typing (and to prevent transient UI effects like
+//! shortcut overlays toggling on a pasted `?`), we feed "plain" character events into
+//! [`PasteBurst`](super::paste_burst::PasteBurst), which buffers bursts and later flushes them
+//! through [`ChatComposer::handle_paste`].
+//!
+//! The burst detector intentionally treats ASCII and non-ASCII differently:
+//!
+//! - ASCII: we briefly hold the first fast char (flicker suppression) until we know whether the
+//!   stream is paste-like.
+//! - non-ASCII: we do not hold the first char (IME input would feel dropped), but we still allow
+//!   burst detection for actual paste streams.
+//!
+//! The burst detector can also be disabled (`disable_paste_burst`), which bypasses the state
+//! machine and treats the key stream as normal typing.
+//!
+//! For the detailed burst state machine, see `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
+//! For a narrative overview of the combined state machine, see `docs/tui-chat-composer.md`.
+//!
+//! # PasteBurst Integration Points
+//!
+//! The burst detector is consulted in a few specific places:
+//!
+//! - [`ChatComposer::handle_input_basic`]: flushes any due burst first, then intercepts plain char
+//!   input to either buffer it or insert normally.
+//! - [`ChatComposer::handle_non_ascii_char`]: handles the non-ASCII/IME path without holding the
+//!   first char, while still allowing paste detection via retro-capture.
+//! - [`ChatComposer::flush_paste_burst_if_due`]/[`ChatComposer::handle_paste_burst_flush`]: called
+//!   from UI ticks to turn a pending burst into either an explicit paste (`handle_paste`) or a
+//!   normal typed character.
+//!
+//! # Input Disabled Mode
+//!
+//! The composer can be temporarily read-only (`input_enabled = false`). In that mode it ignores
+//! edits and renders a placeholder prompt instead of the editable textarea. This is part of the
+//! overall state machine, since it affects which transitions are even possible from a given UI
+//! state.
+
 use crate::key_hint::has_ctrl_or_alt;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -80,6 +139,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
+    Queued(String),
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String),
     None,
@@ -121,7 +181,7 @@ pub(crate) struct ChatComposer {
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
     input_disabled_placeholder: Option<String>,
-    // Non-bracketed paste burst tracker.
+    /// Non-bracketed paste burst tracker (see `bottom_pane/paste_burst.rs`).
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
@@ -132,6 +192,7 @@ pub(crate) struct ChatComposer {
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
+    steer_enabled: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -182,6 +243,7 @@ impl ChatComposer {
             context_window_used_tokens: None,
             skills: None,
             dismissed_skill_popup_token: None,
+            steer_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -190,6 +252,10 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    pub fn set_steer_enabled(&mut self, enabled: bool) {
+        self.steer_enabled = enabled;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -250,6 +316,24 @@ impl ChatComposer {
         true
     }
 
+    /// Integrate pasted text into the composer.
+    ///
+    /// Acts as the only place where paste text is integrated, both for:
+    ///
+    /// - Real/explicit paste events surfaced by the terminal, and
+    /// - Non-bracketed "paste bursts" that [`PasteBurst`](super::paste_burst::PasteBurst) buffers
+    ///   and later flushes here.
+    ///
+    /// Behavior:
+    ///
+    /// - If the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a placeholder
+    ///   element (expanded on submit) and stores the full text in `pending_pastes`.
+    /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
+    ///   trailing space so the user can keep typing naturally.
+    /// - Otherwise, inserts the pasted text directly into the textarea.
+    ///
+    /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
+    /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
@@ -290,6 +374,16 @@ impl ChatComposer {
         }
     }
 
+    /// Enable or disable paste-burst handling.
+    ///
+    /// `disable_paste_burst` is an escape hatch for terminals/platforms where the burst heuristic
+    /// is unwanted or has already been handled elsewhere.
+    ///
+    /// When enabling the flag we clear the burst classification window so subsequent input cannot
+    /// be incorrectly grouped into a previous burst.
+    ///
+    /// This does not flush any in-progress buffer; callers should avoid toggling this mid-burst
+    /// (or should flush first).
     pub(crate) fn set_disable_paste_burst(&mut self, disabled: bool) {
         let was_disabled = self.disable_paste_burst;
         self.disable_paste_burst = disabled;
@@ -410,7 +504,7 @@ impl ChatComposer {
         self.textarea.text().to_string()
     }
 
-    /// Attempt to start a burst by retro-capturing recent chars before the cursor.
+    /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
         let image_number = self.attached_images.len() + 1;
         let placeholder = local_image_label_text(image_number);
@@ -426,14 +520,31 @@ impl ChatComposer {
         images.into_iter().map(|img| img.path).collect()
     }
 
+    /// Flushes any due paste-burst state.
+    ///
+    /// Call this from a UI tick to turn paste-burst transient state into explicit textarea edits:
+    ///
+    /// - If a burst times out, flush it via `handle_paste(String)`.
+    /// - If only the first ASCII char was held (flicker suppression) and no burst followed, emit it
+    ///   as normal typed input.
+    ///
+    /// This also allows a single "held" ASCII char to render even when it turns out not to be part
+    /// of a paste burst.
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
         self.handle_paste_burst_flush(Instant::now())
     }
 
+    /// Returns whether the composer is currently in any paste-burst related transient state.
+    ///
+    /// This includes actively buffering, having a non-empty burst buffer, or holding the first
+    /// ASCII char for flicker suppression.
     pub(crate) fn is_in_paste_burst(&self) -> bool {
         self.paste_burst.is_active()
     }
 
+    /// Returns a delay that reliably exceeds the paste-burst timing threshold.
+    ///
+    /// Use this in tests to avoid boundary flakiness around the `PasteBurst` timeout.
     pub(crate) fn recommended_paste_flush_delay() -> Duration {
         PasteBurst::recommended_flush_delay()
     }
@@ -672,6 +783,20 @@ impl ChatComposer {
         p
     }
 
+    /// Handle non-ASCII character input (often IME) while still supporting paste-burst detection.
+    ///
+    /// This handler exists because non-ASCII input often comes from IMEs, where characters can
+    /// legitimately arrive in short bursts that should **not** be treated as paste.
+    ///
+    /// The key differences from the ASCII path:
+    ///
+    /// - We never hold the first character (`PasteBurst::on_plain_char_no_hold`), because holding a
+    ///   non-ASCII char can feel like dropped input.
+    /// - If a burst is detected, we may need to retroactively remove already-inserted text before
+    ///   the cursor and move it into the paste buffer (see `PasteBurst::decide_begin_buffer`).
+    ///
+    /// Because this path mixes "insert immediately" with "maybe retro-grab later", it must clamp
+    /// the cursor to a UTF-8 char boundary before slicing `textarea.text()`.
     #[inline]
     fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
         if let KeyEvent {
@@ -698,12 +823,13 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                     CharDecision::BeginBuffer { retro_chars } => {
+                        // For non-ASCII we inserted prior chars immediately, so if this turns out
+                        // to be paste-like we need to retroactively grab & remove the already-
+                        // inserted prefix from the textarea before buffering the burst.
                         let cur = self.textarea.cursor();
                         let txt = self.textarea.text();
                         let safe_cur = Self::clamp_to_char_boundary(txt, cur);
                         let before = &txt[..safe_cur];
-                        // If decision is to buffer, seed the paste burst buffer with the grabbed chars + new.
-                        // Otherwise, fall through to normal insertion below.
                         if let Some(grab) =
                             self.paste_burst
                                 .decide_begin_buffer(now, before, retro_chars as usize)
@@ -715,6 +841,8 @@ impl ChatComposer {
                             self.paste_burst.append_char_to_buffer(ch, now);
                             return (InputResult::None, true);
                         }
+                        // If decide_begin_buffer opted not to start buffering,
+                        // fall through to normal insertion below.
                     }
                     _ => unreachable!("on_plain_char_no_hold returned unexpected variant"),
                 }
@@ -1140,6 +1268,199 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
+    /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
+    fn prepare_submission_text(&mut self) -> Option<String> {
+        // If we have pending placeholder pastes, replace them in the textarea text
+        // and continue to the normal submission flow to handle slash commands.
+        if !self.pending_pastes.is_empty() {
+            let mut text = self.textarea.text().to_string();
+            for (placeholder, actual) in &self.pending_pastes {
+                if text.contains(placeholder) {
+                    text = text.replace(placeholder, actual);
+                }
+            }
+            self.textarea.set_text(&text);
+            self.pending_pastes.clear();
+        }
+
+        let mut text = self.textarea.text().to_string();
+        let original_input = text.clone();
+        let input_starts_with_space = original_input.starts_with(' ');
+        self.textarea.set_text("");
+
+        // Replace all pending pastes in the text
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        self.pending_pastes.clear();
+
+        // If there is neither text nor attachments, suppress submission entirely.
+        let has_attachments = !self.attached_images.is_empty();
+        text = text.trim().to_string();
+
+        if let Some((name, _rest)) = parse_slash_name(&text) {
+            let treat_as_plain_text = input_starts_with_space || name.contains('/');
+            if !treat_as_plain_text {
+                let is_builtin = built_in_slash_commands()
+                    .into_iter()
+                    .filter(|(_, cmd)| {
+                        windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
+                    })
+                    .any(|(command_name, _)| command_name == name);
+                let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+                let is_known_prompt = name
+                    .strip_prefix(&prompt_prefix)
+                    .map(|prompt_name| {
+                        self.custom_prompts
+                            .iter()
+                            .any(|prompt| prompt.name == prompt_name)
+                    })
+                    .unwrap_or(false);
+                if !is_builtin && !is_known_prompt {
+                    let message = format!(
+                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                    );
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(message, None),
+                    )));
+                    self.textarea.set_text(&original_input);
+                    self.textarea.set_cursor(original_input.len());
+                    return None;
+                }
+            }
+        }
+
+        let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
+            Ok(expanded) => expanded,
+            Err(err) => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(err.user_message()),
+                )));
+                self.textarea.set_text(&original_input);
+                self.textarea.set_cursor(original_input.len());
+                return None;
+            }
+        };
+        if let Some(expanded) = expanded_prompt {
+            text = expanded;
+        }
+        if text.is_empty() && !has_attachments {
+            return None;
+        }
+        if !text.is_empty() {
+            self.history.record_local_submission(&text);
+        }
+        Some(text)
+    }
+
+    /// Common logic for handling message submission/queuing.
+    /// Returns the appropriate InputResult based on `should_queue`.
+    fn handle_submission(&mut self, should_queue: bool) -> (InputResult, bool) {
+        // If the first line is a bare built-in slash command (no args),
+        // dispatch it even when the slash popup isn't visible. This preserves
+        // the workflow: type a prefix ("/di"), press Tab to complete to
+        // "/diff ", then press Enter/Ctrl+Shift+Q to run it. Tab moves the cursor beyond
+        // the '/name' token and our caret-based heuristic hides the popup,
+        // but Enter/Ctrl+Shift+Q should still dispatch the command rather than submit
+        // literal text.
+        if let Some(result) = self.try_dispatch_bare_slash_command() {
+            return (result, true);
+        }
+
+        // If we're in a paste-like burst capture, treat Enter/Ctrl+Shift+Q as part of the burst
+        // and accumulate it rather than submitting or inserting immediately.
+        // Do not treat as paste inside a slash-command context.
+        let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
+            || self
+                .textarea
+                .text()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .starts_with('/');
+        if self.paste_burst.is_active() && !in_slash_context {
+            let now = Instant::now();
+            if self.paste_burst.append_newline_if_active(now) {
+                return (InputResult::None, true);
+            }
+        }
+
+        // During a paste-like burst, treat Enter/Ctrl+Shift+Q as a newline instead of submit.
+        let now = Instant::now();
+        if self
+            .paste_burst
+            .newline_should_insert_instead_of_submit(now)
+            && !in_slash_context
+        {
+            self.textarea.insert_str("\n");
+            self.paste_burst.extend_window(now);
+            return (InputResult::None, true);
+        }
+
+        let original_input = self.textarea.text().to_string();
+        if let Some(result) = self.try_dispatch_slash_command_with_args() {
+            return (result, true);
+        }
+
+        if let Some(text) = self.prepare_submission_text() {
+            if should_queue {
+                (InputResult::Queued(text), true)
+            } else {
+                // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
+                (InputResult::Submitted(text), true)
+            }
+        } else {
+            // Restore text if submission was suppressed
+            self.textarea.set_text(&original_input);
+            (InputResult::None, true)
+        }
+    }
+
+    /// Check if the first line is a bare slash command (no args) and dispatch it.
+    /// Returns Some(InputResult) if a command was dispatched, None otherwise.
+    fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
+        let first_line = self.textarea.text().lines().next().unwrap_or("");
+        if let Some((name, rest)) = parse_slash_name(first_line)
+            && rest.is_empty()
+            && let Some((_n, cmd)) = built_in_slash_commands()
+                .into_iter()
+                .filter(|(_, cmd)| {
+                    windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
+                })
+                .find(|(n, _)| *n == name)
+        {
+            self.textarea.set_text("");
+            Some(InputResult::Command(cmd))
+        } else {
+            None
+        }
+    }
+
+    /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
+    /// Returns Some(InputResult) if a command was dispatched, None otherwise.
+    fn try_dispatch_slash_command_with_args(&mut self) -> Option<InputResult> {
+        let original_input = self.textarea.text().to_string();
+        let input_starts_with_space = original_input.starts_with(' ');
+
+        if !input_starts_with_space {
+            let text = self.textarea.text().to_string();
+            if let Some((name, rest)) = parse_slash_name(&text)
+                && !rest.is_empty()
+                && !name.contains('/')
+                && let Some((_n, cmd)) = built_in_slash_commands()
+                    .into_iter()
+                    .find(|(command_name, _)| *command_name == name)
+                && cmd == SlashCommand::Review
+            {
+                self.textarea.set_text("");
+                return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
+            }
+        }
+        None
+    }
+
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
@@ -1199,160 +1520,31 @@ impl ChatComposer {
                 self.handle_input_basic(key_event)
             }
             KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            } => self.handle_submission(true),
+            KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                // If the first line is a bare built-in slash command (no args),
-                // dispatch it even when the slash popup isn't visible. This preserves
-                // the workflow: type a prefix ("/di"), press Tab to complete to
-                // "/diff ", then press Enter to run it. Tab moves the cursor beyond
-                // the '/name' token and our caret-based heuristic hides the popup,
-                // but Enter should still dispatch the command rather than submit
-                // literal text.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, rest)) = parse_slash_name(first_line)
-                    && rest.is_empty()
-                    && let Some((_n, cmd)) = built_in_slash_commands()
-                        .into_iter()
-                        .filter(|(_, cmd)| {
-                            windows_degraded_sandbox_active()
-                                || *cmd != SlashCommand::ElevateSandbox
-                        })
-                        .find(|(n, _)| *n == name)
-                {
-                    self.textarea.set_text("");
-                    return (InputResult::Command(cmd), true);
-                }
-                // If we're in a paste-like burst capture, treat Enter as part of the burst
-                // and accumulate it rather than submitting or inserting immediately.
-                // Do not treat Enter as paste inside a slash-command context.
-                let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
-                    || self
-                        .textarea
-                        .text()
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .starts_with('/');
-                if self.paste_burst.is_active() && !in_slash_context {
-                    let now = Instant::now();
-                    if self.paste_burst.append_newline_if_active(now) {
-                        return (InputResult::None, true);
-                    }
-                }
-                // If we have pending placeholder pastes, replace them in the textarea text
-                // and continue to the normal submission flow to handle slash commands.
-                if !self.pending_pastes.is_empty() {
-                    let mut text = self.textarea.text().to_string();
-                    for (placeholder, actual) in &self.pending_pastes {
-                        if text.contains(placeholder) {
-                            text = text.replace(placeholder, actual);
-                        }
-                    }
-                    self.textarea.set_text(&text);
-                    self.pending_pastes.clear();
-                }
-
-                // During a paste-like burst, treat Enter as a newline instead of submit.
-                let now = Instant::now();
-                if self
-                    .paste_burst
-                    .newline_should_insert_instead_of_submit(now)
-                    && !in_slash_context
-                {
-                    self.textarea.insert_str("\n");
-                    self.paste_burst.extend_window(now);
-                    return (InputResult::None, true);
-                }
-                let mut text = self.textarea.text().to_string();
-                let original_input = text.clone();
-                let input_starts_with_space = original_input.starts_with(' ');
-                self.textarea.set_text("");
-
-                // Replace all pending pastes in the text
-                for (placeholder, actual) in &self.pending_pastes {
-                    if text.contains(placeholder) {
-                        text = text.replace(placeholder, actual);
-                    }
-                }
-                self.pending_pastes.clear();
-
-                // If there is neither text nor attachments, suppress submission entirely.
-                let has_attachments = !self.attached_images.is_empty();
-                text = text.trim().to_string();
-                if let Some((name, _rest)) = parse_slash_name(&text) {
-                    let treat_as_plain_text = input_starts_with_space || name.contains('/');
-                    if !treat_as_plain_text {
-                        let is_builtin = built_in_slash_commands()
-                            .into_iter()
-                            .filter(|(_, cmd)| {
-                                windows_degraded_sandbox_active()
-                                    || *cmd != SlashCommand::ElevateSandbox
-                            })
-                            .any(|(command_name, _)| command_name == name);
-                        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
-                        let is_known_prompt = name
-                            .strip_prefix(&prompt_prefix)
-                            .map(|prompt_name| {
-                                self.custom_prompts
-                                    .iter()
-                                    .any(|prompt| prompt.name == prompt_name)
-                            })
-                            .unwrap_or(false);
-                        if !is_builtin && !is_known_prompt {
-                            let message = format!(
-                                r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                            );
-                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_info_event(message, None),
-                            )));
-                            self.textarea.set_text(&original_input);
-                            self.textarea.set_cursor(original_input.len());
-                            return (InputResult::None, true);
-                        }
-                    }
-                }
-
-                if !input_starts_with_space
-                    && let Some((name, rest)) = parse_slash_name(&text)
-                    && !rest.is_empty()
-                    && !name.contains('/')
-                    && let Some((_n, cmd)) = built_in_slash_commands()
-                        .into_iter()
-                        .find(|(command_name, _)| *command_name == name)
-                    && cmd == SlashCommand::Review
-                {
-                    return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
-                }
-
-                let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
-                    Ok(expanded) => expanded,
-                    Err(err) => {
-                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_error_event(err.user_message()),
-                        )));
-                        self.textarea.set_text(&original_input);
-                        self.textarea.set_cursor(original_input.len());
-                        return (InputResult::None, true);
-                    }
-                };
-                if let Some(expanded) = expanded_prompt {
-                    text = expanded;
-                }
-                if text.is_empty() && !has_attachments {
-                    return (InputResult::None, true);
-                }
-                if !text.is_empty() {
-                    self.history.record_local_submission(&text);
-                }
-                // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
-                (InputResult::Submitted(text), true)
+                let should_queue = !self.steer_enabled;
+                self.handle_submission(should_queue)
             }
             input => self.handle_input_basic(input),
         }
     }
 
+    /// Applies any due `PasteBurst` flush at time `now`.
+    ///
+    /// Converts [`PasteBurst::flush_if_due`] results into concrete textarea mutations.
+    ///
+    /// Callers:
+    ///
+    /// - UI ticks via [`ChatComposer::flush_paste_burst_if_due`], so held first-chars can render.
+    /// - Input handling via [`ChatComposer::handle_input_basic`], so a due burst does not lag.
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
         match self.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
@@ -1370,7 +1562,20 @@ impl ChatComposer {
         }
     }
 
-    /// Handle generic Input events that modify the textarea content.
+    /// Handles keys that mutate the textarea, including paste-burst detection.
+    ///
+    /// Acts as the lowest-level keypath for keys that mutate the textarea. It is also where plain
+    /// character streams are converted into explicit paste operations on terminals that do not
+    /// reliably provide bracketed paste.
+    ///
+    /// Ordering is important:
+    ///
+    /// - Always flush any *due* paste burst first so buffered text does not lag behind unrelated
+    ///   edits.
+    /// - Then handle the incoming key, intercepting only "plain" (no Ctrl/Alt) char input.
+    /// - For non-plain keys, flush via `flush_before_modified_input()` before applying the key;
+    ///   otherwise `clear_window_after_non_char()` can leave buffered text waiting without a
+    ///   timestamp to time out against.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
@@ -1390,6 +1595,10 @@ impl ChatComposer {
         }
 
         // Intercept plain Char inputs to optionally accumulate into a burst buffer.
+        //
+        // This is intentionally limited to "plain" (no Ctrl/Alt) chars so shortcuts keep their
+        // normal semantics, and so we can aggressively flush/clear any burst state when non-char
+        // keys are pressed.
         if let KeyEvent {
             code: KeyCode::Char(ch),
             modifiers,
@@ -1578,6 +1787,7 @@ impl ChatComposer {
             esc_backtrack_hint: self.esc_backtrack_hint,
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
+            steer_enabled: self.steer_enabled,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
         }
@@ -2208,6 +2418,14 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         composer.set_text_content("draft text".to_string());
         assert_eq!(composer.clear_for_ctrl_c(), Some("draft text".to_string()));
@@ -2234,6 +2452,13 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
@@ -2274,6 +2499,10 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         // Force an active paste burst so this test doesn't depend on tight timing.
         composer
@@ -2307,6 +2536,10 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
         assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
@@ -2481,6 +2714,10 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
         assert!(composer.is_in_paste_burst());
@@ -2510,6 +2747,10 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
 
@@ -2581,6 +2822,9 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         // Force an active burst so this test doesn't depend on tight timing.
         composer
@@ -2620,6 +2864,9 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         let needs_redraw = composer.handle_paste("hello".to_string());
         assert!(needs_redraw);
@@ -2649,6 +2896,9 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(true);
 
         // Ensure composer is empty and press Enter.
         assert!(composer.textarea.text().is_empty());
@@ -2676,6 +2926,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
         let needs_redraw = composer.handle_paste(large.clone());
@@ -2711,6 +2962,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.handle_paste(large);
         assert_eq!(composer.pending_pastes.len(), 1);
@@ -2781,6 +3033,18 @@ mod tests {
     }
 
     #[test]
+    fn image_placeholder_snapshots() {
+        snapshot_composer_state("image_placeholder_single", false, |composer| {
+            composer.attach_image(PathBuf::from("/tmp/image1.png"));
+        });
+
+        snapshot_composer_state("image_placeholder_multiple", false, |composer| {
+            composer.attach_image(PathBuf::from("/tmp/image1.png"));
+            composer.attach_image(PathBuf::from("/tmp/image2.png"));
+        });
+    }
+
+    #[test]
     fn slash_popup_model_first_for_mo_ui() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -2795,6 +3059,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Type "/mo" humanlike so paste-burst doesn’t interfere.
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
@@ -2823,6 +3088,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
 
         match &composer.active_popup {
@@ -2854,6 +3120,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Type "/res" humanlike so paste-burst doesn’t interfere.
         type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);
@@ -2947,6 +3214,9 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
+            InputResult::Queued(_) => {
+                panic!("expected command dispatch, but composer queued literal text")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -3023,6 +3293,9 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
+            InputResult::Queued(_) => {
+                panic!("expected command dispatch after Tab completion, got literal queue")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
@@ -3059,6 +3332,9 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
+            InputResult::Queued(_) => {
+                panic!("expected command dispatch, but composer queued literal text")
+            }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -3081,6 +3357,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Define test cases: (paste content, is_large)
         let test_cases = [
@@ -3357,6 +3634,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
         let path = PathBuf::from("/tmp/image1.png");
         composer.attach_image(path.clone());
         composer.handle_paste(" hi".into());
@@ -3381,6 +3659,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
         let path = PathBuf::from("/tmp/image2.png");
         composer.attach_image(path.clone());
         let (result, _) =
@@ -3616,6 +3895,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Inject prompts as if received via event.
         composer.set_custom_prompts(vec![CustomPrompt {
@@ -3652,6 +3932,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "my-prompt".to_string(),
@@ -3686,6 +3967,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "my-prompt".to_string(),
@@ -3724,6 +4006,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         // Create a custom prompt with positional args (no named args like $USER)
         composer.set_custom_prompts(vec![CustomPrompt {
@@ -3788,6 +4071,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer
             .textarea
@@ -3824,6 +4108,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.textarea.set_text(" /this-looks-like-a-command");
 
@@ -3957,6 +4242,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "my-prompt".to_string(),
@@ -3994,6 +4280,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "elegant".to_string(),
@@ -4061,6 +4348,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "price".to_string(),
@@ -4098,6 +4386,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "repeat".to_string(),

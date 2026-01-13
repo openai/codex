@@ -268,6 +268,24 @@ struct AppServerCommand {
     /// Omit to run the app server; specify a subcommand for tooling.
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
+
+    /// Controls whether analytics are enabled by default.
+    ///
+    /// Analytics are disabled by default for app-server. Users have to explicitly opt in
+    /// via the `analytics` section in the config.toml file.
+    ///
+    /// However, for first-party use cases like the VSCode IDE extension, we default analytics
+    /// to be enabled by default by setting this flag. Users can still opt out by setting this
+    /// in their config.toml:
+    ///
+    /// ```toml
+    /// [analytics]
+    /// enabled = false
+    /// ```
+    ///
+    /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
+    #[arg(long = "analytics-default-enabled")]
+    analytics_default_enabled: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -500,6 +518,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     codex_linux_sandbox_exe,
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
+                    app_server_cli.analytics_default_enabled,
                 )
                 .await?;
             }
@@ -910,6 +929,14 @@ mod tests {
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
     }
 
+    fn app_server_from_args(args: &[&str]) -> AppServerCommand {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let Subcommand::AppServer(app_server) = cli.subcommand.expect("app-server present") else {
+            unreachable!()
+        };
+        app_server
+    }
+
     fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,
@@ -1106,6 +1133,19 @@ mod tests {
         let interactive = finalize_fork_from_args(["codex", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
+    }
+
+    #[test]
+    fn app_server_analytics_default_disabled_without_flag() {
+        let app_server = app_server_from_args(["codex", "app-server"].as_ref());
+        assert!(!app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn app_server_analytics_default_enabled_with_flag() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
+        assert!(app_server.analytics_default_enabled);
     }
 
     #[test]

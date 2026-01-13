@@ -57,6 +57,7 @@ pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
+pub use model_provider_info::OLLAMA_CHAT_PROVIDER_ID;
 pub use model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
@@ -126,6 +127,7 @@ pub use codex_protocol::protocol;
 pub use codex_protocol::config_types as protocol_config_types;
 
 pub use client::ModelClient;
+pub use client::ModelClientSession;
 pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;

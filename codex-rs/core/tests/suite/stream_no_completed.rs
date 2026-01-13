@@ -67,7 +67,7 @@ async fn retries_on_early_close() {
         name: "openai".into(),
         base_url: Some(format!("{}/v1", server.uri())),
         // Environment variable that should exist in the test environment.
-        // ModelClient will return an error if the environment variable for the
+        // ModelClientSession will return an error if the environment variable for the
         // provider is not set.
         env_key: Some("PATH".into()),
         env_key_instructions: None,
