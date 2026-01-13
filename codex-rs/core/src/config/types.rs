@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -48,47 +49,51 @@ pub struct McpServerConfig {
     pub disabled_tools: Option<Vec<String>>,
 }
 
+// Raw MCP config shape used for deserialization and JSON Schema generation.
+// Keep this in sync with the validation logic in `McpServerConfig`.
+#[derive(Deserialize, Clone, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawMcpServerConfig {
+    // stdio
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub env_vars: Option<Vec<String>>,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+    pub http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub env_http_headers: Option<HashMap<String, String>>,
+
+    // streamable_http
+    pub url: Option<String>,
+    pub bearer_token: Option<String>,
+    pub bearer_token_env_var: Option<String>,
+
+    // shared
+    #[serde(default)]
+    pub startup_timeout_sec: Option<f64>,
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
+    #[serde(default, with = "option_duration_secs")]
+    #[schemars(with = "Option<f64>")]
+    pub tool_timeout_sec: Option<Duration>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub disabled_tools: Option<Vec<String>>,
+}
+
 impl<'de> Deserialize<'de> for McpServerConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize, Clone)]
-        struct RawMcpServerConfig {
-            // stdio
-            command: Option<String>,
-            #[serde(default)]
-            args: Option<Vec<String>>,
-            #[serde(default)]
-            env: Option<HashMap<String, String>>,
-            #[serde(default)]
-            env_vars: Option<Vec<String>>,
-            #[serde(default)]
-            cwd: Option<PathBuf>,
-            http_headers: Option<HashMap<String, String>>,
-            #[serde(default)]
-            env_http_headers: Option<HashMap<String, String>>,
-
-            // streamable_http
-            url: Option<String>,
-            bearer_token: Option<String>,
-            bearer_token_env_var: Option<String>,
-
-            // shared
-            #[serde(default)]
-            startup_timeout_sec: Option<f64>,
-            #[serde(default)]
-            startup_timeout_ms: Option<u64>,
-            #[serde(default, with = "option_duration_secs")]
-            tool_timeout_sec: Option<Duration>,
-            #[serde(default)]
-            enabled: Option<bool>,
-            #[serde(default)]
-            enabled_tools: Option<Vec<String>>,
-            #[serde(default)]
-            disabled_tools: Option<Vec<String>>,
-        }
-
         let mut raw = RawMcpServerConfig::deserialize(deserializer)?;
 
         let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
@@ -164,7 +169,7 @@ const fn default_enabled() -> bool {
     true
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
 pub enum McpServerTransportConfig {
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
@@ -222,7 +227,7 @@ mod option_duration_secs {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, JsonSchema)]
 pub enum UriBasedFileOpener {
     #[serde(rename = "vscode")]
     VsCode,
@@ -254,7 +259,8 @@ impl UriBasedFileOpener {
 }
 
 /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct History {
     /// If true, history entries will not be written to disk.
     pub persistence: HistoryPersistence,
@@ -264,7 +270,7 @@ pub struct History {
     pub max_bytes: Option<usize>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum HistoryPersistence {
     /// Save all history entries to disk.
@@ -277,13 +283,15 @@ pub enum HistoryPersistence {
 // ===== Analytics configuration =====
 
 /// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct AnalyticsConfigToml {
     /// When `false`, disables analytics across Codex product surfaces in this profile.
     pub enabled: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct FeedbackConfigToml {
     /// When `false`, disables the feedback flow across Codex product surfaces.
     pub enabled: Option<bool>,
@@ -291,7 +299,7 @@ pub struct FeedbackConfigToml {
 
 // ===== OTEL configuration =====
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum OtelHttpProtocol {
     /// Binary payload
@@ -300,7 +308,8 @@ pub enum OtelHttpProtocol {
     Json,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct OtelTlsConfig {
     pub ca_certificate: Option<AbsolutePathBuf>,
@@ -309,7 +318,8 @@ pub struct OtelTlsConfig {
 }
 
 /// Which OTEL exporter to use.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub enum OtelExporterKind {
     None,
@@ -332,7 +342,8 @@ pub enum OtelExporterKind {
 }
 
 /// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct OtelConfigToml {
     /// Log user prompt in traces
     pub log_user_prompt: Option<bool>,
@@ -369,7 +380,7 @@ impl Default for OtelConfig {
     }
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Notifications {
     Enabled(bool),
@@ -387,7 +398,7 @@ impl Default for Notifications {
 /// Terminals generally encode both mouse wheels and trackpads as the same "scroll up/down" mouse
 /// button events, without a magnitude. This setting controls whether Codex uses a heuristic to
 /// infer wheel vs trackpad per stream, or forces a specific behavior.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScrollInputMode {
     /// Infer wheel vs trackpad behavior per scroll stream.
@@ -405,7 +416,8 @@ impl Default for ScrollInputMode {
 }
 
 /// Collection of settings that are specific to the TUI.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `true`.
@@ -544,7 +556,8 @@ const fn default_true() -> bool {
 /// Settings for notices we display to users via the tui and app-server clients
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,
@@ -567,7 +580,8 @@ impl Notice {
     pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub writable_roots: Vec<AbsolutePathBuf>,
@@ -590,7 +604,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {
     /// "Core" environment variables for the platform. On UNIX, this would
@@ -607,7 +621,8 @@ pub enum ShellEnvironmentPolicyInherit {
 
 /// Policy for building the `env` when spawning a process via either the
 /// `shell` or `local_shell` tool.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ShellEnvironmentPolicyToml {
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
 
