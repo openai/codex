@@ -21,6 +21,7 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -30,6 +31,7 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+use tracing::warn;
 use tokio::sync::broadcast;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
@@ -150,6 +152,27 @@ impl ThreadManager {
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.state.threads.read().await.keys().copied().collect()
+    }
+
+    pub async fn refresh_mcp_servers(&self, refresh_config: McpServerRefreshConfig) {
+        let threads = self
+            .state
+            .threads
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for thread in threads {
+            if let Err(err) = thread
+                .submit(Op::RefreshMcpServers {
+                    config: refresh_config.clone(),
+                })
+                .await
+            {
+                warn!("failed to request MCP server refresh: {err}");
+            }
+        }
     }
 
     pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
@@ -440,6 +463,7 @@ mod tests {
             RolloutItem::ResponseItem(items[0].clone()),
             RolloutItem::ResponseItem(items[1].clone()),
             RolloutItem::ResponseItem(items[2].clone()),
+            RolloutItem::ResponseItem(items[3].clone()),
         ];
 
         assert_eq!(

@@ -175,6 +175,24 @@ mod tests {
     }
 
     #[test]
+    fn keeps_mutating_xargs_pipeline() {
+        let inner = r#"rg -l QkBindingController presentation/src/main/java | xargs perl -pi -e 's/QkBindingController/QkController/g'"#;
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![
+                ParsedCommand::Search {
+                    cmd: "rg -l QkBindingController presentation/src/main/java".to_string(),
+                    query: Some("QkBindingController".to_string()),
+                    path: Some("java".to_string()),
+                },
+                ParsedCommand::Unknown {
+                    cmd: "xargs perl -pi -e s/QkBindingController/QkController/g".to_string(),
+                },
+            ],
+        );
+    }
+
+    #[test]
     fn supports_cat() {
         let inner = "cat webview/README.md";
         assert_parsed(
@@ -1404,8 +1422,9 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
     match cmd {
         // Always formatting; typically used in pipes.
         // `nl` is special-cased below to allow `nl <file>` to be treated as a read command.
-        "wc" | "tr" | "cut" | "sort" | "uniq" | "xargs" | "tee" | "column" | "awk" | "yes"
-        | "printf" => true,
+        "wc" | "tr" | "cut" | "sort" | "uniq" | "tee" | "column" | "awk" | "yes" => true,
+        "xargs" => !is_mutating_xargs_command(tokens),
+        "printf" => true,
         "head" => {
             // Treat as formatting when no explicit file operand is present.
             // Common forms: `head -n 40`, `head -c 100`.
@@ -1463,6 +1482,54 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
         }
         _ => false,
     }
+}
+
+fn is_mutating_xargs_command(tokens: &[String]) -> bool {
+    xargs_subcommand(tokens).is_some_and(xargs_is_mutating_subcommand)
+}
+
+fn xargs_subcommand(tokens: &[String]) -> Option<&[String]> {
+    if tokens.first().map(String::as_str) != Some("xargs") {
+        return None;
+    }
+    let mut i = 1;
+    while i < tokens.len() {
+        let token = &tokens[i];
+        if token == "--" {
+            return tokens.get(i + 1..).filter(|rest| !rest.is_empty());
+        }
+        if !token.starts_with('-') {
+            return tokens.get(i..).filter(|rest| !rest.is_empty());
+        }
+        let takes_value = matches!(
+            token.as_str(),
+            "-E" | "-e" | "-I" | "-L" | "-n" | "-P" | "-s"
+        );
+        if takes_value && token.len() == 2 {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn xargs_is_mutating_subcommand(tokens: &[String]) -> bool {
+    let Some((head, tail)) = tokens.split_first() else {
+        return false;
+    };
+    match head.as_str() {
+        "perl" | "ruby" => xargs_has_in_place_flag(tail),
+        "sed" => xargs_has_in_place_flag(tail) || tail.iter().any(|token| token == "--in-place"),
+        "rg" => tail.iter().any(|token| token == "--replace"),
+        _ => false,
+    }
+}
+
+fn xargs_has_in_place_flag(tokens: &[String]) -> bool {
+    tokens.iter().any(|token| {
+        token == "-i" || token.starts_with("-i") || token == "-pi" || token.starts_with("-pi")
+    })
 }
 
 fn drop_small_formatting_commands(mut commands: Vec<Vec<String>>) -> Vec<Vec<String>> {

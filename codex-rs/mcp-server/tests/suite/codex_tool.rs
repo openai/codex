@@ -381,23 +381,26 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     let instructions = request["messages"][0]["content"].as_str().unwrap();
     assert!(instructions.starts_with("You are a helpful assistant."));
 
-    let developer_msg = request["messages"]
+    let developer_messages: Vec<&serde_json::Value> = request["messages"]
         .as_array()
-        .and_then(|messages| {
-            messages
-                .iter()
-                .find(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("developer"))
-        })
-        .unwrap();
-    let developer_content = developer_msg
-        .get("content")
-        .and_then(|value| value.as_str())
-        .unwrap();
+        .unwrap()
+        .iter()
+        .filter(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("developer"))
+        .collect();
+    let developer_contents: Vec<&str> = developer_messages
+        .iter()
+        .filter_map(|msg| msg.get("content").and_then(|value| value.as_str()))
+        .collect();
     assert!(
-        !developer_content.contains('<'),
-        "expected developer instructions without XML tags, got `{developer_content}`"
+        developer_contents
+            .iter()
+            .any(|content| content.contains("`sandbox_mode`")),
+        "expected permissions developer message, got {developer_contents:?}"
     );
-    assert_eq!(developer_content, "Foreshadow upcoming tool calls.");
+    assert!(
+        developer_contents.contains(&"Foreshadow upcoming tool calls."),
+        "expected developer instructions in developer messages, got {developer_contents:?}"
+    );
 
     Ok(())
 }

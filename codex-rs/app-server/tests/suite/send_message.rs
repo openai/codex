@@ -13,11 +13,15 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RawResponseItemEvent;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::path::Path;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -287,6 +291,130 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+#[expect(clippy::expect_used)]
+async fn read_raw_response_item(mcp: &mut McpProcess, conversation_id: ThreadId) -> ResponseItem {
+    // TODO: Switch to rawResponseItem/completed once we migrate to app server v2 in codex web.
+    loop {
+        let raw_notification: JSONRPCNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("codex/event/raw_response_item"),
+        )
+        .await
+        .expect("codex/event/raw_response_item notification timeout")
+        .expect("codex/event/raw_response_item notification resp");
+
+        let serde_json::Value::Object(params) = raw_notification
+            .params
+            .expect("codex/event/raw_response_item should have params")
+        else {
+            panic!("codex/event/raw_response_item should have params");
+        };
+
+        let conversation_id_value = params
+            .get("conversationId")
+            .and_then(|value| value.as_str())
+            .expect("raw response item should include conversationId");
+
+        assert_eq!(
+            conversation_id_value,
+            conversation_id.to_string(),
+            "raw response item conversation mismatch"
+        );
+
+        let msg_value = params
+            .get("msg")
+            .cloned()
+            .expect("raw response item should include msg payload");
+
+        // Ghost snapshots are produced concurrently and may arrive before the model reply.
+        let event: RawResponseItemEvent =
+            serde_json::from_value(msg_value).expect("deserialize raw response item");
+        if !matches!(event.item, ResponseItem::GhostSnapshot { .. }) {
+            return event.item;
+        }
+    }
+}
+
+fn assert_instructions_message(item: &ResponseItem) {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            assert_eq!(role, "user");
+            let texts = content_texts(content);
+            let is_instructions = texts
+                .iter()
+                .any(|text| text.starts_with("# AGENTS.md instructions for "));
+            assert!(
+                is_instructions,
+                "expected instructions message, got {texts:?}"
+            );
+        }
+        other => panic!("expected instructions message, got {other:?}"),
+    }
+}
+
+fn assert_permissions_message(item: &ResponseItem) {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            assert_eq!(role, "developer");
+            let texts = content_texts(content);
+            let expected = DeveloperInstructions::from_policy(
+                &SandboxPolicy::DangerFullAccess,
+                AskForApproval::Never,
+                &PathBuf::from("/tmp"),
+            )
+            .into_text();
+            assert_eq!(
+                texts,
+                vec![expected.as_str()],
+                "expected permissions developer message, got {texts:?}"
+            );
+        }
+        other => panic!("expected permissions message, got {other:?}"),
+    }
+}
+
+fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            assert_eq!(role, "developer");
+            let texts = content_texts(content);
+            assert_eq!(
+                texts,
+                vec![expected_text],
+                "expected developer instructions message, got {texts:?}"
+            );
+        }
+        other => panic!("expected developer instructions message, got {other:?}"),
+    }
+}
+
+fn assert_environment_message(item: &ResponseItem) {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            assert_eq!(role, "user");
+            let texts = content_texts(content);
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text.contains("<environment_context>")),
+                "expected environment context message, got {texts:?}"
+            );
+        }
+        other => panic!("expected environment message, got {other:?}"),
+    }
+}
+
+fn assert_user_message(item: &ResponseItem, expected_text: &str) {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            assert_eq!(role, "user");
+            let texts = content_texts(content);
+            assert_eq!(texts, vec![expected_text]);
+        }
+        other => panic!("expected user message, got {other:?}"),
+    }
 }
 
 fn assert_assistant_message(item: &ResponseItem, expected_text: &str) {

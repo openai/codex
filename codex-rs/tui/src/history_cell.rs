@@ -1,3 +1,15 @@
+//! Transcript/history cells for the Codex TUI.
+//!
+//! A `HistoryCell` is the unit of display in the conversation UI, representing both committed
+//! transcript entries and, transiently, an in-flight active cell that can mutate in place while
+//! streaming.
+//!
+//! The transcript overlay (`Ctrl+T`) appends a cached live tail derived from the active cell, and
+//! that cached tail is refreshed based on an active-cell cache key. Cells that change based on
+//! elapsed time expose `transcript_animation_tick()`, and code that mutates the active cell in place
+//! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
+//! rendered transcript output can change.
+
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -99,6 +111,20 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 
     fn is_stream_continuation(&self) -> bool {
         false
+    }
+
+    /// Returns a coarse "animation tick" when transcript output is time-dependent.
+    ///
+    /// The transcript overlay caches the rendered output of the in-flight active cell, so cells
+    /// that include time-based UI (spinner, shimmer, etc.) should return a tick that changes over
+    /// time to signal that the cached tail should be recomputed. Returning `None` means the
+    /// transcript lines are stable, while returning `Some(tick)` during an in-flight animation
+    /// allows the overlay to keep up with the main viewport.
+    ///
+    /// If a cell uses time-based visuals but always returns `None`, `Ctrl+T` can appear "frozen" on
+    /// the first rendered frame even though the main viewport is animating.
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        None
     }
 }
 
@@ -448,6 +474,7 @@ pub(crate) fn new_unified_exec_interaction(
 pub(crate) struct UnifiedExecWaitCell {
     command_display: Option<String>,
     animations_enabled: bool,
+    start_time: Instant,
 }
 
 impl UnifiedExecWaitCell {
@@ -455,6 +482,7 @@ impl UnifiedExecWaitCell {
         Self {
             command_display: command_display.filter(|display| !display.is_empty()),
             animations_enabled,
+            start_time: Instant::now(),
         }
     }
 
@@ -466,10 +494,19 @@ impl UnifiedExecWaitCell {
         }
     }
 
-    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) {
-        if self.command_display.is_none() {
-            self.command_display = command_display.filter(|display| !display.is_empty());
+    /// Update the command display once.
+    ///
+    /// Unified exec can start without a stable command string, and later correlate a process id to
+    /// a user-facing `command_display`. This method records that first non-empty command display and
+    /// returns whether it changed the cell; callers use the `true` case to invalidate any cached
+    /// transcript rendering (for example, the transcript overlay live tail).
+    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) -> bool {
+        let command_display = command_display.filter(|display| !display.is_empty());
+        if self.command_display.is_some() || command_display.is_none() {
+            return false;
         }
+        self.command_display = command_display;
+        true
     }
 
     pub(crate) fn command_display(&self) -> Option<String> {
@@ -506,6 +543,14 @@ impl HistoryCell for UnifiedExecWaitCell {
 
     fn desired_height(&self, width: u16) -> u16 {
         self.display_lines(width).len() as u16
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled {
+            return None;
+        }
+        // Match `App`'s frame scheduling cadence for transcript overlay live-tail animation.
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
     }
 }
 
@@ -1251,6 +1296,13 @@ impl HistoryCell for McpToolCallCell {
         }
 
         lines
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.result.is_some() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
     }
 }
 
