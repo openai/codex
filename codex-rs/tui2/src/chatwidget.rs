@@ -1285,7 +1285,7 @@ impl ChatWidget {
         let mut config = config;
         config.model = Some(model.clone());
         let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
         let mut widget = Self {
@@ -1367,7 +1367,7 @@ impl ChatWidget {
             ..
         } = common;
         let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -3753,7 +3753,7 @@ impl Notification {
 
 const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
 
-const EXAMPLE_PROMPTS: [&str; 8] = [
+const PLACEHOLDERS: [&str; 8] = [
     "Explain this codebase",
     "Summarize recent commits",
     "Implement {feature}",
