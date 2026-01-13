@@ -604,8 +604,14 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                     .and_then(|item| item.get("text"))
                     .and_then(|text| text.as_str());
 
-                // Ignore the cached UI prefix (project docs + skills) since it is not relevant to
-                // compaction behavior and can change as bundled skills evolve.
+                // Ignore cached prefix messages (project docs + permissions) since they are not
+                // relevant to compaction behavior and can change as bundled prompts evolve.
+                let role = value.get("role").and_then(|role| role.as_str());
+                if role == Some("developer")
+                    && text.is_some_and(|text| text.contains("`sandbox_mode`"))
+                {
+                    return false;
+                }
                 !text.is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
             })
             .cloned()
@@ -1726,9 +1732,11 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .into_iter()
         .collect::<VecDeque<_>>();
 
-    // System prompt
+    // Permissions developer message
     final_output.pop_front();
-    // Developer instructions
+    // User instructions (project docs/skills)
+    final_output.pop_front();
+    // Environment context
     final_output.pop_front();
 
     let _ = final_output

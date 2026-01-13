@@ -13,3 +13,7 @@ pub(crate) fn agent_status_from_event(msg: &EventMsg) -> Option<AgentStatus> {
         _ => None,
     }
 }
+
+pub(crate) fn is_final(status: &AgentStatus) -> bool {
+    !matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
+}
