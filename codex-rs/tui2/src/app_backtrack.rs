@@ -1,3 +1,16 @@
+//! Backtracking and transcript overlay event routing.
+//!
+//! This file owns backtrack mode (Esc/Enter navigation in the transcript overlay) and also
+//! mediates a key rendering boundary for the transcript overlay.
+//!
+//! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
+//! tail derived from the current in-flight `ChatWidget.active_cell`.
+//!
+//! That live tail is kept in sync during `TuiEvent::Draw` handling for `Overlay::Transcript` by
+//! asking `ChatWidget` for an active-cell cache key and transcript lines and by passing them into
+//! `TranscriptOverlay::sync_live_tail`. This preserves the invariant that the overlay reflects
+//! both committed history and in-flight activity without changing flush or coalescing behavior.
+
 use std::any::TypeId;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -248,6 +261,37 @@ impl App {
 
     /// Forward any event to the overlay and close it if done.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        // Transcript overlay draws are special: include a live, in-flight tail so the
+        // overlay matches the main viewport while the active cell is still streaming.
+        // This path also drives tail animations and closes the overlay immediately
+        // once it reports completion.
+        if let TuiEvent::Draw = &event
+            && let Some(Overlay::Transcript(t)) = &mut self.overlay
+        {
+            let active_key = self.chat_widget.active_cell_transcript_key();
+            let chat_widget = &self.chat_widget;
+            tui.draw(u16::MAX, |frame| {
+                let width = frame.area().width.max(1);
+                t.sync_live_tail(width, active_key, |w| {
+                    chat_widget.active_cell_transcript_lines(w)
+                });
+                t.render(frame.area(), frame.buffer);
+            })?;
+            let close_overlay = t.is_done();
+            if !close_overlay
+                && active_key.is_some_and(|key| key.animation_tick.is_some())
+                && t.is_scrolled_to_bottom()
+            {
+                tui.frame_requester()
+                    .schedule_frame_in(std::time::Duration::from_millis(50));
+            }
+            if close_overlay {
+                self.close_transcript_overlay(tui);
+                tui.frame_requester().schedule_frame();
+            }
+            return Ok(());
+        }
+
         if let Some(overlay) = &mut self.overlay {
             overlay.handle_event(tui, event)?;
             if overlay.is_done() {
