@@ -79,6 +79,22 @@ validation = "gpt-5.1-codex-max"
 writing = "gpt-5.1"
 ```
 
+### security_review.reasoning_effort
+
+You can also override the reasoning effort used for each security review step. Values are the same as `model_reasoning_effort` (see below). When a per-step value is omitted, the step inherits `model_reasoning_effort` (if set); otherwise it uses the model/provider default. The spec step defaults to `"high"` when neither value is set.
+
+Note: `gpt-5-codex*` models only accept `"low"`, `"medium"`, and `"high"`; other values behave as if the setting was omitted.
+
+```toml
+[security_review.reasoning_effort]
+# Example overrides (omit any key to inherit `model_reasoning_effort`)
+file_triage = "medium"
+spec = "high"          # default when omitted
+bugs = "medium"
+validation = "medium"
+writing = "minimal"
+```
+
 ### model_providers
 
 This option lets you add to the default set of model providers bundled with Codex. The map key becomes the value you use with `model_provider` to select the provider.

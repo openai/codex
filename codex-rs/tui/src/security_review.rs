@@ -97,8 +97,6 @@ const VALIDATION_PLAN_CONCURRENCY: usize = 8;
 const VALIDATION_REFINE_CONCURRENCY: usize = 8;
 const VALIDATION_EXEC_CONCURRENCY: usize = 8;
 const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
-const VALIDATION_BUILD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const VALIDATION_POC_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
 const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles.";
@@ -2486,12 +2484,13 @@ fn linkify_file_lines(markdown: &str, git_link_info: Option<&GitLinkInfo>) -> St
     out_lines.join("\n")
 }
 
-#[allow(clippy::needless_collect)]
+#[allow(clippy::needless_collect, clippy::too_many_arguments)]
 async fn polish_bug_markdowns(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     summaries: &mut [BugSummary],
     details: &mut [BugDetail],
     metrics: Arc<ReviewMetrics>,
@@ -2535,6 +2534,7 @@ async fn polish_bug_markdowns(
                 provider,
                 auth,
                 &writing_model,
+                writing_reasoning_effort,
                 metrics,
                 &content,
                 None,
@@ -2966,7 +2966,7 @@ fn linear_mcp_server() -> McpServerConfig {
         },
         enabled: true,
         startup_timeout_sec: None,
-        tool_timeout_sec: Some(Duration::from_secs(300)),
+        tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
     }
@@ -2982,7 +2982,7 @@ fn notion_mcp_server() -> McpServerConfig {
         },
         enabled: true,
         startup_timeout_sec: None,
-        tool_timeout_sec: Some(Duration::from_secs(300)),
+        tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
     }
@@ -2998,7 +2998,7 @@ fn secbot_mcp_server() -> McpServerConfig {
         },
         enabled: true,
         startup_timeout_sec: None,
-        tool_timeout_sec: Some(Duration::from_secs(300)),
+        tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
     }
@@ -3015,7 +3015,7 @@ fn google_workspace_mcp_server(bin_path: PathBuf) -> McpServerConfig {
         },
         enabled: true,
         startup_timeout_sec: None,
-        tool_timeout_sec: Some(Duration::from_secs(300)),
+        tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
     }
@@ -3145,8 +3145,9 @@ pub async fn run_security_review_setup(
                     existing.enabled = true;
                     logs.push(format!("Enabled MCP server `{name}`."));
                 }
-                if existing.tool_timeout_sec.is_none() && desired.tool_timeout_sec.is_some() {
-                    existing.tool_timeout_sec = desired.tool_timeout_sec;
+                if existing.tool_timeout_sec.is_some() {
+                    existing.tool_timeout_sec = None;
+                    logs.push(format!("Removed MCP tool timeout for `{name}`."));
                 }
                 if name != "google-workspace-mcp" && existing.transport != desired_transport {
                     existing.transport = desired_transport.clone();
@@ -3408,6 +3409,35 @@ pub async fn run_security_review(
     if request.writing_model.is_empty() {
         request.writing_model = MARKDOWN_FIX_MODEL.to_string();
     }
+
+    let global_reasoning_effort = request.config.model_reasoning_effort;
+    let triage_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .file_triage
+        .or(global_reasoning_effort);
+    let spec_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .spec
+        .or(global_reasoning_effort)
+        .or(Some(ReasoningEffort::High));
+    let bug_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .bugs
+        .or(global_reasoning_effort);
+    let validation_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .validation
+        .or(global_reasoning_effort);
+    let writing_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .writing
+        .or(global_reasoning_effort);
+
     let mut progress_sender = request.progress_sender.clone();
     let log_sink = request.log_sink.clone();
     let mut logs = Vec::new();
@@ -4070,13 +4100,16 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Running LLM file triage to prioritize analysis across {} files ({} directories) (model: {triage_model}).",
+                "Running LLM file triage to prioritize analysis across {} files ({} directories) (model: {triage_model}, reasoning: {triage_reasoning_label}).",
                 pruned_snippets.len(),
                 pruned_snippets
                     .iter()
                     .filter_map(|s| s.relative_path.parent())
                     .collect::<HashSet<_>>()
-                    .len()
+                    .len(),
+                triage_reasoning_label = reasoning_effort_label(
+                    normalize_reasoning_effort_for_model(triage_model, triage_reasoning_effort,)
+                )
             ),
         );
         let triage = match triage_files_for_bug_analysis(
@@ -4084,6 +4117,7 @@ pub async fn run_security_review(
             &request.provider,
             &request.auth,
             triage_model,
+            triage_reasoning_effort,
             auto_scope_prompt.clone(),
             pruned_snippets,
             progress_sender.clone(),
@@ -4277,6 +4311,7 @@ pub async fn run_security_review(
             &request.provider,
             &request.auth,
             request.spec_model.as_str(),
+            spec_reasoning_effort,
             &repo_path,
             &directory_candidates,
             metrics.clone(),
@@ -4340,9 +4375,20 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Generating system specifications for {} scope path(s) (running in parallel with bug analysis) (model: {spec_model}).",
+                "Generating system specifications for {} scope path(s) (running in parallel with bug analysis) (spec model: {spec_model}, reasoning: {spec_reasoning_label}; writing model: {writing_model}, reasoning: {writing_reasoning_label}).",
                 spec_targets.len(),
-                spec_model = request.spec_model.as_str()
+                spec_model = request.spec_model.as_str(),
+                spec_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.spec_model.as_str(),
+                        spec_reasoning_effort,
+                    )),
+                writing_model = request.writing_model.as_str(),
+                writing_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.writing_model.as_str(),
+                        writing_reasoning_effort,
+                    ))
             ),
         );
         let model_client = model_client.clone();
@@ -4365,7 +4411,9 @@ pub async fn run_security_review(
                 &provider,
                 &auth,
                 spec_model.as_str(),
+                spec_reasoning_effort,
                 writing_model.as_str(),
+                writing_reasoning_effort,
                 &repo_path,
                 &spec_targets,
                 &output_root,
@@ -4387,7 +4435,9 @@ pub async fn run_security_review(
                     &provider,
                     &auth,
                     THREAT_MODEL_MODEL,
+                    spec_reasoning_effort,
                     writing_model.as_str(),
+                    writing_reasoning_effort,
                     &repository_summary,
                     &repo_path,
                     spec,
@@ -4478,6 +4528,7 @@ pub async fn run_security_review(
                             &request.provider,
                             &request.auth,
                             dedupe_model,
+                            bug_reasoning_effort,
                             summaries,
                             details,
                             progress_sender.clone(),
@@ -4582,8 +4633,12 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Running bug analysis in {total_passes} pass(es) (model: {model}).",
-                model = request.model.as_str()
+                "Running bug analysis in {total_passes} pass(es) (model: {model}, reasoning: {bug_reasoning_label}).",
+                model = request.model.as_str(),
+                bug_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+                    request.model.as_str(),
+                    bug_reasoning_effort,
+                ))
             ),
         );
 
@@ -4609,6 +4664,7 @@ pub async fn run_security_review(
                 &request.provider,
                 &request.auth,
                 &request.model,
+                bug_reasoning_effort,
                 &request.config,
                 request.auth_manager.clone(),
                 &repository_summary,
@@ -4756,6 +4812,7 @@ pub async fn run_security_review(
                     progress_sender.clone(),
                     log_sink.clone(),
                     request.model.as_str(),
+                    bug_reasoning_effort,
                 )
                 .await
                 {
@@ -4891,6 +4948,7 @@ pub async fn run_security_review(
                 &request.provider,
                 &request.auth,
                 dedupe_model,
+                bug_reasoning_effort,
                 all_summaries,
                 all_details,
                 progress_sender.clone(),
@@ -4923,6 +4981,7 @@ pub async fn run_security_review(
                 &request.provider,
                 &request.auth,
                 &request.model,
+                bug_reasoning_effort,
                 &mut all_summaries,
                 &request.repo_path,
                 &repository_summary,
@@ -5011,9 +5070,14 @@ pub async fn run_security_review(
 
         if !all_summaries.is_empty() {
             let polish_message = format!(
-                "Polishing markdown for {} bug finding(s) (model: {model}).",
+                "Polishing markdown for {} bug finding(s) (model: {model}, reasoning: {writing_reasoning_label}).",
                 all_summaries.len(),
-                model = request.writing_model.as_str()
+                model = request.writing_model.as_str(),
+                writing_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.writing_model.as_str(),
+                        writing_reasoning_effort,
+                    ))
             );
             record(&mut logs, polish_message.clone());
             aggregated_logs.push(polish_message);
@@ -5022,6 +5086,7 @@ pub async fn run_security_review(
                 &request.provider,
                 &request.auth,
                 request.writing_model.as_str(),
+                writing_reasoning_effort,
                 &mut all_summaries,
                 &mut all_details,
                 metrics.clone(),
@@ -5307,8 +5372,13 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Validating high-risk findings... (model: {model}).",
-                model = request.validation_model.as_str()
+                "Validating high-risk findings... (model: {model}, reasoning: {validation_reasoning_label}).",
+                model = request.validation_model.as_str(),
+                validation_reasoning_label =
+                    reasoning_effort_label(normalize_reasoning_effort_for_model(
+                        request.validation_model.as_str(),
+                        validation_reasoning_effort,
+                    ))
             ),
         );
         match run_asan_validation(
@@ -5319,6 +5389,7 @@ pub async fn run_security_review(
             artifacts.report_html_path.clone(),
             request.provider.clone(),
             request.validation_model.clone(),
+            validation_reasoning_effort,
             &request.config,
             request.auth_manager.clone(),
             progress_sender.clone(),
@@ -6215,6 +6286,7 @@ async fn triage_files_for_bug_analysis(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     triage_model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     scope_prompt: Option<String>,
     snippets: Vec<FileSnippet>,
     progress_sender: Option<AppEventSender>,
@@ -6320,6 +6392,7 @@ async fn triage_files_for_bug_analysis(
                 provider.clone(),
                 auth.clone(),
                 triage_model.to_string(),
+                reasoning_effort,
                 scope_prompt.clone(),
                 request,
                 progress_sender.clone(),
@@ -6354,6 +6427,7 @@ async fn triage_files_for_bug_analysis(
                         provider.clone(),
                         auth.clone(),
                         triage_model.to_string(),
+                        reasoning_effort,
                         scope_prompt.clone(),
                         next_request,
                         progress_sender.clone(),
@@ -6428,6 +6502,7 @@ async fn triage_chunk(
     provider: ModelProviderInfo,
     auth: Option<CodexAuth>,
     triage_model: String,
+    reasoning_effort: Option<ReasoningEffort>,
     scope_prompt: Option<Arc<str>>,
     request: FileTriageChunkRequest,
     progress_sender: Option<AppEventSender>,
@@ -6463,6 +6538,7 @@ async fn triage_chunk(
             &provider,
             &auth,
             &triage_model,
+            reasoning_effort,
             FILE_TRIAGE_SYSTEM_PROMPT,
             &prompt,
             metrics.clone(),
@@ -6750,7 +6826,9 @@ async fn generate_specs(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     spec_model: &str,
+    spec_reasoning_effort: Option<ReasoningEffort>,
     writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     include_paths: &[PathBuf],
     output_root: &Path,
@@ -6906,6 +6984,7 @@ async fn generate_specs(
             provider,
             auth,
             spec_model,
+            spec_reasoning_effort,
             repo_root,
             &heuristically_filtered,
             metrics.clone(),
@@ -7051,7 +7130,9 @@ async fn generate_specs(
         provider,
         auth,
         spec_model,
+        spec_reasoning_effort,
         writing_model,
+        writing_reasoning_effort,
         repo_root,
         &pending_targets,
         &display_locations,
@@ -7137,7 +7218,9 @@ async fn generate_specs(
         provider,
         auth,
         spec_model,
+        None,
         writing_model,
+        None,
         &display_locations,
         &spec_entries,
         &combined_path,
@@ -7156,6 +7239,7 @@ async fn generate_specs(
         provider,
         auth,
         spec_model,
+        spec_reasoning_effort,
         &combined_markdown,
         metrics.clone(),
     )
@@ -7355,6 +7439,7 @@ async fn expand_auto_scope_keywords(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
+    reasoning_effort: Option<ReasoningEffort>,
     user_query: &str,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<Vec<String>, String> {
@@ -7378,6 +7463,7 @@ async fn expand_auto_scope_keywords(
         provider,
         auth,
         AUTO_SCOPE_MODEL,
+        reasoning_effort,
         AUTO_SCOPE_KEYWORD_SYSTEM_PROMPT,
         &prompt,
         metrics.clone(),
@@ -7731,28 +7817,40 @@ async fn auto_detect_scope(
 ) -> Result<(Vec<AutoScopeSelection>, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
 
-    let mut keywords =
-        match expand_auto_scope_keywords(client, provider, auth, user_query, metrics.clone()).await
-        {
-            Ok(values) => {
-                if values.is_empty() {
-                    logs.push(
-                        "Auto scope keyword expansion returned no keywords; using fallback terms."
-                            .to_string(),
-                    );
-                } else {
-                    logs.push(format!(
-                        "Auto scope keywords suggested by model: {}",
-                        values.join(", ")
-                    ));
-                }
-                values
+    let keyword_reasoning_effort = config
+        .security_review_reasoning_efforts
+        .file_triage
+        .or(config.model_reasoning_effort);
+
+    let mut keywords = match expand_auto_scope_keywords(
+        client,
+        provider,
+        auth,
+        keyword_reasoning_effort,
+        user_query,
+        metrics.clone(),
+    )
+    .await
+    {
+        Ok(values) => {
+            if values.is_empty() {
+                logs.push(
+                    "Auto scope keyword expansion returned no keywords; using fallback terms."
+                        .to_string(),
+                );
+            } else {
+                logs.push(format!(
+                    "Auto scope keywords suggested by model: {}",
+                    values.join(", ")
+                ));
             }
-            Err(err) => {
-                logs.push(format!("Auto scope keyword expansion failed: {err}"));
-                Vec::new()
-            }
-        };
+            values
+        }
+        Err(err) => {
+            logs.push(format!("Auto scope keyword expansion failed: {err}"));
+            Vec::new()
+        }
+    };
 
     if keywords.is_empty() {
         let fallback = fallback_keywords_from_prompt(user_query);
@@ -8730,11 +8828,13 @@ mod severity_matrix_tests {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn filter_spec_directories(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     candidates: &[(PathBuf, String)],
     metrics: Arc<ReviewMetrics>,
@@ -8757,6 +8857,7 @@ Return ALL to keep every directory.",
         provider,
         auth,
         model,
+        reasoning_effort,
         SPEC_DIR_FILTER_SYSTEM_PROMPT,
         &prompt,
         metrics,
@@ -8846,12 +8947,14 @@ async fn run_spec_agent(
     prompt: String,
     metrics: Arc<ReviewMetrics>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(String, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
 
     let mut spec_config = config.clone();
     spec_config.model = Some(model.to_string());
-    spec_config.model_reasoning_effort = Some(ReasoningEffort::High);
+    spec_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
     spec_config.model_provider = provider.clone();
     spec_config.base_instructions = Some(SPEC_SYSTEM_PROMPT.to_string());
     spec_config.user_instructions = None;
@@ -8977,11 +9080,14 @@ async fn run_bug_agent(
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<BugAgentOutcome, SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
 
     let mut bug_config = config.clone();
     bug_config.model = Some(model.to_string());
+    bug_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
     bug_config.model_provider = provider.clone();
     bug_config.base_instructions = Some(BUGS_SYSTEM_PROMPT.to_string());
     bug_config.user_instructions = None;
@@ -9096,7 +9202,9 @@ async fn generate_specs_single_worker(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     spec_model: &str,
+    spec_reasoning_effort: Option<ReasoningEffort>,
     writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     project_locations: &[String],
     raw_dir: &Path,
@@ -9140,6 +9248,7 @@ async fn generate_specs_single_worker(
         prompt,
         metrics.clone(),
         spec_model,
+        spec_reasoning_effort,
     )
     .await
     {
@@ -9170,6 +9279,7 @@ async fn generate_specs_single_worker(
             provider,
             auth,
             writing_model,
+            writing_reasoning_effort,
             metrics.clone(),
             &sanitized,
             None,
@@ -9225,7 +9335,9 @@ async fn generate_specs_parallel_workers(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     spec_model: &str,
+    spec_reasoning_effort: Option<ReasoningEffort>,
     writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     normalized: &[PathBuf],
     display_locations: &[String],
@@ -9258,7 +9370,9 @@ async fn generate_specs_parallel_workers(
                 provider,
                 auth,
                 spec_model,
+                spec_reasoning_effort,
                 writing_model,
+                writing_reasoning_effort,
                 repo_root,
                 target.clone(),
                 project_locations,
@@ -9307,7 +9421,9 @@ async fn generate_spec_for_location(
     provider: ModelProviderInfo,
     auth: Option<CodexAuth>,
     spec_model: &str,
+    spec_reasoning_effort: Option<ReasoningEffort>,
     writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repo_root: PathBuf,
     target: PathBuf,
     project_locations: Vec<String>,
@@ -9349,6 +9465,7 @@ async fn generate_spec_for_location(
         prompt,
         metrics.clone(),
         spec_model,
+        spec_reasoning_effort,
     )
     .await
     {
@@ -9379,6 +9496,7 @@ async fn generate_spec_for_location(
             &provider,
             &auth,
             writing_model,
+            writing_reasoning_effort,
             metrics.clone(),
             &sanitized,
             None,
@@ -9434,7 +9552,9 @@ async fn generate_threat_model(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     repository_summary: &str,
     repo_root: &Path,
     spec: &SpecGenerationOutcome,
@@ -9455,8 +9575,12 @@ async fn generate_threat_model(
         })?;
 
     let mut logs: Vec<String> = Vec::new();
+    let reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+        model,
+        reasoning_effort,
+    ));
     let start_message = format!(
-        "Generating threat model from {} specification section(s).",
+        "Generating threat model from {} specification section(s) (model: {model}, reasoning: {reasoning_label}).",
         spec.locations.len().max(1)
     );
     if let Some(tx) = progress_sender.as_ref() {
@@ -9470,6 +9594,7 @@ async fn generate_threat_model(
         provider,
         auth,
         model,
+        reasoning_effort,
         THREAT_MODEL_SYSTEM_PROMPT,
         &prompt,
         metrics.clone(),
@@ -9512,6 +9637,7 @@ async fn generate_threat_model(
             provider,
             auth,
             model,
+            reasoning_effort,
             THREAT_MODEL_SYSTEM_PROMPT,
             &retry_prompt,
             metrics.clone(),
@@ -9555,7 +9681,13 @@ async fn generate_threat_model(
     }
 
     if !sanitized_response.trim().is_empty() {
-        let polish_message = "Polishing threat model markdown formatting.".to_string();
+        let writing_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+            writing_model,
+            writing_reasoning_effort,
+        ));
+        let polish_message = format!(
+            "Polishing threat model markdown formatting (model: {writing_model}, reasoning: {writing_reasoning_label})."
+        );
         if let Some(tx) = progress_sender.as_ref() {
             tx.send(AppEvent::SecurityReviewLog(polish_message.clone()));
         }
@@ -9565,6 +9697,7 @@ async fn generate_threat_model(
             provider,
             auth,
             writing_model,
+            writing_reasoning_effort,
             metrics.clone(),
             &sanitized_response,
             None,
@@ -9628,6 +9761,7 @@ async fn compact_analysis_context(
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<Option<String>, SecurityReviewFailure> {
     let mut sections: Vec<String> = Vec::new();
     if let Some(spec) = spec_markdown {
@@ -9670,6 +9804,7 @@ async fn compact_analysis_context(
         provider,
         auth,
         model,
+        reasoning_effort,
         BUGS_SYSTEM_PROMPT,
         &prompt,
         metrics,
@@ -10017,7 +10152,9 @@ async fn combine_spec_markdown(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     writing_model: &str,
+    writing_reasoning_effort: Option<ReasoningEffort>,
     project_locations: &[String],
     specs: &[SpecEntry],
     combined_path: &Path,
@@ -10059,6 +10196,7 @@ async fn combine_spec_markdown(
             provider,
             auth,
             model,
+            reasoning_effort,
             SPEC_COMBINE_SYSTEM_PROMPT,
             &prompt,
             metrics.clone(),
@@ -10276,8 +10414,13 @@ async fn combine_spec_markdown(
 
     let sanitized = fix_mermaid_blocks(&combined_raw);
 
-    let polish_message =
-        format!("Polishing combined specification markdown formatting (model: {writing_model}).");
+    let writing_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+        writing_model,
+        writing_reasoning_effort,
+    ));
+    let polish_message = format!(
+        "Polishing combined specification markdown formatting (model: {writing_model}, reasoning: {writing_reasoning_label})."
+    );
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(polish_message.clone()));
     }
@@ -10289,6 +10432,7 @@ async fn combine_spec_markdown(
         provider,
         auth,
         writing_model,
+        writing_reasoning_effort,
         MARKDOWN_FIX_SYSTEM_PROMPT,
         &fix_prompt,
         metrics.clone(),
@@ -10606,6 +10750,7 @@ async fn extract_data_classification(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     spec_markdown: &str,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<Option<ClassificationExtraction>, String> {
@@ -10622,6 +10767,7 @@ async fn extract_data_classification(
         provider,
         auth,
         model,
+        reasoning_effort,
         SPEC_SYSTEM_PROMPT,
         &prompt,
         metrics,
@@ -10823,11 +10969,13 @@ async fn write_bug_analysis_progress(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn polish_markdown_block(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     metrics: Arc<ReviewMetrics>,
     original_content: &str,
     template_hint: Option<&str>,
@@ -10845,6 +10993,7 @@ async fn polish_markdown_block(
         provider,
         auth,
         model,
+        reasoning_effort,
         MARKDOWN_FIX_SYSTEM_PROMPT,
         &fix_prompt,
         metrics,
@@ -10869,6 +11018,7 @@ async fn analyze_files_individually(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     config: &Config,
     auth_manager: Arc<AuthManager>,
     repository_summary: &str,
@@ -10967,6 +11117,7 @@ async fn analyze_files_individually(
                     provider,
                     auth,
                     model,
+                    reasoning_effort,
                     config,
                     auth_manager.clone(),
                     repository_summary,
@@ -11038,6 +11189,7 @@ async fn analyze_files_individually(
                         provider,
                         auth,
                         model,
+                        reasoning_effort,
                         config,
                         auth_manager.clone(),
                         repository_summary,
@@ -11238,6 +11390,7 @@ async fn analyze_files_individually(
             provider,
             auth,
             model,
+            reasoning_effort,
             &mut bug_summaries,
             repo_root,
             repository_summary,
@@ -11351,6 +11504,7 @@ async fn analyze_single_file(
     provider: &ModelProviderInfo,
     _auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     config: &Config,
     auth_manager: Arc<AuthManager>,
     repository_summary: &str,
@@ -11393,6 +11547,7 @@ async fn analyze_single_file(
         log_sink.clone(),
         metrics,
         model,
+        reasoning_effort,
     )
     .await
     {
@@ -12036,6 +12191,7 @@ async fn llm_dedupe_bug_summaries(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     mut summaries: Vec<BugSummary>,
     details: Vec<BugDetail>,
     progress_sender: Option<AppEventSender>,
@@ -12101,6 +12257,7 @@ async fn llm_dedupe_bug_summaries(
             provider,
             auth,
             model,
+            reasoning_effort,
             BUG_DEDUP_SYSTEM_PROMPT,
             &prompt,
             metrics.clone(),
@@ -13130,6 +13287,7 @@ async fn run_risk_rerank_chunk(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     system_prompt: &str,
     base_prompt: String,
     metrics: Arc<ReviewMetrics>,
@@ -13173,6 +13331,7 @@ async fn run_risk_rerank_chunk(
             provider,
             auth,
             model,
+            reasoning_effort,
             system_prompt,
             &prompt,
             metrics.clone(),
@@ -13456,6 +13615,7 @@ async fn rerank_bugs_by_risk(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     summaries: &mut [BugSummary],
     repo_root: &Path,
     repository_summary: &str,
@@ -13518,6 +13678,7 @@ async fn rerank_bugs_by_risk(
                 &provider,
                 &auth_clone,
                 model_owned.as_str(),
+                reasoning_effort,
                 BUG_RERANK_SYSTEM_PROMPT,
                 prompt,
                 metrics_clone,
@@ -15302,20 +15463,9 @@ fn classify_python_validation_status(
     }
 }
 
-enum CommandOutput {
-    Output(std::process::Output),
-    TimedOut,
-}
-
-async fn command_output_with_timeout(
-    mut command: Command,
-    timeout: Duration,
-) -> Result<CommandOutput, std::io::Error> {
+async fn command_output(mut command: Command) -> Result<std::process::Output, std::io::Error> {
     command.kill_on_drop(true);
-    match tokio::time::timeout(timeout, command.output()).await {
-        Ok(result) => result.map(CommandOutput::Output),
-        Err(_) => Ok(CommandOutput::TimedOut),
-    }
+    command.output().await
 }
 
 async fn write_validation_output_files(
@@ -15630,8 +15780,8 @@ async fn execute_bug_command(
             }
             validation.repro_steps.push(format!("Run: `{cmd}`"));
 
-            match command_output_with_timeout(command, VALIDATION_POC_TIMEOUT).await {
-                Ok(CommandOutput::Output(output)) => {
+            match command_output(command).await {
+                Ok(output) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -15699,25 +15849,6 @@ async fn execute_bug_command(
                         "{}: python exited with status {}",
                         label, output.status
                     ));
-                }
-                Ok(CommandOutput::TimedOut) => {
-                    let duration = start.elapsed();
-                    let duration_label = fmt_elapsed_compact(duration.as_secs());
-                    validation.status = BugValidationStatus::Failed;
-                    validation.summary = Some(format!("Timed out after 60m · {duration_label}"));
-                    let timeout_note = format!("Timed out after 60m ({duration_label}).");
-                    let (stdout_path, stderr_path) = write_validation_output_files(
-                        &bug_work_dir,
-                        &repo_path,
-                        &file_stem,
-                        "repro",
-                        "",
-                        &timeout_note,
-                    )
-                    .await;
-                    validation.stdout_path = Some(stdout_path);
-                    validation.stderr_path = Some(stderr_path);
-                    logs.push(format!("{label}: python timed out after 60m"));
                 }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
@@ -16322,6 +16453,7 @@ async fn run_validation_plan_agent(
     progress_sender: Option<AppEventSender>,
     metrics: Arc<ReviewMetrics>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     label: &str,
 ) -> Result<ValidationPlanAgentOutput, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
@@ -16334,6 +16466,8 @@ async fn run_validation_plan_agent(
 
     let mut validation_config = config.clone();
     validation_config.model = Some(model.to_string());
+    validation_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
     validation_config.model_provider = provider.clone();
     validation_config.base_instructions = Some(VALIDATION_PLAN_SYSTEM_PROMPT.to_string());
     validation_config.user_instructions = None;
@@ -16496,6 +16630,7 @@ async fn run_validation_refine_agent(
     progress_sender: Option<AppEventSender>,
     metrics: Arc<ReviewMetrics>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     label: &str,
 ) -> Result<ValidationRefineAgentOutput, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
@@ -16508,6 +16643,8 @@ async fn run_validation_refine_agent(
 
     let mut refine_config = config.clone();
     refine_config.model = Some(model.to_string());
+    refine_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
     refine_config.model_provider = provider.clone();
     refine_config.base_instructions = Some(VALIDATION_REFINE_SYSTEM_PROMPT.to_string());
     refine_config.user_instructions = None;
@@ -16703,6 +16840,7 @@ async fn run_asan_validation(
     report_html_path: Option<PathBuf>,
     provider: ModelProviderInfo,
     model: String,
+    reasoning_effort: Option<ReasoningEffort>,
     config: &Config,
     auth_manager: Arc<AuthManager>,
     progress_sender: Option<AppEventSender>,
@@ -16739,9 +16877,13 @@ async fn run_asan_validation(
         }
     };
 
+    let reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+        model.as_str(),
+        reasoning_effort,
+    ));
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(format!(
-            "Planning validation for high-risk findings... (model: {model}).",
+            "Planning validation for high-risk findings... (model: {model}, reasoning: {reasoning_label}).",
             model = model.as_str()
         )));
     }
@@ -16830,6 +16972,7 @@ async fn run_asan_validation(
                 progress_sender,
                 metrics,
                 model.as_str(),
+                reasoning_effort,
                 label.as_str(),
             )
             .await;
@@ -17111,10 +17254,9 @@ async fn run_asan_validation(
                 progress_sender,
                 &None,
                 logs,
-                "Validation preflight: compiling the target (up to 60m)...".to_string(),
+                "Validation preflight: compiling the target...".to_string(),
             );
 
-            let preflight_started = Instant::now();
             let mut last_failure: Option<ValidationBuildFailure> = None;
             for attempt in attempts {
                 let mut attempt_failure: Option<ValidationBuildFailure> = None;
@@ -17136,33 +17278,9 @@ async fn run_asan_validation(
                         format!("Run: `{command_label}`"),
                     );
 
-                    let remaining =
-                        VALIDATION_BUILD_TIMEOUT.saturating_sub(preflight_started.elapsed());
-                    if remaining.is_zero() {
-                        let timeout_note = "Timed out after 60m.".to_string();
-                        let file_stem = file_stem_for_command(program, args);
-                        let (stdout_path, stderr_path) = write_validation_output_files(
-                            work_dir,
-                            repo_root,
-                            &file_stem,
-                            "build",
-                            "",
-                            &timeout_note,
-                        )
-                        .await;
-                        attempt_failure = Some(ValidationBuildFailure {
-                            command: command_label,
-                            summary: timeout_note,
-                            stdout_path,
-                            stderr_path,
-                            output_snippet: None,
-                        });
-                        break;
-                    }
-
                     let start = Instant::now();
-                    match command_output_with_timeout(command, remaining).await {
-                        Ok(CommandOutput::Output(output)) => {
+                    match command_output(command).await {
+                        Ok(output) => {
                             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                             let success = output.status.success();
@@ -17195,27 +17313,6 @@ async fn run_asan_validation(
                                 });
                                 break;
                             }
-                        }
-                        Ok(CommandOutput::TimedOut) => {
-                            let timeout_note = "Timed out after 60m.".to_string();
-                            let file_stem = file_stem_for_command(program, args);
-                            let (stdout_path, stderr_path) = write_validation_output_files(
-                                work_dir,
-                                repo_root,
-                                &file_stem,
-                                "build",
-                                "",
-                                &timeout_note,
-                            )
-                            .await;
-                            attempt_failure = Some(ValidationBuildFailure {
-                                command: command_label,
-                                summary: timeout_note,
-                                stdout_path,
-                                stderr_path,
-                                output_snippet: None,
-                            });
-                            break;
                         }
                         Err(err) => {
                             let message = format!("Failed to run `{command_label}`: {err}");
@@ -17517,6 +17614,7 @@ async fn run_asan_validation(
                     progress_sender,
                     metrics,
                     model.as_str(),
+                    reasoning_effort,
                     item.label.as_str(),
                 )
                 .await;
@@ -17906,12 +18004,43 @@ async fn make_provider_request_builder(
     Ok(builder)
 }
 
+fn normalize_reasoning_effort_for_model(
+    model: &str,
+    requested: Option<ReasoningEffort>,
+) -> Option<ReasoningEffort> {
+    if !model.starts_with("gpt-5-codex") {
+        return requested;
+    }
+
+    fn is_supported_by_gpt5_codex(effort: ReasoningEffort) -> bool {
+        matches!(
+            effort,
+            ReasoningEffort::Low | ReasoningEffort::Medium | ReasoningEffort::High
+        )
+    }
+
+    requested.filter(|&effort| is_supported_by_gpt5_codex(effort))
+}
+
+fn reasoning_effort_label(effort: Option<ReasoningEffort>) -> &'static str {
+    match effort {
+        None => "default",
+        Some(ReasoningEffort::None) => "none",
+        Some(ReasoningEffort::Minimal) => "minimal",
+        Some(ReasoningEffort::Low) => "low",
+        Some(ReasoningEffort::Medium) => "medium",
+        Some(ReasoningEffort::High) => "high",
+        Some(ReasoningEffort::XHigh) => "xhigh",
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn call_model(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     system_prompt: &str,
     user_prompt: &str,
     metrics: Arc<ReviewMetrics>,
@@ -17931,6 +18060,7 @@ async fn call_model(
             provider,
             auth,
             model,
+            reasoning_effort,
             system_prompt,
             user_prompt,
             temperature,
@@ -18006,6 +18136,7 @@ async fn call_model_attempt(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     system_prompt: &str,
     user_prompt: &str,
     temperature: f32,
@@ -18024,7 +18155,7 @@ async fn call_model_attempt(
                 }],
             }];
 
-            let payload = json!({
+            let mut payload = json!({
                 "model": model,
                 "instructions": system_prompt,
                 "input": input,
@@ -18036,6 +18167,12 @@ async fn call_model_attempt(
                 "include": [],
                 "prompt_cache_key": security_review_session_id(),
             });
+
+            if let Some(effort) = normalize_reasoning_effort_for_model(model, reasoning_effort)
+                && let Some(map) = payload.as_object_mut()
+            {
+                map.insert("reasoning".to_string(), json!({ "effort": effort }));
+            }
 
             let response = builder
                 .header(ACCEPT, "text/event-stream")

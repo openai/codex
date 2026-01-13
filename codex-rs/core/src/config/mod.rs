@@ -10,6 +10,7 @@ use crate::config::types::OtelExporterKind;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ScrollInputMode;
 use crate::config::types::SecurityReviewModels;
+use crate::config::types::SecurityReviewReasoningEfforts;
 use crate::config::types::SecurityReviewToml;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -108,6 +109,9 @@ pub struct Config {
 
     /// Optional model overrides used by the security review pipeline.
     pub security_review_models: SecurityReviewModels,
+
+    /// Optional reasoning-effort overrides used by the security review pipeline.
+    pub security_review_reasoning_efforts: SecurityReviewReasoningEfforts,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
@@ -1330,6 +1334,12 @@ impl Config {
             }
         };
 
+        let security_review_reasoning_efforts = cfg
+            .security_review
+            .as_ref()
+            .map(|review| review.reasoning_effort.clone())
+            .unwrap_or_default();
+
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
 
         // Ensure that every field of ConfigRequirements is applied to the final
@@ -1350,6 +1360,7 @@ impl Config {
             model,
             review_model,
             security_review_models,
+            security_review_reasoning_efforts,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_provider_id,
@@ -3188,6 +3199,7 @@ model_verbosity = "high"
                 model: Some("o3".to_string()),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
                 security_review_models: Default::default(),
+                security_review_reasoning_efforts: Default::default(),
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
@@ -3272,6 +3284,7 @@ model_verbosity = "high"
             model: Some("gpt-3.5-turbo".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             security_review_models: Default::default(),
+            security_review_reasoning_efforts: Default::default(),
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
@@ -3371,6 +3384,7 @@ model_verbosity = "high"
             model: Some("o3".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             security_review_models: Default::default(),
+            security_review_reasoning_efforts: Default::default(),
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
@@ -3456,6 +3470,7 @@ model_verbosity = "high"
             model: Some("gpt-5.1".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             security_review_models: Default::default(),
+            security_review_reasoning_efforts: Default::default(),
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),

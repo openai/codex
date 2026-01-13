@@ -3,6 +3,7 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -32,9 +33,25 @@ pub struct SecurityReviewModels {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecurityReviewReasoningEfforts {
+    /// Reasoning effort used for the file triage step.
+    pub file_triage: Option<ReasoningEffort>,
+    /// Reasoning effort used for specification generation.
+    pub spec: Option<ReasoningEffort>,
+    /// Reasoning effort used for bug finding / analysis.
+    pub bugs: Option<ReasoningEffort>,
+    /// Reasoning effort used for validation and post-validation refinement.
+    pub validation: Option<ReasoningEffort>,
+    /// Reasoning effort used for writing/polishing output artifacts.
+    pub writing: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct SecurityReviewToml {
     #[serde(default)]
     pub models: SecurityReviewModels,
+    #[serde(default)]
+    pub reasoning_effort: SecurityReviewReasoningEfforts,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
