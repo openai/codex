@@ -437,9 +437,7 @@ impl ConfigBuilder {
         // relative paths to absolute paths based on the parent folder of the
         // respective config file, so we should be safe to deserialize without
         // AbsolutePathBufGuard here.
-        let config_toml = serde_path_to_error::deserialize(merged_toml).map_err(|err| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_inner())
-        })?;
+        let config_toml = deserialize_config_toml_with_base(merged_toml, None)?;
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
@@ -496,12 +494,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let cfg = {
-        let _guard = AbsolutePathBufGuard::new(codex_home);
-        serde_path_to_error::deserialize(merged_toml)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_inner()))
-    }
-    .map_err(|e| {
+    let cfg = deserialize_config_toml_with_base(merged_toml, Some(codex_home)).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
     })?;
@@ -509,17 +502,15 @@ pub async fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
-#[cfg(test)]
 fn deserialize_config_toml_with_base(
     root_value: TomlValue,
-    config_base_dir: &Path,
+    config_base_dir: Option<&Path>,
 ) -> std::io::Result<ConfigToml> {
     // This guard ensures that any relative paths that is deserialized into an
     // [AbsolutePathBuf] is resolved against `config_base_dir`.
-    let _guard = AbsolutePathBufGuard::new(config_base_dir);
-    root_value
-        .try_into()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    let _guard = config_base_dir.map(AbsolutePathBufGuard::new);
+    serde_path_to_error::deserialize(root_value)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_inner()))
 }
 
 fn filter_mcp_servers_by_requirements(
