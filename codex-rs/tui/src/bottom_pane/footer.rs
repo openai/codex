@@ -161,7 +161,6 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
-    let mut queue_message = Line::from("");
     let mut queue_message_tab = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
@@ -176,7 +175,6 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::Commands => commands = text,
                 ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
-                ShortcutId::QueueMessage => queue_message = text,
                 ShortcutId::QueueMessageTab => queue_message_tab = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
@@ -192,7 +190,6 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         commands,
         shell_commands,
         newline,
-        queue_message,
         queue_message_tab,
         file_paths,
         paste_image,
@@ -272,7 +269,6 @@ enum ShortcutId {
     Commands,
     ShellCommands,
     InsertNewline,
-    QueueMessage,
     QueueMessageTab,
     FilePaths,
     PasteImage,

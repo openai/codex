@@ -425,7 +425,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Steer,
         key: "steer",
-        stage: Stage::Experimental,
+        stage: Stage::Beta {
+            name: "Steer",
+            menu_description: "Enter submits immediately; Tab/Ctrl+K queues messages when a task is running.",
+            announcement: "NEW! Try Steer mode: Enter submits immediately, Tab/Ctrl+K queues. Enable in /experimental!",
+        },
         default_enabled: false,
     },
 ];
