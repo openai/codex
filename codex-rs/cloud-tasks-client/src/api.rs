@@ -148,11 +148,15 @@ pub trait CloudBackend: Send + Sync {
         diff_override: Option<String>,
     ) -> Result<ApplyOutcome>;
     async fn apply_task(&self, id: TaskId, diff_override: Option<String>) -> Result<ApplyOutcome>;
+    /// Create a new task on the backend.
+    ///
+    /// When `git_ref` is `None`, the request omits `new_task.branch` and the backend is expected to
+    /// choose a default branch (for example, the repository's configured default branch).
     async fn create_task(
         &self,
         env_id: &str,
         prompt: &str,
-        git_ref: &str,
+        git_ref: Option<&str>,
         qa_mode: bool,
         best_of_n: usize,
     ) -> Result<CreatedTask>;

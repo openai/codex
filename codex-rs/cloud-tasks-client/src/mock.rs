@@ -136,7 +136,7 @@ impl CloudBackend for MockClient {
         &self,
         env_id: &str,
         prompt: &str,
-        git_ref: &str,
+        git_ref: Option<&str>,
         qa_mode: bool,
         best_of_n: usize,
     ) -> Result<crate::CreatedTask> {

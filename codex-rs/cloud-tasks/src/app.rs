@@ -458,7 +458,7 @@ mod tests {
             &self,
             _env_id: &str,
             _prompt: &str,
-            _git_ref: &str,
+            _git_ref: Option<&str>,
             _qa_mode: bool,
             _best_of_n: usize,
         ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask> {

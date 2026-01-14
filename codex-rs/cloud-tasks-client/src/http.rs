@@ -103,7 +103,7 @@ impl CloudBackend for HttpClient {
         &self,
         env_id: &str,
         prompt: &str,
-        git_ref: &str,
+        git_ref: Option<&str>,
         qa_mode: bool,
         best_of_n: usize,
     ) -> Result<crate::CreatedTask> {
@@ -293,7 +293,7 @@ mod api {
             &self,
             env_id: &str,
             prompt: &str,
-            git_ref: &str,
+            git_ref: Option<&str>,
             qa_mode: bool,
             best_of_n: usize,
         ) -> Result<crate::CreatedTask> {
@@ -316,11 +316,17 @@ mod api {
             let mut request_body = serde_json::json!({
                 "new_task": {
                     "environment_id": env_id,
-                    "branch": git_ref,
                     "run_environment_in_qa_mode": qa_mode,
                 },
                 "input_items": input_items,
             });
+            if let Some(branch) = git_ref
+                && let Some(obj) = request_body
+                    .get_mut("new_task")
+                    .and_then(serde_json::Value::as_object_mut)
+            {
+                obj.insert("branch".to_string(), serde_json::json!(branch));
+            }
 
             if best_of_n > 1
                 && let Some(obj) = request_body.as_object_mut()

@@ -127,31 +127,117 @@ impl GitInfoProvider for RealGitInfo {
     }
 }
 
-async fn resolve_git_ref(branch_override: Option<&String>) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitRefResolution {
+    Override,
+    CurrentBranch,
+    DefaultBranch,
+    BackendDefault,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedGitRef {
+    git_ref: Option<String>,
+    resolution: GitRefResolution,
+}
+
+impl ResolvedGitRef {
+    fn as_deref(&self) -> Option<&str> {
+        self.git_ref.as_deref()
+    }
+}
+
+async fn resolve_git_ref(branch_override: Option<&String>) -> ResolvedGitRef {
     resolve_git_ref_with_git_info(branch_override, &RealGitInfo).await
 }
 
 async fn resolve_git_ref_with_git_info(
     branch_override: Option<&String>,
     git_info: &impl GitInfoProvider,
-) -> String {
+) -> ResolvedGitRef {
     if let Some(branch) = branch_override {
-        let branch = branch.trim();
-        if !branch.is_empty() {
-            return branch.to_string();
+        let trimmed = branch.trim();
+        if !trimmed.is_empty() {
+            return ResolvedGitRef {
+                git_ref: Some(trimmed.to_string()),
+                resolution: GitRefResolution::Override,
+            };
         }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
         if let Some(branch) = git_info.current_branch_name(&cwd).await {
-            branch
-        } else if let Some(branch) = git_info.default_branch_name(&cwd).await {
-            branch
-        } else {
-            "main".to_string()
+            return ResolvedGitRef {
+                git_ref: Some(branch),
+                resolution: GitRefResolution::CurrentBranch,
+            };
+        }
+
+        if let Some(branch) = git_info.default_branch_name(&cwd).await {
+            return ResolvedGitRef {
+                git_ref: Some(branch),
+                resolution: GitRefResolution::DefaultBranch,
+            };
+        }
+    }
+
+    ResolvedGitRef {
+        git_ref: None,
+        resolution: GitRefResolution::BackendDefault,
+    }
+}
+
+fn looks_like_missing_branch_error(err: &codex_cloud_tasks_client::CloudTaskError) -> bool {
+    let codex_cloud_tasks_client::CloudTaskError::Http(text) = err else {
+        return false;
+    };
+    let text = text.to_lowercase();
+    if !text.contains("branch") {
+        return false;
+    }
+    text.contains("required") || text.contains("missing") || text.contains("must be")
+}
+
+async fn create_task_with_resolved_git_ref(
+    backend: &dyn codex_cloud_tasks_client::CloudBackend,
+    env_id: &str,
+    prompt: &str,
+    git_ref: &ResolvedGitRef,
+    qa_mode: bool,
+    best_of_n: usize,
+) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask> {
+    if git_ref.resolution == GitRefResolution::BackendDefault {
+        append_error_log("new_task: branch=<backend default>");
+        match codex_cloud_tasks_client::CloudBackend::create_task(
+            backend, env_id, prompt, None, qa_mode, best_of_n,
+        )
+        .await
+        {
+            Ok(ok) => Ok(ok),
+            Err(e) if looks_like_missing_branch_error(&e) => {
+                append_error_log("new_task: backend requires branch; retrying with main");
+                codex_cloud_tasks_client::CloudBackend::create_task(
+                    backend,
+                    env_id,
+                    prompt,
+                    Some("main"),
+                    qa_mode,
+                    best_of_n,
+                )
+                .await
+            }
+            Err(e) => Err(e),
         }
     } else {
-        "main".to_string()
+        codex_cloud_tasks_client::CloudBackend::create_task(
+            backend,
+            env_id,
+            prompt,
+            git_ref.as_deref(),
+            qa_mode,
+            best_of_n,
+        )
+        .await
     }
 }
 
@@ -166,7 +252,7 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let prompt = resolve_query_input(query)?;
     let env_id = resolve_environment_id(&ctx, &environment).await?;
     let git_ref = resolve_git_ref(branch.as_ref()).await;
-    let created = codex_cloud_tasks_client::CloudBackend::create_task(
+    let created = create_task_with_resolved_git_ref(
         &*ctx.backend,
         &env_id,
         &prompt,
@@ -1416,7 +1502,15 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                 tokio::spawn(async move {
                                                     let git_ref = resolve_git_ref(None).await;
 
-                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, &git_ref, false, best_of_n).await;
+                                                    let result = create_task_with_resolved_git_ref(
+                                                        &*backend,
+                                                        &env,
+                                                        &text,
+                                                        &git_ref,
+                                                        false,
+                                                        best_of_n,
+                                                    )
+                                                    .await;
                                                     let evt = match result {
                                                         Ok(ok) => app::AppEvent::NewTaskSubmitted(Ok(ok)),
                                                         Err(e) => app::AppEvent::NewTaskSubmitted(Err(format!("{e}"))),
@@ -2034,11 +2128,14 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::resolve_git_ref_with_git_info;
+    use codex_cloud_tasks_client::CloudBackend;
     use codex_cloud_tasks_client::DiffSummary;
     use codex_cloud_tasks_client::MockClient;
     use codex_cloud_tasks_client::TaskId;
     use codex_cloud_tasks_client::TaskStatus;
     use codex_cloud_tasks_client::TaskSummary;
+    use codex_cloud_tasks_client::TaskText;
+    use codex_cloud_tasks_client::TurnAttempt;
     use codex_tui::ComposerAction;
     use codex_tui::ComposerInput;
     use crossterm::event::KeyCode;
@@ -2047,6 +2144,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
 
     struct StubGitInfo {
         default_branch: Option<String>,
@@ -2081,7 +2180,13 @@ mod tests {
         )
         .await;
 
-        assert_eq!(git_ref, "feature/override");
+        assert_eq!(
+            git_ref,
+            ResolvedGitRef {
+                git_ref: Some("feature/override".to_string()),
+                resolution: GitRefResolution::Override,
+            }
+        );
     }
 
     #[tokio::test]
@@ -2092,7 +2197,13 @@ mod tests {
         )
         .await;
 
-        assert_eq!(git_ref, "feature/spaces");
+        assert_eq!(
+            git_ref,
+            ResolvedGitRef {
+                git_ref: Some("feature/spaces".to_string()),
+                resolution: GitRefResolution::Override,
+            }
+        );
     }
 
     #[tokio::test]
@@ -2106,25 +2217,248 @@ mod tests {
         )
         .await;
 
-        assert_eq!(git_ref, "feature/current");
+        assert_eq!(
+            git_ref,
+            ResolvedGitRef {
+                git_ref: Some("feature/current".to_string()),
+                resolution: GitRefResolution::CurrentBranch,
+            }
+        );
     }
 
     #[tokio::test]
-    async fn falls_back_to_current_branch_when_default_is_missing() {
+    async fn uses_current_branch_when_only_current_is_available() {
         let git_ref = resolve_git_ref_with_git_info(
             None,
             &StubGitInfo::new(None, Some("develop".to_string())),
         )
         .await;
 
-        assert_eq!(git_ref, "develop");
+        assert_eq!(
+            git_ref,
+            ResolvedGitRef {
+                git_ref: Some("develop".to_string()),
+                resolution: GitRefResolution::CurrentBranch,
+            }
+        );
     }
 
     #[tokio::test]
-    async fn falls_back_to_main_when_no_git_info_is_available() {
+    async fn uses_default_branch_when_only_default_is_available() {
+        let git_ref = resolve_git_ref_with_git_info(
+            None,
+            &StubGitInfo::new(Some("default-main".to_string()), None),
+        )
+        .await;
+
+        assert_eq!(
+            git_ref,
+            ResolvedGitRef {
+                git_ref: Some("default-main".to_string()),
+                resolution: GitRefResolution::DefaultBranch,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn uses_backend_default_when_no_git_info_is_available() {
         let git_ref = resolve_git_ref_with_git_info(None, &StubGitInfo::new(None, None)).await;
 
-        assert_eq!(git_ref, "main");
+        assert_eq!(
+            git_ref,
+            ResolvedGitRef {
+                git_ref: None,
+                resolution: GitRefResolution::BackendDefault,
+            }
+        );
+    }
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        results: Mutex<
+            VecDeque<codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask>>,
+        >,
+        git_refs: Mutex<Vec<Option<String>>>,
+    }
+
+    impl RecordingBackend {
+        fn new(
+            results: Vec<codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask>>,
+        ) -> Self {
+            Self {
+                results: Mutex::new(results.into()),
+                git_refs: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn git_refs(&self) -> Vec<Option<String>> {
+            self.git_refs.lock().expect("lock poisoned").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CloudBackend for RecordingBackend {
+        async fn list_tasks(
+            &self,
+            _env: Option<&str>,
+        ) -> codex_cloud_tasks_client::Result<Vec<TaskSummary>> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "list_tasks",
+            ))
+        }
+
+        async fn get_task_summary(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<TaskSummary> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "get_task_summary",
+            ))
+        }
+
+        async fn get_task_diff(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<Option<String>> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "get_task_diff",
+            ))
+        }
+
+        async fn get_task_messages(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<Vec<String>> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "get_task_messages",
+            ))
+        }
+
+        async fn get_task_text(&self, _id: TaskId) -> codex_cloud_tasks_client::Result<TaskText> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "get_task_text",
+            ))
+        }
+
+        async fn list_sibling_attempts(
+            &self,
+            _task: TaskId,
+            _turn_id: String,
+        ) -> codex_cloud_tasks_client::Result<Vec<TurnAttempt>> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "list_sibling_attempts",
+            ))
+        }
+
+        async fn apply_task_preflight(
+            &self,
+            _id: TaskId,
+            _diff_override: Option<String>,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::ApplyOutcome> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "apply_task_preflight",
+            ))
+        }
+
+        async fn apply_task(
+            &self,
+            _id: TaskId,
+            _diff_override: Option<String>,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::ApplyOutcome> {
+            Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
+                "apply_task",
+            ))
+        }
+
+        async fn create_task(
+            &self,
+            _env_id: &str,
+            _prompt: &str,
+            git_ref: Option<&str>,
+            _qa_mode: bool,
+            _best_of_n: usize,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask> {
+            self.git_refs
+                .lock()
+                .expect("lock poisoned")
+                .push(git_ref.map(str::to_string));
+            self.results
+                .lock()
+                .expect("lock poisoned")
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Err(codex_cloud_tasks_client::CloudTaskError::Msg(
+                        "unexpected create_task call".to_string(),
+                    ))
+                })
+        }
+    }
+
+    #[tokio::test]
+    async fn create_task_uses_backend_default_when_git_ref_is_backend_default() {
+        let created_task = codex_cloud_tasks_client::CreatedTask {
+            id: TaskId("task-1".to_string()),
+        };
+        let backend = RecordingBackend::new(vec![Ok(created_task.clone())]);
+        let git_ref = ResolvedGitRef {
+            git_ref: None,
+            resolution: GitRefResolution::BackendDefault,
+        };
+
+        let created =
+            create_task_with_resolved_git_ref(&backend, "env-1", "prompt", &git_ref, false, 1)
+                .await
+                .unwrap();
+
+        assert_eq!(created, created_task);
+        assert_eq!(backend.git_refs(), vec![None]);
+    }
+
+    #[tokio::test]
+    async fn create_task_retries_main_when_backend_requires_branch() {
+        let created_task = codex_cloud_tasks_client::CreatedTask {
+            id: TaskId("task-2".to_string()),
+        };
+        let backend = RecordingBackend::new(vec![
+            Err(codex_cloud_tasks_client::CloudTaskError::Http(
+                "branch is required".to_string(),
+            )),
+            Ok(created_task.clone()),
+        ]);
+        let git_ref = ResolvedGitRef {
+            git_ref: None,
+            resolution: GitRefResolution::BackendDefault,
+        };
+
+        let created =
+            create_task_with_resolved_git_ref(&backend, "env-1", "prompt", &git_ref, false, 1)
+                .await
+                .unwrap();
+
+        assert_eq!(created, created_task);
+        assert_eq!(backend.git_refs(), vec![None, Some("main".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn create_task_does_not_retry_on_non_http_errors() {
+        let backend = RecordingBackend::new(vec![Err(
+            codex_cloud_tasks_client::CloudTaskError::Msg("branch is required".to_string()),
+        )]);
+        let git_ref = ResolvedGitRef {
+            git_ref: None,
+            resolution: GitRefResolution::BackendDefault,
+        };
+
+        let err =
+            create_task_with_resolved_git_ref(&backend, "env-1", "prompt", &git_ref, false, 1)
+                .await
+                .unwrap_err();
+
+        assert!(matches!(
+            err,
+            codex_cloud_tasks_client::CloudTaskError::Msg(msg) if msg == "branch is required"
+        ));
+        assert_eq!(backend.git_refs(), vec![None]);
     }
 
     #[test]
