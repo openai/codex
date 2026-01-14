@@ -39,7 +39,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             is_default: true,
             upgrade: None,
             show_in_picker: true,
-            supported_in_api: false,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "gpt-5.1-codex-max".to_string(),

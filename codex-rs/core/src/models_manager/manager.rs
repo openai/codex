@@ -29,7 +29,7 @@ use crate::models_manager::model_presets::builtin_model_presets;
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
-const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
+const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.2-codex";
 const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 
