@@ -42,6 +42,7 @@ mod live_cli;
 mod model_info_overrides;
 mod model_overrides;
 mod model_tools;
+mod models_cache_ttl;
 mod models_etag_responses;
 mod otel;
 mod pending_input;
