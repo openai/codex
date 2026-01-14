@@ -157,7 +157,7 @@ fn create_exec_command_tool() -> ToolSpec {
         (
             "shell".to_string(),
             JsonSchema::String {
-                description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),
+                description: Some("Shell binary to launch. Defaults to the user's default shell.".to_string()),
             },
         ),
         (

@@ -29,7 +29,7 @@ use crate::models_manager::model_presets::builtin_model_presets;
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
-const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
+const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.2-codex";
 const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 
@@ -156,6 +156,9 @@ impl ModelsManager {
     pub(crate) async fn refresh_if_new_etag(&self, etag: String, config: &Config) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
+            if let Err(err) = self.cache_manager.renew_cache_ttl().await {
+                error!("failed to renew cache TTL: {err}");
+            }
             return;
         }
         if let Err(err) = self

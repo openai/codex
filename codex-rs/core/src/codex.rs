@@ -251,7 +251,7 @@ impl Codex {
 
         let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
             .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
+            .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
         let config = Arc::new(config);
         let _ = models_manager
@@ -687,7 +687,7 @@ impl Session {
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
             default_shell.shell_snapshot =
-                ShellSnapshot::try_new(&config.codex_home, &default_shell)
+                ShellSnapshot::try_new(&config.codex_home, conversation_id, &default_shell)
                     .await
                     .map(Arc::new);
         }
@@ -2629,9 +2629,18 @@ pub(crate) async fn run_turn(
             Err(CodexErr::InvalidImageRequest()) => {
                 let mut state = sess.state.lock().await;
                 error_or_panic(
-                    "Invalid image detected, replacing it in the last turn to prevent poisoning",
+                    "Invalid image detected; sanitizing tool output to prevent poisoning",
                 );
-                state.history.replace_last_turn_images("Invalid image");
+                if state.history.replace_last_turn_images("Invalid image") {
+                    continue;
+                }
+                let event = EventMsg::Error(ErrorEvent {
+                    message: "Invalid image in your last message. Please remove it and try again."
+                        .to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                });
+                sess.send_event(&turn_context, event).await;
+                break;
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
