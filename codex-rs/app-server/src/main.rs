@@ -20,6 +20,7 @@ fn main() -> anyhow::Result<()> {
             codex_linux_sandbox_exe,
             CliConfigOverrides::default(),
             loader_overrides,
+            false,
         )
         .await?;
         Ok(())

@@ -30,16 +30,14 @@ pub(crate) fn spawn_agent(
             thread_id: _,
         } = match server.start_thread(config).await {
             Ok(v) => v,
-            #[allow(clippy::print_stderr)]
             Err(err) => {
-                let message = err.to_string();
-                eprintln!("{message}");
+                let message = format!("Failed to initialize codex: {err}");
+                tracing::error!("{message}");
                 app_event_tx_clone.send(AppEvent::CodexEvent(Event {
                     id: "".to_string(),
                     msg: EventMsg::Error(err.to_error_event(None)),
                 }));
-                app_event_tx_clone.send(AppEvent::ExitRequest);
-                tracing::error!("failed to initialize codex: {err}");
+                app_event_tx_clone.send(AppEvent::FatalExitRequest(message));
                 return;
             }
         };
