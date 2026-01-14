@@ -23,7 +23,6 @@ use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
-use crate::user_input::TextElement;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
@@ -774,6 +773,71 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+
+    /// Collab interaction: agent spawn begin.
+    CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent),
+    /// Collab interaction: agent spawn end.
+    CollabAgentSpawnEnd(CollabAgentSpawnEndEvent),
+    /// Collab interaction: agent interaction begin.
+    CollabAgentInteractionBegin(CollabAgentInteractionBeginEvent),
+    /// Collab interaction: agent interaction end.
+    CollabAgentInteractionEnd(CollabAgentInteractionEndEvent),
+    /// Collab interaction: waiting begin.
+    CollabWaitingBegin(CollabWaitingBeginEvent),
+    /// Collab interaction: waiting end.
+    CollabWaitingEnd(CollabWaitingEndEvent),
+    /// Collab interaction: close begin.
+    CollabCloseBegin(CollabCloseBeginEvent),
+    /// Collab interaction: close end.
+    CollabCloseEnd(CollabCloseEndEvent),
+}
+
+impl From<CollabAgentSpawnBeginEvent> for EventMsg {
+    fn from(event: CollabAgentSpawnBeginEvent) -> Self {
+        EventMsg::CollabAgentSpawnBegin(event)
+    }
+}
+
+impl From<CollabAgentSpawnEndEvent> for EventMsg {
+    fn from(event: CollabAgentSpawnEndEvent) -> Self {
+        EventMsg::CollabAgentSpawnEnd(event)
+    }
+}
+
+impl From<CollabAgentInteractionBeginEvent> for EventMsg {
+    fn from(event: CollabAgentInteractionBeginEvent) -> Self {
+        EventMsg::CollabAgentInteractionBegin(event)
+    }
+}
+
+impl From<CollabAgentInteractionEndEvent> for EventMsg {
+    fn from(event: CollabAgentInteractionEndEvent) -> Self {
+        EventMsg::CollabAgentInteractionEnd(event)
+    }
+}
+
+impl From<CollabWaitingBeginEvent> for EventMsg {
+    fn from(event: CollabWaitingBeginEvent) -> Self {
+        EventMsg::CollabWaitingBegin(event)
+    }
+}
+
+impl From<CollabWaitingEndEvent> for EventMsg {
+    fn from(event: CollabWaitingEndEvent) -> Self {
+        EventMsg::CollabWaitingEnd(event)
+    }
+}
+
+impl From<CollabCloseBeginEvent> for EventMsg {
+    fn from(event: CollabCloseBeginEvent) -> Self {
+        EventMsg::CollabCloseBegin(event)
+    }
+}
+
+impl From<CollabCloseEndEvent> for EventMsg {
+    fn from(event: CollabCloseEndEvent) -> Self {
+        EventMsg::CollabCloseEnd(event)
+    }
 }
 
 /// Agent lifecycle status, derived from emitted events.
@@ -1191,12 +1255,19 @@ pub struct AgentMessageEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UserMessageEvent {
     pub message: String,
+    /// Image URLs sourced from `UserInput::Image`. These are safe
+    /// to replay in legacy UI history events and correspond to images sent to
+    /// the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
+    /// Local file paths sourced from `UserInput::LocalImage`. These are kept so
+    /// the UI can reattach images when editing history, and should not be sent
+    /// to the model or treated as API-ready URLs.
     #[serde(default)]
-    pub text_elements: Vec<TextElement>,
+    pub local_images: Vec<std::path::PathBuf>,
+    /// UI-defined spans within `message` used to render or persist special elements.
     #[serde(default)]
-    pub local_images: Vec<String>,
+    pub text_elements: Vec<crate::user_input::TextElement>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2026,6 +2097,105 @@ pub enum TurnAbortReason {
     Interrupted,
     Replaced,
     ReviewEnded,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabAgentSpawnBeginEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
+    /// beginning.
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabAgentSpawnEndEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the newly spawned agent, if it was created.
+    pub new_thread_id: Option<ThreadId>,
+    /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
+    /// beginning.
+    pub prompt: String,
+    /// Last known status of the new agent reported to the sender agent.
+    pub status: AgentStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabAgentInteractionBeginEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
+    /// leaking at the beginning.
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabAgentInteractionEndEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
+    /// leaking at the beginning.
+    pub prompt: String,
+    /// Last known status of the receiver agent reported to the sender agent.
+    pub status: AgentStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabWaitingBeginEvent {
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// ID of the waiting call.
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabWaitingEndEvent {
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// ID of the waiting call.
+    pub call_id: String,
+    /// Last known status of the receiver agent reported to the sender agent.
+    pub status: AgentStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabCloseBeginEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabCloseEndEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// Last known status of the receiver agent reported to the sender agent before
+    /// the close.
+    pub status: AgentStatus,
 }
 
 #[cfg(test)]
