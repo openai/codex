@@ -18,6 +18,8 @@ pub struct SkillInterface {
     pub short_description: Option<String>,
     pub icon_small: Option<PathBuf>,
     pub icon_large: Option<PathBuf>,
+    pub brand_color: Option<String>,
+    pub default_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

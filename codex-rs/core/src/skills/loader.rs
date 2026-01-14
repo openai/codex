@@ -45,6 +45,8 @@ struct Interface {
     short_description: Option<String>,
     icon_small: Option<PathBuf>,
     icon_large: Option<PathBuf>,
+    brand_color: Option<String>,
+    default_prompt: Option<String>,
 }
 
 const SKILLS_FILENAME: &str = "SKILL.md";
@@ -53,6 +55,7 @@ const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
+const MAX_DEFAULT_PROMPT_LEN: usize = MAX_DESCRIPTION_LEN;
 // Traversal depth from the skills root.
 const MAX_SCAN_DEPTH: usize = 6;
 const MAX_SKILLS_DIRS_PER_ROOT: usize = 2000;
@@ -62,7 +65,6 @@ enum SkillParseError {
     Read(std::io::Error),
     MissingFrontmatter,
     InvalidYaml(serde_yaml::Error),
-    InvalidToml(toml::de::Error),
     MissingField(&'static str),
     InvalidField { field: &'static str, reason: String },
 }
@@ -75,7 +77,6 @@ impl fmt::Display for SkillParseError {
                 write!(f, "missing YAML frontmatter delimited by ---")
             }
             SkillParseError::InvalidYaml(e) => write!(f, "invalid YAML: {e}"),
-            SkillParseError::InvalidToml(e) => write!(f, "invalid TOML: {e}"),
             SkillParseError::MissingField(field) => write!(f, "missing field `{field}`"),
             SkillParseError::InvalidField { field, reason } => {
                 write!(f, "invalid {field}: {reason}")
@@ -341,14 +342,12 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty());
-    let interface = load_skill_interface(path)?
-        .map(sanitize_interface_metadata)
-        .transpose()?;
+    let interface = load_skill_interface(path);
 
-    validate_field(&name, MAX_NAME_LEN, "name")?;
-    validate_field(&description, MAX_DESCRIPTION_LEN, "description")?;
+    validate_len(&name, MAX_NAME_LEN, "name")?;
+    validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
     if let Some(short_description) = short_description.as_deref() {
-        validate_field(
+        validate_len(
             short_description,
             MAX_SHORT_DESCRIPTION_LEN,
             "metadata.short-description",
@@ -367,83 +366,74 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
     })
 }
 
-fn load_skill_interface(skill_path: &Path) -> Result<Option<SkillInterface>, SkillParseError> {
-    let Some(skill_dir) = skill_path.parent() else {
-        return Ok(None);
-    };
+fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
+    // Fail open: optional SKILL.toml metadata should not block loading SKILL.md.
+    let skill_dir = skill_path.parent()?;
     let interface_path = skill_dir.join(SKILLS_TOML_FILENAME);
     if !interface_path.exists() {
-        return Ok(None);
+        return None;
     }
 
-    let contents = fs::read_to_string(&interface_path).map_err(SkillParseError::Read)?;
-    let parsed: SkillToml = toml::from_str(&contents).map_err(SkillParseError::InvalidToml)?;
-    let Some(interface) = parsed.interface else {
-        return Ok(None);
+    let contents = match fs::read_to_string(&interface_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {path}: failed to read SKILL.toml: {error}",
+                path = interface_path.display()
+            );
+            return None;
+        }
     };
+    let parsed: SkillToml = match toml::from_str(&contents) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {path}: invalid TOML: {error}",
+                path = interface_path.display()
+            );
+            return None;
+        }
+    };
+    let interface = parsed.interface?;
 
     let interface = SkillInterface {
-        display_name: interface.display_name,
-        short_description: interface.short_description,
-        icon_small: resolve_icon_path(skill_dir, "interface.icon_small", interface.icon_small)?,
-        icon_large: resolve_icon_path(skill_dir, "interface.icon_large", interface.icon_large)?,
-    };
-
-    if interface.display_name.is_none()
-        && interface.short_description.is_none()
-        && interface.icon_small.is_none()
-        && interface.icon_large.is_none()
-    {
-        return Ok(None);
-    }
-
-    Ok(Some(interface))
-}
-
-fn sanitize_interface_metadata(
-    interface: SkillInterface,
-) -> Result<SkillInterface, SkillParseError> {
-    let display_name = interface
-        .display_name
-        .as_deref()
-        .map(sanitize_single_line)
-        .filter(|value| !value.is_empty());
-    let short_description = interface
-        .short_description
-        .as_deref()
-        .map(sanitize_single_line)
-        .filter(|value| !value.is_empty());
-
-    if let Some(display_name) = display_name.as_deref() {
-        validate_field(display_name, MAX_NAME_LEN, "interface.display_name")?;
-    }
-    if let Some(short_description) = short_description.as_deref() {
-        validate_field(
-            short_description,
+        display_name: resolve_str(
+            interface.display_name,
+            MAX_NAME_LEN,
+            "interface.display_name",
+        ),
+        short_description: resolve_str(
+            interface.short_description,
             MAX_SHORT_DESCRIPTION_LEN,
             "interface.short_description",
-        )?;
-    }
-
-    Ok(SkillInterface {
-        display_name,
-        short_description,
-        icon_small: interface.icon_small,
-        icon_large: interface.icon_large,
-    })
+        ),
+        icon_small: resolve_asset_path(skill_dir, "interface.icon_small", interface.icon_small),
+        icon_large: resolve_asset_path(skill_dir, "interface.icon_large", interface.icon_large),
+        brand_color: resolve_color_str(interface.brand_color, "interface.brand_color"),
+        default_prompt: resolve_str(
+            interface.default_prompt,
+            MAX_DEFAULT_PROMPT_LEN,
+            "interface.default_prompt",
+        ),
+    };
+    let has_fields = interface.display_name.is_some()
+        || interface.short_description.is_some()
+        || interface.icon_small.is_some()
+        || interface.icon_large.is_some()
+        || interface.brand_color.is_some()
+        || interface.default_prompt.is_some();
+    if has_fields { Some(interface) } else { None }
 }
 
-fn resolve_icon_path(
+fn resolve_asset_path(
     skill_dir: &Path,
     field: &'static str,
     path: Option<PathBuf>,
-) -> Result<Option<PathBuf>, SkillParseError> {
+) -> Option<PathBuf> {
     // Icons must be relative paths under the skill's assets/ directory; otherwise return None.
-    let Some(path) = path else {
-        return Ok(None);
-    };
+    let path = path?;
     if path.as_os_str().is_empty() {
-        return Ok(None);
+        return None;
     }
 
     let assets_dir = skill_dir.join("assets");
@@ -452,7 +442,7 @@ fn resolve_icon_path(
             "ignoring {field}: icon must be a relative assets path (not {})",
             assets_dir.display()
         );
-        return Ok(None);
+        return None;
     }
 
     let mut components = path.components().peekable();
@@ -463,22 +453,22 @@ fn resolve_icon_path(
         Some(Component::Normal(component)) if component == "assets" => {}
         _ => {
             tracing::warn!("ignoring {field}: icon path must be under assets/");
-            return Ok(None);
+            return None;
         }
     }
     if components.any(|component| matches!(component, Component::ParentDir)) {
         tracing::warn!("ignoring {field}: icon path must not contain '..'");
-        return Ok(None);
+        return None;
     }
 
-    Ok(Some(skill_dir.join(path)))
+    Some(skill_dir.join(path))
 }
 
 fn sanitize_single_line(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn validate_field(
+fn validate_len(
     value: &str,
     max_len: usize,
     field_name: &'static str,
@@ -493,6 +483,36 @@ fn validate_field(
         });
     }
     Ok(())
+}
+
+fn resolve_str(value: Option<String>, max_len: usize, field: &'static str) -> Option<String> {
+    let value = value?;
+    let value = sanitize_single_line(&value);
+    if value.is_empty() {
+        tracing::warn!("ignoring {field}: value is empty");
+        return None;
+    }
+    if value.chars().count() > max_len {
+        tracing::warn!("ignoring {field}: exceeds maximum length of {max_len} characters");
+        return None;
+    }
+    Some(value)
+}
+
+fn resolve_color_str(value: Option<String>, field: &'static str) -> Option<String> {
+    let value = value?;
+    let value = value.trim();
+    if value.is_empty() {
+        tracing::warn!("ignoring {field}: value is empty");
+        return None;
+    }
+    let mut chars = value.chars();
+    if value.len() == 7 && chars.next() == Some('#') && chars.all(|c| c.is_ascii_hexdigit()) {
+        Some(value.to_string())
+    } else {
+        tracing::warn!("ignoring {field}: expected #RRGGBB, got {value}");
+        None
+    }
 }
 
 fn extract_frontmatter(contents: &str) -> Option<String> {
@@ -651,7 +671,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loads_skill_interface_metadata_from_toml() {
+    async fn loads_skill_interface_metadata_happy_path() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
         let skill_dir = skill_path.parent().expect("skill dir");
@@ -659,13 +679,15 @@ mod tests {
 
         write_skill_interface_at(
             skill_dir,
-            r#"
+            r##"
 [interface]
 display_name = "UI Skill"
 short_description = "  short    desc   "
 icon_small = "./assets/small-400px.png"
 icon_large = "./assets/large-logo.svg"
-"#,
+brand_color = "#3B82F6"
+default_prompt = "  default   prompt   "
+"##,
         );
 
         let cfg = make_config(&codex_home).await;
@@ -687,6 +709,8 @@ icon_large = "./assets/large-logo.svg"
                     short_description: Some("short desc".to_string()),
                     icon_small: Some(normalized_skill_dir.join("./assets/small-400px.png")),
                     icon_large: Some(normalized_skill_dir.join("./assets/large-logo.svg")),
+                    brand_color: Some("#3B82F6".to_string()),
+                    default_prompt: Some("default prompt".to_string()),
                 }),
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
@@ -730,6 +754,91 @@ icon_large = "./assets/logo.svg"
                     short_description: None,
                     icon_small: Some(normalized_skill_dir.join("assets/icon.png")),
                     icon_large: Some(normalized_skill_dir.join("./assets/logo.svg")),
+                    brand_color: None,
+                    default_prompt: None,
+                }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn ignores_invalid_brand_color() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_interface_at(
+            skill_dir,
+            r#"
+[interface]
+brand_color = "blue"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn ignores_default_prompt_over_max_length() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        let normalized_skill_dir = normalized(skill_dir);
+        let too_long = "x".repeat(MAX_DEFAULT_PROMPT_LEN + 1);
+
+        write_skill_interface_at(
+            skill_dir,
+            &format!(
+                r##"
+[interface]
+display_name = "UI Skill"
+icon_small = "./assets/small-400px.png"
+default_prompt = "{too_long}"
+"##
+            ),
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: Some(SkillInterface {
+                    display_name: Some("UI Skill".to_string()),
+                    short_description: None,
+                    icon_small: Some(normalized_skill_dir.join("./assets/small-400px.png")),
+                    icon_large: None,
+                    brand_color: None,
+                    default_prompt: None,
                 }),
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
