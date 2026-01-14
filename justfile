@@ -44,6 +44,13 @@ install:
 test:
     cargo nextest run --no-fail-fast
 
+# Build and run Codex from source using Bazel.
+# Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
+# to ensure that Bazel runs the command in the current working directory.
+[no-cd]
+bazel-codex *args:
+    bazel run //codex-rs/cli:codex --run_under="cd $PWD &&" -- "$@"
+
 bazel-test:
     bazel test //... --keep_going
 
