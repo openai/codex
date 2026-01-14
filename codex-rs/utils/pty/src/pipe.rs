@@ -41,7 +41,7 @@ impl ChildTerminator for PipeChildTerminator {
 
         #[cfg(windows)]
         {
-            kill_process(self.pid);
+            kill_process(self.pid)
         }
 
         #[cfg(not(any(unix, windows)))]
