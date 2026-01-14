@@ -1182,24 +1182,24 @@ pub fn resolve_oss_provider(
     }
 }
 
+/// Resolve the web search mode from the config, profile, and features.
 fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
 ) -> WebSearchMode {
+    // Enum gets precedence over features flags
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
         return mode;
     }
-
     if features.enabled(Feature::WebSearchCached) {
         return WebSearchMode::Cached;
     }
-
     if features.enabled(Feature::WebSearchRequest) {
         return WebSearchMode::Live;
     }
-
-    WebSearchMode::Cached
+    // Fall back to default
+    WebSearchMode::default()
 }
 
 impl Config {
@@ -2205,14 +2205,14 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_defaults_to_cached() {
+    fn web_search_mode_uses_default_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            WebSearchMode::Cached
+            WebSearchMode::default()
         );
     }
 
@@ -3584,7 +3584,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                web_search_mode: WebSearchMode::Cached,
+                web_search_mode: WebSearchMode::default(),
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3671,7 +3671,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: WebSearchMode::default(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3773,7 +3773,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: WebSearchMode::default(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3861,7 +3861,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: WebSearchMode::default(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),

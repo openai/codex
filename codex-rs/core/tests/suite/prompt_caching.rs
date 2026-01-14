@@ -11,6 +11,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -86,6 +87,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
+            // Keep tool expectations stable when the default web_search mode changes.
+            config.web_search_mode = WebSearchMode::Cached;
         })
         .build(&server)
         .await?;
