@@ -24,6 +24,7 @@ use toml::Value as TomlValue;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -175,13 +176,39 @@ pub async fn run_main(
             feedback.clone(),
             config_warnings,
         );
+        let mut thread_created_rx = processor.thread_created_receiver();
         async move {
-            while let Some(msg) = incoming_rx.recv().await {
-                match msg {
-                    JSONRPCMessage::Request(r) => processor.process_request(r).await,
-                    JSONRPCMessage::Response(r) => processor.process_response(r).await,
-                    JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                    JSONRPCMessage::Error(e) => processor.process_error(e),
+            let mut listen_for_threads = true;
+            loop {
+                tokio::select! {
+                    msg = incoming_rx.recv() => {
+                        let Some(msg) = msg else {
+                            break;
+                        };
+                        match msg {
+                            JSONRPCMessage::Request(r) => processor.process_request(r).await,
+                            JSONRPCMessage::Response(r) => processor.process_response(r).await,
+                            JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
+                            JSONRPCMessage::Error(e) => processor.process_error(e),
+                        }
+                    }
+                    created = thread_created_rx.recv(), if listen_for_threads => {
+                        match created {
+                            Ok(thread_id) => {
+                                processor.try_attach_thread_listener(thread_id).await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                // TODO(jif) handle lag.
+                                // Assumes thread creation volume is low enough that lag never happens.
+                                // If it does, we log and continue without resyncing to avoid attaching
+                                // listeners for threads that should remain unsubscribed.
+                                warn!("thread_created receiver lagged; skipping resync");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                listen_for_threads = false;
+                            }
+                        }
+                    }
                 }
             }
 

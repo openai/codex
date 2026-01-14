@@ -58,6 +58,10 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     };
 
+    if !snapshot.path.exists() {
+        return command.to_vec();
+    }
+
     if command.len() < 3 {
         return command.to_vec();
     }

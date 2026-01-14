@@ -94,7 +94,7 @@ mod spawn {
         let result = session
             .services
             .agent_control
-            .spawn_agent(config, args.message, true)
+            .spawn_agent(config, args.message)
             .await
             .map_err(collab_spawn_error)?;
 
