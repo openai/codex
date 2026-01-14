@@ -507,7 +507,9 @@ impl MessageProcessor {
                         annotations: None,
                     })],
                     is_error: Some(true),
-                    structured_content: None,
+                    structured_content: Some(json!({
+                        "conversationId": conversation_id,
+                    })),
                 };
                 outgoing.send_response(request_id, result).await;
                 return;
