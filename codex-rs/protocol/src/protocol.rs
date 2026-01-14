@@ -370,20 +370,115 @@ pub struct WritableRoot {
 
 impl WritableRoot {
     pub fn is_path_writable(&self, path: &Path) -> bool {
+        let comparison = PathComparison::new(path, self.root.as_path());
+
         // Check if the path is under the root.
-        if !path.starts_with(&self.root) {
+        if !comparison.starts_with(path, self.root.as_path()) {
             return false;
         }
 
         // Check if the path is under any of the read-only subpaths.
         for subpath in &self.read_only_subpaths {
-            if path.starts_with(subpath) {
+            if comparison.starts_with(path, subpath.as_path()) {
                 return false;
             }
         }
 
         true
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PathComparison {
+    Sensitive,
+    Insensitive,
+}
+
+impl PathComparison {
+    fn new(path: &Path, base: &Path) -> Self {
+        if should_compare_case_insensitively(path, base) {
+            Self::Insensitive
+        } else {
+            Self::Sensitive
+        }
+    }
+
+    fn starts_with(self, path: &Path, base: &Path) -> bool {
+        match self {
+            Self::Sensitive => path.starts_with(base),
+            Self::Insensitive => path_starts_with_case_insensitive(path, base),
+        }
+    }
+}
+
+fn should_compare_case_insensitively(path: &Path, base: &Path) -> bool {
+    if cfg!(target_os = "windows") || cfg!(target_os = "macos") {
+        return true;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        is_wsl_case_insensitive_path(path) || is_wsl_case_insensitive_path(base)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        let _ = base;
+        false
+    }
+}
+
+fn path_starts_with_case_insensitive(path: &Path, base: &Path) -> bool {
+    let mut path_components = path.components();
+    for base_component in base.components() {
+        let Some(path_component) = path_components.next() else {
+            return false;
+        };
+        if !component_eq_ignore_case(path_component.as_os_str(), base_component.as_os_str()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn component_eq_ignore_case(left: &OsStr, right: &OsStr) -> bool {
+    left.to_string_lossy().to_lowercase() == right.to_string_lossy().to_lowercase()
+}
+
+#[cfg(target_os = "linux")]
+fn is_wsl_case_insensitive_path(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Component;
+
+    let mut components = path.components();
+    let Some(Component::RootDir) = components.next() else {
+        return false;
+    };
+    let Some(Component::Normal(mnt)) = components.next() else {
+        return false;
+    };
+    if !ascii_eq_ignore_case(mnt.as_bytes(), b"mnt") {
+        return false;
+    }
+    let Some(Component::Normal(drive)) = components.next() else {
+        return false;
+    };
+    let drive_bytes = drive.as_bytes();
+    drive_bytes.len() == 1 && drive_bytes[0].is_ascii_alphabetic()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_wsl_case_insensitive_path(_path: &Path) -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn ascii_eq_ignore_case(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(lhs, rhs)| lhs.to_ascii_lowercase() == *rhs)
 }
 
 impl FromStr for SandboxPolicy {
@@ -2210,6 +2305,31 @@ mod tests {
         };
         assert!(enabled.has_full_disk_write_access());
         assert!(enabled.has_full_network_access());
+    }
+
+    #[test]
+    fn path_starts_with_case_insensitive_matches() {
+        let root = Path::new("/repo/.git");
+        let path = Path::new("/repo/.GiT/hooks/pre-commit");
+
+        assert!(path_starts_with_case_insensitive(path, root));
+    }
+
+    #[test]
+    fn path_starts_with_case_insensitive_rejects_unrelated_path() {
+        let root = Path::new("/repo/.git");
+        let path = Path::new("/repo/.git-old/hooks/pre-commit");
+
+        assert!(!path_starts_with_case_insensitive(path, root));
+    }
+
+    #[test]
+    fn path_comparison_sensitive_detects_case_difference() {
+        let comparison = PathComparison::Sensitive;
+        let root = Path::new("/repo/.git");
+        let path = Path::new("/repo/.GiT/hooks/pre-commit");
+
+        assert_eq!(comparison.starts_with(path, root), false);
     }
 
     #[test]
