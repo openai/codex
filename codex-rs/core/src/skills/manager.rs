@@ -118,6 +118,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::config::ConfigOverrides;
+    use indoc::formatdoc;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::TempDir;
@@ -125,7 +126,14 @@ mod tests {
     fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
         let skill_dir = codex_home.path().join("skills").join(dir);
         fs::create_dir_all(&skill_dir).unwrap();
-        let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+        let content = formatdoc! {"
+            ---
+            name: {name}
+            description: {description}
+            ---
+
+            # Body
+            "};
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
     }
 

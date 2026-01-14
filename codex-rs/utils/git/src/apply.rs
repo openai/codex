@@ -595,6 +595,7 @@ fn regex_ci(pat: &str) -> Regex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use std::path::Path;
     use std::sync::Mutex;
     use std::sync::OnceLock;
@@ -635,21 +636,42 @@ mod tests {
 
     #[test]
     fn extract_paths_handles_quoted_headers() {
-        let diff = "diff --git \"a/hello world.txt\" \"b/hello world.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello world.txt\n@@ -0,0 +1 @@\n+hi\n";
+        let diff = indoc! {r#"
+            diff --git "a/hello world.txt" "b/hello world.txt"
+            new file mode 100644
+            --- /dev/null
+            +++ b/hello world.txt
+            @@ -0,0 +1 @@
+            +hi
+            "#};
         let paths = extract_paths_from_patch(diff);
         assert_eq!(paths, vec!["hello world.txt".to_string()]);
     }
 
     #[test]
     fn extract_paths_ignores_dev_null_header() {
-        let diff = "diff --git a/dev/null b/ok.txt\nnew file mode 100644\n--- /dev/null\n+++ b/ok.txt\n@@ -0,0 +1 @@\n+hi\n";
+        let diff = indoc! {r#"
+            diff --git a/dev/null b/ok.txt
+            new file mode 100644
+            --- /dev/null
+            +++ b/ok.txt
+            @@ -0,0 +1 @@
+            +hi
+            "#};
         let paths = extract_paths_from_patch(diff);
         assert_eq!(paths, vec!["ok.txt".to_string()]);
     }
 
     #[test]
     fn extract_paths_unescapes_c_style_in_quoted_headers() {
-        let diff = "diff --git \"a/hello\\tworld.txt\" \"b/hello\\tworld.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello\tworld.txt\n@@ -0,0 +1 @@\n+hi\n";
+        let diff = indoc! {r#"
+            diff --git "a/hello\tworld.txt" "b/hello\tworld.txt"
+            new file mode 100644
+            --- /dev/null
+            +++ b/hello	world.txt
+            @@ -0,0 +1 @@
+            +hi
+            "#};
         let paths = extract_paths_from_patch(diff);
         assert_eq!(paths, vec!["hello\tworld.txt".to_string()]);
     }
@@ -669,7 +691,15 @@ mod tests {
         let repo = init_repo();
         let root = repo.path();
 
-        let diff = "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1,2 @@\n+hello\n+world\n";
+        let diff = indoc! {r#"
+            diff --git a/hello.txt b/hello.txt
+            new file mode 100644
+            --- /dev/null
+            +++ b/hello.txt
+            @@ -0,0 +1,2 @@
+            +hello
+            +world
+            "#};
         let req = ApplyGitRequest {
             cwd: root.to_path_buf(),
             diff: diff.to_string(),
@@ -694,7 +724,16 @@ mod tests {
         // local edit (unstaged)
         std::fs::write(root.join("file.txt"), "line1\nlocal2\nline3\n").unwrap();
         // patch wants to change the same line differently
-        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,3 @@\n line1\n-line2\n+remote2\n line3\n";
+        let diff = indoc! {r#"
+            diff --git a/file.txt b/file.txt
+            --- a/file.txt
+            +++ b/file.txt
+            @@ -1,3 +1,3 @@
+             line1
+            -line2
+            +remote2
+             line3
+            "#};
         let req = ApplyGitRequest {
             cwd: root.to_path_buf(),
             diff: diff.to_string(),
@@ -711,7 +750,14 @@ mod tests {
         let repo = init_repo();
         let root = repo.path();
         // Try to modify a file that is not in the index
-        let diff = "diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+        let diff = indoc! {r#"
+            diff --git a/ghost.txt b/ghost.txt
+            --- a/ghost.txt
+            +++ b/ghost.txt
+            @@ -1,1 +1,1 @@
+            -old
+            +new
+            "#};
         let req = ApplyGitRequest {
             cwd: root.to_path_buf(),
             diff: diff.to_string(),
@@ -733,7 +779,14 @@ mod tests {
         let _ = run(root, &["git", "commit", "-m", "seed"]);
 
         // Forward patch: orig -> ORIG
-        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+ORIG\n";
+        let diff = indoc! {r#"
+            diff --git a/file.txt b/file.txt
+            --- a/file.txt
+            +++ b/file.txt
+            @@ -1,1 +1,1 @@
+            -orig
+            +ORIG
+            "#};
         let apply_req = ApplyGitRequest {
             cwd: root.to_path_buf(),
             diff: diff.to_string(),
@@ -768,7 +821,14 @@ mod tests {
         let _ = run(root, &["git", "add", "file.txt"]);
         let _ = run(root, &["git", "commit", "-m", "seed"]);
 
-        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+ORIG\n";
+        let diff = indoc! {r#"
+            diff --git a/file.txt b/file.txt
+            --- a/file.txt
+            +++ b/file.txt
+            @@ -1,1 +1,1 @@
+            -orig
+            +ORIG
+            "#};
         let apply_req = ApplyGitRequest {
             cwd: root.to_path_buf(),
             diff: diff.to_string(),
@@ -809,8 +869,22 @@ mod tests {
         let repo = init_repo();
         let root = repo.path();
         // Build a multi-file diff: one valid add (ok.txt) and one invalid modify (ghost.txt)
-        let diff = "diff --git a/ok.txt b/ok.txt\nnew file mode 100644\n--- /dev/null\n+++ b/ok.txt\n@@ -0,0 +1,2 @@\n+alpha\n+beta\n\n\
-diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+        let diff = indoc! {r#"
+            diff --git a/ok.txt b/ok.txt
+            new file mode 100644
+            --- /dev/null
+            +++ b/ok.txt
+            @@ -0,0 +1,2 @@
+            +alpha
+            +beta
+
+            diff --git a/ghost.txt b/ghost.txt
+            --- a/ghost.txt
+            +++ b/ghost.txt
+            @@ -1,1 +1,1 @@
+            -old
+            +new
+            "#};
 
         // 1) With preflight enabled, nothing should be changed (even though ok.txt could be added)
         let req1 = ApplyGitRequest {

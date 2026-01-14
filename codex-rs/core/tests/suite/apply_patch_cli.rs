@@ -5,6 +5,7 @@ use core_test_support::responses::ev_apply_patch_call;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
+use indoc::indoc;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::sync::atomic::AtomicI32;
@@ -102,7 +103,16 @@ async fn apply_patch_cli_multiple_operations_integration(
     fs::write(&modify_path, "line1\nline2\n")?;
     fs::write(&delete_path, "obsolete\n")?;
 
-    let patch = "*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Add File: nested/new.txt
+        +created
+        *** Delete File: delete.txt
+        *** Update File: modify.txt
+        @@
+        -line2
+        +changed
+        *** End Patch"};
 
     let call_id = "apply-multi-ops";
     mount_apply_patch(&harness, call_id, patch, "done", output_type).await;
@@ -145,7 +155,16 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
     let target = harness.path("multi.txt");
     fs::write(&target, "line1\nline2\nline3\nline4\n")?;
 
-    let patch = "*** Begin Patch\n*** Update File: multi.txt\n@@\n-line2\n+changed2\n@@\n-line4\n+changed4\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: multi.txt
+        @@
+        -line2
+        +changed2
+        @@
+        -line4
+        +changed4
+        *** End Patch"};
     let call_id = "apply-multi-chunks";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -176,7 +195,14 @@ async fn apply_patch_cli_moves_file_to_new_directory(
     fs::create_dir_all(original.parent().expect("parent"))?;
     fs::write(&original, "old content\n")?;
 
-    let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-old content\n+new content\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: old/name.txt
+        *** Move to: renamed/dir/name.txt
+        @@
+        -old content
+        +new content
+        *** End Patch"};
     let call_id = "apply-move";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -203,7 +229,14 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
     let target = harness.path("no_newline.txt");
     fs::write(&target, "no newline at end")?;
 
-    let patch = "*** Begin Patch\n*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: no_newline.txt
+        @@
+        -no newline at end
+        +first line
+        +second line
+        *** End Patch"};
     let call_id = "apply-append-nl";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -231,7 +264,14 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
     let target = harness.path("insert_only.txt");
     fs::write(&target, "alpha\nomega\n")?;
 
-    let patch = "*** Begin Patch\n*** Update File: insert_only.txt\n@@\n alpha\n+beta\n omega\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: insert_only.txt
+        @@
+         alpha
+        +beta
+         omega
+        *** End Patch"};
     let call_id = "apply-insert-only";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -261,7 +301,14 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
     fs::write(&original, "from\n")?;
     fs::write(&destination, "existing\n")?;
 
-    let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-from\n+new\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: old/name.txt
+        *** Move to: renamed/dir/name.txt
+        @@
+        -from
+        +new
+        *** End Patch"};
     let call_id = "apply-move-overwrite";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -293,7 +340,13 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     fs::create_dir_all(original.parent().expect("parent should exist"))?;
     fs::write(&original, "same\n")?;
 
-    let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/name.txt\n@@\n same\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: old/name.txt
+        *** Move to: renamed/name.txt
+        @@
+         same
+        *** End Patch"};
     let call_id = "apply-move-no-change";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -346,7 +399,11 @@ async fn apply_patch_cli_add_overwrites_existing_file(
     let path = harness.path("duplicate.txt");
     fs::write(&path, "old content\n")?;
 
-    let patch = "*** Begin Patch\n*** Add File: duplicate.txt\n+new content\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Add File: duplicate.txt
+        +new content
+        *** End Patch"};
     let call_id = "apply-add-overwrite";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -369,7 +426,10 @@ async fn apply_patch_cli_rejects_invalid_hunk_header(
 
     let harness = apply_patch_harness().await?;
 
-    let patch = "*** Begin Patch\n*** Frobnicate File: foo\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Frobnicate File: foo
+        *** End Patch"};
     let call_id = "apply-invalid-header";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -435,7 +495,13 @@ async fn apply_patch_cli_reports_missing_target_file(
 
     let harness = apply_patch_harness().await?;
 
-    let patch = "*** Begin Patch\n*** Update File: missing.txt\n@@\n-nope\n+better\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: missing.txt
+        @@
+        -nope
+        +better
+        *** End Patch"};
     let call_id = "apply-missing-file";
     mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
 
@@ -471,7 +537,10 @@ async fn apply_patch_cli_delete_missing_file_reports_error(
 
     let harness = apply_patch_harness().await?;
 
-    let patch = "*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Delete File: missing.txt
+        *** End Patch"};
     let call_id = "apply-delete-missing";
     mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
 
@@ -506,7 +575,9 @@ async fn apply_patch_cli_rejects_empty_patch(model_output: ApplyPatchModelOutput
 
     let harness = apply_patch_harness().await?;
 
-    let patch = "*** Begin Patch\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** End Patch"};
     let call_id = "apply-empty";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -535,7 +606,10 @@ async fn apply_patch_cli_delete_directory_reports_verification_error(
 
     fs::create_dir(harness.path("dir"))?;
 
-    let patch = "*** Begin Patch\n*** Delete File: dir\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Delete File: dir
+        *** End Patch"};
     let call_id = "apply-delete-dir";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -569,7 +643,11 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
         .join("escape.txt");
     let _ = fs::remove_file(&escape_path);
 
-    let patch = "*** Begin Patch\n*** Add File: ../escape.txt\n+outside\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Add File: ../escape.txt
+        +outside
+        *** End Patch"};
     let call_id = "apply-path-traversal";
     mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
 
@@ -625,7 +703,14 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
     let source = harness.path("stay.txt");
     fs::write(&source, "from\n")?;
 
-    let patch = "*** Begin Patch\n*** Update File: stay.txt\n*** Move to: ../escape-move.txt\n@@\n-from\n+to\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: stay.txt
+        *** Move to: ../escape-move.txt
+        @@
+        -from
+        +to
+        *** End Patch"};
     let call_id = "apply-move-traversal";
     mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
 
@@ -674,7 +759,15 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 
     // Compose a patch that would create a file, then fail verification on an update.
     let call_id = "apply-partial-no-side-effects";
-    let patch = "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Add File: created.txt
+        +hello
+        *** Update File: missing.txt
+        @@
+        -old
+        +new
+        *** End Patch"};
 
     mount_apply_patch(&harness, call_id, patch, "failed", model_output).await;
 
@@ -1042,7 +1135,14 @@ async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput)
     let target = harness.path("tail.txt");
     fs::write(&target, "alpha\nlast\n")?;
 
-    let patch = "*** Begin Patch\n*** Update File: tail.txt\n@@\n-last\n+end\n*** End of File\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: tail.txt
+        @@
+        -last
+        +end
+        *** End of File
+        *** End Patch"};
     let call_id = "apply-eof";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
@@ -1164,7 +1264,14 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
 
     // Patch: update + move
     let call_id = "apply-rename-change";
-    let patch = "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-old\n+new\n*** End Patch";
+    let patch = indoc! {"
+        *** Begin Patch
+        *** Update File: old.txt
+        *** Move to: new.txt
+        @@
+        -old
+        +new
+        *** End Patch"};
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
     let model = test.session_configured.model.clone();

@@ -1496,6 +1496,7 @@ name = "codex-git"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
+ "indoc",
  "once_cell",
  "pretty_assertions",
  "regex",
@@ -1764,6 +1765,7 @@ dependencies = [
  "dirs",
  "dunce",
  "image",
+ "indoc",
  "insta",
  "itertools 0.14.0",
  "lazy_static",

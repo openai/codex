@@ -287,6 +287,7 @@ mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
     use crate::test_backend::VT100Backend;
+    use indoc::indoc;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
 
@@ -480,7 +481,13 @@ mod tests {
     #[test]
     fn vt100_deep_nested_mixed_list_third_level_marker_is_colored() {
         // Markdown with five levels (ordered → unordered → ordered → unordered → unordered).
-        let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
+        let md = indoc! {"
+            1. First
+               - Second level
+                 1. Third level (ordered)
+                    - Fourth level (bullet)
+                      - Fifth level to test indent consistency
+            "};
         let text = render_markdown_text(md);
         let lines: Vec<Line<'static>> = text.lines.clone();
 

@@ -12,6 +12,7 @@ use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use indoc::indoc;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -301,22 +302,27 @@ fn create_shell_tool() -> ToolSpec {
         ),
     ]);
 
-    let description  = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-        
-Examples of valid command strings:
+    let description = if cfg!(windows) {
+        indoc! {r#"
+            Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
-- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
-- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
-- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
-- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+            Examples of valid command strings:
+
+            - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
+            - recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
+            - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
+            - ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+            - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
+            - running an inline Python script: ["powershell.exe", "-Command", "@'\nprint('Hello, world!')\n'@ | python -"]
+            "#}
+        .to_string()
     } else {
-        r#"Runs a shell command and returns its output.
-- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-    }.to_string();
+        indoc! {"
+            Runs a shell command and returns its output.
+            - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with [\"bash\", \"-lc\"].
+            - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."}
+        .to_string()
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
@@ -376,20 +382,25 @@ fn create_shell_command_tool() -> ToolSpec {
     ]);
 
     let description = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output.
-        
-Examples of valid command strings:
+        indoc! {r#"
+            Runs a Powershell command (Windows) and returns its output.
 
-- ls -a (show hidden): "Get-ChildItem -Force"
-- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
-- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
-- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
-- setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+            Examples of valid command strings:
+
+            - ls -a (show hidden): "Get-ChildItem -Force"
+            - recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+            - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+            - ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+            - setting an env var: "$env:FOO='bar'; echo $env:FOO"
+            - running an inline Python script: "@'\nprint('Hello, world!')\n'@ | python -"
+            "#}
+        .to_string()
     } else {
-        r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
-    }.to_string();
+        indoc! {"
+            Runs a shell command and returns its output.
+            - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."}
+        .to_string()
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell_command".to_string(),
@@ -2148,21 +2159,26 @@ mod tests {
         assert_eq!(name, "shell");
 
         let expected = if cfg!(windows) {
-            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-        
-Examples of valid command strings:
+            indoc! {r#"
+                Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
-- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
-- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
-- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
-- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+                Examples of valid command strings:
+
+                - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
+                - recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
+                - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
+                - ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+                - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
+                - running an inline Python script: ["powershell.exe", "-Command", "@'\nprint('Hello, world!')\n'@ | python -"]
+                "#}
+            .to_string()
         } else {
-            r#"Runs a shell command and returns its output.
-- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-        }.to_string();
+            indoc! {"
+                Runs a shell command and returns its output.
+                - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with [\"bash\", \"-lc\"].
+                - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."}
+            .to_string()
+        };
         assert_eq!(description, &expected);
     }
 
@@ -2178,19 +2194,24 @@ Examples of valid command strings:
         assert_eq!(name, "shell_command");
 
         let expected = if cfg!(windows) {
-            r#"Runs a Powershell command (Windows) and returns its output.
-        
-Examples of valid command strings:
+            indoc! {r#"
+                Runs a Powershell command (Windows) and returns its output.
 
-- ls -a (show hidden): "Get-ChildItem -Force"
-- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
-- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
-- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
-- setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#.to_string()
+                Examples of valid command strings:
+
+                - ls -a (show hidden): "Get-ChildItem -Force"
+                - recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+                - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+                - ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+                - setting an env var: "$env:FOO='bar'; echo $env:FOO"
+                - running an inline Python script: "@'\nprint('Hello, world!')\n'@ | python -"
+                "#}
+            .to_string()
         } else {
-            r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#.to_string()
+            indoc! {"
+                Runs a shell command and returns its output.
+                - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."}
+            .to_string()
         };
         assert_eq!(description, &expected);
     }

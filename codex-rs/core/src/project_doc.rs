@@ -237,6 +237,8 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::skills::load_skills;
+    use indoc::formatdoc;
+    use indoc::indoc;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -516,10 +518,32 @@ mod tests {
         )
         .unwrap_or_else(|_| cfg.codex_home.join("skills/pdf-processing/SKILL.md"));
         let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
-        let usage_rules = "- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.\n- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.\n- How to use a skill (progressive disclosure):\n  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.\n  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.\n  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.\n  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.\n- Context hygiene:\n  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.\n  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.\n  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.\n- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.";
-        let expected = format!(
-            "base doc\n\n## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.\n### Available skills\n- pdf-processing: extract from pdfs (file: {expected_path_str})\n### How to use skills\n{usage_rules}"
-        );
+        let usage_rules = indoc! {"
+- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
+- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
+- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
+- How to use a skill (progressive disclosure):
+  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.
+  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
+  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
+  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.
+- Coordination and sequencing:
+  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+- Context hygiene:
+  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
+  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."};
+        let expected = formatdoc! {"
+            base doc
+
+            ## Skills
+            A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
+            ### Available skills
+            - pdf-processing: extract from pdfs (file: {expected_path_str})
+            ### How to use skills
+            {usage_rules}"};
         assert_eq!(res, expected);
     }
 
@@ -540,17 +564,44 @@ mod tests {
             dunce::canonicalize(cfg.codex_home.join("skills/linting/SKILL.md").as_path())
                 .unwrap_or_else(|_| cfg.codex_home.join("skills/linting/SKILL.md"));
         let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
-        let usage_rules = "- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.\n- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.\n- How to use a skill (progressive disclosure):\n  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.\n  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.\n  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.\n  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.\n- Context hygiene:\n  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.\n  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.\n  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.\n- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.";
-        let expected = format!(
-            "## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.\n### Available skills\n- linting: run clippy (file: {expected_path_str})\n### How to use skills\n{usage_rules}"
-        );
+        let usage_rules = indoc! {"
+- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
+- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
+- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
+- How to use a skill (progressive disclosure):
+  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.
+  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
+  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
+  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.
+- Coordination and sequencing:
+  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+- Context hygiene:
+  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
+  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."};
+        let expected = formatdoc! {"
+            ## Skills
+            A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
+            ### Available skills
+            - linting: run clippy (file: {expected_path_str})
+            ### How to use skills
+            {usage_rules}"};
         assert_eq!(res, expected);
     }
 
     fn create_skill(codex_home: PathBuf, name: &str, description: &str) {
         let skill_dir = codex_home.join(format!("skills/{name}"));
         fs::create_dir_all(&skill_dir).unwrap();
-        let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+        let content = formatdoc! {"
+            ---
+            name: {name}
+            description: {description}
+            ---
+
+            # Body
+            "};
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
     }
 }

@@ -189,6 +189,7 @@ pub(crate) mod announcement {
 mod tests {
     use super::*;
     use crate::tooltips::announcement::parse_announcement_tip_toml;
+    use indoc::indoc;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -211,40 +212,40 @@ mod tests {
 
     #[test]
     fn announcement_tip_toml_picks_last_matching() {
-        let toml = r#"
-[[announcements]]
-content = "first"
-from_date = "2000-01-01"
+        let toml = indoc! {r#"
+            [[announcements]]
+            content = "first"
+            from_date = "2000-01-01"
 
-[[announcements]]
-content = "latest match"
-version_regex = ".*"
-target_app = "cli"
+            [[announcements]]
+            content = "latest match"
+            version_regex = ".*"
+            target_app = "cli"
 
-[[announcements]]
-content = "should not match"
-to_date = "2000-01-01"
-        "#;
+            [[announcements]]
+            content = "should not match"
+            to_date = "2000-01-01"
+            "#};
 
         assert_eq!(
             Some("latest match".to_string()),
             parse_announcement_tip_toml(toml)
         );
 
-        let toml = r#"
-[[announcements]]
-content = "first"
-from_date = "2000-01-01"
-target_app = "cli"
+        let toml = indoc! {r#"
+            [[announcements]]
+            content = "first"
+            from_date = "2000-01-01"
+            target_app = "cli"
 
-[[announcements]]
-content = "latest match"
-version_regex = ".*"
+            [[announcements]]
+            content = "latest match"
+            version_regex = ".*"
 
-[[announcements]]
-content = "should not match"
-to_date = "2000-01-01"
-        "#;
+            [[announcements]]
+            content = "should not match"
+            to_date = "2000-01-01"
+            "#};
 
         assert_eq!(
             Some("latest match".to_string()),
@@ -254,54 +255,54 @@ to_date = "2000-01-01"
 
     #[test]
     fn announcement_tip_toml_picks_no_match() {
-        let toml = r#"
-[[announcements]]
-content = "first"
-from_date = "2000-01-01"
-to_date = "2000-01-05"
+        let toml = indoc! {r#"
+            [[announcements]]
+            content = "first"
+            from_date = "2000-01-01"
+            to_date = "2000-01-05"
 
-[[announcements]]
-content = "latest match"
-version_regex = "invalid_version_name"
+            [[announcements]]
+            content = "latest match"
+            version_regex = "invalid_version_name"
 
-[[announcements]]
-content = "should not match either "
-target_app = "vsce"
-        "#;
+            [[announcements]]
+            content = "should not match either "
+            target_app = "vsce"
+            "#};
 
         assert_eq!(None, parse_announcement_tip_toml(toml));
     }
 
     #[test]
     fn announcement_tip_toml_bad_deserialization() {
-        let toml = r#"
-[[announcements]]
-content = 123
-from_date = "2000-01-01"
-        "#;
+        let toml = indoc! {r#"
+            [[announcements]]
+            content = 123
+            from_date = "2000-01-01"
+            "#};
 
         assert_eq!(None, parse_announcement_tip_toml(toml));
     }
 
     #[test]
     fn announcement_tip_toml_parse_comments() {
-        let toml = r#"
-# Example announcement tips for Codex TUI.
-# Each [[announcements]] entry is evaluated in order; the last matching one is shown.
-# Dates are UTC, formatted as YYYY-MM-DD. The from_date is inclusive and the to_date is exclusive.
-# version_regex matches against the CLI version (env!("CARGO_PKG_VERSION")); omit to apply to all versions.
-# target_app specify which app should display the announcement (cli, vsce, ...).
+        let toml = indoc! {r#"
+            # Example announcement tips for Codex TUI.
+            # Each [[announcements]] entry is evaluated in order; the last matching one is shown.
+            # Dates are UTC, formatted as YYYY-MM-DD. The from_date is inclusive and the to_date is exclusive.
+            # version_regex matches against the CLI version (env!("CARGO_PKG_VERSION")); omit to apply to all versions.
+            # target_app specify which app should display the announcement (cli, vsce, ...).
 
-[[announcements]]
-content = "Welcome to Codex! Check out the new onboarding flow."
-from_date = "2024-10-01"
-to_date = "2024-10-15"
-target_app = "cli"
-version_regex = "^0\\.0\\.0$"
+            [[announcements]]
+            content = "Welcome to Codex! Check out the new onboarding flow."
+            from_date = "2024-10-01"
+            to_date = "2024-10-15"
+            target_app = "cli"
+            version_regex = "^0\\.0\\.0$"
 
-[[announcements]]
-content = "This is a test announcement"
-        "#;
+            [[announcements]]
+            content = "This is a test announcement"
+            "#};
 
         assert_eq!(
             Some("This is a test announcement".to_string()),

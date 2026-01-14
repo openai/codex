@@ -12,6 +12,7 @@ use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
+use indoc::indoc;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -45,10 +46,11 @@ pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "update_plan".to_string(),
-        description: r#"Updates the task plan.
-Provide an optional explanation and a list of plan items, each with a step and status.
-At most one step can be in_progress at a time.
-"#
+        description: indoc! {"
+            Updates the task plan.
+            Provide an optional explanation and a list of plan items, each with a step and status.
+            At most one step can be in_progress at a time.
+            "}
         .to_string(),
         strict: false,
         parameters: JsonSchema::Object {

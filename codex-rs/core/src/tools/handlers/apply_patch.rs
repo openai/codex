@@ -30,6 +30,7 @@ use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use indoc::indoc;
 
 pub struct ApplyPatchHandler;
 
@@ -288,75 +289,74 @@ pub(crate) fn create_apply_patch_json_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "apply_patch".to_string(),
-        description: r#"Use the `apply_patch` tool to edit files.
-Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
+        description: indoc! {r#"
+            Use the `apply_patch` tool to edit files.
+            Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
 
-*** Begin Patch
-[ one or more file sections ]
-*** End Patch
+            *** Begin Patch
+            [ one or more file sections ]
+            *** End Patch
 
-Within that envelope, you get a sequence of file operations.
-You MUST include a header to specify the action you are taking.
-Each operation starts with one of three headers:
+            Within that envelope, you get a sequence of file operations.
+            You MUST include a header to specify the action you are taking.
+            Each operation starts with one of three headers:
 
-*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
-*** Delete File: <path> - remove an existing file. Nothing follows.
-*** Update File: <path> - patch an existing file in place (optionally with a rename).
+            *** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+            *** Delete File: <path> - remove an existing file. Nothing follows.
+            *** Update File: <path> - patch an existing file in place (optionally with a rename).
 
-May be immediately followed by *** Move to: <new path> if you want to rename the file.
-Then one or more “hunks”, each introduced by @@ (optionally followed by a hunk header).
-Within a hunk each line starts with:
+            May be immediately followed by *** Move to: <new path> if you want to rename the file.
+            Then one or more “hunks”, each introduced by @@ (optionally followed by a hunk header).
+            Within a hunk each line starts with:
 
-For instructions on [context_before] and [context_after]:
-- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change’s [context_after] lines in the second change’s [context_before] lines.
-- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:
-@@ class BaseClass
-[3 lines of pre-context]
-- [old_code]
-+ [new_code]
-[3 lines of post-context]
+            For instructions on [context_before] and [context_after]:
+            - By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change’s [context_after] lines in the second change’s [context_before] lines.
+            - If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:
+            @@ class BaseClass
+            [3 lines of pre-context]
+            - [old_code]
+            + [new_code]
+            [3 lines of post-context]
 
-- If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:
+            - If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:
 
-@@ class BaseClass
-@@ 	 def method():
-[3 lines of pre-context]
-- [old_code]
-+ [new_code]
-[3 lines of post-context]
+            @@ class BaseClass
+            @@     def method():
+            [3 lines of pre-context]
+            - [old_code]
+            + [new_code]
+            [3 lines of post-context]
 
-The full grammar definition is below:
-Patch := Begin { FileOp } End
-Begin := "*** Begin Patch" NEWLINE
-End := "*** End Patch" NEWLINE
-FileOp := AddFile | DeleteFile | UpdateFile
-AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
-DeleteFile := "*** Delete File: " path NEWLINE
-UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
-MoveTo := "*** Move to: " newPath NEWLINE
-Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
-HunkLine := (" " | "-" | "+") text NEWLINE
+            The full grammar definition is below:
+            Patch := Begin { FileOp } End
+            Begin := "*** Begin Patch" NEWLINE
+            End := "*** End Patch" NEWLINE
+            FileOp := AddFile | DeleteFile | UpdateFile
+            AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
+            DeleteFile := "*** Delete File: " path NEWLINE
+            UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
+            MoveTo := "*** Move to: " newPath NEWLINE
+            Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
+            HunkLine := (" " | "-" | "+") text NEWLINE
 
-A full patch can combine several operations:
+            *** Begin Patch
+            *** Add File: hello.txt
+            +Hello world
+            *** Update File: src/app.py
+            *** Move to: src/main.py
+            @@ def greet():
+            -print("Hi")
+            +print("Hello, world!")
+            *** Delete File: obsolete.txt
+            *** End Patch
 
-*** Begin Patch
-*** Add File: hello.txt
-+Hello world
-*** Update File: src/app.py
-*** Move to: src/main.py
-@@ def greet():
--print("Hi")
-+print("Hello, world!")
-*** Delete File: obsolete.txt
-*** End Patch
+            It is important to remember:
 
-It is important to remember:
-
-- You must include a header with your intended action (Add/Delete/Update)
-- You must prefix new lines with `+` even when creating a new file
-- File references can only be relative, NEVER ABSOLUTE.
-"#
-            .to_string(),
+            - You must include a header with your intended action (Add/Delete/Update)
+            - You must prefix new lines with `+` even when creating a new file
+            - File references can only be relative, NEVER ABSOLUTE.
+            "#}
+        .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -370,6 +370,7 @@ It is important to remember:
 mod tests {
     use super::*;
     use codex_apply_patch::MaybeApplyPatchVerified;
+    use indoc::indoc;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -380,13 +381,14 @@ mod tests {
         std::fs::create_dir_all(cwd.join("old")).expect("create old dir");
         std::fs::create_dir_all(cwd.join("renamed/dir")).expect("create dest dir");
         std::fs::write(cwd.join("old/name.txt"), "old content\n").expect("write old file");
-        let patch = r#"*** Begin Patch
-*** Update File: old/name.txt
-*** Move to: renamed/dir/name.txt
-@@
--old content
-+new content
-*** End Patch"#;
+        let patch = indoc! {"
+            *** Begin Patch
+            *** Update File: old/name.txt
+            *** Move to: renamed/dir/name.txt
+            @@
+            -old content
+            +new content
+            *** End Patch"};
         let argv = vec!["apply_patch".to_string(), patch.to_string()];
         let action = match codex_apply_patch::maybe_parse_apply_patch_verified(&argv, cwd) {
             MaybeApplyPatchVerified::Body(action) => action,

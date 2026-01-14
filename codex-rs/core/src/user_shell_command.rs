@@ -48,7 +48,7 @@ pub fn format_user_shell_command_record(
     turn_context: &TurnContext,
 ) -> String {
     let body = format_user_shell_command_body(command, exec_output, turn_context);
-    format!("{USER_SHELL_COMMAND_OPEN}\n{body}\n{USER_SHELL_COMMAND_CLOSE}")
+    [USER_SHELL_COMMAND_OPEN, &body, USER_SHELL_COMMAND_CLOSE].join("\n")
 }
 
 pub fn user_shell_command_record_item(
@@ -70,13 +70,15 @@ mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
     use crate::exec::StreamOutput;
+    use indoc::indoc;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn detects_user_shell_command_text_variants() {
-        assert!(is_user_shell_command_text(
-            "<user_shell_command>\necho hi\n</user_shell_command>"
-        ));
+        assert!(is_user_shell_command_text(indoc! {"
+                <user_shell_command>
+                echo hi
+                </user_shell_command>"}));
         assert!(!is_user_shell_command_text("echo hi"));
     }
 
@@ -100,7 +102,18 @@ mod tests {
         };
         assert_eq!(
             text,
-            "<user_shell_command>\n<command>\necho hi\n</command>\n<result>\nExit code: 0\nDuration: 1.0000 seconds\nOutput:\nhi\n</result>\n</user_shell_command>"
+            indoc! {"
+                <user_shell_command>
+                <command>
+                echo hi
+                </command>
+                <result>
+                Exit code: 0
+                Duration: 1.0000 seconds
+                Output:
+                hi
+                </result>
+                </user_shell_command>"}
         );
     }
 
@@ -118,7 +131,18 @@ mod tests {
         let record = format_user_shell_command_record("false", &exec_output, &turn_context);
         assert_eq!(
             record,
-            "<user_shell_command>\n<command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\ncombined output wins\n</result>\n</user_shell_command>"
+            indoc! {"
+                <user_shell_command>
+                <command>
+                false
+                </command>
+                <result>
+                Exit code: 42
+                Duration: 0.1200 seconds
+                Output:
+                combined output wins
+                </result>
+                </user_shell_command>"}
         );
     }
 }

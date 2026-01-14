@@ -89,6 +89,8 @@ mod tests {
 
     use super::*;
     use core_test_support::test_path_buf;
+    use indoc::formatdoc;
+    use indoc::indoc;
     use pretty_assertions::assert_eq;
 
     fn fake_shell() -> Shell {
@@ -104,13 +106,13 @@ mod tests {
         let cwd = test_path_buf("/repo");
         let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell());
 
-        let expected = format!(
-            r#"<environment_context>
-  <cwd>{cwd}</cwd>
-  <shell>bash</shell>
-</environment_context>"#,
+        let expected = formatdoc! {"
+            <environment_context>
+              <cwd>{cwd}</cwd>
+              <shell>bash</shell>
+            </environment_context>",
             cwd = cwd.display(),
-        );
+        };
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -119,9 +121,10 @@ mod tests {
     fn serialize_read_only_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
-  <shell>bash</shell>
-</environment_context>"#;
+        let expected = indoc! {"
+            <environment_context>
+              <shell>bash</shell>
+            </environment_context>"};
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -130,9 +133,10 @@ mod tests {
     fn serialize_external_sandbox_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
-  <shell>bash</shell>
-</environment_context>"#;
+        let expected = indoc! {"
+            <environment_context>
+              <shell>bash</shell>
+            </environment_context>"};
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -141,9 +145,10 @@ mod tests {
     fn serialize_external_sandbox_with_restricted_network_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
-  <shell>bash</shell>
-</environment_context>"#;
+        let expected = indoc! {"
+            <environment_context>
+              <shell>bash</shell>
+            </environment_context>"};
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -152,9 +157,10 @@ mod tests {
     fn serialize_full_access_environment_context() {
         let context = EnvironmentContext::new(None, fake_shell());
 
-        let expected = r#"<environment_context>
-  <shell>bash</shell>
-</environment_context>"#;
+        let expected = indoc! {"
+            <environment_context>
+              <shell>bash</shell>
+            </environment_context>"};
 
         assert_eq!(context.serialize_to_xml(), expected);
     }

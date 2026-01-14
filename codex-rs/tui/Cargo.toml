@@ -120,6 +120,7 @@ codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
+indoc = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 serial_test = { workspace = true }
