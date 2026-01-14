@@ -1,10 +1,8 @@
-use crate::CodexThread;
 use crate::agent::AgentStatus;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
@@ -29,21 +27,18 @@ impl AgentControl {
     }
 
     /// Spawn a new agent thread and submit the initial prompt.
-    ///
-    /// If `headless` is true, a background drain task is spawned to prevent unbounded event growth
-    /// of the channel queue when there is no client actively reading the thread events.
     pub(crate) async fn spawn_agent(
         &self,
         config: crate::config::Config,
         prompt: String,
-        headless: bool,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let new_thread = state.spawn_new_thread(config, self.clone()).await?;
 
-        if headless {
-            spawn_headless_drain(Arc::clone(&new_thread.thread));
-        }
+        // Notify a new thread has been created. This notification will be processed by clients
+        // to subscribe or drain this newly created thread.
+        // TODO(jif) add helper for drain
+        state.notify_thread_created(new_thread.thread_id);
 
         self.send_prompt(new_thread.thread_id, prompt).await?;
 
@@ -110,38 +105,18 @@ impl AgentControl {
     }
 }
 
-/// When an agent is spawned "headless" (no UI/view attached), there may be no consumer polling
-/// `CodexThread::next_event()`. The underlying event channel is unbounded, so the producer can
-/// accumulate events indefinitely. This drain task prevents that memory growth by polling and
-/// discarding events until shutdown.
-fn spawn_headless_drain(thread: Arc<CodexThread>) {
-    tokio::spawn(async move {
-        loop {
-            match thread.next_event().await {
-                Ok(event) => {
-                    if matches!(event.msg, EventMsg::ShutdownComplete) {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!("failed to receive event from agent: {err:?}");
-                    break;
-                }
-            }
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::CodexAuth;
+    use crate::CodexThread;
     use crate::ThreadManager;
     use crate::agent::agent_status_from_event;
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use assert_matches::assert_matches;
     use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;
@@ -262,7 +237,7 @@ mod tests {
         let control = AgentControl::default();
         let (_home, config) = test_config().await;
         let err = control
-            .spawn_agent(config, "hello".to_string(), false)
+            .spawn_agent(config, "hello".to_string())
             .await
             .expect_err("spawn_agent should fail without a manager");
         assert_eq!(
@@ -363,7 +338,7 @@ mod tests {
         let harness = AgentControlHarness::new().await;
         let thread_id = harness
             .control
-            .spawn_agent(harness.config.clone(), "spawned".to_string(), false)
+            .spawn_agent(harness.config.clone(), "spawned".to_string())
             .await
             .expect("spawn_agent should succeed");
         let _thread = harness
