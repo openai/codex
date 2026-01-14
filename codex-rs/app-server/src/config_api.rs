@@ -135,7 +135,7 @@ mod tests {
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
-            mcp_server_requirements: None,
+            mcp_servers: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);

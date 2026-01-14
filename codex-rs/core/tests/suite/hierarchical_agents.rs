@@ -17,7 +17,7 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::HierarchicalAgents);
+        config.features.enable(Feature::ChildAgentsMd);
         std::fs::write(config.cwd.join("AGENTS.md"), "be nice").expect("write AGENTS.md");
     });
     let test = builder.build(&server).await.expect("build test codex");
@@ -52,7 +52,7 @@ async fn hierarchical_agents_emits_when_no_project_doc() {
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::HierarchicalAgents);
+        config.features.enable(Feature::ChildAgentsMd);
     });
     let test = builder.build(&server).await.expect("build test codex");
 
