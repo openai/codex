@@ -14,6 +14,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
@@ -213,7 +214,7 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
         }
     }
 
-    // Follow symlinks for user, admin, and repo skills. System skills are written by Codex itself.
+    // Follow symlinked directories for user, admin, and repo skills. System skills are written by Codex itself.
     let follow_symlinks = matches!(
         scope,
         SkillScope::Repo | SkillScope::User | SkillScope::Admin
@@ -278,20 +279,6 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                         depth + 1,
                     );
                     continue;
-                }
-
-                if metadata.is_file() && file_name == SKILLS_FILENAME {
-                    match parse_skill_file(&path, scope) {
-                        Ok(skill) => outcome.skills.push(skill),
-                        Err(err) => {
-                            if scope != SkillScope::System {
-                                outcome.errors.push(SkillError {
-                                    path,
-                                    message: err.to_string(),
-                                });
-                            }
-                        }
-                    }
                 }
 
                 continue;
@@ -398,8 +385,8 @@ fn load_skill_interface(skill_path: &Path) -> Result<Option<SkillInterface>, Ski
     let interface = SkillInterface {
         display_name: interface.display_name,
         short_description: interface.short_description,
-        icon_small: resolve_icon_path(skill_dir, interface.icon_small),
-        icon_large: resolve_icon_path(skill_dir, interface.icon_large),
+        icon_small: resolve_icon_path(skill_dir, "interface.icon_small", interface.icon_small)?,
+        icon_large: resolve_icon_path(skill_dir, "interface.icon_large", interface.icon_large)?,
     };
 
     if interface.display_name.is_none()
@@ -446,15 +433,45 @@ fn sanitize_interface_metadata(
     })
 }
 
-fn resolve_icon_path(skill_dir: &Path, path: Option<PathBuf>) -> Option<PathBuf> {
-    let path = path?;
+fn resolve_icon_path(
+    skill_dir: &Path,
+    field: &'static str,
+    path: Option<PathBuf>,
+) -> Result<Option<PathBuf>, SkillParseError> {
+    // Icons must be relative paths under the skill's assets/ directory; otherwise return None.
+    let Some(path) = path else {
+        return Ok(None);
+    };
     if path.as_os_str().is_empty() {
-        return None;
+        return Ok(None);
     }
+
+    let assets_dir = skill_dir.join("assets");
     if path.is_absolute() {
-        return Some(path);
+        tracing::warn!(
+            "ignoring {field}: icon must be a relative assets path (not {})",
+            assets_dir.display()
+        );
+        return Ok(None);
     }
-    Some(skill_dir.join(path))
+
+    let mut components = path.components().peekable();
+    while matches!(components.peek(), Some(Component::CurDir)) {
+        components.next();
+    }
+    match components.next() {
+        Some(Component::Normal(component)) if component == "assets" => {}
+        _ => {
+            tracing::warn!("ignoring {field}: icon path must be under assets/");
+            return Ok(None);
+        }
+    }
+    if components.any(|component| matches!(component, Component::ParentDir)) {
+        tracing::warn!("ignoring {field}: icon path must not contain '..'");
+        return Ok(None);
+    }
+
+    Ok(Some(skill_dir.join(path)))
 }
 
 fn sanitize_single_line(raw: &str) -> String {
@@ -677,6 +694,85 @@ icon_large = "./assets/large-logo.svg"
         );
     }
 
+    #[tokio::test]
+    async fn accepts_icon_paths_under_assets_dir() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        let normalized_skill_dir = normalized(skill_dir);
+
+        write_skill_interface_at(
+            skill_dir,
+            r#"
+[interface]
+display_name = "UI Skill"
+icon_small = "assets/icon.png"
+icon_large = "./assets/logo.svg"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: Some(SkillInterface {
+                    display_name: Some("UI Skill".to_string()),
+                    short_description: None,
+                    icon_small: Some(normalized_skill_dir.join("assets/icon.png")),
+                    icon_large: Some(normalized_skill_dir.join("./assets/logo.svg")),
+                }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn drops_interface_when_icons_are_invalid() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_interface_at(
+            skill_dir,
+            r#"
+[interface]
+icon_small = "icon.png"
+icon_large = "./assets/../logo.svg"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
     #[cfg(unix)]
     fn symlink_dir(target: &Path, link: &Path) {
         std::os::unix::fs::symlink(target, link).unwrap();
@@ -721,7 +817,7 @@ icon_large = "./assets/large-logo.svg"
 
     #[tokio::test]
     #[cfg(unix)]
-    async fn loads_skills_via_symlinked_skill_file_for_user_scope() {
+    async fn ignores_symlinked_skill_file_for_user_scope() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let shared = tempfile::tempdir().expect("tempdir");
 
@@ -740,17 +836,7 @@ icon_large = "./assets/large-logo.svg"
             "unexpected errors: {:?}",
             outcome.errors
         );
-        assert_eq!(
-            outcome.skills,
-            vec![SkillMetadata {
-                name: "linked-file-skill".to_string(),
-                description: "from link".to_string(),
-                short_description: None,
-                interface: None,
-                path: normalized(&shared_skill_path),
-                scope: SkillScope::User,
-            }]
-        );
+        assert_eq!(outcome.skills, Vec::new());
     }
 
     #[tokio::test]
