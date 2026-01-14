@@ -99,7 +99,7 @@
         "experimental_windows_sandbox": {
           "type": "boolean"
         },
-        "hierarchical_agents": {
+        "child_agents_md": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -559,7 +559,7 @@
             "experimental_windows_sandbox": {
               "type": "boolean"
             },
-            "hierarchical_agents": {
+            "child_agents_md": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
