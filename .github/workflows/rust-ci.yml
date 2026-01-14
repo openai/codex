@@ -136,12 +136,18 @@ jobs:
             runs_on:
               group: codex-runners
               labels: codex-linux-arm64
-          - runner: windows-latest
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-          - runner: windows-11-arm
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
@@ -156,12 +162,18 @@ jobs:
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
-          - runner: windows-latest
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
-          - runner: windows-11-arm
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: release
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@v6
@@ -383,12 +395,18 @@ jobs:
             runs_on:
               group: codex-runners
               labels: codex-linux-arm64
-          - runner: windows-latest
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-          - runner: windows-11-arm
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@v6
