@@ -414,6 +414,7 @@ async fn make_chatwidget_manual(
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         last_unified_wait: None,
+        unified_exec_wait_streak: None,
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
@@ -1317,62 +1318,23 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 }
 
 #[tokio::test]
-async fn unified_exec_wait_cell_revision_updates_on_late_command_display() {
+async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.active_cell = Some(Box::new(crate::history_cell::new_unified_exec_wait_live(
-        None,
-        chat.config.animations,
-    )));
     chat.unified_exec_processes.push(UnifiedExecProcessSummary {
         key: "proc-1".to_string(),
         command_display: "sleep 5".to_string(),
     });
 
-    let before = chat.active_cell_revision;
     chat.on_terminal_interaction(TerminalInteractionEvent {
         call_id: "call-1".to_string(),
         process_id: "proc-1".to_string(),
         stdin: String::new(),
     });
 
-    assert_eq!(chat.active_cell_revision, before.wrapping_add(1));
-    let lines = chat
-        .active_cell_transcript_lines(80)
-        .expect("active cell lines");
-    let blob = lines_to_single_string(&lines);
-    assert!(
-        blob.contains("sleep 5"),
-        "expected command display to render: {blob:?}"
-    );
-}
-
-#[tokio::test]
-async fn unified_exec_wait_cell_revision_updates_on_replacement() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.active_cell = Some(Box::new(crate::history_cell::new_unified_exec_wait_live(
-        Some("old command".to_string()),
-        chat.config.animations,
-    )));
-    chat.unified_exec_processes.push(UnifiedExecProcessSummary {
-        key: "proc-2".to_string(),
-        command_display: "new command".to_string(),
-    });
-
-    let before = chat.active_cell_revision;
-    chat.on_terminal_interaction(TerminalInteractionEvent {
-        call_id: "call-2".to_string(),
-        process_id: "proc-2".to_string(),
-        stdin: String::new(),
-    });
-
-    assert_eq!(chat.active_cell_revision, before.wrapping_add(1));
-    let lines = chat
-        .active_cell_transcript_lines(80)
-        .expect("active cell lines");
-    let blob = lines_to_single_string(&lines);
-    assert!(
-        blob.contains("new command"),
-        "expected replacement wait cell to render: {blob:?}"
+    assert!(chat.active_cell.is_none());
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal · sleep 5"
     );
 }
 
@@ -1383,9 +1345,9 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
     terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
-    assert_snapshot!(
-        "unified_exec_waiting_multiple_empty_active",
-        active_blob(&chat)
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal · just fix"
     );
 
     chat.handle_codex_event(Event {
@@ -1426,15 +1388,15 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
     terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal · just fix"
+    );
     let pre_cells = drain_insert_history(&mut rx);
-    let mut active_combined = pre_cells
+    let active_combined = pre_cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    if !active_combined.is_empty() {
-        active_combined.push('\n');
-    }
-    active_combined.push_str(&active_blob(&chat));
     assert_snapshot!("unified_exec_non_empty_then_empty_active", active_combined);
 
     chat.handle_codex_event(Event {
