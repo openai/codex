@@ -1,3 +1,4 @@
+use dirs::home_dir;
 use path_absolutize::Absolutize;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -21,16 +22,40 @@ use ts_rs::TS;
 pub struct AbsolutePathBuf(PathBuf);
 
 impl AbsolutePathBuf {
+    fn expand_tilde(path: &Path) -> PathBuf {
+        let Some(path_str) = path.to_str() else {
+            return path.to_path_buf();
+        };
+        if path_str == "~"
+            && let Some(home) = home_dir()
+        {
+            return home;
+        }
+        if let Some(rest) = path_str.strip_prefix("~/")
+            && let Some(home) = home_dir()
+        {
+            return home.join(rest);
+        }
+        if let Some(rest) = path_str.strip_prefix("~\\")
+            && let Some(home) = home_dir()
+        {
+            return home.join(rest);
+        }
+        path.to_path_buf()
+    }
+
     pub fn resolve_path_against_base<P: AsRef<Path>, B: AsRef<Path>>(
         path: P,
         base_path: B,
     ) -> std::io::Result<Self> {
-        let absolute_path = path.as_ref().absolutize_from(base_path.as_ref())?;
+        let expanded = Self::expand_tilde(path.as_ref());
+        let absolute_path = expanded.absolutize_from(base_path.as_ref())?;
         Ok(Self(absolute_path.into_owned()))
     }
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        let absolute_path = path.as_ref().absolutize()?;
+        let expanded = Self::expand_tilde(path.as_ref());
+        let absolute_path = expanded.absolutize()?;
         Ok(Self(absolute_path.into_owned()))
     }
 
@@ -165,6 +190,7 @@ impl<'de> Deserialize<'de> for AbsolutePathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[test]
@@ -202,5 +228,44 @@ mod tests {
             abs_path_buf.as_path(),
             base_dir.join(relative_path).as_path()
         );
+    }
+
+    #[test]
+    fn tilde_expands_to_home_root() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let temp_dir = tempdir().expect("base dir");
+        let abs_path_buf = {
+            let _guard = AbsolutePathBufGuard::new(temp_dir.path());
+            serde_json::from_str::<AbsolutePathBuf>("\"~\"").expect("failed to deserialize")
+        };
+        assert_eq!(abs_path_buf.as_path(), home.as_path());
+    }
+
+    #[test]
+    fn tilde_expands_during_deserialization() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let temp_dir = tempdir().expect("base dir");
+        let abs_path_buf = {
+            let _guard = AbsolutePathBufGuard::new(temp_dir.path());
+            serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize")
+        };
+        assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
+    }
+
+    #[test]
+    fn tilde_backslash_expands_during_deserialization() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let temp_dir = tempdir().expect("base dir");
+        let abs_path_buf = {
+            let _guard = AbsolutePathBufGuard::new(temp_dir.path());
+            serde_json::from_str::<AbsolutePathBuf>("\"~\\\\code\"").expect("failed to deserialize")
+        };
+        assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 }

@@ -1870,7 +1870,9 @@ dependencies = [
 name = "codex-utils-absolute-path"
 version = "0.0.0"
 dependencies = [
+ "dirs",
  "path-absolutize",
+ "pretty_assertions",
  "schemars 0.8.22",
  "serde",
  "serde_json",
