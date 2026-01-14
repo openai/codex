@@ -114,6 +114,7 @@ pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_dangerous_command;
 pub use command_safety::is_safe_command;
 pub use exec_policy::ExecPolicyError;
+pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
 pub use safety::get_platform_sandbox;
 pub use safety::is_windows_elevated_sandbox_enabled;
