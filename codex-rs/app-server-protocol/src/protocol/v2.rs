@@ -15,6 +15,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
@@ -1640,6 +1641,26 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    CollabToolCall {
+        /// Unique identifier for this collab tool call.
+        id: String,
+        /// Name of the collab tool that was invoked.
+        tool: String,
+        /// Current status of the collab tool call.
+        status: CollabToolCallStatus,
+        /// Thread ID of the agent issuing the collab request.
+        sender_thread_id: String,
+        /// Thread ID of the receiving agent, when applicable.
+        receiver_thread_id: Option<String>,
+        /// Thread ID of the newly spawned agent, when applicable.
+        new_thread_id: Option<String>,
+        /// Prompt text sent as part of the collab tool call, when available.
+        prompt: Option<String>,
+        /// Last known status of the target agent, when available.
+        agent_status: Option<CollabAgentStatus>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     WebSearch { id: String, query: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1728,6 +1749,66 @@ pub enum McpToolCallStatus {
     InProgress,
     Completed,
     Failed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CollabToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CollabAgentState {
+    PendingInit,
+    Running,
+    Completed,
+    Errored,
+    Shutdown,
+    NotFound,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CollabAgentStatus {
+    pub state: CollabAgentState,
+    pub message: Option<String>,
+}
+
+impl From<CoreAgentStatus> for CollabAgentStatus {
+    fn from(value: CoreAgentStatus) -> Self {
+        match value {
+            CoreAgentStatus::PendingInit => Self {
+                state: CollabAgentState::PendingInit,
+                message: None,
+            },
+            CoreAgentStatus::Running => Self {
+                state: CollabAgentState::Running,
+                message: None,
+            },
+            CoreAgentStatus::Completed(message) => Self {
+                state: CollabAgentState::Completed,
+                message,
+            },
+            CoreAgentStatus::Errored(message) => Self {
+                state: CollabAgentState::Errored,
+                message: Some(message),
+            },
+            CoreAgentStatus::Shutdown => Self {
+                state: CollabAgentState::Shutdown,
+                message: None,
+            },
+            CoreAgentStatus::NotFound => Self {
+                state: CollabAgentState::NotFound,
+                message: None,
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
