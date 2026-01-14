@@ -514,15 +514,6 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
-        // Drop any placeholder header before inserting the configured header.
-        if self
-            .active_cell
-            .as_ref()
-            .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>())
-        {
-            self.active_cell = None;
-            self.needs_final_message_separator = false;
-        }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }

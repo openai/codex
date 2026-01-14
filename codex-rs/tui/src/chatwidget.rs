@@ -1525,10 +1525,12 @@ impl ChatWidget {
         config.model = model.clone();
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-        let widget_config = config;
-        let codex_op_tx = spawn_agent(widget_config.clone(), app_event_tx.clone(), thread_manager);
+        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
-        let model_for_header = model.clone().unwrap_or_else(|| "loading".to_string());
+        let model_for_header = config
+            .model
+            .clone()
+            .unwrap_or_else(|| "loading".to_string());
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
 
         let mut widget = Self {
@@ -1541,8 +1543,8 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
-                disable_paste_burst: widget_config.disable_paste_burst,
-                animations_enabled: widget_config.animations,
+                disable_paste_burst: config.disable_paste_burst,
+                animations_enabled: config.animations,
                 skills: None,
             }),
             active_cell: if model.is_none() {
@@ -1551,7 +1553,7 @@ impl ChatWidget {
                         "loading".to_string(),
                         placeholder_style,
                         None,
-                        widget_config.cwd.clone(),
+                        config.cwd.clone(),
                         CODEX_CLI_VERSION,
                     ),
                 ))
@@ -1559,7 +1561,7 @@ impl ChatWidget {
                 None
             },
             active_cell_revision: 0,
-            config: widget_config,
+            config,
             model,
             auth_manager,
             models_manager,
