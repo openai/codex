@@ -252,6 +252,16 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         .await??,
     )?;
 
+    let exec_command = format_with_current_shell("python3 -c 'print(42)'");
+    let expected_amendment_command = if let Some(commands) =
+        codex_core::bash::parse_shell_lc_plain_commands(&exec_command)
+        && let Some(command) = commands.into_iter().next()
+    {
+        command
+    } else {
+        exec_command.clone()
+    };
+
     // Expect an exec approval request (elicitation)
     let request = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -264,7 +274,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
                 ExecCommandApprovalParams {
                     conversation_id,
                     call_id: "call1".to_string(),
-                    command: format_with_current_shell("python3 -c 'print(42)'"),
+                    command: exec_command.clone(),
                     cwd: working_directory.clone(),
                     reason: None,
                     parsed_cmd: vec![ParsedCommand::Unknown {
@@ -289,11 +299,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             assert_eq!(
                 params.proposed_execpolicy_amendment,
                 Some(codex_app_server_protocol::ExecPolicyAmendment {
-                    command: vec![
-                        "python3".to_string(),
-                        "-c".to_string(),
-                        "print(42)".to_string()
-                    ],
+                    command: expected_amendment_command,
                 })
             );
 
