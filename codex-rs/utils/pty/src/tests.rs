@@ -1,15 +1,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-#[cfg(unix)]
-use std::io::ErrorKind;
 
 use pretty_assertions::assert_eq;
 
 use crate::spawn_pipe_process;
 use crate::spawn_pty_process;
-#[cfg(unix)]
-use crate::SpawnedProcess;
 
 fn find_python() -> Option<String> {
     for candidate in ["python3", "python"] {
@@ -34,16 +30,6 @@ fn setsid_available() -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
-}
-
-#[cfg(unix)]
-fn process_exists(pid: i32) -> bool {
-    let result = unsafe { libc::kill(pid, 0) };
-    if result == 0 {
-        return true;
-    }
-    let err = std::io::Error::last_os_error();
-    err.kind() != ErrorKind::NotFound
 }
 
 fn shell_command(program: &str) -> (String, Vec<String>) {
