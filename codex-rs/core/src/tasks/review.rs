@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -87,7 +88,9 @@ async fn start_review_conversation(
     // re-enable blocked tools (web search, view image).
     sub_agent_config
         .features
-        .disable(crate::features::Feature::WebSearchRequest);
+        .disable(crate::features::Feature::WebSearchRequest)
+        .disable(crate::features::Feature::WebSearchCached);
+    sub_agent_config.web_search_mode = WebSearchMode::Disabled;
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());

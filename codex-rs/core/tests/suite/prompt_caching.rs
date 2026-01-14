@@ -52,7 +52,13 @@ fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
             .as_array()
             .unwrap()
             .iter()
-            .map(|t| t["name"].as_str().unwrap().to_string())
+            .map(|t| {
+                t.get("name")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| t.get("type").and_then(|value| value.as_str()))
+                    .unwrap()
+                    .to_string()
+            })
             .collect::<Vec<_>>(),
         expected_names
     );
@@ -122,6 +128,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "read_mcp_resource",
         "update_plan",
         "apply_patch",
+        "web_search",
         "view_image",
     ];
     let body0 = req1.single_request().body_json();

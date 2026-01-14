@@ -691,11 +691,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     .parse_overrides()
                     .map_err(anyhow::Error::msg)?;
 
-                // Honor `--search` via the new feature toggle.
+                // Honor `--search` via the canonical web_search mode.
                 if interactive.web_search {
                     cli_kv_overrides.push((
-                        "features.web_search_request".to_string(),
-                        toml::Value::Boolean(true),
+                        "web_search".to_string(),
+                        toml::Value::String("live".to_string()),
                     ));
                 }
 

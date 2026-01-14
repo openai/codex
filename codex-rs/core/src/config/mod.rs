@@ -42,6 +42,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -336,7 +337,7 @@ pub struct Config {
     /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
-    pub tools_web_search_request: bool,
+    pub web_search_mode: WebSearchMode,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -894,6 +895,9 @@ pub struct ConfigToml {
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
+    /// Controls the web search tool mode: disabled, cached, or live.
+    pub web_search: Option<WebSearchMode>,
+
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
@@ -1178,6 +1182,26 @@ pub fn resolve_oss_provider(
     }
 }
 
+fn resolve_web_search_mode(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+    features: &Features,
+) -> WebSearchMode {
+    if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
+        return mode;
+    }
+
+    if features.enabled(Feature::WebSearchCached) {
+        return WebSearchMode::Cached;
+    }
+
+    if features.enabled(Feature::WebSearchRequest) {
+        return WebSearchMode::Live;
+    }
+
+    WebSearchMode::Cached
+}
+
 impl Config {
     #[cfg(test)]
     fn load_from_base_config_with_overrides(
@@ -1242,6 +1266,7 @@ impl Config {
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
         #[cfg(target_os = "windows")]
         {
             // Base flag controls sandbox on/off; elevated only applies when base is enabled.
@@ -1361,7 +1386,6 @@ impl Config {
         };
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
-        let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
         let forced_chatgpt_workspace_id =
@@ -1505,7 +1529,7 @@ impl Config {
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
-            tools_web_search_request,
+            web_search_mode,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
@@ -2178,6 +2202,50 @@ trust_level = "trusted"
         assert_eq!(config.feedback_enabled, true);
 
         Ok(())
+    }
+
+    #[test]
+    fn web_search_mode_defaults_to_cached() {
+        let cfg = ConfigToml::default();
+        let profile = ConfigProfile::default();
+        let features = Features::with_defaults();
+
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features),
+            WebSearchMode::Cached
+        );
+    }
+
+    #[test]
+    fn web_search_mode_prefers_profile_over_legacy_flags() {
+        let cfg = ConfigToml::default();
+        let profile = ConfigProfile {
+            web_search: Some(WebSearchMode::Live),
+            ..Default::default()
+        };
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchCached);
+
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features),
+            WebSearchMode::Live
+        );
+    }
+
+    #[test]
+    fn web_search_mode_disabled_overrides_legacy_request() {
+        let cfg = ConfigToml {
+            web_search: Some(WebSearchMode::Disabled),
+            ..Default::default()
+        };
+        let profile = ConfigProfile::default();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchRequest);
+
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features),
+            WebSearchMode::Disabled
+        );
     }
 
     #[test]
@@ -3516,7 +3584,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                tools_web_search_request: false,
+                web_search_mode: WebSearchMode::Cached,
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3603,7 +3671,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            tools_web_search_request: false,
+            web_search_mode: WebSearchMode::Cached,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3705,7 +3773,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            tools_web_search_request: false,
+            web_search_mode: WebSearchMode::Cached,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3793,7 +3861,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            tools_web_search_request: false,
+            web_search_mode: WebSearchMode::Cached,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),

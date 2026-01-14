@@ -395,6 +395,14 @@
         }
       ]
     },
+    "web_search": {
+      "description": "Controls the web search tool mode: disabled, cached, or live.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/WebSearchMode"
+        }
+      ]
+    },
     "windows_wsl_setup_acknowledged": {
       "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
       "type": "boolean"
@@ -634,6 +642,9 @@
         },
         "tools_web_search": {
           "type": "boolean"
+        },
+        "web_search": {
+          "$ref": "#/definitions/WebSearchMode"
         }
       },
       "additionalProperties": false
@@ -1418,6 +1429,14 @@
         "low",
         "medium",
         "high"
+      ]
+    },
+    "WebSearchMode": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "cached",
+        "live"
       ]
     },
     "WireApi": {
