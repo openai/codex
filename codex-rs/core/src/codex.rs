@@ -254,14 +254,19 @@ impl Codex {
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
 
         let config = Arc::new(config);
-        if config.features.enabled(Feature::RemoteModels)
-            && let Err(err) = models_manager
-                .refresh_available_models_with_cache(&config)
-                .await
-        {
-            error!("failed to refresh available models: {err:?}");
-        }
-        let model = models_manager.get_model(&config.model, &config).await;
+        let _ = models_manager
+            .list_models(
+                &config,
+                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+            )
+            .await;
+        let model = models_manager
+            .get_default_model(
+                &config.model,
+                &config,
+                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+            )
+            .await;
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             model: model.clone(),
@@ -755,7 +760,7 @@ impl Session {
             .write()
             .await
             .initialize(
-                config.mcp_servers.clone(),
+                &config.mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
                 auth_statuses.clone(),
                 tx_event.clone(),
@@ -965,7 +970,7 @@ impl Session {
         let model_info = self
             .services
             .models_manager
-            .construct_model_info(session_configuration.model.as_str(), &per_turn_config)
+            .get_model_info(session_configuration.model.as_str(), &per_turn_config)
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -986,6 +991,14 @@ impl Session {
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
+    }
+
+    async fn get_config(&self) -> std::sync::Arc<Config> {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .original_config_do_not_use
+            .clone()
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
@@ -1739,7 +1752,7 @@ impl Session {
         let mut refreshed_manager = McpConnectionManager::default();
         refreshed_manager
             .initialize(
-                mcp_servers,
+                &mcp_servers,
                 store_mode,
                 auth_statuses,
                 self.get_tx_event(),
@@ -2374,7 +2387,7 @@ async fn spawn_review_thread(
     let review_model_info = sess
         .services
         .models_manager
-        .construct_model_info(&model, &config)
+        .get_model_info(&model, &config)
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
@@ -2543,6 +2556,8 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
+    let mut client_session = turn_context.client.new_session();
+
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
@@ -2573,6 +2588,7 @@ pub(crate) async fn run_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
+            &mut client_session,
             turn_input,
             cancellation_token.child_token(),
         )
@@ -2650,6 +2666,7 @@ async fn run_model_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
+    client_session: &mut ModelClientSession,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
@@ -2684,15 +2701,13 @@ async fn run_model_turn(
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
-    let mut client_session = turn_context.client.new_session();
-
     let mut retries = 0;
     loop {
         let err = match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
-            &mut client_session,
+            client_session,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -2902,9 +2917,10 @@ async fn try_run_turn(
             }
             ResponseEvent::ModelsEtag(etag) => {
                 // Update internal state with latest models etag
+                let config = sess.get_config().await;
                 sess.services
                     .models_manager
-                    .refresh_if_new_etag(etag, sess.features.enabled(Feature::RemoteModels))
+                    .refresh_if_new_etag(etag, &config)
                     .await;
             }
             ResponseEvent::Completed {

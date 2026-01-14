@@ -33,8 +33,10 @@ use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
@@ -76,6 +78,19 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
     pub update_action: Option<UpdateAction>,
+    pub exit_reason: ExitReason,
+}
+
+#[derive(Debug)]
+pub(crate) enum AppRunControl {
+    Continue,
+    Exit(ExitReason),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitReason {
+    UserRequested,
+    Fatal(String),
 }
 
 fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Option<SessionSummary> {
@@ -119,6 +134,15 @@ fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorI
             crate::history_cell::new_warning_event(format!("{path}: {message}")),
         )));
     }
+}
+
+fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<DeprecationNoticeEvent>) {
+    let Some(DeprecationNoticeEvent { summary, details }) = notice else {
+        return;
+    };
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        crate::history_cell::new_deprecation_notice(summary, details),
+    )));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,7 +213,9 @@ async fn handle_model_migration_prompt_if_needed(
     app_event_tx: &AppEventSender,
     models_manager: Arc<ModelsManager>,
 ) -> Option<AppExitInfo> {
-    let available_models = models_manager.list_models(config).await;
+    let available_models = models_manager
+        .list_models(config, RefreshStrategy::OnlineIfUncached)
+        .await;
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == model)
@@ -279,6 +305,7 @@ async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     thread_id: None,
                     update_action: None,
+                    exit_reason: ExitReason::UserRequested,
                 });
             }
         }
@@ -345,10 +372,12 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
 
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
@@ -357,7 +386,7 @@ impl App {
         ));
         let mut model = thread_manager
             .get_models_manager()
-            .get_model(&config.model, &config)
+            .get_default_model(&config.model, &config, RefreshStrategy::OnlineIfUncached)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
@@ -494,14 +523,23 @@ impl App {
 
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
-            app.handle_event(
-                tui,
-                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                    latest_version,
-                    crate::update_action::get_update_action(),
-                ))),
-            )
-            .await?;
+            let control = app
+                .handle_event(
+                    tui,
+                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                        latest_version,
+                        crate::update_action::get_update_action(),
+                    ))),
+                )
+                .await?;
+            if let AppRunControl::Exit(exit_reason) = control {
+                return Ok(AppExitInfo {
+                    token_usage: app.token_usage(),
+                    thread_id: app.chat_widget.thread_id(),
+                    update_action: app.pending_update_action,
+                    exit_reason,
+                });
+            }
         }
 
         let tui_events = tui.event_stream();
@@ -509,19 +547,26 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
-        while select! {
-            Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event).await?
+        let exit_reason = loop {
+            let control = select! {
+                Some(event) = app_event_rx.recv() => {
+                    app.handle_event(tui, event).await?
+                }
+                Some(event) = tui_events.next() => {
+                    app.handle_tui_event(tui, event).await?
+                }
+            };
+            match control {
+                AppRunControl::Continue => {}
+                AppRunControl::Exit(reason) => break reason,
             }
-            Some(event) = tui_events.next() => {
-                app.handle_tui_event(tui, event).await?
-            }
-        } {}
+        };
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: app.chat_widget.thread_id(),
             update_action: app.pending_update_action,
+            exit_reason,
         })
     }
 
@@ -529,7 +574,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         event: TuiEvent,
-    ) -> Result<bool> {
+    ) -> Result<AppRunControl> {
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -551,7 +596,7 @@ impl App {
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
                     {
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
@@ -570,14 +615,14 @@ impl App {
                 }
             }
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
-    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         let model_info = self
             .server
             .get_models_manager()
-            .construct_model_info(self.current_model.as_str(), &self.config)
+            .get_model_info(self.current_model.as_str(), &self.config)
             .await;
         match event {
             AppEvent::NewSession => {
@@ -804,7 +849,7 @@ impl App {
                     && matches!(event.msg, EventMsg::ShutdownComplete)
                 {
                     self.suppress_shutdown_complete = false;
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 if let EventMsg::ListSkillsResponse(response) = &event.msg {
                     let cwd = self.chat_widget.config_ref().cwd.clone();
@@ -813,11 +858,11 @@ impl App {
                 }
                 self.chat_widget.handle_codex_event(event);
             }
-            AppEvent::ConversationHistory(ev) => {
-                self.on_conversation_history_for_backtrack(tui, ev).await?;
-            }
             AppEvent::ExitRequest => {
-                return Ok(false);
+                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+            }
+            AppEvent::FatalExitRequest(message) => {
+                return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
@@ -917,7 +962,7 @@ impl App {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
                         });
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
@@ -1086,7 +1131,7 @@ impl App {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
@@ -1098,7 +1143,7 @@ impl App {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
@@ -1107,7 +1152,7 @@ impl App {
                     // One-shot suppression if the user just confirmed continue.
                     if self.skip_world_writable_scan_once {
                         self.skip_world_writable_scan_once = false;
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     let should_check = codex_core::get_platform_sandbox().is_some()
@@ -1132,7 +1177,7 @@ impl App {
             }
             AppEvent::UpdateFeatureFlags { updates } => {
                 if updates.is_empty() {
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(self.active_profile.as_deref());
@@ -1291,7 +1336,7 @@ impl App {
                 }
             },
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
@@ -1437,8 +1482,9 @@ impl App {
                 && self.backtrack.nth_user_message != usize::MAX
                 && self.chat_widget.composer_is_empty() =>
             {
-                // Delegate to helper for clarity; preserves behavior.
-                self.confirm_backtrack_from_main();
+                if let Some(selection) = self.confirm_backtrack_from_main() {
+                    self.apply_backtrack_selection(tui, selection);
+                }
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -1509,6 +1555,7 @@ mod tests {
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ThreadId;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1775,7 +1822,7 @@ mod tests {
 
     #[tokio::test]
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
-        let mut app = make_test_app().await;
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
@@ -1811,9 +1858,8 @@ mod tests {
             )) as Arc<dyn HistoryCell>
         };
 
-        // Simulate the transcript after trimming for a fork, replaying history, and
-        // appending the edited turn. The session header separates the retained history
-        // from the forked thread's replayed turns.
+        // Simulate a transcript with duplicated history (e.g., from prior backtracks)
+        // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
             user_cell("first question"),
@@ -1829,15 +1875,44 @@ mod tests {
 
         assert_eq!(user_count(&app.transcript_cells), 2);
 
-        app.backtrack.base_id = Some(ThreadId::new());
+        let base_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: base_id,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: PathBuf::new(),
+            }),
+        });
+
+        app.backtrack.base_id = Some(base_id);
         app.backtrack.primed = true;
         app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
 
-        app.confirm_backtrack_from_main();
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        assert_eq!(selection.nth_user_message, 1);
+        assert_eq!(selection.prefill, "follow-up (edited)");
 
-        let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
-        assert_eq!(nth, 1);
-        assert_eq!(prefill, "follow-up (edited)");
+        app.apply_backtrack_rollback(selection);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
     }
 
     #[tokio::test]

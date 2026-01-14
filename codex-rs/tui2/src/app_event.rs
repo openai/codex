@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
-use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
@@ -43,6 +42,9 @@ pub(crate) enum AppEvent {
 
     /// Request to exit the application gracefully.
     ExitRequest,
+
+    /// Request to exit the application due to a fatal error.
+    FatalExitRequest(String),
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
@@ -179,9 +181,6 @@ pub(crate) enum AppEvent {
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
-
-    /// Forwarded conversation history snapshot from the current conversation.
-    ConversationHistory(ConversationPathResponseEvent),
 
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),

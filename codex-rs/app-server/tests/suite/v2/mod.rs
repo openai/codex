@@ -1,4 +1,5 @@
 mod account;
+mod analytics;
 mod config_rpc;
 mod initialize;
 mod model_list;

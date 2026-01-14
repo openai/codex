@@ -6,9 +6,11 @@
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
+pub use app::ExitReason;
 use codex_app_server_protocol::AuthMode;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
+use codex_common::oss::ollama_chat_deprecation_notice;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
@@ -394,6 +396,7 @@ async fn run_ratatui_app(
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
                         update_action: Some(action),
+                        exit_reason: ExitReason::UserRequested,
                         session_lines: Vec::new(),
                     });
                 }
@@ -434,6 +437,7 @@ async fn run_ratatui_app(
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
                 update_action: None,
+                exit_reason: ExitReason::UserRequested,
                 session_lines: Vec::new(),
             });
         }
@@ -451,21 +455,25 @@ async fn run_ratatui_app(
         initial_config
     };
 
+    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
+        Ok(notice) => notice,
+        Err(err) => {
+            tracing::warn!(?err, "Failed to detect Ollama wire API");
+            None
+        }
+    };
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
         restore();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
-        if let Err(err) = writeln!(
-            std::io::stdout(),
-            "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
-        ) {
-            error!("Failed to write session error message: {err}");
-        }
         Ok(AppExitInfo {
             token_usage: codex_core::protocol::TokenUsage::default(),
             conversation_id: None,
             update_action: None,
+            exit_reason: ExitReason::Fatal(format!(
+                "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
+            )),
             session_lines: Vec::new(),
         })
     };
@@ -512,6 +520,7 @@ async fn run_ratatui_app(
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
                         update_action: None,
+                        exit_reason: ExitReason::UserRequested,
                         session_lines: Vec::new(),
                     });
                 }
@@ -560,6 +569,7 @@ async fn run_ratatui_app(
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    exit_reason: ExitReason::UserRequested,
                     session_lines: Vec::new(),
                 });
             }
@@ -614,6 +624,7 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        ollama_chat_support_notice,
     )
     .await;
 

@@ -21,6 +21,7 @@ pub(crate) struct FooterProps {
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
+    pub(crate) steer_enabled: bool,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
     pub(crate) transcript_scrolled: bool,
@@ -152,10 +153,18 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             shortcut_overlay_lines(state)
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::ContextOnly => vec![context_window_line(
-            props.context_window_percent,
-            props.context_window_used_tokens,
-        )],
+        FooterMode::ContextOnly => {
+            let mut line = context_window_line(
+                props.context_window_percent,
+                props.context_window_used_tokens,
+            );
+            if props.is_task_running && props.steer_enabled {
+                line.push_span(" · ".dim());
+                line.push_span(key_hint::plain(KeyCode::Tab));
+                line.push_span(" to queue message".dim());
+            }
+            vec![line]
+        }
     };
     apply_copy_feedback(&mut lines, props.transcript_copy_feedback);
     lines
@@ -508,6 +517,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -525,6 +535,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: true,
@@ -542,6 +553,7 @@ mod tests {
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: true,
                 is_task_running: false,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -559,6 +571,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -576,6 +589,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -593,6 +607,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -610,6 +625,7 @@ mod tests {
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -627,6 +643,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
+                steer_enabled: false,
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -644,8 +661,45 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
+                transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_context_only_queue_hint_disabled",
+            FooterProps {
+                mode: FooterMode::ContextOnly,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: true,
+                steer_enabled: false,
+                context_window_percent: None,
+                context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
+                transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_context_only_queue_hint_enabled",
+            FooterProps {
+                mode: FooterMode::ContextOnly,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: true,
+                steer_enabled: true,
+                context_window_percent: None,
+                context_window_used_tokens: None,
                 transcript_scrolled: false,
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
@@ -661,6 +715,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,

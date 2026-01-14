@@ -7,9 +7,9 @@ use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
-use codex_core::error::CodexErr;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandSource;
@@ -127,7 +127,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     assert_eq!(requests[0].url.path(), "/v1/models");
 
     let model_info = models_manager
-        .construct_model_info(REMOTE_MODEL_SLUG, &config)
+        .get_model_info(REMOTE_MODEL_SLUG, &config)
         .await;
     assert_eq!(model_info.shell_type, ConfigShellToolType::UnifiedExec);
 
@@ -225,9 +225,7 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
     let models_manager = test.thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, slug, &test.config).await;
 
-    let model_info = models_manager
-        .construct_model_info(slug, &test.config)
-        .await;
+    let model_info = models_manager.get_model_info(slug, &test.config).await;
     assert_eq!(
         model_info.truncation_policy,
         TruncationPolicyConfig::bytes(12_000)
@@ -273,9 +271,7 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     let models_manager = test.thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, slug, &test.config).await;
 
-    let model_info = models_manager
-        .construct_model_info(slug, &test.config)
-        .await;
+    let model_info = models_manager.get_model_info(slug, &test.config).await;
     assert_eq!(
         model_info.truncation_policy,
         TruncationPolicyConfig::bytes(200)
@@ -423,12 +419,9 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         provider,
     );
 
-    manager
-        .refresh_available_models_with_cache(&config)
-        .await
-        .expect("refresh succeeds");
-
-    let available = manager.list_models(&config).await;
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
     let remote = available
         .iter()
         .find(|model| model.model == "remote-alpha")
@@ -483,22 +476,25 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     );
 
     let start = Instant::now();
-    let refresh = timeout(
+    let model = timeout(
         Duration::from_secs(7),
-        manager.refresh_available_models_with_cache(&config),
+        manager.get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached),
     )
     .await;
     let elapsed = start.elapsed();
-    let err = refresh
-        .expect("refresh should finish")
-        .expect_err("refresh should time out");
-    let request_summaries: Vec<String> = server
+    // get_model should return a default model even when refresh times out
+    let default_model = model.expect("get_model should finish and return default model");
+    assert!(
+        default_model == "gpt-5.2-codex",
+        "get_model should return default model when refresh times out, got: {default_model}"
+    );
+    let _ = server
         .received_requests()
         .await
         .expect("mock server should capture requests")
         .iter()
         .map(|req| format!("{} {}", req.method, req.url.path()))
-        .collect();
+        .collect::<Vec<String>>();
     assert!(
         elapsed >= Duration::from_millis(4_500),
         "expected models call to block near the timeout; took {elapsed:?}"
@@ -507,10 +503,6 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
         elapsed < Duration::from_millis(5_800),
         "expected models call to time out before the delayed response; took {elapsed:?}"
     );
-    match err {
-        CodexErr::Timeout => {}
-        other => panic!("expected timeout error, got {other:?}; requests: {request_summaries:?}"),
-    }
     assert_eq!(
         models_mock.requests().len(),
         1,
@@ -550,10 +542,14 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
         provider,
     );
 
-    let selected = manager.get_model(&None, &config).await;
+    let selected = manager
+        .get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached)
+        .await;
     assert_eq!(selected, "gpt-5.2-codex");
 
-    let available = manager.list_models(&config).await;
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
     let hidden = available
         .iter()
         .find(|model| model.model == "codex-auto-balanced")
@@ -571,7 +567,9 @@ async fn wait_for_model_available(
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {
-            let guard = manager.list_models(config).await;
+            let guard = manager
+                .list_models(config, RefreshStrategy::OnlineIfUncached)
+                .await;
             guard.iter().find(|model| model.model == slug).cloned()
         } {
             return model;
