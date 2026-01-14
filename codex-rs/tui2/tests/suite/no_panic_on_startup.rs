@@ -35,14 +35,14 @@ model_provider = "ollama"
     std::fs::write(codex_home.join("config.toml"), config_contents)?;
 
     let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
-    assert_eq!(1, exit_code, "Codex CLI should exit nonzero.");
+    assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
         "expected startup error in output, got: {output}"
     );
     assert!(
-        output.contains("failed to read execpolicy files"),
-        "expected execpolicy read error in output, got: {output}"
+        output.contains("failed to read rules files"),
+        "expected rules read error in output, got: {output}"
     );
     Ok(())
 }
@@ -63,7 +63,7 @@ async fn run_codex_cli(
         codex_home.as_ref().display().to_string(),
     );
 
-    let args = vec!["-c".to_string(), "analytics_enabled=false".to_string()];
+    let args = vec!["-c".to_string(), "analytics.enabled=false".to_string()];
     let spawned = codex_utils_pty::spawn_pty_process(
         codex_cli.to_string_lossy().as_ref(),
         &args,

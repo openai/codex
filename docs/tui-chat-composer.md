@@ -92,9 +92,9 @@ When enabled:
 - The burst detector is bypassed for new input (no flicker suppression hold and no burst buffering
   decisions for incoming characters).
 - The key stream is treated as normal typing (including normal slash command behavior).
-- Enabling the flag clears the burst classification window. In the current implementation it does
-  **not** flush or clear an already-buffered burst, so callers should avoid toggling this flag
-  mid-burst (or should flush first).
+- Enabling the flag flushes any held/buffered burst text through the normal paste path
+  (`ChatComposer::handle_paste`) and then clears the burst timing and Enter-suppression windows so
+  transient burst state cannot leak into subsequent input.
 
 ### Enter handling
 
