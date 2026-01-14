@@ -60,7 +60,7 @@ pub enum ExecPolicyError {
 
     #[error("failed to parse execpolicy file {path}: {source}")]
     ParsePolicy {
-        path: String,
+        path: PathBuf,
         source: codex_execpolicy::Error,
     },
 }
@@ -233,7 +233,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         parser
             .parse(&identifier, &contents)
             .map_err(|source| ExecPolicyError::ParsePolicy {
-                path: identifier,
+                path: policy_path.clone(),
                 source,
             })?;
     }
