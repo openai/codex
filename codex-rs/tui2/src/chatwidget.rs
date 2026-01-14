@@ -195,6 +195,7 @@ impl UnifiedExecWaitState {
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
+const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -500,30 +501,7 @@ impl ChatWidget {
             event,
             self.show_welcome_banner,
         );
-
-        let mut merged_header = false;
-        let mut session_info_to_add = Some(session_info_cell);
-        if let Some(active) = self.active_cell.take() {
-            if active
-                .as_any()
-                .is::<history_cell::SessionHeaderHistoryCell>()
-            {
-                if let Some(cell) = session_info_to_add.take() {
-                    self.active_cell = Some(Box::new(cell));
-                }
-                merged_header = true;
-            } else {
-                self.active_cell = Some(active);
-            }
-        }
-
-        self.flush_active_cell();
-
-        if !merged_header {
-            if let Some(cell) = session_info_to_add {
-                self.add_to_history(cell);
-            }
-        }
+        self.apply_session_info_cell(session_info_cell);
 
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
@@ -1413,9 +1391,12 @@ impl ChatWidget {
         let model_for_header = config
             .model
             .clone()
-            .unwrap_or_else(|| "loading".to_string());
-
-        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let active_cell = if model.is_none() {
+            Some(Self::placeholder_session_header_cell(&config))
+        } else {
+            None
+        };
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -1431,19 +1412,7 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            active_cell: if config.model.is_none() {
-                Some(Box::new(
-                    history_cell::SessionHeaderHistoryCell::new_with_style(
-                        "loading".to_string(),
-                        placeholder_style,
-                        None,
-                        config.cwd.clone(),
-                        CODEX_CLI_VERSION,
-                    ),
-                ))
-            } else {
-                None
-            },
+            active_cell,
             active_cell_revision: 0,
             config,
             model,
@@ -1517,9 +1486,7 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
-        let header_model = model
-            .clone()
-            .unwrap_or_else(|| session_configured.model.clone());
+        let header_model = model.unwrap_or_else(|| session_configured.model.clone());
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -3539,7 +3506,46 @@ impl ChatWidget {
     }
 
     fn model_display_name(&self) -> &str {
-        self.model.as_deref().unwrap_or("loading")
+        self.model.as_deref().unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
+    }
+
+    /// Build a placeholder header cell while the session is configuring.
+    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
+        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
+            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+            placeholder_style,
+            None,
+            config.cwd.clone(),
+            CODEX_CLI_VERSION,
+        ))
+    }
+
+    /// Merge the real session info cell with any placeholder header to avoid double boxes.
+    fn apply_session_info_cell(&mut self, cell: history_cell::SessionInfoCell) {
+        let mut session_info_cell = Some(Box::new(cell) as Box<dyn HistoryCell>);
+        let merged_header = if let Some(active) = self.active_cell.take() {
+            if active
+                .as_any()
+                .is::<history_cell::SessionHeaderHistoryCell>()
+            {
+                if let Some(cell) = session_info_cell.take() {
+                    self.active_cell = Some(cell);
+                }
+                true
+            } else {
+                self.active_cell = Some(active);
+                false
+            }
+        } else {
+            false
+        };
+
+        self.flush_active_cell();
+
+        if !merged_header && let Some(cell) = session_info_cell {
+            self.add_boxed_history(cell);
+        }
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

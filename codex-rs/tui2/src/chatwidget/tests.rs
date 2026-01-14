@@ -342,7 +342,7 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model: cfg.model.clone(),
+        model: cfg.model,
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
@@ -1004,7 +1004,7 @@ async fn alt_up_edits_most_recent_queued_message() {
 async fn enqueueing_history_prompt_multiple_times_is_stable() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.conversation_id = Some(ThreadId::new());
-    assert!(chat.bottom_pane.is_task_running() == false);
+    assert!(!chat.bottom_pane.is_task_running());
 
     // Submit an initial prompt to seed history.
     chat.bottom_pane.set_composer_text("repeat me".to_string());
