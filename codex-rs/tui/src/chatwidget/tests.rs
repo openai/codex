@@ -1053,6 +1053,7 @@ async fn alt_up_edits_most_recent_queued_message() {
 #[tokio::test]
 async fn enqueueing_history_prompt_multiple_times_is_stable() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     // Submit an initial prompt to seed history.
     chat.bottom_pane.set_composer_text("repeat me".to_string());
@@ -1079,6 +1080,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 #[tokio::test]
 async fn streaming_final_answer_keeps_task_running_state() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     chat.on_task_started();
     chat.on_agent_message_delta("Final answer line\n".to_string());
@@ -3887,6 +3889,7 @@ printf 'fenced within fenced\n'
 #[tokio::test]
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
@@ -3912,6 +3915,7 @@ async fn chatwidget_tall() {
 #[tokio::test]
 async fn review_queues_user_messages_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     chat.handle_codex_event(Event {
         id: "review-1".into(),

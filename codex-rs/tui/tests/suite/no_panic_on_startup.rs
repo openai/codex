@@ -50,7 +50,6 @@ model_provider = "ollama"
 }
 
 struct CodexCliOutput {
-    #[allow(dead_code)]
     exit_code: i32,
     output: String,
 }

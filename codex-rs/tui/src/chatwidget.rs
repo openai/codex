@@ -2160,6 +2160,13 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
+        if self.thread_id.is_none() {
+            self.add_info_message(
+                "Messages are disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
         if self.bottom_pane.is_task_running() || self.is_review_mode {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
@@ -2169,6 +2176,13 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        if self.thread_id.is_none() {
+            self.add_info_message(
+                "Messages are disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
