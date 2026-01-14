@@ -347,7 +347,8 @@ impl MessageProcessor {
         }
     }
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
-        let (initial_prompt, config): (String, Config) = match arguments {
+        let (initial_prompt, config, resume_path): (String, Config, Option<PathBuf>) =
+            match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
                 Ok(tool_cfg) => match tool_cfg
                     .into_config(self.codex_linux_sandbox_exe.clone())
@@ -417,6 +418,7 @@ impl MessageProcessor {
                 id,
                 initial_prompt,
                 config,
+                resume_path,
                 outgoing,
                 thread_manager,
                 running_requests_id_to_codex_uuid,

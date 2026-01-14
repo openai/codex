@@ -61,6 +61,10 @@ pub struct CodexToolCallParam {
     /// Prompt used when compacting the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_prompt: Option<String>,
+
+    /// Optional path to a rollout file to resume the session from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_path: Option<PathBuf>,
 }
 
 /// Custom enum mirroring [`AskForApproval`], but has an extra dependency on
@@ -153,7 +157,7 @@ impl CodexToolCallParam {
     pub async fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
-    ) -> std::io::Result<(String, Config)> {
+    ) -> std::io::Result<(String, Config, Option<PathBuf>)> {
         let Self {
             prompt,
             model,
@@ -165,6 +169,7 @@ impl CodexToolCallParam {
             base_instructions,
             developer_instructions,
             compact_prompt,
+            resume_path,
         } = self;
 
         // Build the `ConfigOverrides` recognized by codex-core.
@@ -190,7 +195,7 @@ impl CodexToolCallParam {
         let cfg =
             Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await?;
 
-        Ok((prompt, cfg))
+        Ok((prompt, cfg, resume_path))
     }
 }
 
