@@ -98,7 +98,11 @@ impl ExecPolicyManager {
         features: &Features,
         config_stack: &ConfigLayerStack,
     ) -> Result<Self, ExecPolicyError> {
-        let policy = load_exec_policy_for_features(features, config_stack).await?;
+        let (policy, warning) =
+            load_exec_policy_for_features_with_warning(features, config_stack).await?;
+        if let Some(err) = warning.as_ref() {
+            tracing::warn!("failed to parse execpolicy: {err}");
+        }
         Ok(Self::new(Arc::new(policy)))
     }
 
@@ -195,14 +199,26 @@ impl Default for ExecPolicyManager {
     }
 }
 
-async fn load_exec_policy_for_features(
+pub async fn check_execpolicy_for_warnings(
     features: &Features,
     config_stack: &ConfigLayerStack,
-) -> Result<Policy, ExecPolicyError> {
+) -> Result<Option<ExecPolicyError>, ExecPolicyError> {
+    let (_, warning) = load_exec_policy_for_features_with_warning(features, config_stack).await?;
+    Ok(warning)
+}
+
+async fn load_exec_policy_for_features_with_warning(
+    features: &Features,
+    config_stack: &ConfigLayerStack,
+) -> Result<(Policy, Option<ExecPolicyError>), ExecPolicyError> {
     if !features.enabled(Feature::ExecPolicy) {
-        Ok(Policy::empty())
-    } else {
-        load_exec_policy(config_stack).await
+        return Ok((Policy::empty(), None));
+    }
+
+    match load_exec_policy(config_stack).await {
+        Ok(policy) => Ok((policy, None)),
+        Err(err @ ExecPolicyError::ParsePolicy { .. }) => Ok((Policy::empty(), Some(err))),
+        Err(err) => Err(err),
     }
 }
 
