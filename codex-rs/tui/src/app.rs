@@ -77,6 +77,19 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
     pub update_action: Option<UpdateAction>,
+    pub exit_reason: ExitReason,
+}
+
+#[derive(Debug)]
+pub(crate) enum AppRunControl {
+    Continue,
+    Exit(ExitReason),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitReason {
+    UserRequested,
+    Fatal(String),
 }
 
 fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Option<SessionSummary> {
@@ -289,6 +302,7 @@ async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     thread_id: None,
                     update_action: None,
+                    exit_reason: ExitReason::UserRequested,
                 });
             }
         }
@@ -506,14 +520,23 @@ impl App {
 
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
-            app.handle_event(
-                tui,
-                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                    latest_version,
-                    crate::update_action::get_update_action(),
-                ))),
-            )
-            .await?;
+            let control = app
+                .handle_event(
+                    tui,
+                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                        latest_version,
+                        crate::update_action::get_update_action(),
+                    ))),
+                )
+                .await?;
+            if let AppRunControl::Exit(exit_reason) = control {
+                return Ok(AppExitInfo {
+                    token_usage: app.token_usage(),
+                    thread_id: app.chat_widget.thread_id(),
+                    update_action: app.pending_update_action,
+                    exit_reason,
+                });
+            }
         }
 
         let tui_events = tui.event_stream();
@@ -521,19 +544,26 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
-        while select! {
-            Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event).await?
+        let exit_reason = loop {
+            let control = select! {
+                Some(event) = app_event_rx.recv() => {
+                    app.handle_event(tui, event).await?
+                }
+                Some(event) = tui_events.next() => {
+                    app.handle_tui_event(tui, event).await?
+                }
+            };
+            match control {
+                AppRunControl::Continue => {}
+                AppRunControl::Exit(reason) => break reason,
             }
-            Some(event) = tui_events.next() => {
-                app.handle_tui_event(tui, event).await?
-            }
-        } {}
+        };
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: app.chat_widget.thread_id(),
             update_action: app.pending_update_action,
+            exit_reason,
         })
     }
 
@@ -541,7 +571,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         event: TuiEvent,
-    ) -> Result<bool> {
+    ) -> Result<AppRunControl> {
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -563,7 +593,7 @@ impl App {
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
                     {
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
@@ -582,10 +612,10 @@ impl App {
                 }
             }
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
-    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         let model_info = self
             .server
             .get_models_manager()
@@ -816,7 +846,7 @@ impl App {
                     && matches!(event.msg, EventMsg::ShutdownComplete)
                 {
                     self.suppress_shutdown_complete = false;
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 if let EventMsg::ListSkillsResponse(response) = &event.msg {
                     let cwd = self.chat_widget.config_ref().cwd.clone();
@@ -826,7 +856,10 @@ impl App {
                 self.chat_widget.handle_codex_event(event);
             }
             AppEvent::ExitRequest => {
-                return Ok(false);
+                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+            }
+            AppEvent::FatalExitRequest(message) => {
+                return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
@@ -926,7 +959,7 @@ impl App {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
                         });
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
@@ -1095,7 +1128,7 @@ impl App {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
@@ -1107,7 +1140,7 @@ impl App {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
@@ -1116,7 +1149,7 @@ impl App {
                     // One-shot suppression if the user just confirmed continue.
                     if self.skip_world_writable_scan_once {
                         self.skip_world_writable_scan_once = false;
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     let should_check = codex_core::get_platform_sandbox().is_some()
@@ -1141,7 +1174,7 @@ impl App {
             }
             AppEvent::UpdateFeatureFlags { updates } => {
                 if updates.is_empty() {
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(self.active_profile.as_deref());
@@ -1300,7 +1333,7 @@ impl App {
                 }
             },
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
