@@ -23,7 +23,6 @@ use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
-use crate::user_input::TextElement;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
@@ -1256,12 +1255,19 @@ pub struct AgentMessageEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UserMessageEvent {
     pub message: String,
+    /// Image URLs sourced from `UserInput::Image`. These are safe
+    /// to replay in legacy UI history events and correspond to images sent to
+    /// the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub text_elements: Vec<TextElement>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub local_images: Vec<String>,
+    /// Local file paths sourced from `UserInput::LocalImage`. These are kept so
+    /// the UI can reattach images when editing history, and should not be sent
+    /// to the model or treated as API-ready URLs.
+    #[serde(default)]
+    pub local_images: Vec<std::path::PathBuf>,
+    /// UI-defined spans within `message` used to render or persist special elements.
+    #[serde(default)]
+    pub text_elements: Vec<crate::user_input::TextElement>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

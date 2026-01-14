@@ -14,7 +14,7 @@ pub enum UserInput {
         /// These are byte ranges into the UTF-8 `text` buffer and are used to render
         /// or persist rich input markers (e.g., image placeholders) across history
         /// and resume without mutating the literal text.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         text_elements: Vec<TextElement>,
     },
     /// Pre‑encoded data: URI image.
