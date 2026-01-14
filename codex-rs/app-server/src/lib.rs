@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_core::check_execpolicy_for_warnings;
 use codex_feedback::CodexFeedback;
@@ -84,7 +85,7 @@ pub async fn run_main(
         )
     })?;
     let loader_overrides_for_config_api = loader_overrides.clone();
-    let mut startup_warning = None;
+    let mut config_warnings = Vec::new();
     let config = match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
         .loader_overrides(loader_overrides)
@@ -93,8 +94,11 @@ pub async fn run_main(
     {
         Ok(config) => config,
         Err(err) => {
-            let message = format!("error loading config: {err}. Using built-in defaults.");
-            startup_warning = Some(message);
+            let message = ConfigWarningNotification {
+                summary: "Invalid configuration; using defaults.".to_string(),
+                details: Some(err.to_string()),
+            };
+            config_warnings.push(message);
             Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -107,11 +111,11 @@ pub async fn run_main(
     if let Ok(Some(err)) =
         check_execpolicy_for_warnings(&config.features, &config.config_layer_stack).await
     {
-        let message = format!("error parsing rules: {err}. Custom rules not applied.");
-        startup_warning = Some(match startup_warning {
-            Some(existing) => format!("{existing}\n{message}"),
-            None => message,
-        });
+        let message = ConfigWarningNotification {
+            summary: "Error parsing rules; custom rules not applied.".to_string(),
+            details: Some(err.to_string()),
+        };
+        config_warnings.push(message);
     }
 
     let feedback = CodexFeedback::new();
@@ -150,8 +154,11 @@ pub async fn run_main(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
-    if let Some(message) = startup_warning.as_ref() {
-        error!("{message}");
+    for warning in &config_warnings {
+        match &warning.details {
+            Some(details) => error!("{} {}", warning.summary, details),
+            None => error!("{}", warning.summary),
+        }
     }
 
     // Task: process incoming messages.
@@ -166,7 +173,7 @@ pub async fn run_main(
             cli_overrides,
             loader_overrides,
             feedback.clone(),
-            startup_warning,
+            config_warnings,
         );
         async move {
             while let Some(msg) = incoming_rx.recv().await {

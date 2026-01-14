@@ -36,7 +36,7 @@ pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
     initialized: bool,
-    startup_warning: Option<String>,
+    config_warnings: Vec<ConfigWarningNotification>,
 }
 
 impl MessageProcessor {
@@ -49,7 +49,7 @@ impl MessageProcessor {
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         feedback: CodexFeedback,
-        startup_warning: Option<String>,
+        config_warnings: Vec<ConfigWarningNotification>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared(
@@ -78,7 +78,7 @@ impl MessageProcessor {
             codex_message_processor,
             config_api,
             initialized: false,
-            startup_warning,
+            config_warnings,
         }
     }
 
@@ -160,16 +160,14 @@ impl MessageProcessor {
 
                     self.initialized = true;
 
-                    if let Some(message) = self.startup_warning.take() {
-                        let notification = ConfigWarningNotification {
-                            summary: "Config error: using defaults".to_string(),
-                            details: Some(message),
-                        };
-                        self.outgoing
-                            .send_server_notification(ServerNotification::ConfigWarning(
-                                notification,
-                            ))
-                            .await;
+                    if !self.config_warnings.is_empty() {
+                        for notification in self.config_warnings.drain(..) {
+                            self.outgoing
+                                .send_server_notification(ServerNotification::ConfigWarning(
+                                    notification,
+                                ))
+                                .await;
+                        }
                     }
 
                     return;
