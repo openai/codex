@@ -504,9 +504,8 @@ Example end-to-end flow for clients implementing custom prompts:
    - Optional front matter keys: `description`, `argument-hint`.
    - The prompt body is everything after the front matter.
 2. Client calls `prompt/list` and caches the returned templates.
-3. Client exposes a UI affordance to show and expand prompts. As an example,
-the VSCode IDE extension exposes it as a slash command like `/prompts:<id>`, which
-is populated from the cached list.
+3. Client exposes a UI affordance to show and expand prompts. 
+   - As an example, the VSCode IDE extension exposes it as a slash command like `/prompts:<id>`, which is populated from the cached list.
 4. When a user selects a prompt, the client expands `/prompts:<id>` to the prompt `content`.
    - Any trailing arguments are appended to the expanded content.
 5. Client submits the expanded prompt text in the normal `turn/start` request.
