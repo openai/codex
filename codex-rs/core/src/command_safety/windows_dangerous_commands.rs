@@ -184,20 +184,17 @@ fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
 
 /// Check for /f or /F flag in CMD del/erase arguments.
 fn has_force_flag_cmd(args: &[String]) -> bool {
-    args.iter()
-        .any(|a| a.eq_ignore_ascii_case("/f") || a.to_ascii_lowercase().contains("/f"))
+    args.iter().any(|a| a.eq_ignore_ascii_case("/f"))
 }
 
 /// Check for /s or /S flag in CMD rd/rmdir arguments.
 fn has_recursive_flag_cmd(args: &[String]) -> bool {
-    args.iter()
-        .any(|a| a.eq_ignore_ascii_case("/s") || a.to_ascii_lowercase().contains("/s"))
+    args.iter().any(|a| a.eq_ignore_ascii_case("/s"))
 }
 
 /// Check for /q or /Q flag in CMD rd/rmdir arguments.
 fn has_quiet_flag_cmd(args: &[String]) -> bool {
-    args.iter()
-        .any(|a| a.eq_ignore_ascii_case("/q") || a.to_ascii_lowercase().contains("/q"))
+    args.iter().any(|a| a.eq_ignore_ascii_case("/q"))
 }
 
 fn args_have_url(args: &[String]) -> bool {
@@ -480,6 +477,26 @@ mod tests {
             "powershell",
             "-Command",
             "[void]( Remove-Item test -Force)]"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_path_containing_f_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "del",
+            "C:/foo/bar.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rd_path_containing_s_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "rd",
+            "C:/source"
         ])));
     }
 }
