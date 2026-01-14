@@ -353,13 +353,16 @@ impl ThreadManagerState {
             session_configured.rollout_path.clone(),
         ));
         self.threads.write().await.insert(thread_id, thread.clone());
-        let _ = self.thread_created_tx.send(thread_id);
 
         Ok(NewThread {
             thread_id,
             thread,
             session_configured,
         })
+    }
+
+    pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
+        let _ = self.thread_created_tx.send(thread_id);
     }
 }
 

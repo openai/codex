@@ -37,6 +37,7 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let new_thread = state.spawn_new_thread(config, self.clone()).await?;
+        state.notify_thread_created(new_thread.thread_id);
 
         self.send_prompt(new_thread.thread_id, prompt).await?;
 

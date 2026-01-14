@@ -7,6 +7,7 @@ use app_test_support::format_with_current_shell;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -26,6 +27,7 @@ use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use pretty_assertions::assert_eq;
@@ -218,7 +220,22 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         conversation_id, ..
     } = to_response::<NewConversationResponse>(new_conv_resp)?;
 
-    // 2) sendUserMessage triggers a shell call; approval policy is Untrusted so we should get an elicitation
+    // 2) addConversationListener
+    let add_listener_id = mcp
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
+        .await?;
+    let _: AddConversationSubscriptionResponse = to_response::<AddConversationSubscriptionResponse>(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
+        )
+        .await??,
+    )?;
+
+    // 3) sendUserMessage triggers a shell call; approval policy is Untrusted so we should get an elicitation
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
@@ -235,20 +252,36 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         .await??,
     )?;
 
-    // Expect an exec approval request (elicitation)
+    // Expect an ExecCommandApproval request (elicitation)
     let request = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = request else {
-        panic!("expected exec approval request, got: {request:?}");
+    let ServerRequest::ExecCommandApproval { request_id, params } = request else {
+        panic!("expected ExecCommandApproval request, got: {request:?}");
     };
-    assert_eq!(params.thread_id, conversation_id.to_string());
-    assert_eq!(params.item_id, "call1");
 
-    mcp.send_response(request_id, serde_json::json!({ "decision": "accept" }))
-        .await?;
+    assert_eq!(
+        ExecCommandApprovalParams {
+            conversation_id,
+            call_id: "call1".to_string(),
+            command: format_with_current_shell("python3 -c 'print(42)'"),
+            cwd: working_directory.clone(),
+            reason: None,
+            parsed_cmd: vec![ParsedCommand::Unknown {
+                cmd: "python3 -c 'print(42)'".to_string()
+            }],
+        },
+        params
+    );
+
+    // Approve so the first turn can complete
+    mcp.send_response(
+        request_id,
+        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+    )
+    .await?;
 
     // Wait for first TurnComplete
     let _ = timeout(
@@ -257,7 +290,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     )
     .await??;
 
-    // 3) sendUserTurn with approval_policy=never should run without elicitation
+    // 4) sendUserTurn with approval_policy=never should run without elicitation
     let send_turn_id = mcp
         .send_send_user_turn_request(SendUserTurnParams {
             conversation_id,

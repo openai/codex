@@ -161,13 +161,6 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     self.initialized = true;
-                    let thread_ids = self.codex_message_processor.list_thread_ids().await;
-                    for thread_id in thread_ids {
-                        self.codex_message_processor
-                            .ensure_thread_listener(thread_id)
-                            .await;
-                    }
-
                     if !self.config_warnings.is_empty() {
                         for notification in self.config_warnings.drain(..) {
                             self.outgoing
@@ -224,13 +217,6 @@ impl MessageProcessor {
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.codex_message_processor.thread_created_receiver()
-    }
-
-    pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        if !self.initialized {
-            return Vec::new();
-        }
-        self.codex_message_processor.list_thread_ids().await
     }
 
     pub(crate) async fn ensure_thread_listener(&mut self, thread_id: ThreadId) {

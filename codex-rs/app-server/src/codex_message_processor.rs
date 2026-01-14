@@ -1680,10 +1680,6 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
-    pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        self.thread_manager.list_thread_ids().await
-    }
-
     pub(crate) async fn ensure_thread_listener(&mut self, thread_id: ThreadId) {
         if self.has_listener_for_thread(thread_id) {
             return;

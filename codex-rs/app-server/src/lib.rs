@@ -24,6 +24,7 @@ use toml::Value as TomlValue;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -197,10 +198,10 @@ pub async fn run_main(
                                 processor.ensure_thread_listener(thread_id).await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                let thread_ids = processor.list_thread_ids().await;
-                                for thread_id in thread_ids {
-                                    processor.ensure_thread_listener(thread_id).await;
-                                }
+                                // Assumes thread creation volume is low enough that lag never happens.
+                                // If it does, we log and continue without resyncing to avoid attaching
+                                // listeners for threads that should remain unsubscribed.
+                                warn!("thread_created receiver lagged; skipping resync");
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                 listen_for_threads = false;
