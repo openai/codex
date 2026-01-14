@@ -117,13 +117,16 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         return false;
     }
 
-    // If we have a single argument, it's likely a command string (e.g., cmd /c "del /f file").
-    // We do a best-effort tokenization to detect obvious destructive commands.
-    // This is NOT a full CMD parser; it intentionally handles only common cases.
-    let tokens = match remaining.as_slice() {
+    let cmd_tokens: Vec<String> = match remaining.as_slice() {
         [only] => shlex_split(only).unwrap_or_else(|| vec![only.clone()]),
         _ => remaining,
     };
+
+    // Refine tokens by splitting concatenated CMD operators (e.g. "echo hi&del")
+    let tokens: Vec<String> = cmd_tokens
+        .into_iter()
+        .flat_map(|t| split_embedded_cmd_operators(&t))
+        .collect();
 
     const CMD_SEPARATORS: &[&str] = &["&", "&&", "|", "||"];
     tokens
@@ -183,6 +186,41 @@ fn is_direct_gui_launch(command: &[String]) -> bool {
     }
 
     false
+}
+
+fn split_embedded_cmd_operators(token: &str) -> Vec<String> {
+    // Split concatenated CMD operators so `echo hi&del` becomes `["echo hi", "&", "del"]`.
+    // Handles `&`, `&&`, `|`, `||`. Best-effort (CMD escaping is weird by nature).
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut it = token.char_indices().peekable();
+
+    while let Some((i, ch)) = it.next() {
+        if ch == '&' || ch == '|' {
+            if i > start {
+                parts.push(token[start..i].to_string());
+            }
+
+            // Detect doubled operator: && or ||
+            let op_len = match it.peek() {
+                Some(&(j, next)) if next == ch => {
+                    it.next(); // consume second char
+                    (j + next.len_utf8()) - i
+                }
+                _ => ch.len_utf8(),
+            };
+
+            parts.push(token[i..i + op_len].to_string());
+            start = i + op_len;
+        }
+    }
+
+    if start < token.len() {
+        parts.push(token[start..].to_string());
+    }
+
+    parts.retain(|s| !s.trim().is_empty());
+    parts
 }
 
 /// Check for PowerShell force delete cmdlets like `Remove-Item -Force`.
@@ -576,6 +614,92 @@ mod tests {
             "cmd",
             "/c",
             "echo hello & del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_chained_no_space_del_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi&del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_chained_andand_no_space_del_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi&&del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_chained_oror_no_space_del_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi||del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_start_url_single_string_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "start https://example.com"
+        ])));
+    }
+
+    #[test]
+    fn cmd_chained_no_space_rmdir_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi&rmdir /s /q testdir"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_force_uppercase_flag_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "DEL", "/F", "file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmdexe_r_del_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd.exe", "/r", "del", "/f", "file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_start_quoted_url_single_string_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            r#"start "https://example.com""#
+        ])));
+    }
+
+    #[test]
+    fn cmd_start_title_then_url_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            r#"start "" https://example.com"#
+        ])));
+    }
+
+    #[test]
+    fn powershell_rm_alias_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "rm test -Force"
         ])));
     }
 }
