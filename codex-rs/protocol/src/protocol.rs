@@ -507,14 +507,15 @@ impl SandboxPolicy {
                         let top_level_git_is_file = top_level_git.as_path().is_file();
                         let top_level_git_is_dir = top_level_git.as_path().is_dir();
                         if top_level_git_is_dir || top_level_git_is_file {
-                            if top_level_git_is_file && is_git_pointer_file(&top_level_git)
+                            if top_level_git_is_file
+                                && is_git_pointer_file(&top_level_git)
                                 && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
-                                    && !subpaths
-                                        .iter()
-                                        .any(|subpath| subpath.as_path() == gitdir.as_path())
-                                    {
-                                        subpaths.push(gitdir);
-                                    }
+                                && !subpaths
+                                    .iter()
+                                    .any(|subpath| subpath.as_path() == gitdir.as_path())
+                            {
+                                subpaths.push(gitdir);
+                            }
                             subpaths.push(top_level_git);
                         }
                         #[allow(clippy::expect_used)]
