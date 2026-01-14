@@ -36,7 +36,6 @@ pub struct TextElement {
     /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
     /// Optional human-readable placeholder for the element, displayed in the UI.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
 }
 
