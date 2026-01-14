@@ -112,25 +112,33 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         }
     }
 
-    let Some(first_cmd) = iter.next() else {
+    let remaining: Vec<String> = iter.cloned().collect();
+    if remaining.is_empty() {
         return false;
-    };
-    // Classic `cmd /c start https://...` ShellExecute path.
-    if first_cmd.eq_ignore_ascii_case("start") {
-        let remaining: Vec<String> = iter.cloned().collect();
-        return args_have_url(&remaining);
     }
 
-    // Force delete: del /f, erase /f
-    if first_cmd.eq_ignore_ascii_case("del") || first_cmd.eq_ignore_ascii_case("erase") {
-        let remaining: Vec<String> = iter.cloned().collect();
-        return has_force_flag_cmd(&remaining);
-    }
+    for (i, cmd) in remaining.iter().enumerate() {
+        // Classic `cmd /c ... start https://...` ShellExecute path.
+        // We check if "start" appears and if there's a URL in the *rest* of the command.
+        if cmd.eq_ignore_ascii_case("start") {
+            if args_have_url(&remaining[i..]) {
+                return true;
+            }
+        }
 
-    // Recursive directory removal: rd /s /q, rmdir /s /q
-    if first_cmd.eq_ignore_ascii_case("rd") || first_cmd.eq_ignore_ascii_case("rmdir") {
-        let remaining: Vec<String> = iter.cloned().collect();
-        return has_recursive_flag_cmd(&remaining) && has_quiet_flag_cmd(&remaining);
+        // Force delete: del /f, erase /f
+        if cmd.eq_ignore_ascii_case("del") || cmd.eq_ignore_ascii_case("erase") {
+            if has_force_flag_cmd(&remaining[i..]) {
+                return true;
+            }
+        }
+
+        // Recursive directory removal: rd /s /q, rmdir /s /q
+        if cmd.eq_ignore_ascii_case("rd") || cmd.eq_ignore_ascii_case("rmdir") {
+            if has_recursive_flag_cmd(&remaining[i..]) && has_quiet_flag_cmd(&remaining[i..]) {
+                return true;
+            }
+        }
     }
 
     false
@@ -497,6 +505,14 @@ mod tests {
             "/c",
             "rd",
             "C:/source"
+        ])));
+    }
+
+    #[test]
+    fn cmd_bypass_chained_del_is_dangerous() {
+        // "echo hello & del /f file.txt" -> should be dangerous
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "echo", "hello", "&", "del", "/f", "file.txt"
         ])));
     }
 }
