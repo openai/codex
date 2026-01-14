@@ -244,7 +244,7 @@ async fn tool_call_output_exceeds_limit_truncated_chars_limit() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn oversized_user_message_is_written_to_temp_file() -> Result<()> {
+async fn oversized_user_message_is_written_to_user_message_dir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

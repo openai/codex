@@ -15,6 +15,7 @@ use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use std::fs;
 use std::path::PathBuf;
+use tempfile::tempdir;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -86,8 +87,16 @@ fn truncate_exec_output(content: &str) -> String {
 }
 
 #[test]
-fn stores_oversized_user_message_in_temp_file() {
+fn stores_oversized_user_message_in_user_message_dir() {
     let mut history = ContextManager::new();
+    let temp_dir = tempdir().expect("create temp dir");
+    history.set_user_message_dir(Some(
+        temp_dir
+            .path()
+            .join("context")
+            .join("usermsgs")
+            .join("test-session"),
+    ));
     history.set_token_info(Some(TokenUsageInfo {
         total_token_usage: TokenUsage::default(),
         last_token_usage: TokenUsage::default(),

@@ -453,6 +453,10 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    pub(crate) fn codex_home(&self) -> &PathBuf {
+        &self.original_config_do_not_use.codex_home
+    }
+
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         if let Some(model) = updates.model.clone() {
@@ -686,7 +690,7 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), conversation_id);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3347,7 +3351,8 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let conversation_id = ThreadId::default();
+        let mut state = SessionState::new(session_configuration, conversation_id);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -3413,7 +3418,8 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let conversation_id = ThreadId::default();
+        let mut state = SessionState::new(session_configuration, conversation_id);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -3674,7 +3680,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), conversation_id);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
@@ -3769,7 +3775,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), conversation_id);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {

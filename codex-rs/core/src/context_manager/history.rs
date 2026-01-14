@@ -15,8 +15,10 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
+use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
+use uuid::Uuid;
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
@@ -24,6 +26,7 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    user_message_dir: Option<PathBuf>,
 }
 
 impl ContextManager {
@@ -31,6 +34,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            user_message_dir: None,
         }
     }
 
@@ -40,6 +44,10 @@ impl ContextManager {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.token_info = info;
+    }
+
+    pub(crate) fn set_user_message_dir(&mut self, dir: Option<PathBuf>) {
+        self.user_message_dir = dir;
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -318,7 +326,10 @@ impl ContextManager {
             return item.clone();
         }
 
-        let Some(path) = write_message_to_temp_file(&text) else {
+        let Some(user_message_dir) = self.user_message_dir.as_ref() else {
+            return item.clone();
+        };
+        let Some(path) = write_message_to_user_dir(&text, user_message_dir) else {
             return item.clone();
         };
 
@@ -368,31 +379,18 @@ fn message_text(content: &[ContentItem]) -> String {
     pieces.join("\n")
 }
 
-fn write_message_to_temp_file(text: &str) -> Option<PathBuf> {
-    let mut temp = match tempfile::Builder::new()
-        .prefix("codex-user-input-")
-        .suffix(".txt")
-        .tempfile()
-    {
-        Ok(temp) => temp,
-        Err(err) => {
-            warn!(error = %err, "failed to create temp file for user message");
-            return None;
-        }
-    };
-
-    if let Err(err) = std::io::Write::write_all(&mut temp, text.as_bytes()) {
-        warn!(error = %err, "failed to write user message to temp file");
+fn write_message_to_user_dir(text: &str, user_message_dir: &Path) -> Option<PathBuf> {
+    if let Err(err) = std::fs::create_dir_all(user_message_dir) {
+        warn!(error = %err, "failed to create user message directory");
         return None;
     }
 
-    let (_, path) = match temp.keep() {
-        Ok(kept) => kept,
-        Err(err) => {
-            warn!(error = %err, "failed to persist user message temp file");
-            return None;
-        }
-    };
+    let id = Uuid::new_v4();
+    let path = user_message_dir.join(format!("user-message-{id}.txt"));
+    if let Err(err) = std::fs::write(&path, text.as_bytes()) {
+        warn!(error = %err, "failed to write user message to file");
+        return None;
+    }
 
     Some(path)
 }
