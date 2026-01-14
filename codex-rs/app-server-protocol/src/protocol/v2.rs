@@ -1645,7 +1645,7 @@ pub enum ThreadItem {
         /// Unique identifier for this collab tool call.
         id: String,
         /// Name of the collab tool that was invoked.
-        tool: String,
+        tool: CollabAgentTool,
         /// Current status of the collab tool call.
         status: CollabAgentToolCallStatus,
         /// Thread ID of the agent issuing the collab request.
@@ -1656,7 +1656,7 @@ pub enum ThreadItem {
         /// Prompt text sent as part of the collab tool call, when available.
         prompt: Option<String>,
         /// Last known status of the target agent, when available.
-        agent_status: Option<CollabAgentState>,
+        agent_state: Option<CollabAgentState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1710,6 +1710,16 @@ pub enum CommandExecutionStatus {
     Completed,
     Failed,
     Declined,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CollabAgentTool {
+    SpawnAgent,
+    SendInput,
+    Wait,
+    CloseAgent,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1775,7 +1785,7 @@ pub enum CollabAgentStatus {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CollabAgentState {
-    pub state: CollabAgentStatus,
+    pub status: CollabAgentStatus,
     pub message: Option<String>,
 }
 
@@ -1783,27 +1793,27 @@ impl From<CoreAgentStatus> for CollabAgentState {
     fn from(value: CoreAgentStatus) -> Self {
         match value {
             CoreAgentStatus::PendingInit => Self {
-                state: CollabAgentStatus::PendingInit,
+                status: CollabAgentStatus::PendingInit,
                 message: None,
             },
             CoreAgentStatus::Running => Self {
-                state: CollabAgentStatus::Running,
+                status: CollabAgentStatus::Running,
                 message: None,
             },
             CoreAgentStatus::Completed(message) => Self {
-                state: CollabAgentStatus::Completed,
+                status: CollabAgentStatus::Completed,
                 message,
             },
             CoreAgentStatus::Errored(message) => Self {
-                state: CollabAgentStatus::Errored,
+                status: CollabAgentStatus::Errored,
                 message: Some(message),
             },
             CoreAgentStatus::Shutdown => Self {
-                state: CollabAgentStatus::Shutdown,
+                status: CollabAgentStatus::Shutdown,
                 message: None,
             },
             CoreAgentStatus::NotFound => Self {
-                state: CollabAgentStatus::NotFound,
+                status: CollabAgentStatus::NotFound,
                 message: None,
             },
         }

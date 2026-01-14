@@ -15,6 +15,7 @@ use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
+use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -283,12 +284,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::CollabAgentSpawnBegin(begin_event) => {
             let item = ThreadItem::CollabAgentToolCall {
                 id: begin_event.call_id,
-                tool: "spawn_agent".to_string(),
+                tool: CollabAgentTool::SpawnAgent,
                 status: V2CollabToolCallStatus::InProgress,
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_id: None,
                 prompt: Some(begin_event.prompt),
-                agent_status: None,
+                agent_state: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -307,12 +308,12 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             let item = ThreadItem::CollabAgentToolCall {
                 id: end_event.call_id,
-                tool: "spawn_agent".to_string(),
+                tool: CollabAgentTool::SpawnAgent,
                 status,
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_id: end_event.new_thread_id.map(|id| id.to_string()),
                 prompt: Some(end_event.prompt),
-                agent_status: Some(V2CollabAgentStatus::from(end_event.status)),
+                agent_state: Some(V2CollabAgentStatus::from(end_event.status)),
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -326,12 +327,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::CollabAgentInteractionBegin(begin_event) => {
             let item = ThreadItem::CollabAgentToolCall {
                 id: begin_event.call_id,
-                tool: "send_input".to_string(),
+                tool: CollabAgentTool::SendInput,
                 status: V2CollabToolCallStatus::InProgress,
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_id: Some(begin_event.receiver_thread_id.to_string()),
                 prompt: Some(begin_event.prompt),
-                agent_status: None,
+                agent_state: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -350,12 +351,12 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             let item = ThreadItem::CollabAgentToolCall {
                 id: end_event.call_id,
-                tool: "send_input".to_string(),
+                tool: CollabAgentTool::SendInput,
                 status,
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_id: Some(end_event.receiver_thread_id.to_string()),
                 prompt: Some(end_event.prompt),
-                agent_status: Some(V2CollabAgentStatus::from(end_event.status)),
+                agent_state: Some(V2CollabAgentStatus::from(end_event.status)),
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -369,12 +370,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::CollabWaitingBegin(begin_event) => {
             let item = ThreadItem::CollabAgentToolCall {
                 id: begin_event.call_id,
-                tool: "wait".to_string(),
+                tool: CollabAgentTool::Wait,
                 status: V2CollabToolCallStatus::InProgress,
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_id: Some(begin_event.receiver_thread_id.to_string()),
                 prompt: None,
-                agent_status: None,
+                agent_state: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -393,12 +394,12 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             let item = ThreadItem::CollabAgentToolCall {
                 id: end_event.call_id,
-                tool: "wait".to_string(),
+                tool: CollabAgentTool::Wait,
                 status,
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_id: Some(end_event.receiver_thread_id.to_string()),
                 prompt: None,
-                agent_status: Some(V2CollabAgentStatus::from(end_event.status)),
+                agent_state: Some(V2CollabAgentStatus::from(end_event.status)),
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -412,12 +413,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::CollabCloseBegin(begin_event) => {
             let item = ThreadItem::CollabAgentToolCall {
                 id: begin_event.call_id,
-                tool: "close_agent".to_string(),
+                tool: CollabAgentTool::CloseAgent,
                 status: V2CollabToolCallStatus::InProgress,
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_id: Some(begin_event.receiver_thread_id.to_string()),
                 prompt: None,
-                agent_status: None,
+                agent_state: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -436,12 +437,12 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             let item = ThreadItem::CollabAgentToolCall {
                 id: end_event.call_id,
-                tool: "close_agent".to_string(),
+                tool: CollabAgentTool::CloseAgent,
                 status,
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_id: Some(end_event.receiver_thread_id.to_string()),
                 prompt: None,
-                agent_status: Some(V2CollabAgentStatus::from(end_event.status)),
+                agent_state: Some(V2CollabAgentStatus::from(end_event.status)),
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
