@@ -29,6 +29,7 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -233,15 +234,17 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let otel =
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false);
-
-    #[allow(clippy::print_stderr)]
-    let otel = match otel {
-        Ok(otel) => otel,
-        Err(e) => {
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
             eprintln!("Could not create otel exporter: {e}");
-            std::process::exit(1);
+            None
+        }
+        Err(_) => {
+            eprintln!("Could not create otel exporter: panicked during initialization");
+            None
         }
     };
 
@@ -310,7 +313,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     );
     let default_model = thread_manager
         .get_models_manager()
-        .get_model(&config.model, &config)
+        .get_default_model(&config.model, &config, RefreshStrategy::OnlineIfUncached)
         .await;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.

@@ -32,7 +32,7 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::DeprecationNoticeEvent;
@@ -210,9 +210,8 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     model: &str,
     app_event_tx: &AppEventSender,
-    models_manager: Arc<ModelsManager>,
+    available_models: Vec<ModelPreset>,
 ) -> Option<AppExitInfo> {
-    let available_models = models_manager.list_models(config).await;
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == model)
@@ -383,14 +382,18 @@ impl App {
         ));
         let mut model = thread_manager
             .get_models_manager()
-            .get_model(&config.model, &config)
+            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .await;
+        let available_models = thread_manager
+            .get_models_manager()
+            .list_models(&config, RefreshStrategy::Offline)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
             &mut config,
             model.as_str(),
             &app_event_tx,
-            thread_manager.get_models_manager(),
+            available_models,
         )
         .await;
         if let Some(exit_info) = exit_info {
@@ -619,7 +622,7 @@ impl App {
         let model_info = self
             .server
             .get_models_manager()
-            .construct_model_info(self.current_model.as_str(), &self.config)
+            .get_model_info(self.current_model.as_str(), &self.config)
             .await;
         match event {
             AppEvent::NewSession => {
