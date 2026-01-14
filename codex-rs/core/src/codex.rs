@@ -254,14 +254,19 @@ impl Codex {
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
 
         let config = Arc::new(config);
-        if config.features.enabled(Feature::RemoteModels)
-            && let Err(err) = models_manager
-                .refresh_available_models_with_cache(&config)
-                .await
-        {
-            error!("failed to refresh available models: {err:?}");
-        }
-        let model = models_manager.get_model(&config.model, &config).await;
+        let _ = models_manager
+            .list_models(
+                &config,
+                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+            )
+            .await;
+        let model = models_manager
+            .get_default_model(
+                &config.model,
+                &config,
+                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+            )
+            .await;
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             model: model.clone(),
@@ -965,7 +970,7 @@ impl Session {
         let model_info = self
             .services
             .models_manager
-            .construct_model_info(session_configuration.model.as_str(), &per_turn_config)
+            .get_model_info(session_configuration.model.as_str(), &per_turn_config)
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -986,6 +991,14 @@ impl Session {
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
+    }
+
+    async fn get_config(&self) -> std::sync::Arc<Config> {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .original_config_do_not_use
+            .clone()
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
@@ -2374,7 +2387,7 @@ async fn spawn_review_thread(
     let review_model_info = sess
         .services
         .models_manager
-        .construct_model_info(&model, &config)
+        .get_model_info(&model, &config)
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
@@ -2904,9 +2917,10 @@ async fn try_run_turn(
             }
             ResponseEvent::ModelsEtag(etag) => {
                 // Update internal state with latest models etag
+                let config = sess.get_config().await;
                 sess.services
                     .models_manager
-                    .refresh_if_new_etag(etag, sess.features.enabled(Feature::RemoteModels))
+                    .refresh_if_new_etag(etag, &config)
                     .await;
             }
             ResponseEvent::Completed {

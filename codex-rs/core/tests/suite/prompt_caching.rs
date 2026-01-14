@@ -85,7 +85,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .await?;
     let base_instructions = thread_manager
         .get_models_manager()
-        .construct_model_info(
+        .get_model_info(
             config
                 .model
                 .as_deref()
