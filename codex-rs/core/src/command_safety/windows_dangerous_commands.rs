@@ -117,10 +117,16 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         return false;
     }
 
-    // We split on CMD operators: &, &&, |, ||
-    // and check the first token of each segment.
+    // If we have a single argument, it's likely a command string (e.g., cmd /c "del /f file").
+    // We do a best-effort tokenization to detect obvious destructive commands.
+    // This is NOT a full CMD parser; it intentionally handles only common cases.
+    let tokens = match remaining.as_slice() {
+        [only] => shlex_split(only).unwrap_or_else(|| vec![only.clone()]),
+        _ => remaining,
+    };
+
     const CMD_SEPARATORS: &[&str] = &["&", "&&", "|", "||"];
-    remaining
+    tokens
         .split(|t| CMD_SEPARATORS.contains(&t.as_str()))
         .any(|segment| {
             let Some(cmd) = segment.first() else {
@@ -131,14 +137,12 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
             if cmd.eq_ignore_ascii_case("start") && args_have_url(segment) {
                 return true;
             }
-
             // Force delete: del /f, erase /f
             if (cmd.eq_ignore_ascii_case("del") || cmd.eq_ignore_ascii_case("erase"))
                 && has_force_flag_cmd(segment)
             {
                 return true;
             }
-
             // Recursive directory removal: rd /s /q, rmdir /s /q
             if (cmd.eq_ignore_ascii_case("rd") || cmd.eq_ignore_ascii_case("rmdir"))
                 && has_recursive_flag_cmd(segment)
@@ -146,7 +150,6 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
             {
                 return true;
             }
-
             false
         })
 }
@@ -528,7 +531,6 @@ mod tests {
 
     #[test]
     fn cmd_bypass_chained_del_is_dangerous() {
-        // "echo hello & del /f file.txt" -> should be dangerous
         assert!(is_dangerous_command_windows(&vec_str(&[
             "cmd", "/c", "echo", "hello", "&", "del", "/f", "file.txt"
         ])));
@@ -536,8 +538,6 @@ mod tests {
 
     #[test]
     fn powershell_chained_no_space_is_dangerous() {
-        // "Write-Host hi;Remove-Item -Force C:\tmp" -> should be dangerous
-        // Tokenizer might see "hi;Remove-Item" as one token.
         assert!(is_dangerous_command_windows(&vec_str(&[
             "powershell",
             "-Command",
@@ -547,7 +547,6 @@ mod tests {
 
     #[test]
     fn powershell_comma_separated_is_dangerous() {
-        // "del,-Force,C:\foo" -> should be dangerous as comma is a separator/argument delimiter
         assert!(is_dangerous_command_windows(&vec_str(&[
             "powershell",
             "-Command",
@@ -557,10 +556,26 @@ mod tests {
 
     #[test]
     fn cmd_echo_del_is_not_dangerous() {
-        // "cmd /c echo del /f" -> should NOT be dangerous (it just prints text)
-        // Current implementation likely flags this because it scans all tokens.
         assert!(!is_dangerous_command_windows(&vec_str(&[
             "cmd", "/c", "echo", "del", "/f"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_single_string_argument_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_chained_single_string_argument_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hello & del /f file.txt"
         ])));
     }
 }
