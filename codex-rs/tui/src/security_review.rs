@@ -2422,12 +2422,13 @@ fn render_bug_sections(
         if !artifacts.is_empty() {
             composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
         }
-        if let Some(output) = build_validation_output_block(
+        let validation_output = build_validation_output_block(
             &snapshot.bug.validation,
             repo_root,
             output_root,
             expects_asan,
-        ) {
+        );
+        if let Some(output) = validation_output.as_deref() {
             composed.push_str("- **Validation Output:**\n```\n");
             composed.push_str(output.trim());
             composed.push_str("\n```\n");
@@ -2442,6 +2443,17 @@ fn render_bug_sections(
             composed.push_str("- **Control output:**\n```\n");
             composed.push_str(control_snippet.trim());
             composed.push_str("\n```\n");
+        }
+        let poc_artifact = first_validation_poc_artifact(&snapshot.bug.validation);
+        if let Some(exploit) = build_exploit_scenario_block(
+            &snapshot.bug,
+            base_raw,
+            validation_output.as_deref(),
+            poc_artifact.as_deref(),
+        ) {
+            composed.push_str("\n");
+            composed.push_str(exploit.trim());
+            composed.push('\n');
         }
         sections.push(composed);
     }
@@ -8933,6 +8945,84 @@ mod validation_target_selection_tests {
 
         let targets = build_validation_findings_context(&snapshot);
         assert_eq!(targets.ids, Vec::<BugIdentifier>::new());
+    }
+}
+
+#[cfg(test)]
+mod exploit_scenario_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn extracts_trigger_excerpt_from_validation_output() {
+        let output = r#"
+=== CONTROL ===
+$ ./control_cmd --foo bar
+
+=== TRIGGER ===
+$ ./target_cmd --evil input.bin
+INPUT:
+line1
+line2
+
+done
+"#;
+
+        let excerpt = extract_exploit_trigger_excerpt(output).expect("excerpt");
+        assert!(excerpt.contains("$ ./target_cmd --evil input.bin"));
+        assert!(excerpt.contains("INPUT:"));
+    }
+
+    #[test]
+    fn exploit_scenario_prefers_idor_input_kind() {
+        let bug = SecurityReviewBug {
+            summary_id: 1,
+            risk_rank: Some(1),
+            risk_score: Some(0.0),
+            title: "IDOR in get_user".to_string(),
+            severity: "High".to_string(),
+            impact: "High - Data exposure.".to_string(),
+            likelihood: "High - Remote.".to_string(),
+            recommendation: "x".to_string(),
+            file: "x.rs#L1-L2".to_string(),
+            blame: None,
+            risk_reason: None,
+            verification_types: vec!["network_api".to_string()],
+            vulnerability_tag: Some("idor".to_string()),
+            validation: BugValidationState::default(),
+            assignee_github: None,
+        };
+
+        let kind = infer_exploit_input_kind(&bug, "", Some("$ curl http://example"));
+        assert_eq!(kind, "another user's identifier in an API request");
+    }
+
+    #[test]
+    fn exploit_scenario_includes_poc_or_trigger_excerpt() {
+        let mut validation = BugValidationState::default();
+        validation.status = BugValidationStatus::Passed;
+        let bug = SecurityReviewBug {
+            summary_id: 1,
+            risk_rank: Some(1),
+            risk_score: Some(0.0),
+            title: "Heap overflow".to_string(),
+            severity: "High".to_string(),
+            impact: "High - Crash.".to_string(),
+            likelihood: "High - Remote.".to_string(),
+            recommendation: "x".to_string(),
+            file: "x.rs#L1-L2".to_string(),
+            blame: None,
+            risk_reason: None,
+            verification_types: vec!["crash_poc_release_bin".to_string()],
+            vulnerability_tag: None,
+            validation,
+            assignee_github: None,
+        };
+
+        let scenario =
+            build_exploit_scenario_block(&bug, "", None, Some("/tmp/poc.py")).expect("scenario");
+        assert!(scenario.contains("#### Exploit scenario"));
+        assert!(scenario.contains("PoC artifact"));
     }
 }
 
@@ -15593,6 +15683,231 @@ fn build_validation_output_block(
     } else {
         Some(sections.join("\n\n"))
     }
+}
+
+fn first_validation_poc_artifact(validation: &BugValidationState) -> Option<String> {
+    validation.artifacts.iter().find_map(|artifact| {
+        let trimmed = artifact.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.ends_with(".py") || lower.ends_with(".sh") {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn extract_exploit_trigger_excerpt(output: &str) -> Option<String> {
+    let lines: Vec<&str> = output.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut start_idx = None;
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.to_ascii_lowercase().contains("trigger") {
+            start_idx = Some(idx);
+            break;
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+
+    let mut in_input_block = false;
+    let mut input_lines = 0usize;
+    let mut remaining_lines = 12usize;
+    let max_chars = 1_200usize;
+
+    let push_line = |line: &str, out: &mut Vec<String>, remaining_lines: &mut usize| {
+        if *remaining_lines == 0 {
+            return;
+        }
+        let trimmed = line.trim_end();
+        if trimmed.trim().is_empty() {
+            return;
+        }
+        if out.iter().any(|existing| existing == trimmed) {
+            return;
+        }
+        let current_chars: usize = out.iter().map(|s| s.len() + 1).sum();
+        if current_chars >= max_chars {
+            return;
+        }
+        out.push(trimmed.to_string());
+        *remaining_lines = remaining_lines.saturating_sub(1);
+    };
+
+    let scan_from = start_idx.unwrap_or(0);
+    for line in lines.iter().skip(scan_from) {
+        let trimmed = line.trim_end();
+        let lowered = trimmed.trim_start().to_ascii_lowercase();
+
+        if (lowered.contains("=== control") || lowered.contains("=== setup")) && !out.is_empty() {
+            break;
+        }
+
+        if lowered.starts_with("input:") {
+            in_input_block = true;
+            input_lines = 0;
+            push_line("INPUT:", &mut out, &mut remaining_lines);
+            continue;
+        }
+
+        if in_input_block {
+            if trimmed.trim().is_empty() {
+                in_input_block = false;
+                continue;
+            }
+            if lowered.contains("=== ") && lowered.contains(" ===") {
+                in_input_block = false;
+                continue;
+            }
+            if input_lines < 8 {
+                push_line(trimmed, &mut out, &mut remaining_lines);
+                input_lines += 1;
+            } else {
+                in_input_block = false;
+            }
+            continue;
+        }
+
+        let leading = trimmed.trim_start();
+        if leading.starts_with("$ ") || leading.starts_with("Run:") {
+            push_line(trimmed, &mut out, &mut remaining_lines);
+        }
+
+        if remaining_lines == 0 {
+            break;
+        }
+    }
+
+    if out.is_empty() && start_idx.is_some() {
+        let mut remaining_lines = 3usize;
+        for line in lines.iter() {
+            let trimmed = line.trim_end();
+            if trimmed.trim_start().starts_with("$ ") {
+                push_line(trimmed, &mut out, &mut remaining_lines);
+            }
+            if remaining_lines == 0 {
+                break;
+            }
+        }
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.join("\n"))
+    }
+}
+
+fn infer_exploit_input_kind(
+    bug: &SecurityReviewBug,
+    base_markdown: &str,
+    validation_output: Option<&str>,
+) -> &'static str {
+    let tag = bug
+        .vulnerability_tag
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if tag.contains("idor") {
+        return "another user's identifier in an API request";
+    }
+    if tag.contains("sql-injection") {
+        return "a crafted request parameter containing SQL injection payloads";
+    }
+    if tag.starts_with("path-traversal") {
+        return "a crafted path containing traversal sequences (e.g. `../`)";
+    }
+
+    let title = bug.title.trim().to_ascii_lowercase();
+    let validation = validation_output.unwrap_or("");
+    let haystack = format!("{title}\n{tag}\n{base_markdown}\n{validation}").to_ascii_lowercase();
+
+    if haystack.contains("ldap") {
+        return "attacker-controlled LDAP/CRL distribution-point metadata";
+    }
+    if haystack.contains("hkps://")
+        || haystack.contains("hkp://")
+        || haystack.contains("keyserver")
+        || haystack.contains("dirmngr")
+    {
+        return "a malicious keyserver/network response that the target fetches";
+    }
+    if haystack.contains(".tar") || haystack.contains("tar") {
+        return "a crafted archive (e.g. a `.tar` file)";
+    }
+    if haystack.contains(".png")
+        || haystack.contains(".jpg")
+        || haystack.contains(".jpeg")
+        || haystack.contains(".gif")
+    {
+        return "a crafted media file";
+    }
+    if crash_poc_category(bug).is_some() {
+        return "a crafted input that reaches a memory-unsafe parsing/execution path";
+    }
+    if bug
+        .verification_types
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("network_api"))
+    {
+        return "a crafted network request";
+    }
+
+    "attacker-controlled input to a shipped entrypoint"
+}
+
+fn build_exploit_scenario_block(
+    bug: &SecurityReviewBug,
+    base_markdown: &str,
+    validation_output: Option<&str>,
+    poc_artifact: Option<&str>,
+) -> Option<String> {
+    let trigger_excerpt = validation_output.and_then(extract_exploit_trigger_excerpt);
+    if trigger_excerpt.is_none() && poc_artifact.is_none() {
+        return None;
+    }
+
+    let input_kind = infer_exploit_input_kind(bug, base_markdown, validation_output);
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("#### Exploit scenario".to_string());
+    lines.push(String::new());
+    lines.push(format!(
+        "An external attacker can realistically trigger this by supplying {input_kind}."
+    ));
+    lines.push(String::new());
+
+    let status = validation_status_label(&bug.validation);
+    lines.push(format!("- **Validation status:** {status}"));
+
+    let impact = bug.impact.lines().next().unwrap_or("").trim();
+    if !impact.is_empty() {
+        lines.push(format!("- **Impact:** {impact}"));
+    }
+
+    if let Some(poc) = poc_artifact {
+        lines.push(format!("- **PoC artifact:** `{poc}`"));
+    }
+
+    if let Some(excerpt) = trigger_excerpt.as_deref() {
+        lines.push("- **Trigger example (from validation output):**".to_string());
+        lines.push("```".to_string());
+        lines.push(excerpt.trim().to_string());
+        lines.push("```".to_string());
+    }
+
+    Some(lines.join("\n"))
 }
 
 fn looks_like_build_failure(stdout: &str, stderr: &str) -> bool {
