@@ -1680,8 +1680,8 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
-    /// Ensure we have a listener for thread_id
-    pub(crate) async fn ensure_thread_listener(&mut self, thread_id: ThreadId) {
+    /// Best-effort: attach a listener for thread_id if missing.
+    pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
         if self
             .listener_thread_ids_by_subscription
             .values()

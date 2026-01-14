@@ -195,7 +195,7 @@ pub async fn run_main(
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                processor.ensure_thread_listener(thread_id).await;
+                                processor.try_attach_thread_listener(thread_id).await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 // TODO(jif) handle lag.

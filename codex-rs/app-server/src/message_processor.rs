@@ -219,12 +219,12 @@ impl MessageProcessor {
         self.codex_message_processor.thread_created_receiver()
     }
 
-    pub(crate) async fn ensure_thread_listener(&mut self, thread_id: ThreadId) {
+    pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
         if !self.initialized {
             return;
         }
         self.codex_message_processor
-            .ensure_thread_listener(thread_id)
+            .try_attach_thread_listener(thread_id)
             .await;
     }
 
