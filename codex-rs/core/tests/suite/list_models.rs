@@ -49,6 +49,7 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 
 fn expected_models_for_api_key() -> Vec<ModelPreset> {
     vec![
+        gpt_52_codex(),
         gpt_5_1_codex_max(),
         gpt_5_1_codex_mini(),
         gpt_5_2(),
@@ -108,7 +109,7 @@ fn gpt_52_codex() -> ModelPreset {
         is_default: true,
         upgrade: None,
         show_in_picker: true,
-        supported_in_api: false,
+        supported_in_api: true,
     }
 }
 
@@ -137,7 +138,7 @@ fn gpt_5_1_codex_max() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
-        is_default: true,
+        is_default: false,
         upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
