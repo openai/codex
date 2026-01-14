@@ -101,7 +101,7 @@ enum PromptSelectionAction {
     Submit { text: String },
 }
 
-/// Snapshot of the composer text and caret state used to drive the slash popup.
+/// Snapshot of the composer text and cursor state used to drive the slash popup.
 struct SlashPopupContext {
     /// Full textarea text, used for slicing by byte index.
     text: String,
@@ -117,14 +117,14 @@ impl SlashPopupContext {
         &self.text[..self.first_line_end]
     }
 
-    /// Whether the caret is on the first line.
-    fn caret_on_first_line(&self) -> bool {
+    /// Whether the cursor is on the first line.
+    fn cursor_on_first_line(&self) -> bool {
         self.cursor <= self.first_line_end
     }
 
     /// Return the prefix used to filter slash commands.
     fn popup_prefix(&self) -> &str {
-        let prefix_end = if self.caret_on_first_line() {
+        let prefix_end = if self.cursor_on_first_line() {
             self.cursor.max(1).min(self.first_line_end)
         } else {
             self.first_line_end
@@ -193,7 +193,7 @@ impl ChatComposer {
 
     /// Return the prefix string used to filter the slash popup, or None to hide it.
     fn slash_popup_filter_prefix<'a>(&self, ctx: &'a SlashPopupContext) -> Option<&'a str> {
-        if !ctx.caret_on_first_line() {
+        if !ctx.cursor_on_first_line() {
             return None;
         }
         // A literal "/ " should be treated as plain text, not a command prefix.
@@ -1339,7 +1339,7 @@ impl ChatComposer {
         // dispatch it even when the slash popup isn't visible. This preserves
         // the workflow: type a prefix ("/di"), press Tab to complete to
         // "/diff ", then press Enter/Ctrl+Shift+Q to run it. Tab moves the cursor beyond
-        // the '/name' token and our caret-based heuristic hides the popup,
+        // the '/name' token and our cursor-based heuristic hides the popup,
         // but Enter/Ctrl+Shift+Q should still dispatch the command rather than submit
         // literal text.
         if let Some(result) = self.try_dispatch_bare_slash_command() {
