@@ -1236,11 +1236,9 @@ pub struct SkillsListResponse {
 #[ts(export_to = "v2/")]
 pub struct PromptListParams {
     /// When empty, defaults to the current session `CODEX_HOME/prompts`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roots: Vec<PathBuf>,
 
     /// When true, bypass the prompt cache and re-scan prompts from disk.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
 }
 
@@ -1258,11 +1256,7 @@ pub struct PromptMetadata {
     pub id: String,
     pub path: PathBuf,
     pub content: String,
-    #[ts(optional)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[ts(optional)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
 }
 
