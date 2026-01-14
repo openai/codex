@@ -256,7 +256,7 @@ impl ModelsManager {
         let existing_presets = self.local_models.clone();
         let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
         let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
-        merged_presets = ModelPreset::with_auth(merged_presets, chatgpt_mode);
+        merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
         if !has_default {
