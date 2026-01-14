@@ -7,6 +7,8 @@ use codex_core::error::SandboxErr;
 use codex_core::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::mounts::apply_read_only_mounts;
+
 use landlock::ABI;
 use landlock::Access;
 use landlock::AccessFs;
@@ -31,6 +33,10 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
 ) -> Result<()> {
+    if !sandbox_policy.has_full_disk_write_access() {
+        apply_read_only_mounts(sandbox_policy, cwd)?;
+    }
+
     if !sandbox_policy.has_full_network_access() {
         install_network_seccomp_filter_on_current_thread()?;
     }

@@ -37,6 +37,7 @@ pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+    pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
@@ -46,6 +47,7 @@ pub struct UnifiedExecRequest {
 pub struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
     pub cwd: PathBuf,
+    pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
 }
 
@@ -58,6 +60,7 @@ impl UnifiedExecRequest {
         command: Vec<String>,
         cwd: PathBuf,
         env: HashMap<String, String>,
+        tty: bool,
         sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
         exec_approval_requirement: ExecApprovalRequirement,
@@ -66,6 +69,7 @@ impl UnifiedExecRequest {
             command,
             cwd,
             env,
+            tty,
             sandbox_permissions,
             justification,
             exec_approval_requirement,
@@ -96,6 +100,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         vec![UnifiedExecApprovalKey {
             command: req.command.clone(),
             cwd: req.cwd.clone(),
+            tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,
         }]
     }
@@ -189,7 +194,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env)
+            .open_session_with_exec_env(&exec_env, req.tty)
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {

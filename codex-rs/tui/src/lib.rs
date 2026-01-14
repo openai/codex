@@ -123,11 +123,11 @@ pub async fn run_main(
         )
     };
 
-    // Map the legacy --search flag to the new feature toggle.
+    // Map the legacy --search flag to the canonical web_search mode.
     if cli.web_search {
         cli.config_overrides
             .raw_overrides
-            .push("features.web_search_request=true".to_string());
+            .push("web_search=\"live\"".to_string());
     }
 
     // When using `--oss`, let the bootstrapper pick the model (defaulting to

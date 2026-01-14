@@ -89,7 +89,7 @@ pub enum Feature {
     /// Experimental shell snapshotting.
     ShellSnapshot,
     /// Append additional AGENTS.md guidance to user instructions.
-    HierarchicalAgents,
+    ChildAgentsMd,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
     /// Enforce UTF8 output in Powershell.
@@ -359,8 +359,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::HierarchicalAgents,
-        key: "hierarchical_agents",
+        id: Feature::ChildAgentsMd,
+        key: "child_agents_md",
         stage: Stage::Experimental,
         default_enabled: false,
     },

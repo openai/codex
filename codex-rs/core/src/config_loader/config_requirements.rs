@@ -44,7 +44,7 @@ impl fmt::Display for RequirementSource {
 pub struct ConfigRequirements {
     pub approval_policy: Constrained<AskForApproval>,
     pub sandbox_policy: Constrained<SandboxPolicy>,
-    pub mcp_server_requirements: Option<BTreeMap<String, McpServerRequirement>>,
+    pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
 }
 
 impl Default for ConfigRequirements {
@@ -52,7 +52,7 @@ impl Default for ConfigRequirements {
         Self {
             approval_policy: Constrained::allow_any_from_default(),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly),
-            mcp_server_requirements: None,
+            mcp_servers: None,
         }
     }
 }
@@ -74,7 +74,7 @@ pub struct McpServerRequirement {
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
-    pub mcp_server_requirements: Option<BTreeMap<String, McpServerRequirement>>,
+    pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -103,7 +103,7 @@ impl<T> std::ops::Deref for Sourced<T> {
 pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
-    pub mcp_server_requirements: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -134,7 +134,7 @@ impl ConfigRequirementsWithSources {
             {
                 allowed_approval_policies,
                 allowed_sandbox_modes,
-                mcp_server_requirements,
+                mcp_servers,
             }
         );
     }
@@ -143,12 +143,12 @@ impl ConfigRequirementsWithSources {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
-            mcp_server_requirements,
+            mcp_servers,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
-            mcp_server_requirements: mcp_server_requirements.map(|sourced| sourced.value),
+            mcp_servers: mcp_servers.map(|sourced| sourced.value),
         }
     }
 }
@@ -184,7 +184,7 @@ impl ConfigRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_approval_policies.is_none()
             && self.allowed_sandbox_modes.is_none()
-            && self.mcp_server_requirements.is_none()
+            && self.mcp_servers.is_none()
     }
 }
 
@@ -195,7 +195,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
-            mcp_server_requirements,
+            mcp_servers,
         } = toml;
 
         let approval_policy: Constrained<AskForApproval> = match allowed_approval_policies {
@@ -273,7 +273,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         Ok(ConfigRequirements {
             approval_policy,
             sandbox_policy,
-            mcp_server_requirements: mcp_server_requirements.map(|sourced| sourced.value),
+            mcp_servers: mcp_servers.map(|sourced| sourced.value),
         })
     }
 }
@@ -291,15 +291,14 @@ mod tests {
         let ConfigRequirementsToml {
             allowed_approval_policies,
             allowed_sandbox_modes,
-            mcp_server_requirements,
+            mcp_servers,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            mcp_server_requirements: mcp_server_requirements
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
 
@@ -319,7 +318,7 @@ mod tests {
         let other = ConfigRequirementsToml {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
-            mcp_server_requirements: None,
+            mcp_servers: None,
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -332,7 +331,7 @@ mod tests {
                     source.clone()
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source)),
-                mcp_server_requirements: None,
+                mcp_servers: None,
             }
         );
     }
@@ -360,7 +359,7 @@ mod tests {
                     source_location,
                 )),
                 allowed_sandbox_modes: None,
-                mcp_server_requirements: None,
+                mcp_servers: None,
             }
         );
         Ok(())
@@ -396,7 +395,7 @@ mod tests {
                     existing_source,
                 )),
                 allowed_sandbox_modes: None,
-                mcp_server_requirements: None,
+                mcp_servers: None,
             }
         );
         Ok(())
@@ -561,17 +560,17 @@ mod tests {
     #[test]
     fn deserialize_mcp_server_requirements() -> Result<()> {
         let toml_str = r#"
-            [mcp_server_requirements.docs.identity]
+            [mcp_servers.docs.identity]
             command = "codex-mcp"
 
-            [mcp_server_requirements.remote.identity]
+            [mcp_servers.remote.identity]
             url = "https://example.com/mcp"
         "#;
         let requirements: ConfigRequirements =
             with_unknown_source(from_str(toml_str)?).try_into()?;
 
         assert_eq!(
-            requirements.mcp_server_requirements,
+            requirements.mcp_servers,
             Some(BTreeMap::from([
                 (
                     "docs".to_string(),
