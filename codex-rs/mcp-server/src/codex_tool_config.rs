@@ -319,6 +319,10 @@ mod tests {
                 "description": "The *initial user prompt* to start the Codex conversation.",
                 "type": "string"
               },
+              "resume-path": {
+                "description": "Optional path to a rollout file to resume the session from.",
+                "type": "string"
+              },
               "sandbox": {
                 "description": "Sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`.",
                 "enum": [
@@ -370,5 +374,22 @@ mod tests {
           "title": "Codex Reply",
         });
         assert_eq!(expected_tool_json, tool_json);
+    }
+
+    #[test]
+    fn codex_tool_accepts_pre_change_payload() {
+        let payload = serde_json::json!({
+            "prompt": "hello",
+            "model": "gpt-5.2",
+            "sandbox": "workspace-write",
+            "approval-policy": "untrusted",
+        });
+
+        let parsed: CodexToolCallParam = serde_json::from_value(payload).expect("payload parses");
+        assert_eq!(parsed.prompt, "hello");
+        assert_eq!(parsed.model.as_deref(), Some("gpt-5.2"));
+        assert_eq!(parsed.sandbox, Some(CodexToolCallSandboxMode::WorkspaceWrite));
+        assert_eq!(parsed.approval_policy, Some(CodexToolCallApprovalPolicy::Untrusted));
+        assert!(parsed.resume_path.is_none());
     }
 }
