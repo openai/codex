@@ -31,6 +31,7 @@ pub use config_requirements::McpServerRequirement;
 pub use config_requirements::RequirementSource;
 pub use config_requirements::SandboxModeRequirement;
 pub use merge::merge_toml_values;
+pub(crate) use overrides::build_cli_overrides_layer;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::ConfigLayerStackOrdering;
