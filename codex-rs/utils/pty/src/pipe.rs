@@ -36,7 +36,7 @@ impl ChildTerminator for PipeChildTerminator {
     fn kill(&mut self) -> io::Result<()> {
         #[cfg(unix)]
         {
-            return crate::process_group::kill_process_group(self.process_group_id);
+            crate::process_group::kill_process_group(self.process_group_id)
         }
 
         #[cfg(windows)]
