@@ -46,19 +46,19 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyError {
-    #[error("failed to read execpolicy files from {dir}: {source}")]
+    #[error("failed to read rules files from {dir}: {source}")]
     ReadDir {
         dir: PathBuf,
         source: std::io::Error,
     },
 
-    #[error("failed to read execpolicy file {path}: {source}")]
+    #[error("failed to read rules file {path}: {source}")]
     ReadFile {
         path: PathBuf,
         source: std::io::Error,
     },
 
-    #[error("failed to parse execpolicy file {path}: {source}")]
+    #[error("failed to parse rules file {path}: {source}")]
     ParsePolicy {
         path: String,
         source: codex_execpolicy::Error,
@@ -67,19 +67,19 @@ pub enum ExecPolicyError {
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyUpdateError {
-    #[error("failed to update execpolicy file {path}: {source}")]
+    #[error("failed to update rules file {path}: {source}")]
     AppendRule { path: PathBuf, source: AmendError },
 
-    #[error("failed to join blocking execpolicy update task: {source}")]
+    #[error("failed to join blocking rules update task: {source}")]
     JoinBlockingTask { source: tokio::task::JoinError },
 
-    #[error("failed to update in-memory execpolicy: {source}")]
+    #[error("failed to update in-memory rules: {source}")]
     AddRule {
         #[from]
         source: ExecPolicyRuleError,
     },
 
-    #[error("cannot append execpolicy rule because execpolicy feature is disabled")]
+    #[error("cannot append rule because rules feature is disabled")]
     FeatureDisabled,
 }
 
@@ -101,7 +101,7 @@ impl ExecPolicyManager {
         let (policy, warning) =
             load_exec_policy_for_features_with_warning(features, config_stack).await?;
         if let Some(err) = warning.as_ref() {
-            tracing::warn!("failed to parse execpolicy: {err}");
+            tracing::warn!("failed to parse rules: {err}");
         }
         Ok(Self::new(Arc::new(policy)))
     }
@@ -255,7 +255,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     }
 
     let policy = parser.build();
-    tracing::debug!("loaded execpolicy from {} files", policy_paths.len());
+    tracing::debug!("loaded rules from {} files", policy_paths.len());
 
     Ok(policy)
 }
