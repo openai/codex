@@ -1,10 +1,15 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+#[cfg(unix)]
+use std::io::ErrorKind;
+
 use pretty_assertions::assert_eq;
 
 use crate::spawn_pipe_process;
 use crate::spawn_pty_process;
+#[cfg(unix)]
+use crate::SpawnedProcess;
 
 fn find_python() -> Option<String> {
     for candidate in ["python3", "python"] {
@@ -18,6 +23,27 @@ fn find_python() -> Option<String> {
         }
     }
     None
+}
+
+fn setsid_available() -> bool {
+    if cfg!(windows) {
+        return false;
+    }
+    std::process::Command::new("setsid")
+        .arg("true")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn process_exists(pid: i32) -> bool {
+    let result = unsafe { libc::kill(pid, 0) };
+    if result == 0 {
+        return true;
+    }
+    let err = std::io::Error::last_os_error();
+    err.kind() != ErrorKind::NotFound
 }
 
 fn shell_command(program: &str) -> (String, Vec<String>) {
@@ -187,6 +213,86 @@ async fn pipe_drains_stderr_without_stdout_activity() -> anyhow::Result<()> {
 
     assert_eq!(code, 0, "expected python to exit cleanly");
     assert!(!output.is_empty(), "expected stderr output to be drained");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_terminate_aborts_detached_readers() -> anyhow::Result<()> {
+    if !setsid_available() {
+        eprintln!("setsid not available; skipping pipe_terminate_aborts_detached_readers");
+        return Ok(());
+    }
+
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let script =
+        "setsid sh -c 'i=0; while [ $i -lt 200 ]; do echo tick; sleep 0.01; i=$((i+1)); done' &";
+    let (program, args) = shell_command(script);
+    let mut spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+
+    let _ = tokio::time::timeout(
+        tokio::time::Duration::from_millis(500),
+        spawned.output_rx.recv(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("expected detached output before terminate"))??;
+
+    spawned.session.terminate();
+    let mut post_rx = spawned.session.output_receiver();
+
+    let post_terminate =
+        tokio::time::timeout(tokio::time::Duration::from_millis(200), post_rx.recv()).await;
+
+    match post_terminate {
+        Err(_) => Ok(()),
+        Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => Ok(()),
+        Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+            anyhow::bail!("unexpected output after terminate (lagged)")
+        }
+        Ok(Ok(chunk)) => anyhow::bail!(
+            "unexpected output after terminate: {:?}",
+            String::from_utf8_lossy(&chunk)
+        ),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_terminate_kills_process_group_after_exit() -> anyhow::Result<()> {
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let (program, args) = shell_command("sleep 9999 & echo $!");
+    let SpawnedProcess {
+        session,
+        output_rx,
+        exit_rx,
+    } = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+
+    let (output, code) = collect_output_until_exit(output_rx, exit_rx, 2_000).await;
+    assert_eq!(code, 0, "expected shell to exit cleanly");
+
+    let pid_line = String::from_utf8_lossy(&output)
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let pid: i32 = pid_line
+        .parse()
+        .map_err(|_| anyhow::anyhow!("failed to parse background pid from {pid_line:?}"))?;
+
+    session.terminate();
+
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(500);
+    while tokio::time::Instant::now() < deadline && process_exists(pid) {
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    if process_exists(pid) {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        anyhow::bail!("background pid still alive after terminate: {pid}");
+    }
 
     Ok(())
 }

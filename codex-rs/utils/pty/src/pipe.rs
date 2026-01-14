@@ -26,18 +26,29 @@ use crate::process::SpawnedProcess;
 use libc;
 
 struct PipeChildTerminator {
+    #[cfg(windows)]
     pid: u32,
+    #[cfg(unix)]
+    process_group_id: u32,
 }
 
 impl ChildTerminator for PipeChildTerminator {
     fn kill(&mut self) -> io::Result<()> {
-        kill_process(self.pid)
-    }
-}
+        #[cfg(unix)]
+        {
+            return crate::process_group::kill_process_group(self.process_group_id);
+        }
 
-#[cfg(unix)]
-fn kill_process(pid: u32) -> io::Result<()> {
-    crate::process_group::kill_process_group_by_pid(pid)
+        #[cfg(windows)]
+        {
+            return kill_process(self.pid);
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            Ok(())
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -125,6 +136,8 @@ pub async fn spawn_process(
     let pid = child
         .id()
         .ok_or_else(|| io::Error::other("missing child pid"))?;
+    #[cfg(unix)]
+    let process_group_id = pid;
 
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -159,6 +172,13 @@ pub async fn spawn_process(
             read_output_stream(BufReader::new(stderr), output_tx).await;
         })
     });
+    let mut reader_abort_handles = Vec::new();
+    if let Some(handle) = stdout_handle.as_ref() {
+        reader_abort_handles.push(handle.abort_handle());
+    }
+    if let Some(handle) = stderr_handle.as_ref() {
+        reader_abort_handles.push(handle.abort_handle());
+    }
     let reader_handle = tokio::spawn(async move {
         if let Some(handle) = stdout_handle {
             let _ = handle.await;
@@ -189,8 +209,14 @@ pub async fn spawn_process(
         writer_tx,
         output_tx,
         initial_output_rx,
-        Box::new(PipeChildTerminator { pid }),
+        Box::new(PipeChildTerminator {
+            #[cfg(windows)]
+            pid,
+            #[cfg(unix)]
+            process_group_id,
+        }),
         reader_handle,
+        reader_abort_handles,
         writer_handle,
         wait_handle,
         exit_status,

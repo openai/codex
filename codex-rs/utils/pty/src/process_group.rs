@@ -5,6 +5,7 @@
 //! - `set_process_group` is called in `pre_exec` so the child starts its own
 //!   process group.
 //! - `kill_process_group_by_pid` targets the whole group (children/grandchildren)
+//! - `kill_process_group` targets a known process group ID directly
 //!   instead of a single PID.
 //! - `set_parent_death_signal` (Linux only) arranges for the child to receive a
 //!   `SIGTERM` when the parent exits, and re-checks the parent PID to avoid
@@ -91,6 +92,29 @@ pub fn kill_process_group_by_pid(pid: u32) -> io::Result<()> {
 #[cfg(not(unix))]
 /// No-op on non-Unix platforms.
 pub fn kill_process_group_by_pid(_pid: u32) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+/// Kill a specific process group ID (best-effort).
+pub fn kill_process_group(process_group_id: u32) -> io::Result<()> {
+    use std::io::ErrorKind;
+
+    let pgid = process_group_id as libc::pid_t;
+    let result = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    if result == -1 {
+        let err = io::Error::last_os_error();
+        if err.kind() != ErrorKind::NotFound {
+            return Err(err);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+/// No-op on non-Unix platforms.
+pub fn kill_process_group(_process_group_id: u32) -> io::Result<()> {
     Ok(())
 }
 

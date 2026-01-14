@@ -158,6 +158,7 @@ pub async fn spawn_process(
         initial_output_rx,
         Box::new(PtyChildTerminator { killer }),
         reader_handle,
+        Vec::new(),
         writer_handle,
         wait_handle,
         exit_status,
