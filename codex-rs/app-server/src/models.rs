@@ -10,7 +10,7 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Config) -> Vec<Model> {
     thread_manager
-        .list_models(config, RefreshStrategy::default())
+        .list_models(config, RefreshStrategy::OnlineIfUncached)
         .await
         .into_iter()
         .filter(|preset| preset.show_in_picker)

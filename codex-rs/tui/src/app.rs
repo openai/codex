@@ -201,7 +201,7 @@ async fn handle_model_migration_prompt_if_needed(
     models_manager: Arc<ModelsManager>,
 ) -> Option<AppExitInfo> {
     let available_models = models_manager
-        .list_models(config, RefreshStrategy::default())
+        .list_models(config, RefreshStrategy::OnlineIfUncached)
         .await;
     let upgrade = available_models
         .iter()
@@ -372,7 +372,7 @@ impl App {
         ));
         let mut model = thread_manager
             .get_models_manager()
-            .get_default_model(&config.model, &config, RefreshStrategy::default())
+            .get_default_model(&config.model, &config, RefreshStrategy::OnlineIfUncached)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,

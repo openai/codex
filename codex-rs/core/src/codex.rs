@@ -257,14 +257,14 @@ impl Codex {
         let _ = models_manager
             .list_models(
                 &config,
-                crate::models_manager::manager::RefreshStrategy::default(),
+                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
         let model = models_manager
             .get_default_model(
                 &config.model,
                 &config,
-                crate::models_manager::manager::RefreshStrategy::default(),
+                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
         let session_configuration = SessionConfiguration {

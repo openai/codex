@@ -20,7 +20,7 @@ async fn list_models_returns_api_key_models() -> Result<()> {
         built_in_model_providers()["openai"].clone(),
     );
     let models = manager
-        .list_models(&config, RefreshStrategy::default())
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
         .await;
 
     let expected_models = expected_models_for_api_key();
@@ -38,7 +38,7 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
         built_in_model_providers()["openai"].clone(),
     );
     let models = manager
-        .list_models(&config, RefreshStrategy::default())
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
         .await;
 
     let expected_models = expected_models_for_chatgpt();

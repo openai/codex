@@ -34,14 +34,13 @@ const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 
 /// Strategy for refreshing available models.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshStrategy {
     /// Always fetch from the network, ignoring cache.
     Online,
     /// Only use cached data, never fetch from the network.
     Offline,
     /// Use cache if available and fresh, otherwise fetch from the network.
-    #[default]
     OnlineIfUncached,
 }
 
