@@ -124,34 +124,35 @@ impl ContextManager {
         self.items = items;
     }
 
-    pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) {
-        let Some(last_item) = self.items.last_mut() else {
-            return;
+    /// Replace image content in the last turn if it originated from a tool output.
+    /// Returns true when a tool image was replaced, false otherwise.
+    pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
+        let Some(index) = self.items.iter().rposition(|item| {
+            matches!(item, ResponseItem::FunctionCallOutput { .. })
+                || matches!(item, ResponseItem::Message { role, .. } if role == "user")
+        }) else {
+            return false;
         };
 
-        match last_item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                for item in content.iter_mut() {
-                    if matches!(item, ContentItem::InputImage { .. }) {
-                        *item = ContentItem::InputText {
-                            text: placeholder.to_string(),
-                        };
-                    }
-                }
-            }
+        match &mut self.items[index] {
             ResponseItem::FunctionCallOutput { output, .. } => {
                 let Some(content_items) = output.content_items.as_mut() else {
-                    return;
+                    return false;
                 };
+                let mut replaced = false;
+                let placeholder = placeholder.to_string();
                 for item in content_items.iter_mut() {
                     if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
                         *item = FunctionCallOutputContentItem::InputText {
-                            text: placeholder.to_string(),
+                            text: placeholder.clone(),
                         };
+                        replaced = true;
                     }
                 }
+                replaced
             }
-            _ => {}
+            ResponseItem::Message { role, .. } if role == "user" => false,
+            _ => false,
         }
     }
 
