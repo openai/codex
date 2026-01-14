@@ -545,8 +545,7 @@ The corresponding `prompt/list` response:
             "description": "Prep a branch, commit, and open a draft PR",
             "argumentHint": "[FILES=<paths>] [PR_TITLE=\"<title>\"]"
           }
-        ],
-        "errors": []
+        ]
       }
     ]
 } }

@@ -1263,18 +1263,9 @@ pub struct PromptMetadata {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct PromptErrorInfo {
-    pub path: PathBuf,
-    pub message: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct PromptListEntry {
     pub root: PathBuf,
     pub prompts: Vec<PromptMetadata>,
-    pub errors: Vec<PromptErrorInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

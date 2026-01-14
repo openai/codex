@@ -3253,11 +3253,7 @@ impl CodexMessageProcessor {
                     argument_hint: prompt.argument_hint,
                 })
                 .collect();
-            data.push(PromptListEntry {
-                root,
-                prompts,
-                errors: Vec::new(),
-            });
+            data.push(PromptListEntry { root, prompts });
         }
 
         self.outgoing

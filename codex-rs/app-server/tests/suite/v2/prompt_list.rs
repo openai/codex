@@ -52,7 +52,6 @@ Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write
     let entry = data.pop().expect("prompt list entry");
     let expected_root = std::fs::canonicalize(&prompts_dir).unwrap_or_else(|_| prompts_dir.clone());
     assert_eq!(entry.root, expected_root);
-    assert_eq!(entry.errors, Vec::new());
 
     let prompts = entry.prompts;
     let expected_content = "\nCreate a branch named `dev/<feature_name>` for this work.\nIf files are specified, stage them first: $FILES.\nCommit the staged changes with a clear message.\nOpen a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write a concise summary yourself.".to_string();
