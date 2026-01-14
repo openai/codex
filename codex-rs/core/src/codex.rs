@@ -539,12 +539,24 @@ impl Session {
             features: &per_turn_config.features,
         });
 
+        let base_instructions = if per_turn_config.features.enabled(Feature::Collab) {
+            const COLLAB_INSTRUCTIONS: &str =
+                include_str!("../templates/collab/experimental_prompt.md");
+            let base = session_configuration
+                .base_instructions
+                .as_deref()
+                .unwrap_or(model_info.base_instructions.as_str());
+            Some(format!("{base}\n\n{COLLAB_INSTRUCTIONS}"))
+        } else {
+            session_configuration.base_instructions.clone()
+        };
+
         TurnContext {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            base_instructions: session_configuration.base_instructions.clone(),
+            base_instructions,
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
