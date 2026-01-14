@@ -1641,23 +1641,22 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    CollabToolCall {
+    CollabAgentToolCall {
         /// Unique identifier for this collab tool call.
         id: String,
         /// Name of the collab tool that was invoked.
         tool: String,
         /// Current status of the collab tool call.
-        status: CollabToolCallStatus,
+        status: CollabAgentToolCallStatus,
         /// Thread ID of the agent issuing the collab request.
         sender_thread_id: String,
-        /// Thread ID of the receiving agent, when applicable.
+        /// Thread ID of the receiving agent, when applicable. In case of spawn operation,
+        /// this correspond to the newly spawned agent.
         receiver_thread_id: Option<String>,
-        /// Thread ID of the newly spawned agent, when applicable.
-        new_thread_id: Option<String>,
         /// Prompt text sent as part of the collab tool call, when available.
         prompt: Option<String>,
         /// Last known status of the target agent, when available.
-        agent_status: Option<CollabAgentStatus>,
+        agent_status: Option<CollabAgentState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1754,7 +1753,7 @@ pub enum McpToolCallStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum CollabToolCallStatus {
+pub enum CollabAgentToolCallStatus {
     InProgress,
     Completed,
     Failed,
@@ -1763,7 +1762,7 @@ pub enum CollabToolCallStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum CollabAgentState {
+pub enum CollabAgentStatus {
     PendingInit,
     Running,
     Completed,
@@ -1775,36 +1774,36 @@ pub enum CollabAgentState {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct CollabAgentStatus {
-    pub state: CollabAgentState,
+pub struct CollabAgentState {
+    pub state: CollabAgentStatus,
     pub message: Option<String>,
 }
 
-impl From<CoreAgentStatus> for CollabAgentStatus {
+impl From<CoreAgentStatus> for CollabAgentState {
     fn from(value: CoreAgentStatus) -> Self {
         match value {
             CoreAgentStatus::PendingInit => Self {
-                state: CollabAgentState::PendingInit,
+                state: CollabAgentStatus::PendingInit,
                 message: None,
             },
             CoreAgentStatus::Running => Self {
-                state: CollabAgentState::Running,
+                state: CollabAgentStatus::Running,
                 message: None,
             },
             CoreAgentStatus::Completed(message) => Self {
-                state: CollabAgentState::Completed,
+                state: CollabAgentStatus::Completed,
                 message,
             },
             CoreAgentStatus::Errored(message) => Self {
-                state: CollabAgentState::Errored,
+                state: CollabAgentStatus::Errored,
                 message: Some(message),
             },
             CoreAgentStatus::Shutdown => Self {
-                state: CollabAgentState::Shutdown,
+                state: CollabAgentStatus::Shutdown,
                 message: None,
             },
             CoreAgentStatus::NotFound => Self {
-                state: CollabAgentState::NotFound,
+                state: CollabAgentStatus::NotFound,
                 message: None,
             },
         }
