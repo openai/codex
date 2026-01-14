@@ -189,6 +189,15 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
     let AddConversationSubscriptionResponse { subscription_id: _ } =
         to_response::<_>(add_listener_resp)?;
 
+    let send_id = mcp
+        .send_send_user_message_request(SendUserMessageParams {
+            conversation_id,
+            items: vec![InputItem::Text {
+                text: "Hello".to_string(),
+            }],
+        })
+        .await?;
+
     let permissions = read_raw_response_item(&mut mcp, conversation_id).await;
     assert_permissions_message(&permissions);
 
@@ -200,15 +209,6 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
 
     let environment = read_raw_response_item(&mut mcp, conversation_id).await;
     assert_environment_message(&environment);
-
-    let send_id = mcp
-        .send_send_user_message_request(SendUserMessageParams {
-            conversation_id,
-            items: vec![InputItem::Text {
-                text: "Hello".to_string(),
-            }],
-        })
-        .await?;
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -392,7 +392,7 @@ fn assert_environment_message(item: &ResponseItem) {
                 texts
                     .iter()
                     .any(|text| text.contains("<environment_context>")),
-                "expected environment message, got {texts:?}"
+                "expected environment context message, got {texts:?}"
             );
         }
         other => panic!("expected environment message, got {other:?}"),

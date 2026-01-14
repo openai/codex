@@ -1680,8 +1680,11 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
+    /// Ensure we have a listener for thread_id
     pub(crate) async fn ensure_thread_listener(&mut self, thread_id: ThreadId) {
-        if self.has_listener_for_thread(thread_id) {
+        if self.listener_threads
+            .values()
+            .any(|entry| *entry == thread_id) {
             return;
         }
 
@@ -3605,12 +3608,6 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
-    }
-
-    fn has_listener_for_thread(&self, thread_id: ThreadId) -> bool {
-        self.listener_threads
-            .values()
-            .any(|entry| *entry == thread_id)
     }
 
     async fn attach_conversation_listener(

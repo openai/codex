@@ -198,6 +198,7 @@ pub async fn run_main(
                                 processor.ensure_thread_listener(thread_id).await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                // TODO(jif) handle lag.
                                 // Assumes thread creation volume is low enough that lag never happens.
                                 // If it does, we log and continue without resyncing to avoid attaching
                                 // listeners for threads that should remain unsubscribed.

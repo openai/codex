@@ -3,8 +3,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
-#[cfg(test)]
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
@@ -33,10 +31,13 @@ impl AgentControl {
         &self,
         config: crate::config::Config,
         prompt: String,
-        _headless: bool,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let new_thread = state.spawn_new_thread(config, self.clone()).await?;
+
+        // Notify a new thread has been created. This notification will be processed by clients
+        // to subscribe or drain this newly created thread.
+        // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
 
         self.send_prompt(new_thread.thread_id, prompt).await?;
@@ -114,7 +115,7 @@ mod tests {
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use assert_matches::assert_matches;
-    use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::{ErrorEvent, EventMsg};
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;
@@ -235,7 +236,7 @@ mod tests {
         let control = AgentControl::default();
         let (_home, config) = test_config().await;
         let err = control
-            .spawn_agent(config, "hello".to_string(), false)
+            .spawn_agent(config, "hello".to_string())
             .await
             .expect_err("spawn_agent should fail without a manager");
         assert_eq!(
@@ -336,7 +337,7 @@ mod tests {
         let harness = AgentControlHarness::new().await;
         let thread_id = harness
             .control
-            .spawn_agent(harness.config.clone(), "spawned".to_string(), false)
+            .spawn_agent(harness.config.clone(), "spawned".to_string())
             .await
             .expect("spawn_agent should succeed");
         let _thread = harness
