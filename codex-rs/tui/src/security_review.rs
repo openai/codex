@@ -96,6 +96,10 @@ const VALIDATION_MAX_FINDINGS: usize = 8;
 const VALIDATION_PLAN_CONCURRENCY: usize = 8;
 const VALIDATION_REFINE_CONCURRENCY: usize = 8;
 const VALIDATION_EXEC_CONCURRENCY: usize = 8;
+const VALIDATION_EXEC_TIMEOUT_SECS: u64 = 30 * 60;
+const VALIDATION_PREFLIGHT_TIMEOUT_SECS: u64 = 30 * 60;
+const VALIDATION_CURL_TIMEOUT_SECS: u64 = 60;
+const VALIDATION_PLAYWRIGHT_TIMEOUT_SECS: u64 = 5 * 60;
 const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
 
 const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
@@ -8857,6 +8861,82 @@ mod validation_classification_tests {
 }
 
 #[cfg(test)]
+mod validation_target_selection_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_bug_snapshot(
+        summary_id: usize,
+        risk_rank: usize,
+        title: &str,
+        severity: &str,
+        verification_types: Vec<String>,
+    ) -> BugSnapshot {
+        BugSnapshot {
+            bug: SecurityReviewBug {
+                summary_id,
+                risk_rank: Some(risk_rank),
+                risk_score: Some(0.0),
+                title: title.to_string(),
+                severity: severity.to_string(),
+                impact: "x".to_string(),
+                likelihood: "x".to_string(),
+                recommendation: "x".to_string(),
+                file: "x.rs#L1-L2".to_string(),
+                blame: None,
+                risk_reason: None,
+                verification_types,
+                vulnerability_tag: Some("idor".to_string()),
+                validation: BugValidationState::default(),
+                assignee_github: None,
+            },
+            original_markdown: format!("# {title}\n\nDetails.\n"),
+        }
+    }
+
+    #[test]
+    fn excludes_web_browser_findings_from_validation_targets() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                make_bug_snapshot(
+                    1,
+                    1,
+                    "Browser-only finding",
+                    "High",
+                    vec!["web_browser".to_string()],
+                ),
+                make_bug_snapshot(2, 2, "API finding", "High", vec!["network_api".to_string()]),
+            ],
+        };
+
+        let targets = build_validation_findings_context(&snapshot);
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
+    }
+
+    #[test]
+    fn empty_when_only_web_browser_findings_present() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![make_bug_snapshot(
+                1,
+                1,
+                "Browser-only finding",
+                "High",
+                vec!["web_browser".to_string()],
+            )],
+        };
+
+        let targets = build_validation_findings_context(&snapshot);
+        assert_eq!(targets.ids, Vec::<BugIdentifier>::new());
+    }
+}
+
+#[cfg(test)]
 mod severity_matrix_tests {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -15596,6 +15676,21 @@ async fn command_output(mut command: Command) -> Result<std::process::Output, st
     command.output().await
 }
 
+enum CommandOutputOutcome {
+    Completed(std::process::Output),
+    TimedOut,
+}
+
+async fn command_output_with_timeout(
+    command: Command,
+    timeout: Duration,
+) -> Result<CommandOutputOutcome, std::io::Error> {
+    match tokio::time::timeout(timeout, command_output(command)).await {
+        Ok(output) => Ok(CommandOutputOutcome::Completed(output?)),
+        Err(_elapsed) => Ok(CommandOutputOutcome::TimedOut),
+    }
+}
+
 async fn write_validation_output_files(
     work_dir: &Path,
     repo_path: &Path,
@@ -15693,6 +15788,7 @@ async fn execute_bug_command(
 
     match plan.request.tool {
         BugVerificationTool::Curl => {
+            let timeout = Duration::from_secs(VALIDATION_CURL_TIMEOUT_SECS);
             let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
@@ -15736,8 +15832,8 @@ async fn execute_bug_command(
                     .arg(control_target)
                     .current_dir(&repo_path);
 
-                match control_cmd.output().await {
-                    Ok(output) => {
+                match command_output_with_timeout(control_cmd, timeout).await {
+                    Ok(CommandOutputOutcome::Completed(output)) => {
                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                         let success = output.status.success();
@@ -15756,6 +15852,24 @@ async fn execute_bug_command(
                             "control",
                             &stdout,
                             &stderr,
+                        )
+                        .await;
+                        validation.control_stdout_path = Some(stdout_path);
+                        validation.control_stderr_path = Some(stderr_path);
+                    }
+                    Ok(CommandOutputOutcome::TimedOut) => {
+                        let summary = format!(
+                            "curl control timed out after {}",
+                            fmt_elapsed_compact(timeout.as_secs())
+                        );
+                        validation.control_summary = Some(summary.clone());
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            &bug_work_dir,
+                            &repo_path,
+                            &file_stem,
+                            "control",
+                            "",
+                            summary.as_str(),
                         )
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
@@ -15782,8 +15896,8 @@ async fn execute_bug_command(
                 .arg(&target)
                 .current_dir(&repo_path);
 
-            match command.output().await {
-                Ok(output) => {
+            match command_output_with_timeout(command, timeout).await {
+                Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -15819,6 +15933,28 @@ async fn execute_bug_command(
                         "{}: curl exited with status {}",
                         label, output.status
                     ));
+                }
+                Ok(CommandOutputOutcome::TimedOut) => {
+                    let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    let summary = format!(
+                        "Timed out after {duration_label} while running curl; unable to validate."
+                    );
+                    validation.summary = Some(summary.clone());
+                    validation.output_snippet =
+                        Some(truncate_text(summary.as_str(), VALIDATION_OUTPUT_GRAPHEMES));
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        "",
+                        summary.as_str(),
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
+                    logs.push(format!("{label}: curl timed out after {duration_label}"));
                 }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
@@ -15908,8 +16044,9 @@ async fn execute_bug_command(
             }
             validation.repro_steps.push(format!("Run: `{cmd}`"));
 
-            match command_output(command).await {
-                Ok(output) => {
+            let timeout = Duration::from_secs(VALIDATION_EXEC_TIMEOUT_SECS);
+            match command_output_with_timeout(command, timeout).await {
+                Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -15978,6 +16115,28 @@ async fn execute_bug_command(
                         label, output.status
                     ));
                 }
+                Ok(CommandOutputOutcome::TimedOut) => {
+                    let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    let summary = format!(
+                        "Timed out after {duration_label} while running python validation; unable to validate."
+                    );
+                    validation.summary = Some(summary.clone());
+                    validation.output_snippet =
+                        Some(truncate_text(summary.as_str(), VALIDATION_OUTPUT_GRAPHEMES));
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        "",
+                        summary.as_str(),
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
+                    logs.push(format!("{label}: python timed out after {duration_label}"));
+                }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run python: {err}"));
@@ -15986,6 +16145,7 @@ async fn execute_bug_command(
             }
         }
         BugVerificationTool::Playwright => {
+            let timeout = Duration::from_secs(VALIDATION_PLAYWRIGHT_TIMEOUT_SECS);
             let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
@@ -16033,8 +16193,8 @@ async fn execute_bug_command(
                     .arg(&control_screenshot_path)
                     .current_dir(&repo_path);
 
-                match control_cmd.output().await {
-                    Ok(output) => {
+                match command_output_with_timeout(control_cmd, timeout).await {
+                    Ok(CommandOutputOutcome::Completed(output)) => {
                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                         let success = output.status.success();
@@ -16068,6 +16228,24 @@ async fn execute_bug_command(
                         validation.control_stdout_path = Some(stdout_path);
                         validation.control_stderr_path = Some(stderr_path);
                     }
+                    Ok(CommandOutputOutcome::TimedOut) => {
+                        let summary = format!(
+                            "playwright control timed out after {}",
+                            fmt_elapsed_compact(timeout.as_secs())
+                        );
+                        validation.control_summary = Some(summary.clone());
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            &bug_work_dir,
+                            &repo_path,
+                            &file_stem,
+                            "control",
+                            "",
+                            summary.as_str(),
+                        )
+                        .await;
+                        validation.control_stdout_path = Some(stdout_path);
+                        validation.control_stderr_path = Some(stderr_path);
+                    }
                     Err(err) => {
                         validation.control_summary =
                             Some(format!("Failed to run playwright control: {err}"));
@@ -16089,8 +16267,8 @@ async fn execute_bug_command(
                 .arg(&screenshot_path)
                 .current_dir(&repo_path);
 
-            match command.output().await {
-                Ok(output) => {
+            match command_output_with_timeout(command, timeout).await {
+                Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -16133,6 +16311,30 @@ async fn execute_bug_command(
                     logs.push(format!(
                         "{}: playwright exited with status {}",
                         label, output.status
+                    ));
+                }
+                Ok(CommandOutputOutcome::TimedOut) => {
+                    let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    let summary = format!(
+                        "Timed out after {duration_label} while running playwright; unable to validate."
+                    );
+                    validation.summary = Some(summary.clone());
+                    validation.output_snippet =
+                        Some(truncate_text(summary.as_str(), VALIDATION_OUTPUT_GRAPHEMES));
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        "",
+                        summary.as_str(),
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
+                    logs.push(format!(
+                        "{label}: playwright timed out after {duration_label}"
                     ));
                 }
                 Err(err) => {
@@ -16434,6 +16636,9 @@ fn build_validation_findings_context(
         .bugs
         .iter()
         .filter(|b| {
+            if has_verification_type(&b.bug, "web_browser") {
+                return false;
+            }
             let sev = b.bug.severity.to_ascii_lowercase();
             let is_high = sev.contains("critical") || sev.contains("high");
             if !is_high {
@@ -16466,7 +16671,11 @@ fn build_validation_findings_context(
     let mut high_risk: Vec<&BugSnapshot> = snapshot
         .bugs
         .iter()
-        .filter(|b| is_high_risk(&b.bug) && crash_poc_category(&b.bug) != Some("crash_poc_func"))
+        .filter(|b| {
+            is_high_risk(&b.bug)
+                && crash_poc_category(&b.bug) != Some("crash_poc_func")
+                && !has_verification_type(&b.bug, "web_browser")
+        })
         .collect();
     high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
     for item in high_risk {
@@ -17410,8 +17619,9 @@ async fn run_asan_validation(
                     );
 
                     let start = Instant::now();
-                    match command_output(command).await {
-                        Ok(output) => {
+                    let timeout = Duration::from_secs(VALIDATION_PREFLIGHT_TIMEOUT_SECS);
+                    match command_output_with_timeout(command, timeout).await {
+                        Ok(CommandOutputOutcome::Completed(output)) => {
                             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                             let success = output.status.success();
@@ -17444,6 +17654,30 @@ async fn run_asan_validation(
                                 });
                                 break;
                             }
+                        }
+                        Ok(CommandOutputOutcome::TimedOut) => {
+                            let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                            let message = format!(
+                                "Timed out after {duration_label} while running `{command_label}`."
+                            );
+                            let file_stem = file_stem_for_command(program, args);
+                            let (stdout_path, stderr_path) = write_validation_output_files(
+                                work_dir,
+                                repo_root,
+                                &file_stem,
+                                "build",
+                                "",
+                                message.as_str(),
+                            )
+                            .await;
+                            attempt_failure = Some(ValidationBuildFailure {
+                                command: command_label,
+                                summary: message,
+                                stdout_path,
+                                stderr_path,
+                                output_snippet: None,
+                            });
+                            break;
                         }
                         Err(err) => {
                             let message = format!("Failed to run `{command_label}`: {err}");
