@@ -25,8 +25,10 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
     if is_running_as_root() {
         unshare_mount_namespace()?;
     } else {
+        let original_euid = unsafe { libc::geteuid() };
+        let original_egid = unsafe { libc::getegid() };
         unshare_user_and_mount_namespaces()?;
-        write_user_namespace_maps()?;
+        write_user_namespace_maps(original_euid, original_egid)?;
     }
     make_mounts_private()?;
 
@@ -152,12 +154,10 @@ struct CapUserData {
 
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 
-/// Map the current uid/gid to root inside the user namespace.
-fn write_user_namespace_maps() -> Result<()> {
+/// Map the provided uid/gid to root inside the user namespace.
+fn write_user_namespace_maps(uid: libc::uid_t, gid: libc::gid_t) -> Result<()> {
     write_proc_file("/proc/self/setgroups", "deny\n")?;
 
-    let uid = unsafe { libc::getuid() };
-    let gid = unsafe { libc::getgid() };
     write_proc_file("/proc/self/uid_map", format!("0 {uid} 1\n"))?;
     write_proc_file("/proc/self/gid_map", format!("0 {gid} 1\n"))?;
     Ok(())
