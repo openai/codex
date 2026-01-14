@@ -2,10 +2,12 @@ use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use core_test_support::load_default_config_for_test;
+use indoc::indoc;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -17,7 +19,9 @@ async fn list_models_returns_api_key_models() -> Result<()> {
         CodexAuth::from_api_key("sk-test"),
         built_in_model_providers()["openai"].clone(),
     );
-    let models = manager.list_models(&config).await;
+    let models = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
 
     let expected_models = expected_models_for_api_key();
     assert_eq!(expected_models, models);
@@ -33,7 +37,9 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         built_in_model_providers()["openai"].clone(),
     );
-    let models = manager.list_models(&config).await;
+    let models = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
 
     let expected_models = expected_models_for_chatgpt();
     assert_eq!(expected_models, models);
@@ -43,6 +49,7 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 
 fn expected_models_for_api_key() -> Vec<ModelPreset> {
     vec![
+        gpt_52_codex(),
         gpt_5_1_codex_max(),
         gpt_5_1_codex_mini(),
         gpt_5_2(),
@@ -102,7 +109,7 @@ fn gpt_52_codex() -> ModelPreset {
         is_default: true,
         upgrade: None,
         show_in_picker: true,
-        supported_in_api: false,
+        supported_in_api: true,
     }
 }
 
@@ -131,7 +138,7 @@ fn gpt_5_1_codex_max() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
-        is_default: true,
+        is_default: false,
         upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
@@ -409,6 +416,16 @@ fn gpt52_codex_upgrade() -> codex_protocol::openai_models::ModelUpgrade {
         upgrade_copy: Some(
             "Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
                 .to_string(),
+        ),
+        migration_markdown: Some(
+            indoc! {r#"
+                **Codex just got an upgrade. Introducing {model_to}.**
+
+                Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about {model_to} at https://openai.com/index/introducing-gpt-5-2-codex
+
+                You can continue using {model_from} if you prefer.
+            "#}
+            .to_string(),
         ),
     }
 }

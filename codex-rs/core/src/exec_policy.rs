@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use crate::is_dangerous_command::command_might_be_dangerous;
+use crate::is_safe_command::is_known_safe_command;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -45,19 +46,19 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyError {
-    #[error("failed to read execpolicy files from {dir}: {source}")]
+    #[error("failed to read rules files from {dir}: {source}")]
     ReadDir {
         dir: PathBuf,
         source: std::io::Error,
     },
 
-    #[error("failed to read execpolicy file {path}: {source}")]
+    #[error("failed to read rules file {path}: {source}")]
     ReadFile {
         path: PathBuf,
         source: std::io::Error,
     },
 
-    #[error("failed to parse execpolicy file {path}: {source}")]
+    #[error("failed to parse rules file {path}: {source}")]
     ParsePolicy {
         path: String,
         source: codex_execpolicy::Error,
@@ -66,19 +67,19 @@ pub enum ExecPolicyError {
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyUpdateError {
-    #[error("failed to update execpolicy file {path}: {source}")]
+    #[error("failed to update rules file {path}: {source}")]
     AppendRule { path: PathBuf, source: AmendError },
 
-    #[error("failed to join blocking execpolicy update task: {source}")]
+    #[error("failed to join blocking rules update task: {source}")]
     JoinBlockingTask { source: tokio::task::JoinError },
 
-    #[error("failed to update in-memory execpolicy: {source}")]
+    #[error("failed to update in-memory rules: {source}")]
     AddRule {
         #[from]
         source: ExecPolicyRuleError,
     },
 
-    #[error("cannot append execpolicy rule because execpolicy feature is disabled")]
+    #[error("cannot append rule because rules feature is disabled")]
     FeatureDisabled,
 }
 
@@ -97,7 +98,11 @@ impl ExecPolicyManager {
         features: &Features,
         config_stack: &ConfigLayerStack,
     ) -> Result<Self, ExecPolicyError> {
-        let policy = load_exec_policy_for_features(features, config_stack).await?;
+        let (policy, warning) =
+            load_exec_policy_for_features_with_warning(features, config_stack).await?;
+        if let Some(err) = warning.as_ref() {
+            tracing::warn!("failed to parse rules: {err}");
+        }
         Ok(Self::new(Arc::new(policy)))
     }
 
@@ -116,14 +121,15 @@ impl ExecPolicyManager {
         let exec_policy = self.current();
         let commands =
             parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
-        let heuristics_fallback = |cmd: &[String]| {
-            if requires_initial_appoval(approval_policy, sandbox_policy, cmd, sandbox_permissions) {
-                Decision::Prompt
-            } else {
-                Decision::Allow
-            }
+        let exec_policy_fallback = |cmd: &[String]| {
+            render_decision_for_unmatched_command(
+                approval_policy,
+                sandbox_policy,
+                cmd,
+                sandbox_permissions,
+            )
         };
-        let evaluation = exec_policy.check_multiple(commands.iter(), &heuristics_fallback);
+        let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {
@@ -193,14 +199,26 @@ impl Default for ExecPolicyManager {
     }
 }
 
-async fn load_exec_policy_for_features(
+pub async fn check_execpolicy_for_warnings(
     features: &Features,
     config_stack: &ConfigLayerStack,
-) -> Result<Policy, ExecPolicyError> {
+) -> Result<Option<ExecPolicyError>, ExecPolicyError> {
+    let (_, warning) = load_exec_policy_for_features_with_warning(features, config_stack).await?;
+    Ok(warning)
+}
+
+async fn load_exec_policy_for_features_with_warning(
+    features: &Features,
+    config_stack: &ConfigLayerStack,
+) -> Result<(Policy, Option<ExecPolicyError>), ExecPolicyError> {
     if !features.enabled(Feature::ExecPolicy) {
-        Ok(Policy::empty())
-    } else {
-        load_exec_policy(config_stack).await
+        return Ok((Policy::empty(), None));
+    }
+
+    match load_exec_policy(config_stack).await {
+        Ok(policy) => Ok((policy, None)),
+        Err(err @ ExecPolicyError::ParsePolicy { .. }) => Ok((Policy::empty(), Some(err))),
+        Err(err) => Err(err),
     }
 }
 
@@ -237,9 +255,73 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     }
 
     let policy = parser.build();
-    tracing::debug!("loaded execpolicy from {} files", policy_paths.len());
+    tracing::debug!("loaded rules from {} files", policy_paths.len());
 
     Ok(policy)
+}
+
+/// If a command is not matched by any execpolicy rule, derive a [`Decision`].
+pub fn render_decision_for_unmatched_command(
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    command: &[String],
+    sandbox_permissions: SandboxPermissions,
+) -> Decision {
+    if is_known_safe_command(command) {
+        return Decision::Allow;
+    }
+
+    // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
+    // here.
+    let runtime_sandbox_provides_safety =
+        cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly);
+
+    // If the command is flagged as dangerous or we have no sandbox protection,
+    // we should never allow it to run without user approval.
+    //
+    // We prefer to prompt the user rather than outright forbid the command,
+    // but if the user has explicitly disabled prompts, we must
+    // forbid the command.
+    if command_might_be_dangerous(command) || runtime_sandbox_provides_safety {
+        return if matches!(approval_policy, AskForApproval::Never) {
+            Decision::Forbidden
+        } else {
+            Decision::Prompt
+        };
+    }
+
+    match approval_policy {
+        AskForApproval::Never | AskForApproval::OnFailure => {
+            // We allow the command to run, relying on the sandbox for
+            // protection.
+            Decision::Allow
+        }
+        AskForApproval::UnlessTrusted => {
+            // We already checked `is_known_safe_command(command)` and it
+            // returned false, so we must prompt.
+            Decision::Prompt
+        }
+        AskForApproval::OnRequest => {
+            match sandbox_policy {
+                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                    // The user has indicated we should "just run" commands
+                    // in their unrestricted environment, so we do so since the
+                    // command has not been flagged as dangerous.
+                    Decision::Allow
+                }
+                SandboxPolicy::ReadOnly | SandboxPolicy::WorkspaceWrite { .. } => {
+                    // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
+                    // non‑escalated, non‑dangerous commands — let the sandbox enforce
+                    // restrictions (e.g., block network/write) without a user prompt.
+                    if sandbox_permissions.requires_escalated_permissions() {
+                        Decision::Prompt
+                    } else {
+                        Decision::Allow
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
@@ -1049,6 +1131,110 @@ prefix_rule(
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
             }
+        );
+    }
+
+    fn vec_str(items: &[&str]) -> Vec<String> {
+        items.iter().map(std::string::ToString::to_string).collect()
+    }
+
+    /// Note this test behaves differently on Windows because it exercises an
+    /// `if cfg!(windows)` code path in render_decision_for_unmatched_command().
+    #[tokio::test]
+    async fn verify_approval_requirement_for_unsafe_powershell_command() {
+        // `brew install powershell` to run this test on a Mac!
+        // Note `pwsh` is required to parse a PowerShell command to see if it
+        // is safe.
+        if which::which("pwsh").is_err() {
+            return;
+        }
+
+        let policy = ExecPolicyManager::new(Arc::new(Policy::empty()));
+        let features = Features::with_defaults();
+        let permissions = SandboxPermissions::UseDefault;
+
+        // This command should not be run without user approval unless there is
+        // a proper sandbox in place to ensure safety.
+        let sneaky_command = vec_str(&["pwsh", "-Command", "echo hi @(calc)"]);
+        let expected_amendment = Some(ExecPolicyAmendment::new(vec_str(&[
+            "pwsh",
+            "-Command",
+            "echo hi @(calc)",
+        ])));
+        let (pwsh_approval_reason, expected_req) = if cfg!(windows) {
+            (
+                r#"On Windows, SandboxPolicy::ReadOnly should be assumed to mean
+                that no sandbox is present, so anything that is not "provably
+                safe" should require approval."#,
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: None,
+                    proposed_execpolicy_amendment: expected_amendment.clone(),
+                },
+            )
+        } else {
+            (
+                "On non-Windows, rely on the read-only sandbox to prevent harm.",
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: expected_amendment.clone(),
+                },
+            )
+        };
+        assert_eq!(
+            expected_req,
+            policy
+                .create_exec_approval_requirement_for_command(
+                    &features,
+                    &sneaky_command,
+                    AskForApproval::OnRequest,
+                    &SandboxPolicy::ReadOnly,
+                    permissions,
+                )
+                .await,
+            "{pwsh_approval_reason}"
+        );
+
+        // This is flagged as a dangerous command on all platforms.
+        let dangerous_command = vec_str(&["rm", "-rf", "/important/data"]);
+        assert_eq!(
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec_str(&[
+                    "rm",
+                    "-rf",
+                    "/important/data",
+                ]))),
+            },
+            policy
+                .create_exec_approval_requirement_for_command(
+                    &features,
+                    &dangerous_command,
+                    AskForApproval::OnRequest,
+                    &SandboxPolicy::ReadOnly,
+                    permissions,
+                )
+                .await,
+            r#"On all platforms, a forbidden command should require approval
+            (unless AskForApproval::Never is specified)."#
+        );
+
+        // A dangerous command should be forbidden if the user has specified
+        // AskForApproval::Never.
+        assert_eq!(
+            ExecApprovalRequirement::Forbidden {
+                reason: "`rm -rf /important/data` rejected: blocked by policy".to_string(),
+            },
+            policy
+                .create_exec_approval_requirement_for_command(
+                    &features,
+                    &dangerous_command,
+                    AskForApproval::Never,
+                    &SandboxPolicy::ReadOnly,
+                    permissions,
+                )
+                .await,
+            r#"On all platforms, a forbidden command should require approval
+            (unless AskForApproval::Never is specified)."#
         );
     }
 }
