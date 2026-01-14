@@ -705,4 +705,47 @@ mod tests {
             "bundled models.json should contain at least one model"
         );
     }
+
+    #[test]
+    fn bundled_models_json_priorities_are_unique() {
+        let file_contents = include_str!("../../models.json");
+        let response: ModelsResponse =
+            serde_json::from_str(file_contents).expect("bundled models.json should deserialize");
+
+        let mut seen = HashSet::new();
+        for model in &response.models {
+            assert!(
+                seen.insert(model.priority),
+                "duplicate priority {}",
+                model.priority
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_models_json_slugs_match_priority_order() {
+        let file_contents = include_str!("../../models.json");
+        let response: ModelsResponse =
+            serde_json::from_str(file_contents).expect("bundled models.json should deserialize");
+
+        let mut models = response.models;
+        models.sort_by(|a, b| a.priority.cmp(&b.priority));
+        let slugs: Vec<String> = models.into_iter().map(|model| model.slug).collect();
+
+        let expected = vec![
+            "gpt-5.2",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-mini",
+            "gpt-5.1",
+            "gpt-5-codex",
+            "gpt-5",
+            "gpt-5-codex-mini",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<String>>();
+
+        assert_eq!(slugs, expected);
+    }
 }
