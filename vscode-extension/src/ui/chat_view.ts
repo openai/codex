@@ -97,7 +97,8 @@ export type ChatBlock =
 export type ChatViewState = {
   capabilities?: {
     agents: boolean;
-    cliVariant: "unknown" | "codex" | "codex-mine";
+    selectedCliVariant: "auto" | "codex" | "codex-mine";
+    detectedCliVariant: "unknown" | "codex" | "codex-mine";
   };
   workspaceColorOverrides?: Record<string, number>;
   customPrompts?: Array<{
@@ -965,7 +966,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       const caps = st.capabilities ?? {
         agents: false,
-        cliVariant: "unknown" as const,
+        selectedCliVariant: "auto" as const,
+        detectedCliVariant: "unknown" as const,
       };
       if (!caps.agents) {
         this.view?.webview.postMessage({ type: "agentIndex", agents: [] });

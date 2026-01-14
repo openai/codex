@@ -119,7 +119,8 @@ type ChatViewState = {
   globalBlocks?: ChatBlock[];
   capabilities?: {
     agents: boolean;
-    cliVariant: "unknown" | "codex" | "codex-mine";
+    selectedCliVariant: "auto" | "codex" | "codex-mine";
+    detectedCliVariant: "unknown" | "codex" | "codex-mine";
   };
   workspaceColorOverrides?: Record<string, number>;
   sessions: Session[];
@@ -1486,10 +1487,13 @@ function main(): void {
   function buildSlashSuggestions(): SuggestItem[] {
     const caps = state.capabilities ?? {
       agents: false,
-      cliVariant: "unknown" as const,
+      selectedCliVariant: "auto" as const,
+      detectedCliVariant: "unknown" as const,
     };
     const base =
-      caps.cliVariant === "codex-mine" ? baseSlashSuggestions : ([] as const);
+      caps.selectedCliVariant === "codex-mine"
+        ? baseSlashSuggestions
+        : ([] as const);
     const ui = caps.agents
       ? uiSlashSuggestions
       : uiSlashSuggestions.filter((s) => s.label !== "/agents");
@@ -2173,7 +2177,8 @@ function main(): void {
       let items: SuggestItem[] = [...atSuggestions];
       const caps = state.capabilities ?? {
         agents: false,
-        cliVariant: "unknown" as const,
+        selectedCliVariant: "auto" as const,
+        detectedCliVariant: "unknown" as const,
       };
 
       if (query.length > 0 || atTok.token === "@") {
@@ -2573,7 +2578,7 @@ function main(): void {
     if (statusBtn) statusBtn.disabled = !s.activeSession || s.sending;
     resumeBtn.disabled = s.sending;
     attachBtn.disabled = !s.activeSession;
-    const variant = s.capabilities?.cliVariant ?? "unknown";
+    const variant = s.capabilities?.selectedCliVariant ?? "auto";
     reloadBtn.disabled =
       !s.activeSession || s.sending || s.reloading || variant !== "codex-mine";
     reloadBtn.title =
@@ -2586,7 +2591,9 @@ function main(): void {
         ? "CLI: codex-mine (Settings)"
         : variant === "codex"
           ? "CLI: codex (Settings)"
-          : "Settings";
+          : variant === "auto"
+            ? "CLI: auto (Settings)"
+            : "Settings";
     if (variant !== "codex-mine" && rewindTurnIndex !== null) setEditMode(null);
     // Keep input enabled so the user can draft messages even before selecting a session,
     // but do not override ask_user_question which intentionally locks the composer.
@@ -3071,7 +3078,7 @@ function main(): void {
         );
 
         if (block.type === "user") {
-          const variant = state.capabilities?.cliVariant ?? "unknown";
+          const variant = state.capabilities?.selectedCliVariant ?? "auto";
           userTurnIndex += 1;
           div.dataset.turnIndex = String(userTurnIndex);
 
@@ -3470,7 +3477,7 @@ function main(): void {
   }
 
   function setEditMode(next: number | null, presetText?: string): void {
-    const variant = state.capabilities?.cliVariant ?? "unknown";
+    const variant = state.capabilities?.selectedCliVariant ?? "auto";
     if (next !== null && variant !== "codex-mine") {
       vscode.postMessage({
         type: "uiError",
@@ -3508,7 +3515,7 @@ function main(): void {
   function sendCurrentInput(): void {
     if (!state.activeSession) return;
     if (state.sending) return;
-    const variant = state.capabilities?.cliVariant ?? "unknown";
+    const variant = state.capabilities?.selectedCliVariant ?? "auto";
     const text = inputEl.value;
     const trimmed = text.trim();
     if (!trimmed && pendingImages.length === 0) return;

@@ -3645,11 +3645,17 @@ function buildChatState(): ChatViewState {
     source: p.source,
   }));
   const capsForBackendKey = (backendKey: string | null) => {
-    if (!backendKey) return { agents: false, cliVariant: "unknown" as const };
-    const cliVariant = cliVariantForBackendKey(backendKey);
+    if (!backendKey)
+      return {
+        agents: false,
+        selectedCliVariant: "auto" as const,
+        detectedCliVariant: "unknown" as const,
+      };
+    const detectedCliVariant = cliVariantForBackendKey(backendKey);
     return {
       agents: isMineSelectedForBackendKey(backendKey),
-      cliVariant,
+      selectedCliVariant: selectedCliVariantForBackendKey(backendKey),
+      detectedCliVariant,
     };
   };
   if (!sessions)
