@@ -7,6 +7,7 @@ use codex_app_server_protocol::PromptListResponse;
 use codex_app_server_protocol::PromptMetadata;
 use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -37,8 +38,8 @@ Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write
 
     let req_id = mcp
         .send_prompt_list_request(PromptListParams {
-            roots: Vec::new(),
-            force_reload: false,
+            roots: Some(Vec::new()),
+            force_reload: Some(false),
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -63,6 +64,15 @@ Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write
         argument_hint: Some("[FILES=<paths>] [PR_TITLE=\"<title>\"]".to_string()),
     }];
     assert_eq!(prompts, expected);
+
+    let req_id = mcp.send_request("prompt/list", Some(json!({}))).await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let PromptListResponse { data: raw_data } = to_response::<PromptListResponse>(resp)?;
+    assert_eq!(raw_data.len(), 1);
 
     Ok(())
 }

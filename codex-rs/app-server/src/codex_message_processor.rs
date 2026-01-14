@@ -3228,10 +3228,7 @@ impl CodexMessageProcessor {
     }
 
     async fn prompt_list(&self, request_id: RequestId, params: PromptListParams) {
-        let PromptListParams {
-            roots,
-            force_reload: _,
-        } = params;
+        let roots = params.roots.unwrap_or_default();
         let roots = if roots.is_empty() {
             codex_core::custom_prompts::default_prompts_dir()
                 .map(|root| vec![root])

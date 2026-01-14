@@ -554,7 +554,7 @@ impl McpProcess {
         self.send_request("fuzzyFileSearch", Some(params)).await
     }
 
-    async fn send_request(
+    pub async fn send_request(
         &mut self,
         method: &str,
         params: Option<serde_json::Value>,

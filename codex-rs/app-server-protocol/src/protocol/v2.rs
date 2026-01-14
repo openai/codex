@@ -1235,11 +1235,11 @@ pub struct SkillsListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PromptListParams {
-    /// When empty, defaults to the current session `CODEX_HOME/prompts`.
-    pub roots: Vec<PathBuf>,
+    /// When empty or null, defaults to the current session `CODEX_HOME/prompts`.
+    pub roots: Option<Vec<PathBuf>>,
 
     /// When true, bypass the prompt cache and re-scan prompts from disk.
-    pub force_reload: bool,
+    pub force_reload: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
