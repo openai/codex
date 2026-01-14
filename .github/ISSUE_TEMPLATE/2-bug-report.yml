@@ -43,7 +43,8 @@ body:
   - type: input
     id: terminal
     attributes:
-      label: What terminal emulator are you using (if applicable)?
+      label: What terminal emulator and version are you using (if applicable)?
+      description: Also note any multiplexer in use (screen / tmux / zellij)
       description: |
         E.g, VSCode, Terminal.app, iTerm2, Ghostty, Windows Terminal (WSL / PowerShell)
   - type: textarea
