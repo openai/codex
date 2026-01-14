@@ -26,6 +26,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
@@ -108,6 +109,7 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
@@ -119,6 +121,7 @@ use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -136,6 +139,8 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -358,12 +363,18 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
-/// Maintains the per-session UI state for the chat screen.
+/// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
-/// This type owns the state derived from a `codex_core::protocol` event stream (history cells,
-/// active streaming buffers, bottom-pane overlays, and transient status text). It is not
-/// responsible for running the agent itself; it only reflects progress by updating UI state and by
-/// sending `Op` requests back to codex-core.
+/// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
+/// buffers, bottom-pane overlays, and transient status text) and turns key presses into user
+/// intent (`Op` submissions and `AppEvent` requests).
+///
+/// It is not responsible for running the agent itself; it reflects progress by updating UI state
+/// and by sending requests back to codex-core.
+///
+/// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
+/// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
+/// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -431,6 +442,14 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
+    /// When `Some`, the user has pressed a quit shortcut and the second press
+    /// must occur before `quit_shortcut_expires_at`.
+    quit_shortcut_expires_at: Option<Instant>,
+    /// Tracks which quit shortcut key was pressed first.
+    ///
+    /// We require the second press to match this key so `Ctrl+C` followed by
+    /// `Ctrl+D` (or vice versa) doesn't quit accidentally.
+    quit_shortcut_key: Option<KeyBinding>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
@@ -693,7 +712,9 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
-        self.bottom_pane.clear_ctrl_c_quit_hint();
+        self.bottom_pane.clear_quit_shortcut_hint();
+        self.quit_shortcut_expires_at = None;
+        self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
@@ -1197,7 +1218,7 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
-        self.request_exit();
+        self.request_immediate_exit();
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
@@ -1625,6 +1646,8 @@ impl ChatWidget {
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
+            quit_shortcut_expires_at: None,
+            quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -1717,6 +1740,8 @@ impl ChatWidget {
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
+            quit_shortcut_expires_at: None,
+            quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -1750,6 +1775,19 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'d') => {
+                if self.on_ctrl_d() {
+                    return;
+                }
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
             } if c.eq_ignore_ascii_case(&'v')
                 && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
@@ -1757,7 +1795,9 @@ impl ChatWidget {
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
-                self.bottom_pane.clear_ctrl_c_quit_hint();
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
             }
             _ => {}
         }
@@ -1968,7 +2008,7 @@ impl ChatWidget {
                 self.open_experimental_popup();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
-                self.request_exit();
+                self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_core::auth::logout(
@@ -1977,7 +2017,7 @@ impl ChatWidget {
                 ) {
                     tracing::error!("failed to logout: {e}");
                 }
-                self.request_exit();
+                self.request_quit_without_confirmation();
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
@@ -2442,8 +2482,21 @@ impl ChatWidget {
         }
     }
 
-    fn request_exit(&self) {
-        self.app_event_tx.send(AppEvent::ExitRequest);
+    /// Exit the UI immediately without waiting for shutdown.
+    ///
+    /// Prefer [`Self::request_quit_without_confirmation`] for user-initiated exits;
+    /// this is mainly a fallback for shutdown completion or emergency exits.
+    fn request_immediate_exit(&self) {
+        self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+    }
+
+    /// Request a shutdown-first quit.
+    ///
+    /// This is used for explicit quit commands (`/quit`, `/exit`, `/logout`) and for
+    /// the double-press Ctrl+C/Ctrl+D quit shortcut.
+    fn request_quit_without_confirmation(&self) {
+        self.app_event_tx
+            .send(AppEvent::Exit(ExitMode::ShutdownFirst));
     }
 
     fn request_redraw(&mut self) {
@@ -3830,19 +3883,87 @@ impl ChatWidget {
         self.bottom_pane.on_file_search_result(query, matches);
     }
 
-    /// Handle Ctrl-C key press.
+    /// Handles a Ctrl+C press at the chat-widget layer.
+    ///
+    /// The first press arms a time-bounded quit shortcut and shows a footer hint via the bottom
+    /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
+    /// is armed.
+    ///
+    /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
+    /// quit.
     fn on_ctrl_c(&mut self) {
+        let key = key_hint::ctrl(KeyCode::Char('c'));
+        let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            if modal_or_popup_active {
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+                self.bottom_pane.clear_quit_shortcut_hint();
+            } else {
+                self.arm_quit_shortcut(key);
+            }
             return;
         }
 
-        if self.bottom_pane.is_task_running() {
-            self.bottom_pane.show_ctrl_c_quit_hint();
+        if self.quit_shortcut_active_for(key) {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_quit_without_confirmation();
+            return;
+        }
+
+        self.arm_quit_shortcut(key);
+
+        if self.is_cancellable_work_active() {
             self.submit_op(Op::Interrupt);
-            return;
+        }
+    }
+
+    /// Handles a Ctrl+D press at the chat-widget layer.
+    ///
+    /// Ctrl-D only participates in quit when the composer is empty and no modal/popup is active.
+    /// Otherwise it should be routed to the active view and not attempt to quit.
+    fn on_ctrl_d(&mut self) -> bool {
+        let key = key_hint::ctrl(KeyCode::Char('d'));
+        if self.quit_shortcut_active_for(key) {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_quit_without_confirmation();
+            return true;
         }
 
-        self.submit_op(Op::Shutdown);
+        if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active() {
+            return false;
+        }
+
+        self.arm_quit_shortcut(key);
+        true
+    }
+
+    /// True if `key` matches the armed quit shortcut and the window has not expired.
+    fn quit_shortcut_active_for(&self, key: KeyBinding) -> bool {
+        self.quit_shortcut_key == Some(key)
+            && self
+                .quit_shortcut_expires_at
+                .is_some_and(|expires_at| Instant::now() < expires_at)
+    }
+
+    /// Arm the double-press quit shortcut and show the footer hint.
+    ///
+    /// This keeps the state machine (`quit_shortcut_*`) in `ChatWidget`, since
+    /// it is the component that interprets Ctrl+C vs Ctrl+D and decides whether
+    /// quitting is currently allowed, while delegating rendering to `BottomPane`.
+    fn arm_quit_shortcut(&mut self, key: KeyBinding) {
+        self.quit_shortcut_expires_at = Instant::now()
+            .checked_add(QUIT_SHORTCUT_TIMEOUT)
+            .or_else(|| Some(Instant::now()));
+        self.quit_shortcut_key = Some(key);
+        self.bottom_pane.show_quit_shortcut_hint(key);
+    }
+
+    // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
+    fn is_cancellable_work_active(&self) -> bool {
+        self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {

@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -417,6 +418,8 @@ async fn make_chatwidget_manual(
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
+        quit_shortcut_expires_at: None,
+        quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
@@ -1054,19 +1057,58 @@ async fn streaming_final_answer_keeps_task_running_state() {
         Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
-    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(chat.bottom_pane.quit_shortcut_hint_visible());
 }
 
 #[tokio::test]
 async fn ctrl_c_shutdown_ignores_caps_lock() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
 
-    match op_rx.try_recv() {
-        Ok(Op::Shutdown) => {}
-        other => panic!("expected Op::Shutdown, got {other:?}"),
-    }
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_d_double_press_quits_without_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    let width = 100;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw after ctrl+d");
+    assert!(
+        terminal
+            .backend()
+            .vt100()
+            .screen()
+            .contents()
+            .contains("ctrl + d again to quit")
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_d_with_modal_open_does_not_quit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_approvals_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -1085,7 +1127,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(chat.bottom_pane.composer_text().is_empty());
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(chat.bottom_pane.quit_shortcut_hint_visible());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     let restored_text = chat.bottom_pane.composer_text();
@@ -1094,7 +1136,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
         "expected placeholder {placeholder:?} after history recall"
     );
     assert!(restored_text.starts_with("draft message "));
-    assert!(!chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     let images = chat.bottom_pane.take_recent_submission_images();
     assert!(
@@ -1291,7 +1333,7 @@ async fn slash_quit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Quit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
 #[tokio::test]
@@ -1300,7 +1342,7 @@ async fn slash_exit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Exit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
 #[tokio::test]
