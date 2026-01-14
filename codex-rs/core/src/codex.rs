@@ -2064,10 +2064,13 @@ mod handlers {
             codex_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
             codex_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
         };
-        let response = ElicitationResponse {
-            action,
-            content: None,
+        // When accepting, send an empty object as content to satisfy MCP servers
+        // that expect non-null content on Accept. For Decline/Cancel, content is None.
+        let content = match action {
+            ElicitationAction::Accept => Some(serde_json::json!({})),
+            ElicitationAction::Decline | ElicitationAction::Cancel => None,
         };
+        let response = ElicitationResponse { action, content };
         if let Err(err) = sess
             .resolve_elicitation(server_name, request_id, response)
             .await
