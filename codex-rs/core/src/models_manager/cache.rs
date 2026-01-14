@@ -27,7 +27,7 @@ impl ModelsCacheManager {
     }
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
-    pub(crate) async fn load_fresh(&self) -> Option<CacheData> {
+    pub(crate) async fn load_fresh(&self) -> Option<ModelsCache> {
         let cache = match self.load().await {
             Ok(cache) => cache?,
             Err(err) => {
@@ -38,10 +38,7 @@ impl ModelsCacheManager {
         if !cache.is_fresh(self.cache_ttl) {
             return None;
         }
-        Some(CacheData {
-            models: cache.models,
-            etag: cache.etag,
-        })
+        Some(cache)
     }
 
     /// Persist the cache to disk, creating parent directories as needed.
@@ -98,19 +95,13 @@ impl ModelsCacheManager {
     }
 }
 
-/// Data returned from loading a fresh cache entry.
-pub(crate) struct CacheData {
-    pub(crate) models: Vec<ModelInfo>,
-    pub(crate) etag: Option<String>,
-}
-
 /// Serialized snapshot of models and metadata cached on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ModelsCache {
-    fetched_at: DateTime<Utc>,
+pub(crate) struct ModelsCache {
+    pub(crate) fetched_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    etag: Option<String>,
-    models: Vec<ModelInfo>,
+    pub(crate) etag: Option<String>,
+    pub(crate) models: Vec<ModelInfo>,
 }
 
 impl ModelsCache {
