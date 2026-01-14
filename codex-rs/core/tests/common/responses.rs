@@ -319,6 +319,15 @@ pub fn ev_completed(id: &str) -> Value {
     })
 }
 
+pub fn ev_done() -> Value {
+    serde_json::json!({
+        "type": "response.done",
+        "response": {
+            "usage": {"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
+        }
+    })
+}
+
 /// Convenience: SSE event for a created response with a specific id.
 pub fn ev_response_created(id: &str) -> Value {
     serde_json::json!({
@@ -812,13 +821,20 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
                 continue;
             };
 
-            let mut connection_log = Vec::new();
+            let connection_index = {
+                let mut log = requests.lock().unwrap();
+                log.push(Vec::new());
+                log.len() - 1
+            };
             for request_events in connection_requests {
                 let Some(Ok(message)) = ws_stream.next().await else {
                     break;
                 };
                 if let Some(body) = parse_ws_request_body(message) {
-                    connection_log.push(WebSocketRequest { body });
+                    let mut log = requests.lock().unwrap();
+                    if let Some(connection_log) = log.get_mut(connection_index) {
+                        connection_log.push(WebSocketRequest { body });
+                    }
                 }
 
                 for event in &request_events {
@@ -831,7 +847,6 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
                 }
             }
 
-            requests.lock().unwrap().push(connection_log);
             let _ = ws_stream.close(None).await;
 
             if connections.lock().unwrap().is_empty() {

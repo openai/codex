@@ -3,6 +3,7 @@
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::protocol::AskForApproval;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_json_to_toml::json_to_toml;
 use mcp_types::Tool;
@@ -185,11 +186,34 @@ impl CodexToolCallParam {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexToolCallReplyParam {
-    /// The conversation id for this Codex session.
-    pub conversation_id: String,
+    /// DEPRECATED: use threadId instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
+
+    /// The thread id for this Codex session.
+    /// This field is required, but we keep it optional here for backward
+    /// compatibility for clients that still use conversationId.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_id: Option<String>,
 
     /// The *next user prompt* to continue the Codex conversation.
     pub prompt: String,
+}
+
+impl CodexToolCallReplyParam {
+    pub(crate) fn get_thread_id(&self) -> anyhow::Result<ThreadId> {
+        if let Some(thread_id) = &self.thread_id {
+            let thread_id = ThreadId::from_string(thread_id)?;
+            Ok(thread_id)
+        } else if let Some(conversation_id) = &self.conversation_id {
+            let thread_id = ThreadId::from_string(conversation_id)?;
+            Ok(thread_id)
+        } else {
+            Err(anyhow::anyhow!(
+                "either threadId or conversationId must be provided"
+            ))
+        }
+    }
 }
 
 /// Builds a `Tool` definition for the `codex-reply` tool-call.
@@ -217,8 +241,7 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         input_schema: tool_input_schema,
         output_schema: None,
         description: Some(
-            "Continue a Codex conversation by providing the conversation id and prompt."
-                .to_string(),
+            "Continue a Codex conversation by providing the thread id and prompt.".to_string(),
         ),
         annotations: None,
     }
@@ -317,20 +340,23 @@ mod tests {
         let tool = create_tool_for_codex_tool_call_reply_param();
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
-          "description": "Continue a Codex conversation by providing the conversation id and prompt.",
+          "description": "Continue a Codex conversation by providing the thread id and prompt.",
           "inputSchema": {
             "properties": {
               "conversationId": {
-                "description": "The conversation id for this Codex session.",
+                "description": "DEPRECATED: use threadId instead.",
                 "type": "string"
               },
               "prompt": {
                 "description": "The *next user prompt* to continue the Codex conversation.",
                 "type": "string"
               },
+              "threadId": {
+                "description": "The thread id for this Codex session. This field is required, but we keep it optional here for backward compatibility for clients that still use conversationId.",
+                "type": "string"
+              }
             },
             "required": [
-              "conversationId",
               "prompt",
             ],
             "type": "object",

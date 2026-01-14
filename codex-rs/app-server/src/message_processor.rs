@@ -10,6 +10,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -17,6 +18,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -36,6 +38,7 @@ pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
     initialized: bool,
+    config_warnings: Vec<ConfigWarningNotification>,
 }
 
 impl MessageProcessor {
@@ -48,6 +51,7 @@ impl MessageProcessor {
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         feedback: CodexFeedback,
+        config_warnings: Vec<ConfigWarningNotification>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared(
@@ -76,6 +80,7 @@ impl MessageProcessor {
             codex_message_processor,
             config_api,
             initialized: false,
+            config_warnings,
         }
     }
 
@@ -161,6 +166,16 @@ impl MessageProcessor {
                         self.codex_message_processor
                             .ensure_thread_listener(thread_id)
                             .await;
+                    }
+
+                    if !self.config_warnings.is_empty() {
+                        for notification in self.config_warnings.drain(..) {
+                            self.outgoing
+                                .send_server_notification(ServerNotification::ConfigWarning(
+                                    notification,
+                                ))
+                                .await;
+                        }
                     }
 
                     return;

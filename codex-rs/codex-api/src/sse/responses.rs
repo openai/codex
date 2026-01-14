@@ -89,6 +89,14 @@ struct ResponseCompleted {
 }
 
 #[derive(Debug, Deserialize)]
+struct ResponseDone {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    usage: Option<ResponseCompletedUsage>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ResponseCompletedUsage {
     input_tokens: i64,
     input_tokens_details: Option<ResponseCompletedInputTokensDetails>,
@@ -228,6 +236,29 @@ pub fn process_responses_event(
                     }
                 }
             }
+        }
+        "response.done" => {
+            if let Some(resp_val) = event.response {
+                match serde_json::from_value::<ResponseDone>(resp_val) {
+                    Ok(resp) => {
+                        return Ok(Some(ResponseEvent::Completed {
+                            response_id: resp.id.unwrap_or_default(),
+                            token_usage: resp.usage.map(Into::into),
+                        }));
+                    }
+                    Err(err) => {
+                        let error = format!("failed to parse ResponseCompleted: {err}");
+                        debug!("{error}");
+                        return Err(ResponsesEventError::Api(ApiError::Stream(error)));
+                    }
+                }
+            }
+
+            debug!("response.done missing response payload");
+            return Ok(Some(ResponseEvent::Completed {
+                response_id: String::new(),
+                token_usage: None,
+            }));
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
@@ -514,6 +545,65 @@ mod tests {
                 assert_eq!(msg, "stream closed before response.completed")
             }
             other => panic!("unexpected second event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn response_done_emits_completed() {
+        let done = json!({
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": null,
+                    "output_tokens": 2,
+                    "output_tokens_details": null,
+                    "total_tokens": 3
+                }
+            }
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.done\ndata: {done}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }) => {
+                assert_eq!(response_id, "");
+                assert!(token_usage.is_some());
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn response_done_without_payload_emits_completed() {
+        let done = json!({
+            "type": "response.done"
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.done\ndata: {done}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }) => {
+                assert_eq!(response_id, "");
+                assert!(token_usage.is_none());
+            }
+            other => panic!("unexpected event: {other:?}"),
         }
     }
 

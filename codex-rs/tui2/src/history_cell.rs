@@ -1962,7 +1962,8 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("docs".to_string(), stdio_config);
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert("docs".to_string(), stdio_config);
 
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer secret".to_string());
@@ -1981,7 +1982,11 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("http".to_string(), http_config);
+        servers.insert("http".to_string(), http_config);
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
 
         let mut tools: HashMap<String, Tool> = HashMap::new();
         tools.insert(
