@@ -1,5 +1,6 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(target_os = "windows")]
@@ -417,7 +418,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -440,7 +441,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -463,7 +464,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -640,7 +641,7 @@ impl App {
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    model: self.current_model.clone(),
+                    model: Some(self.current_model.clone()),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 self.current_model = model_info.slug.clone();
@@ -690,7 +691,7 @@ impl App {
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
                                     is_first_run: false,
-                                    model: self.current_model.clone(),
+                                    model: Some(self.current_model.clone()),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
@@ -759,7 +760,7 @@ impl App {
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
                                     is_first_run: false,
-                                    model: self.current_model.clone(),
+                                    model: Some(self.current_model.clone()),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
@@ -858,9 +859,12 @@ impl App {
                 }
                 self.chat_widget.handle_codex_event(event);
             }
-            AppEvent::ExitRequest => {
-                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
-            }
+            AppEvent::Exit(mode) => match mode {
+                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::Immediate => {
+                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                }
+            },
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }

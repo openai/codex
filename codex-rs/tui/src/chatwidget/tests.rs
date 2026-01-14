@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -354,7 +355,7 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model: resolved_model,
+        model: Some(resolved_model),
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
@@ -399,7 +400,7 @@ async fn make_chatwidget_manual(
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
-        model: resolved_model.clone(),
+        model: Some(resolved_model.clone()),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
         session_header: SessionHeader::new(resolved_model),
@@ -430,6 +431,8 @@ async fn make_chatwidget_manual(
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
+        quit_shortcut_expires_at: None,
+        quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
@@ -1054,6 +1057,7 @@ async fn alt_up_edits_most_recent_queued_message() {
 #[tokio::test]
 async fn enqueueing_history_prompt_multiple_times_is_stable() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     // Submit an initial prompt to seed history.
     chat.bottom_pane.set_composer_text("repeat me".to_string());
@@ -1080,6 +1084,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 #[tokio::test]
 async fn streaming_final_answer_keeps_task_running_state() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     chat.on_task_started();
     chat.on_agent_message_delta("Final answer line\n".to_string());
@@ -1104,19 +1109,34 @@ async fn streaming_final_answer_keeps_task_running_state() {
         Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
-    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 }
 
 #[tokio::test]
-async fn ctrl_c_shutdown_ignores_caps_lock() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+async fn ctrl_c_shutdown_works_with_caps_lock() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
 
-    match op_rx.try_recv() {
-        Ok(Op::Shutdown) => {}
-        other => panic!("expected Op::Shutdown, got {other:?}"),
-    }
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_d_quits_without_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_d_with_modal_open_does_not_quit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_approvals_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -1135,7 +1155,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(chat.bottom_pane.composer_text().is_empty());
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     let restored_text = chat.bottom_pane.composer_text();
@@ -1144,7 +1164,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
         "expected placeholder {placeholder:?} after history recall"
     );
     assert!(restored_text.starts_with("draft message "));
-    assert!(!chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     let images = chat.bottom_pane.take_recent_submission_images();
     assert!(
@@ -1487,7 +1507,7 @@ async fn slash_quit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Quit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
 #[tokio::test]
@@ -1496,7 +1516,7 @@ async fn slash_exit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Exit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
 #[tokio::test]
@@ -2018,6 +2038,7 @@ async fn experimental_features_toggle_saves_on_exit() {
 #[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.open_model_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -2027,6 +2048,7 @@ async fn model_selection_popup_snapshot() {
 #[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
+    chat.thread_id = Some(ThreadId::new());
     let preset = |slug: &str, show_in_picker: bool| ModelPreset {
         id: slug.to_string(),
         model: slug.to_string(),
@@ -2300,6 +2322,7 @@ async fn feedback_upload_consent_popup_snapshot() {
 #[tokio::test]
 async fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -3846,6 +3869,7 @@ printf 'fenced within fenced\n'
 #[tokio::test]
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
@@ -3871,6 +3895,7 @@ async fn chatwidget_tall() {
 #[tokio::test]
 async fn review_queues_user_messages_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     chat.handle_codex_event(Event {
         id: "review-1".into(),
