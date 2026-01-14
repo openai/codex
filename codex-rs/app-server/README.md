@@ -497,11 +497,7 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/
 ## Prompts
 
 Use `prompt/list` to fetch user-defined custom prompt templates from `$CODEX_HOME/prompts`.
-For additional details, please see:
-
-```
-https://developers.openai.com/codex/custom-prompts
-```
+For additional details, please see: https://developers.openai.com/codex/custom-prompts
 
 Example end-to-end flow for clients implementing custom prompts:
 1. User saves a prompt file at `$CODEX_HOME/prompts/<id>.md`.
