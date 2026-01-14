@@ -56,7 +56,11 @@ impl AgentControl {
             .send_op(
                 agent_id,
                 Op::UserInput {
-                    items: vec![UserInput::Text { text: prompt }],
+                    items: vec![UserInput::Text {
+                        text: prompt,
+                        // Plain text conversion has no UI element ranges.
+                        text_elements: Vec::new(),
+                    }],
                     final_output_json_schema: None,
                 },
             )
@@ -321,6 +325,7 @@ mod tests {
             Op::UserInput {
                 items: vec![UserInput::Text {
                     text: "hello from tests".to_string(),
+                    text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
             },
@@ -351,6 +356,7 @@ mod tests {
             Op::UserInput {
                 items: vec![UserInput::Text {
                     text: "spawned".to_string(),
+                    text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
             },

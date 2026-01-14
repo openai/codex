@@ -118,7 +118,8 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
             assert_eq!(
                 content,
                 &vec![UserInput::Text {
-                    text: preview.to_string()
+                    text: preview.to_string(),
+                    text_elements: Vec::new(),
                 }]
             );
         }

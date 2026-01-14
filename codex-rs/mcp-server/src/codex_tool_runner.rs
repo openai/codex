@@ -116,6 +116,7 @@ pub async fn run_codex_tool_session(
         op: Op::UserInput {
             items: vec![UserInput::Text {
                 text: initial_prompt.clone(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         },
@@ -158,7 +159,11 @@ pub async fn run_codex_tool_session_reply(
         .insert(request_id.clone(), thread_id);
     if let Err(e) = thread
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: prompt }],
+            items: vec![UserInput::Text {
+                text: prompt,
+                // Plain text conversion has no UI element ranges.
+                text_elements: Vec::new(),
+            }],
             final_output_json_schema: None,
         })
         .await

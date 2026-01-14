@@ -536,6 +536,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "call the rmcp image tool".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
