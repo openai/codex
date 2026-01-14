@@ -249,7 +249,7 @@ async fn handle_model_migration_prompt_if_needed(
     app_event_tx: &AppEventSender,
     models_manager: Arc<ModelsManager>,
 ) -> Option<AppExitInfo> {
-    let available_models = models_manager.list_models(config).await;
+    let available_models = models_manager.list_models(config, true).await;
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == model)

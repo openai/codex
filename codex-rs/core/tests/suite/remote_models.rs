@@ -428,14 +428,19 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         .await
         .expect("refresh succeeds");
 
-    let available = manager.list_models(&config).await;
+    let available = manager.list_models(&config, true).await;
     let remote = available
         .iter()
         .find(|model| model.model == "remote-alpha")
         .expect("remote model should be listed");
     let mut expected_remote: ModelPreset = remote_model.into();
-    expected_remote.is_default = true;
+    expected_remote.is_default = false;
     assert_eq!(*remote, expected_remote);
+    let default_model = available
+        .iter()
+        .find(|model| model.is_default)
+        .expect("default model should be present");
+    assert_eq!(default_model.model, "gpt-5.2-codex");
     assert!(
         available
             .iter()
@@ -553,7 +558,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     let selected = manager.get_model(&None, &config).await;
     assert_eq!(selected, "gpt-5.2-codex");
 
-    let available = manager.list_models(&config).await;
+    let available = manager.list_models(&config, true).await;
     let hidden = available
         .iter()
         .find(|model| model.model == "codex-auto-balanced")
@@ -571,7 +576,7 @@ async fn wait_for_model_available(
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {
-            let guard = manager.list_models(config).await;
+            let guard = manager.list_models(config, true).await;
             guard.iter().find(|model| model.model == slug).cloned()
         } {
             return model;

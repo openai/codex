@@ -138,8 +138,15 @@ impl ThreadManager {
         self.state.models_manager.clone()
     }
 
-    pub async fn list_models(&self, config: &Config) -> Vec<ModelPreset> {
-        self.state.models_manager.list_models(config).await
+    pub async fn list_models(
+        &self,
+        config: &Config,
+        include_codex_auto_models: bool,
+    ) -> Vec<ModelPreset> {
+        self.state
+            .models_manager
+            .list_models(config, include_codex_auto_models)
+            .await
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {

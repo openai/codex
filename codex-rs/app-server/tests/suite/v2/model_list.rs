@@ -32,6 +32,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(100),
             cursor: None,
+            include_codex_auto_models: None,
         })
         .await?;
 
@@ -172,6 +173,7 @@ async fn list_models_pagination_works() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(1),
             cursor: None,
+            include_codex_auto_models: None,
         })
         .await?;
 
@@ -194,6 +196,7 @@ async fn list_models_pagination_works() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(1),
             cursor: Some(next_cursor.clone()),
+            include_codex_auto_models: None,
         })
         .await?;
 
@@ -216,6 +219,7 @@ async fn list_models_pagination_works() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(1),
             cursor: Some(third_cursor.clone()),
+            include_codex_auto_models: None,
         })
         .await?;
 
@@ -238,6 +242,7 @@ async fn list_models_pagination_works() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(1),
             cursor: Some(fourth_cursor.clone()),
+            include_codex_auto_models: None,
         })
         .await?;
 
@@ -270,6 +275,7 @@ async fn list_models_rejects_invalid_cursor() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: None,
             cursor: Some("invalid".to_string()),
+            include_codex_auto_models: None,
         })
         .await?;
 

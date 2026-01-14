@@ -2250,10 +2250,16 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ModelListParams,
     ) {
-        let ModelListParams { limit, cursor } = params;
+        let ModelListParams {
+            limit,
+            cursor,
+            include_codex_auto_models,
+        } = params;
+        let include_codex_auto_models = include_codex_auto_models == Some(true);
         let mut config = (*config).clone();
         config.features.enable(Feature::RemoteModels);
-        let models = supported_models(thread_manager, &config).await;
+        let models = supported_models(thread_manager, &config, include_codex_auto_models).await;
+
         let total = models.len();
 
         if total == 0 {
