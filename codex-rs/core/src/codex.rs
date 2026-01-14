@@ -2383,7 +2383,10 @@ async fn spawn_review_thread(
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
-    let model = config.review_model.clone();
+    let model = config
+        .review_model
+        .clone()
+        .unwrap_or_else(|| parent_turn_context.client.get_model());
     let review_model_info = sess
         .services
         .models_manager
@@ -2407,14 +2410,13 @@ async fn spawn_review_thread(
 
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*config).clone();
-    per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
-    per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
+    per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
 
-    let otel_manager = parent_turn_context.client.get_otel_manager().with_model(
-        config.review_model.as_str(),
-        review_model_info.slug.as_str(),
-    );
+    let otel_manager = parent_turn_context
+        .client
+        .get_otel_manager()
+        .with_model(model.as_str(), review_model_info.slug.as_str());
 
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(

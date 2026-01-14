@@ -393,7 +393,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
-        cfg.review_model = "gpt-5.1".to_string();
+        cfg.review_model = Some("gpt-5.1".to_string());
     })
     .await;
 
@@ -427,6 +427,56 @@ async fn review_uses_custom_review_model_from_config() {
     assert_eq!(request.path(), "/v1/responses");
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
+
+    server.verify().await;
+}
+
+/// Ensure that when `review_model` is not set in the config, the review request
+/// uses the session model.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_session_model_when_review_model_unset() {
+    skip_if_no_network!();
+
+    // Minimal stream: just a completed event
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = TempDir::new().unwrap();
+    let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
+        cfg.model = Some("gpt-4.1".to_string());
+        cfg.review_model = None;
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "use session model".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let body = request.body_json();
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-4.1");
 
     server.verify().await;
 }
