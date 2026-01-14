@@ -494,7 +494,7 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
         .expect("mock server should capture requests")
         .iter()
         .map(|req| format!("{} {}", req.method, req.url.path()))
-        .collect();
+        .collect::<Vec<String>>();
     assert!(
         elapsed >= Duration::from_millis(4_500),
         "expected models call to block near the timeout; took {elapsed:?}"
