@@ -34,14 +34,13 @@ const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 
 /// Strategy for refreshing available models.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshStrategy {
     /// Always fetch from the network, ignoring cache.
     Online,
     /// Only use cached data, never fetch from the network.
     Offline,
     /// Use cache if available and fresh, otherwise fetch from the network.
-    #[default]
     OnlineIfUncached,
 }
 
@@ -154,7 +153,6 @@ impl ModelsManager {
     /// Refresh models if the provided ETag differs from the cached ETag.
     ///
     /// Uses `Online` strategy to fetch latest models when ETags differ.
-    /// If ETags match, renews the cache TTL to extend its validity.
     pub(crate) async fn refresh_if_new_etag(&self, etag: String, config: &Config) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
@@ -260,7 +258,7 @@ impl ModelsManager {
         let existing_presets = self.local_models.clone();
         let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
         let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
-        merged_presets = ModelPreset::with_auth(merged_presets, chatgpt_mode);
+        merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
         if !has_default {

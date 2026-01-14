@@ -485,16 +485,16 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     // get_model should return a default model even when refresh times out
     let default_model = model.expect("get_model should finish and return default model");
     assert!(
-        default_model == "gpt-5.2-codex" || default_model == "gpt-5.1-codex-max",
+        default_model == "gpt-5.2-codex",
         "get_model should return default model when refresh times out, got: {default_model}"
     );
-    let _request_summaries: Vec<String> = server
+    let _ = server
         .received_requests()
         .await
         .expect("mock server should capture requests")
         .iter()
         .map(|req| format!("{} {}", req.method, req.url.path()))
-        .collect();
+        .collect::<Vec<String>>();
     assert!(
         elapsed >= Duration::from_millis(4_500),
         "expected models call to block near the timeout; took {elapsed:?}"

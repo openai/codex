@@ -27,7 +27,7 @@ impl ModelsCacheManager {
     }
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
-    pub(crate) async fn load_fresh(&self) -> Option<CacheData> {
+    pub(crate) async fn load_fresh(&self) -> Option<ModelsCache> {
         let cache = match self.load().await {
             Ok(cache) => cache?,
             Err(err) => {
@@ -38,10 +38,7 @@ impl ModelsCacheManager {
         if !cache.is_fresh(self.cache_ttl) {
             return None;
         }
-        Some(CacheData {
-            models: cache.models,
-            etag: cache.etag,
-        })
+        Some(cache)
     }
 
     /// Persist the cache to disk, creating parent directories as needed.
@@ -54,17 +51,6 @@ impl ModelsCacheManager {
         if let Err(err) = self.save_internal(&cache).await {
             error!("failed to write models cache: {err}");
         }
-    }
-
-    /// Renew the cache TTL by updating the fetched_at timestamp to the current time.
-    /// This rewrites the cache with a newer fetched_at value, effectively resetting the TTL.
-    pub(crate) async fn renew_cache_ttl(&self) -> io::Result<()> {
-        let mut cache = match self.load().await? {
-            Some(cache) => cache,
-            None => return Err(io::Error::new(ErrorKind::NotFound, "cache not found")),
-        };
-        cache.fetched_at = Utc::now();
-        self.save_internal(&cache).await
     }
 
     async fn load(&self) -> io::Result<Option<ModelsCache>> {
@@ -107,12 +93,6 @@ impl ModelsCacheManager {
         f(&mut cache.fetched_at);
         self.save_internal(&cache).await
     }
-}
-
-/// Data returned from loading a fresh cache entry.
-pub(crate) struct CacheData {
-    pub(crate) models: Vec<ModelInfo>,
-    pub(crate) etag: Option<String>,
 }
 
 /// Serialized snapshot of models and metadata cached on disk.
