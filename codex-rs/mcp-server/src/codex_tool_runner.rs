@@ -3,6 +3,7 @@
 //! and to make future feature-growth easier to manage.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::exec_approval::handle_exec_approval_request;
@@ -60,6 +61,7 @@ pub async fn run_codex_tool_session(
     id: RequestId,
     initial_prompt: String,
     config: CodexConfig,
+    resume_path: Option<PathBuf>,
     outgoing: Arc<OutgoingMessageSender>,
     thread_manager: Arc<ThreadManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
@@ -68,21 +70,42 @@ pub async fn run_codex_tool_session(
         thread_id,
         thread,
         session_configured,
-    } = match thread_manager.start_thread(config).await {
-        Ok(res) => res,
-        Err(e) => {
-            let result = CallToolResult {
-                content: vec![ContentBlock::TextContent(TextContent {
-                    r#type: "text".to_string(),
-                    text: format!("Failed to start Codex session: {e}"),
-                    annotations: None,
-                })],
-                is_error: Some(true),
-                structured_content: None,
-            };
-            outgoing.send_response(id.clone(), result).await;
-            return;
-        }
+    } = match resume_path {
+        Some(path) => match thread_manager
+            .resume_thread_from_rollout_with_auth(config, path)
+            .await
+        {
+            Ok(res) => res,
+            Err(e) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Failed to resume Codex session: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                outgoing.send_response(id.clone(), result).await;
+                return;
+            }
+        },
+        None => match thread_manager.start_thread(config).await {
+            Ok(res) => res,
+            Err(e) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Failed to start Codex session: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                outgoing.send_response(id.clone(), result).await;
+                return;
+            }
+        },
     };
 
     let session_configured_event = Event {
