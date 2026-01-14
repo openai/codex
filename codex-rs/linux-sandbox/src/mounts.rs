@@ -137,6 +137,21 @@ fn is_running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
+#[repr(C)]
+struct CapUserHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+struct CapUserData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
+const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+
 /// Map the current uid/gid to root inside the user namespace.
 fn write_user_namespace_maps() -> Result<()> {
     write_proc_file("/proc/self/setgroups", "deny\n")?;
@@ -150,24 +165,25 @@ fn write_user_namespace_maps() -> Result<()> {
 
 /// Drop all capabilities in the current user namespace.
 fn drop_caps() -> Result<()> {
-    let mut header = libc::__user_cap_header_struct {
-        version: libc::_LINUX_CAPABILITY_VERSION_3,
+    let mut header = CapUserHeader {
+        version: LINUX_CAPABILITY_VERSION_3,
         pid: 0,
     };
     let data = [
-        libc::__user_cap_data_struct {
+        CapUserData {
             effective: 0,
             permitted: 0,
             inheritable: 0,
         },
-        libc::__user_cap_data_struct {
+        CapUserData {
             effective: 0,
             permitted: 0,
             inheritable: 0,
         },
     ];
 
-    let result = unsafe { libc::capset(&mut header, data.as_ptr()) };
+    // Use syscall directly to avoid libc capability symbols that are missing on musl.
+    let result = unsafe { libc::syscall(libc::SYS_capset, &mut header, data.as_ptr()) };
     if result != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
