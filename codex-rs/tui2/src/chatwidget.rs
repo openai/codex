@@ -97,6 +97,8 @@ use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -150,6 +152,7 @@ use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::StreamController;
+use crate::version::CODEX_CLI_VERSION;
 use std::path::Path;
 
 use chrono::Local;
@@ -292,7 +295,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) model: String,
+    pub(crate) model: Option<String>,
 }
 
 #[derive(Default)]
@@ -507,6 +510,15 @@ impl ChatWidget {
         });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
+        }
+        // Drop any placeholder header before inserting the configured header.
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>())
+        {
+            self.active_cell = None;
+            self.needs_final_message_separator = false;
         }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
@@ -1375,10 +1387,18 @@ impl ChatWidget {
             model,
         } = common;
         let mut config = config;
-        config.model = Some(model.clone());
+        config.model = model.clone();
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
+
+        let model_for_header = if let Some(model) = &config.model {
+            model.clone()
+        } else {
+            "loading".to_string()
+        };
+
+        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -1394,13 +1414,25 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            active_cell: None,
+            active_cell: if config.model.is_none() {
+                Some(Box::new(
+                    history_cell::SessionHeaderHistoryCell::new_with_style(
+                        "loading".to_string(),
+                        placeholder_style,
+                        None,
+                        config.cwd.clone(),
+                        CODEX_CLI_VERSION,
+                    ),
+                ))
+            } else {
+                None
+            },
             active_cell_revision: 0,
             config,
-            model: model.clone(),
+            model: model_for_header.clone(),
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model),
+            session_header: SessionHeader::new(model_for_header),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1466,6 +1498,10 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
+        let header_model = model
+            .clone()
+            .unwrap_or_else(|| session_configured.model.clone());
+
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
@@ -1486,10 +1522,10 @@ impl ChatWidget {
             active_cell: None,
             active_cell_revision: 0,
             config,
-            model: model.clone(),
+            model: header_model.clone(),
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model),
+            session_header: SessionHeader::new(header_model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1874,6 +1910,15 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
+            if self.conversation_id.is_none()
+                && active
+                    .as_any()
+                    .is::<history_cell::SessionHeaderHistoryCell>()
+            {
+                // Keep the startup header active until SessionConfigured arrives.
+                self.active_cell = Some(active);
+                return;
+            }
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -2405,6 +2450,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        if self.conversation_id.is_none() {
+            self.add_info_message(
+                "Model selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+
         let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
             Ok(models) => models,
             Err(_) => {

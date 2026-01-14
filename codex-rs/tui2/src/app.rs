@@ -485,7 +485,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -508,7 +508,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -531,7 +531,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -1445,7 +1445,7 @@ impl App {
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    model: self.current_model.clone(),
+                    model: Some(self.current_model.clone()),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
@@ -1494,7 +1494,7 @@ impl App {
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
                                     is_first_run: false,
-                                    model: self.current_model.clone(),
+                                    model: Some(self.current_model.clone()),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
@@ -1562,7 +1562,7 @@ impl App {
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
                                     is_first_run: false,
-                                    model: self.current_model.clone(),
+                                    model: Some(self.current_model.clone()),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,

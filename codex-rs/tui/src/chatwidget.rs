@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
@@ -98,6 +99,8 @@ use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -316,7 +319,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) model: String,
+    pub(crate) model: Option<String>,
 }
 
 #[derive(Default)]
@@ -524,6 +527,16 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
+        // Drop any placeholder header (used when model was unknown at startup) instead of flushing
+        // it into history; the real header will be inserted below.
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>())
+        {
+            self.active_cell = None;
+            self.needs_final_message_separator = false;
+        }
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1515,10 +1528,18 @@ impl ChatWidget {
             model,
         } = common;
         let mut config = config;
-        config.model = Some(model.clone());
+        config.model = model.clone();
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
+        let widget_config = config;
+        let codex_op_tx = spawn_agent(widget_config.clone(), app_event_tx.clone(), thread_manager);
+
+        let model_for_header = if let Some(model) = &model {
+            model.clone()
+        } else {
+            "loading".to_string()
+        };
+        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -1530,17 +1551,29 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
-                disable_paste_burst: config.disable_paste_burst,
-                animations_enabled: config.animations,
+                disable_paste_burst: widget_config.disable_paste_burst,
+                animations_enabled: widget_config.animations,
                 skills: None,
             }),
-            active_cell: None,
+            active_cell: if model.is_none() {
+                Some(Box::new(
+                    history_cell::SessionHeaderHistoryCell::new_with_style(
+                        "loading".to_string(),
+                        placeholder_style,
+                        None,
+                        widget_config.cwd.clone(),
+                        CODEX_CLI_VERSION,
+                    ),
+                ))
+            } else {
+                None
+            },
             active_cell_revision: 0,
-            config,
-            model: model.clone(),
+            config: widget_config,
+            model: model_for_header.clone(),
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model),
+            session_header: SessionHeader::new(model_for_header),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1608,6 +1641,10 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
+        let header_model = model
+            .clone()
+            .unwrap_or_else(|| session_configured.model.clone());
+
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
@@ -1628,10 +1665,10 @@ impl ChatWidget {
             active_cell: None,
             active_cell_revision: 0,
             config,
-            model: model.clone(),
+            model: header_model.clone(),
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model),
+            session_header: SessionHeader::new(header_model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -2074,6 +2111,15 @@ impl ChatWidget {
     fn flush_active_cell(&mut self) {
         self.flush_wait_cell();
         if let Some(active) = self.active_cell.take() {
+            if self.thread_id.is_none()
+                && active
+                    .as_any()
+                    .is::<history_cell::SessionHeaderHistoryCell>()
+            {
+                // Keep the startup header active until SessionConfigured arrives.
+                self.active_cell = Some(active);
+                return;
+            }
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -2637,6 +2683,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        if self.thread_id.is_none() {
+            self.add_info_message(
+                "Model selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+
         let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
             Ok(models) => models,
             Err(_) => {
