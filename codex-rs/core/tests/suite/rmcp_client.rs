@@ -73,7 +73,8 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.mcp_servers.insert(
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::Stdio {
@@ -93,6 +94,10 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     disabled_tools: None,
                 },
             );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
         })
         .build(&server)
         .await?;
@@ -204,7 +209,8 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.mcp_servers.insert(
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::Stdio {
@@ -224,6 +230,10 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                     disabled_tools: None,
                 },
             );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
         })
         .build(&server)
         .await?;
@@ -393,7 +403,8 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
     let fixture = test_codex()
         .with_config(move |config| {
             config.model_provider.wire_api = codex_core::WireApi::Chat;
-            config.mcp_servers.insert(
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::Stdio {
@@ -413,6 +424,10 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
                     disabled_tools: None,
                 },
             );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
         })
         .build(&server)
         .await?;
@@ -533,7 +548,8 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.mcp_servers.insert(
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::Stdio {
@@ -550,6 +566,10 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                     disabled_tools: None,
                 },
             );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
         })
         .build(&server)
         .await?;
@@ -676,7 +696,8 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.mcp_servers.insert(
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::StreamableHttp {
@@ -692,6 +713,10 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     disabled_tools: None,
                 },
             );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
         })
         .build(&server)
         .await?;
@@ -850,7 +875,8 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.mcp_servers.insert(
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::StreamableHttp {
@@ -866,6 +892,10 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
                     disabled_tools: None,
                 },
             );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
         })
         .build(&server)
         .await?;

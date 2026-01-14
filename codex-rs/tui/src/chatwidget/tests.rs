@@ -1,3 +1,9 @@
+//! Exercises `ChatWidget` event handling and rendering invariants.
+//!
+//! These tests treat the widget as the adapter between `codex_core::protocol::EventMsg` inputs and
+//! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
+//! changes show up as stable, reviewable diffs.
+
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -30,6 +36,7 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::Op;
@@ -372,7 +379,7 @@ async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
-    let bottom = BottomPane::new(BottomPaneParams {
+    let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
         has_input_focus: true,
@@ -382,6 +389,7 @@ async fn make_chatwidget_manual(
         animations_enabled: cfg.animations,
         skills: None,
     });
+    bottom.set_steer_enabled(true);
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
     let widget = ChatWidget {
@@ -389,6 +397,7 @@ async fn make_chatwidget_manual(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_cell: None,
+        active_cell_revision: 0,
         config: cfg,
         model: resolved_model.clone(),
         auth_manager: auth_manager.clone(),
@@ -405,8 +414,10 @@ async fn make_chatwidget_manual(
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         last_unified_wait: None,
+        unified_exec_wait_streak: None,
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
+        agent_turn_running: false,
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -1057,7 +1068,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
         assert_eq!(chat.bottom_pane.composer_text(), "repeat me");
 
         // Queue the prompt while the task is running.
-        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     }
 
     assert_eq!(chat.queued_user_messages.len(), 3);
@@ -1079,7 +1090,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     chat.bottom_pane
         .set_composer_text("queued submission".to_string());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
@@ -1307,15 +1318,36 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 }
 
 #[tokio::test]
+async fn unified_exec_wait_status_header_updates_on_late_command_display() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.unified_exec_processes.push(UnifiedExecProcessSummary {
+        key: "proc-1".to_string(),
+        command_display: "sleep 5".to_string(),
+    });
+
+    chat.on_terminal_interaction(TerminalInteractionEvent {
+        call_id: "call-1".to_string(),
+        process_id: "proc-1".to_string(),
+        stdin: String::new(),
+    });
+
+    assert!(chat.active_cell.is_none());
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal · sleep 5"
+    );
+}
+
+#[tokio::test]
 async fn unified_exec_waiting_multiple_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     begin_unified_exec_startup(&mut chat, "call-wait-1", "proc-1", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
     terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
-    assert_snapshot!(
-        "unified_exec_waiting_multiple_empty_active",
-        active_blob(&chat)
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal · just fix"
     );
 
     chat.handle_codex_event(Event {
@@ -1356,15 +1388,15 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
     terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal · just fix"
+    );
     let pre_cells = drain_insert_history(&mut rx);
-    let mut active_combined = pre_cells
+    let active_combined = pre_cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    if !active_combined.is_empty() {
-        active_combined.push('\n');
-    }
-    active_combined.push_str(&active_blob(&chat));
     assert_snapshot!("unified_exec_non_empty_then_empty_active", active_combined);
 
     chat.handle_codex_event(Event {
@@ -1474,6 +1506,15 @@ async fn slash_resume_opens_picker() {
     chat.dispatch_command(SlashCommand::Resume);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_fork_opens_picker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Fork);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenForkPicker));
 }
 
 #[tokio::test]
@@ -2883,6 +2924,32 @@ async fn mcp_startup_header_booting_snapshot() {
 }
 
 #[tokio::test]
+async fn mcp_startup_complete_does_not_clear_running_task() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+            ready: vec!["schaltwerk".into()],
+            ..Default::default()
+        }),
+    });
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+}
+
+#[tokio::test]
 async fn background_event_updates_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -3790,6 +3857,36 @@ async fn chatwidget_tall() {
     }
     let width: u16 = 80;
     let height: u16 = 24;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[tokio::test]
+async fn review_queues_user_messages_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "review-1".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.queue_user_message(UserMessage::from(
+        "Queued while /review is running.".to_string(),
+    ));
+
+    let width: u16 = 80;
+    let height: u16 = 18;
     let backend = VT100Backend::new(width, height);
     let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
     let desired_height = chat.desired_height(width).min(height);

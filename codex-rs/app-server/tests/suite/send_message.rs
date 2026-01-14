@@ -13,11 +13,15 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RawResponseItemEvent;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::path::Path;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -194,6 +198,9 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
         })
         .await?;
 
+    let permissions = read_raw_response_item(&mut mcp, conversation_id).await;
+    assert_permissions_message(&permissions);
+
     let developer = read_raw_response_item(&mut mcp, conversation_id).await;
     assert_developer_message(&developer, "Use the test harness tools.");
 
@@ -337,6 +344,27 @@ fn assert_instructions_message(item: &ResponseItem) {
             );
         }
         other => panic!("expected instructions message, got {other:?}"),
+    }
+}
+
+fn assert_permissions_message(item: &ResponseItem) {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            assert_eq!(role, "developer");
+            let texts = content_texts(content);
+            let expected = DeveloperInstructions::from_policy(
+                &SandboxPolicy::DangerFullAccess,
+                AskForApproval::Never,
+                &PathBuf::from("/tmp"),
+            )
+            .into_text();
+            assert_eq!(
+                texts,
+                vec![expected.as_str()],
+                "expected permissions developer message, got {texts:?}"
+            );
+        }
+        other => panic!("expected permissions message, got {other:?}"),
     }
 }
 

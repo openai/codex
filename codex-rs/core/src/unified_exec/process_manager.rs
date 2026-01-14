@@ -10,12 +10,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::bash::extract_bash_command;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::exec_env::create_env;
-use crate::protocol::BackgroundEventEvent;
-use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxPermissions;
@@ -74,8 +69,6 @@ struct PreparedProcessHandles {
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
-    session_ref: Arc<Session>,
-    turn_ref: Arc<TurnContext>,
     command: Vec<String>,
     process_id: String,
 }
@@ -224,8 +217,6 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&transcript),
             )
             .await;
-
-            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
         };
 
         let original_token_count = approx_token_count(&text);
@@ -259,8 +250,6 @@ impl UnifiedExecProcessManager {
             output_buffer,
             output_notify,
             cancellation_token,
-            session_ref,
-            turn_ref,
             command: session_command,
             process_id,
             ..
@@ -325,10 +314,6 @@ impl UnifiedExecProcessManager {
             session_command: Some(session_command.clone()),
         };
 
-        if response.process_id.is_some() {
-            Self::emit_waiting_status(&session_ref, &turn_ref, &session_command).await;
-        }
-
         Ok(response)
     }
 
@@ -382,8 +367,6 @@ impl UnifiedExecProcessManager {
             output_buffer,
             output_notify,
             cancellation_token,
-            session_ref: Arc::clone(&entry.session_ref),
-            turn_ref: Arc::clone(&entry.turn_ref),
             command: entry.command.clone(),
             process_id: entry.process_id.clone(),
         })
@@ -412,8 +395,6 @@ impl UnifiedExecProcessManager {
     ) {
         let entry = ProcessEntry {
             process: Arc::clone(&process),
-            session_ref: Arc::clone(&context.session),
-            turn_ref: Arc::clone(&context.turn),
             call_id: context.call_id.clone(),
             process_id: process_id.clone(),
             command: command.to_vec(),
@@ -447,25 +428,6 @@ impl UnifiedExecProcessManager {
             transcript,
             started_at,
         );
-    }
-
-    async fn emit_waiting_status(
-        session: &Arc<Session>,
-        turn: &Arc<TurnContext>,
-        command: &[String],
-    ) {
-        let command_display = if let Some((_, script)) = extract_bash_command(command) {
-            script.to_string()
-        } else {
-            command.join(" ")
-        };
-        let message = format!("Waiting for `{command_display}`");
-        session
-            .send_event(
-                turn.as_ref(),
-                EventMsg::BackgroundEvent(BackgroundEventEvent { message }),
-            )
-            .await;
     }
 
     pub(crate) async fn open_session_with_exec_env(
