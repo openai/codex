@@ -1,4 +1,5 @@
 use crate::agent::AgentStatus;
+use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -11,8 +12,14 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::CollabInteractionEvent;
-use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
+use codex_protocol::protocol::CollabAgentInteractionEndEvent;
+use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabCloseBeginEvent;
+use codex_protocol::protocol::CollabCloseEndEvent;
+use codex_protocol::protocol::CollabWaitingBeginEvent;
+use codex_protocol::protocol::CollabWaitingEndEvent;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -42,6 +49,7 @@ impl ToolHandler for CollabHandler {
             turn,
             tool_name,
             payload,
+            call_id,
             ..
         } = invocation;
 
@@ -55,10 +63,10 @@ impl ToolHandler for CollabHandler {
         };
 
         match tool_name.as_str() {
-            "spawn_agent" => spawn::handle(session, turn, arguments).await,
-            "send_input" => send_input::handle(session, turn, arguments).await,
-            "wait" => wait::handle(session, turn, arguments).await,
-            "close_agent" => close_agent::handle(session, turn, arguments).await,
+            "spawn_agent" => spawn::handle(session, turn, call_id, arguments).await,
+            "send_input" => send_input::handle(session, turn, call_id, arguments).await,
+            "wait" => wait::handle(session, turn, call_id, arguments).await,
+            "close_agent" => close_agent::handle(session, turn, call_id, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
             ))),
@@ -68,7 +76,6 @@ impl ToolHandler for CollabHandler {
 
 mod spawn {
     use super::*;
-    use crate::codex::Session;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
@@ -79,6 +86,7 @@ mod spawn {
     pub async fn handle(
         session: Arc<Session>,
         turn: Arc<TurnContext>,
+        call_id: String,
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
@@ -87,45 +95,61 @@ mod spawn {
                 "Empty message can't be send to an agent".to_string(),
             ));
         }
+        let prompt = args.message.clone();
+        session
+            .send_event(
+                &turn,
+                CollabAgentSpawnBeginEvent {
+                    call_id: call_id.clone(),
+                    sender_thread_id: session.conversation_id,
+                    prompt: prompt.clone(),
+                }
+                .into(),
+            )
+            .await;
         let config = build_agent_spawn_config(turn.as_ref())?;
         let result = session
             .services
             .agent_control
-            .spawn_agent(config, args.message.clone(), true)
+            .spawn_agent(config, prompt.clone(), true)
             .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
-
-        emit_event(session, turn, args.message, result).await;
-
-        Ok(ToolOutput::Function {
-            content: format!("agent_id: {result}"),
-            success: Some(true),
-            content_items: None,
-        })
-    }
-
-    async fn emit_event(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        prompt: String,
-        new_id: ThreadId,
-    ) {
+            .map_err(|err| FunctionCallError::Fatal(err.to_string()));
+        let (new_thread_id, status) = match &result {
+            Ok(thread_id) => (
+                Some(thread_id.clone()),
+                session
+                    .services
+                    .agent_control
+                    .get_status(thread_id.clone())
+                    .await,
+            ),
+            Err(_) => (None, AgentStatus::NotFound),
+        };
         session
             .send_event(
                 &turn,
-                EventMsg::CollabInteraction(CollabInteractionEvent::AgentSpawned {
-                    sender_id: session.conversation_id,
-                    new_id,
+                CollabAgentSpawnEndEvent {
+                    call_id,
+                    sender_thread_id: session.conversation_id,
+                    new_thread_id,
                     prompt,
-                }),
+                    status,
+                }
+                .into(),
             )
-            .await
+            .await;
+        let new_thread_id = result?;
+
+        Ok(ToolOutput::Function {
+            content: format!("agent_id: {new_thread_id}"),
+            success: Some(true),
+            content_items: None,
+        })
     }
 }
 
 mod send_input {
     use super::*;
-    use crate::codex::Session;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
@@ -137,28 +161,59 @@ mod send_input {
     pub async fn handle(
         session: Arc<Session>,
         turn: Arc<TurnContext>,
+        call_id: String,
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SendInputArgs = parse_arguments(&arguments)?;
-        let agent_id = agent_id(&args.id)?;
+        let receiver_thread_id = agent_id(&args.id)?;
         if args.message.trim().is_empty() {
             return Err(FunctionCallError::RespondToModel(
                 "Empty message can't be send to an agent".to_string(),
             ));
         }
-        let content = session
+        let prompt = args.message.clone();
+        session
+            .send_event(
+                &turn,
+                CollabAgentInteractionBeginEvent {
+                    call_id: call_id.clone(),
+                    sender_thread_id: session.conversation_id,
+                    receiver_thread_id: receiver_thread_id.clone(),
+                    prompt: prompt.clone(),
+                }
+                .into(),
+            )
+            .await;
+        let result = session
             .services
             .agent_control
-            .send_prompt(agent_id, args.message.clone())
+            .send_prompt(receiver_thread_id.clone(), prompt.clone())
             .await
             .map_err(|err| match err {
                 CodexErr::ThreadNotFound(id) => {
                     FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
                 }
                 err => FunctionCallError::Fatal(err.to_string()),
-            })?;
-
-        emit_event(session, turn, agent_id, args.message).await;
+            });
+        let status = session
+            .services
+            .agent_control
+            .get_status(receiver_thread_id.clone())
+            .await;
+        session
+            .send_event(
+                &turn,
+                CollabAgentInteractionEndEvent {
+                    call_id,
+                    sender_thread_id: session.conversation_id,
+                    receiver_thread_id,
+                    prompt,
+                    status,
+                }
+                .into(),
+            )
+            .await;
+        let content = result?;
 
         Ok(ToolOutput::Function {
             content,
@@ -166,30 +221,11 @@ mod send_input {
             content_items: None,
         })
     }
-
-    async fn emit_event(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        receiver_id: ThreadId,
-        prompt: String,
-    ) {
-        session
-            .send_event(
-                &turn,
-                EventMsg::CollabInteraction(CollabInteractionEvent::AgentInteraction {
-                    sender_id: session.conversation_id,
-                    receiver_id,
-                    prompt,
-                }),
-            )
-            .await
-    }
 }
 
 mod wait {
     use super::*;
     use crate::agent::status::is_final;
-    use crate::codex::Session;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::Instant;
@@ -210,10 +246,13 @@ mod wait {
     pub async fn handle(
         session: Arc<Session>,
         turn: Arc<TurnContext>,
+        call_id: String,
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: WaitArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
+        let receiver_thread_id = agent_id.clone();
+        let error_agent_id = agent_id.clone();
 
         // Validate timeout.
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
@@ -226,7 +265,7 @@ mod wait {
             ms => ms.min(MAX_WAIT_TIMEOUT_MS),
         };
 
-        let mut status_rx = session
+        let status_rx = session
             .services
             .agent_control
             .subscribe_status(agent_id)
@@ -238,18 +277,54 @@ mod wait {
                 err => FunctionCallError::Fatal(err.to_string()),
             })?;
 
-        let waiting_id = format!("collab-waiting-{}", uuid::Uuid::new_v4());
         session
             .send_event(
                 &turn,
-                EventMsg::CollabInteraction(CollabInteractionEvent::WaitingBegin {
-                    sender_id: session.conversation_id,
-                    receiver_id: agent_id,
-                    waiting_id: waiting_id.clone(),
-                }),
+                CollabWaitingBeginEvent {
+                    sender_thread_id: session.conversation_id,
+                    receiver_thread_id: receiver_thread_id.clone(),
+                    call_id: call_id.clone(),
+                }
+                .into(),
+            )
+            .await;
+        let result = wait_for_status(session.as_ref(), agent_id, timeout_ms, status_rx).await;
+        session
+            .send_event(
+                &turn,
+                CollabWaitingEndEvent {
+                    sender_thread_id: session.conversation_id,
+                    receiver_thread_id,
+                    call_id,
+                    status: result.status.clone(),
+                }
+                .into(),
             )
             .await;
 
+        if matches!(result.status, AgentStatus::NotFound) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "agent with id {error_agent_id} not found"
+            )));
+        }
+
+        let content = serde_json::to_string(&result).map_err(|err| {
+            FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
+        })?;
+
+        Ok(ToolOutput::Function {
+            content,
+            success: Some(!result.timed_out),
+            content_items: None,
+        })
+    }
+
+    async fn wait_for_status(
+        session: &Session,
+        agent_id: ThreadId,
+        timeout_ms: i64,
+        mut status_rx: tokio::sync::watch::Receiver<AgentStatus>,
+    ) -> WaitResult {
         // Get last known status.
         let mut status = status_rx.borrow_and_update().clone();
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
@@ -274,41 +349,12 @@ mod wait {
             }
         };
 
-        session
-            .send_event(
-                &turn,
-                EventMsg::CollabInteraction(CollabInteractionEvent::WaitingEnd {
-                    sender_id: session.conversation_id,
-                    receiver_id: agent_id,
-                    waiting_id,
-                    status: status.clone(),
-                }),
-            )
-            .await;
-
-        if matches!(status, AgentStatus::NotFound) {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "agent with id {agent_id} not found"
-            )));
-        }
-
-        let result = WaitResult { status, timed_out };
-
-        let content = serde_json::to_string(&result).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
-        })?;
-
-        Ok(ToolOutput::Function {
-            content,
-            success: Some(!result.timed_out),
-            content_items: None,
-        })
+        WaitResult { status, timed_out }
     }
 }
 
 pub mod close_agent {
     use super::*;
-    use crate::codex::Session;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -319,27 +365,53 @@ pub mod close_agent {
     pub async fn handle(
         session: Arc<Session>,
         turn: Arc<TurnContext>,
+        call_id: String,
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
         let status = session.services.agent_control.get_status(agent_id).await;
 
-        if !matches!(status, AgentStatus::Shutdown) {
-            let _ = session
+        session
+            .send_event(
+                &turn,
+                CollabCloseBeginEvent {
+                    call_id: call_id.clone(),
+                    sender_thread_id: session.conversation_id,
+                    receiver_thread_id: agent_id.clone(),
+                }
+                .into(),
+            )
+            .await;
+        let result = if !matches!(status, AgentStatus::Shutdown) {
+            session
                 .services
                 .agent_control
-                .shutdown_agent(agent_id)
+                .shutdown_agent(agent_id.clone())
                 .await
                 .map_err(|err| match err {
                     CodexErr::ThreadNotFound(id) => {
                         FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
                     }
                     err => FunctionCallError::Fatal(err.to_string()),
-                })?;
-        }
-
-        emit_event(session, turn, agent_id, status.clone()).await;
+                })
+                .map(|_| ())
+        } else {
+            Ok(())
+        };
+        session
+            .send_event(
+                &turn,
+                CollabCloseEndEvent {
+                    call_id,
+                    sender_thread_id: session.conversation_id,
+                    receiver_thread_id: agent_id,
+                    status: status.clone(),
+                }
+                .into(),
+            )
+            .await;
+        result?;
 
         let content = serde_json::to_string(&CloseAgentResult { status }).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize close_agent result: {err}"))
@@ -350,24 +422,6 @@ pub mod close_agent {
             success: Some(true),
             content_items: None,
         })
-    }
-
-    async fn emit_event(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        receiver_id: ThreadId,
-        status: AgentStatus,
-    ) {
-        session
-            .send_event(
-                &turn,
-                EventMsg::CollabInteraction(CollabInteractionEvent::Close {
-                    sender_id: session.conversation_id,
-                    receiver_id,
-                    status,
-                }),
-            )
-            .await
     }
 }
 

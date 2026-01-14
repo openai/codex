@@ -1988,7 +1988,14 @@ impl ChatWidget {
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
-            EventMsg::CollabInteraction(_) => {
+            EventMsg::CollabAgentSpawnBegin(_)
+            | EventMsg::CollabAgentSpawnEnd(_)
+            | EventMsg::CollabAgentInteractionBegin(_)
+            | EventMsg::CollabAgentInteractionEnd(_)
+            | EventMsg::CollabWaitingBegin(_)
+            | EventMsg::CollabWaitingEnd(_)
+            | EventMsg::CollabCloseBegin(_)
+            | EventMsg::CollabCloseEnd(_) => {
                 // TODO(jif) handle collab tools.
             }
             EventMsg::RawResponseItem(_)
