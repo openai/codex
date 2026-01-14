@@ -179,13 +179,22 @@ fn is_direct_gui_launch(command: &[String]) -> bool {
 fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
     // PowerShell cmdlets/aliases for deletion
     const DELETE_CMDLETS: &[&str] = &["remove-item", "ri", "rm", "del", "erase", "rd", "rmdir"];
-    let has_delete = tokens.iter().any(|t| DELETE_CMDLETS.contains(&t.as_str()));
+    const PS_SEPARATORS: &[char] = &[';', '|', '&', '{', '}', '(', ')', '\n', '\r', '\t', ','];
+
+    let has_delete = tokens.iter().any(|t| {
+        // We split on common delimiters to catch chained commands.
+        // '&' is the PowerShell call operator and can prefix cmdlets without whitespace.
+        t.split(|c| PS_SEPARATORS.contains(&c)).any(|segment| {
+            let s = segment.trim();
+            DELETE_CMDLETS.iter().any(|cmd| s.eq_ignore_ascii_case(cmd))
+        })
+    });
     let has_force = tokens.iter().any(|t| {
-        // Handle -Force, -Force:, -Force; (trailing punctuation)
-        // We use trim_end_matches for simplicity/performance. If this becomes insufficient
-        // (e.g. need to handle complex surrounding punctuation), consider using a Regex.
-        let trimmed = t.trim_end_matches([';', ')', '}', ']']);
-        trimmed == "-force" || trimmed.starts_with("-force:")
+        t.split(|c| PS_SEPARATORS.contains(&c)).any(|segment| {
+            let trimmed = segment.trim();
+            trimmed.eq_ignore_ascii_case("-force")
+                || trimmed.to_ascii_lowercase().starts_with("-force:")
+        })
     });
     has_delete && has_force
 }
@@ -513,6 +522,27 @@ mod tests {
         // "echo hello & del /f file.txt" -> should be dangerous
         assert!(is_dangerous_command_windows(&vec_str(&[
             "cmd", "/c", "echo", "hello", "&", "del", "/f", "file.txt"
+        ])));
+    }
+
+    #[test]
+    fn powershell_chained_no_space_is_dangerous() {
+        // "Write-Host hi;Remove-Item -Force C:\tmp" -> should be dangerous
+        // Tokenizer might see "hi;Remove-Item" as one token.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Write-Host hi;Remove-Item -Force C:\\tmp"
+        ])));
+    }
+
+    #[test]
+    fn powershell_comma_separated_is_dangerous() {
+        // "del,-Force,C:\foo" -> should be dangerous as comma is a separator/argument delimiter
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "del,-Force,C:\\foo"
         ])));
     }
 }
