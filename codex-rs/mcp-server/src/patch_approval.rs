@@ -6,6 +6,7 @@ use codex_core::CodexThread;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::ThreadId;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPCErrorError;
@@ -19,11 +20,13 @@ use tracing::error;
 use crate::codex_tool_runner::INVALID_PARAMS_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PatchApprovalElicitRequestParams {
     pub message: String,
     #[serde(rename = "requestedSchema")]
     pub requested_schema: ElicitRequestParamsRequestedSchema,
+    #[serde(rename = "threadId")]
+    pub thread_id: ThreadId,
     pub codex_elicitation: String,
     pub codex_mcp_tool_call_id: String,
     pub codex_event_id: String,
@@ -51,6 +54,7 @@ pub(crate) async fn handle_patch_approval_request(
     request_id: RequestId,
     tool_call_id: String,
     event_id: String,
+    thread_id: ThreadId,
 ) {
     let mut message_lines = Vec::new();
     if let Some(r) = &reason {
@@ -65,6 +69,7 @@ pub(crate) async fn handle_patch_approval_request(
             properties: json!({}),
             required: None,
         },
+        thread_id,
         codex_elicitation: "patch-approval".to_string(),
         codex_mcp_tool_call_id: tool_call_id.clone(),
         codex_event_id: event_id.clone(),
