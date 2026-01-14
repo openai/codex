@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -240,6 +241,46 @@ impl From<ModelInfo> for ModelPreset {
             show_in_picker: info.visibility == ModelVisibility::List,
             supported_in_api: info.supported_in_api,
         }
+    }
+}
+
+impl ModelPreset {
+    /// Filter models based on authentication mode.
+    ///
+    /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
+    pub fn filter_by_auth(models: Vec<ModelPreset>, chatgpt_mode: bool) -> Vec<ModelPreset> {
+        models
+            .into_iter()
+            .filter(|model| chatgpt_mode || model.supported_in_api)
+            .collect()
+    }
+
+    /// Merge remote presets with existing presets, preferring remote when slugs match.
+    ///
+    /// Remote presets take precedence. Existing presets not in remote are appended with `is_default` set to false.
+    pub fn merge(
+        remote_presets: Vec<ModelPreset>,
+        existing_presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
+        if remote_presets.is_empty() {
+            return existing_presets;
+        }
+
+        let remote_slugs: HashSet<&str> = remote_presets
+            .iter()
+            .map(|preset| preset.model.as_str())
+            .collect();
+
+        let mut merged_presets = remote_presets.clone();
+        for mut preset in existing_presets {
+            if remote_slugs.contains(preset.model.as_str()) {
+                continue;
+            }
+            preset.is_default = false;
+            merged_presets.push(preset);
+        }
+
+        merged_presets
     }
 }
 

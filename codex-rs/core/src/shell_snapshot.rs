@@ -135,7 +135,13 @@ async fn run_shell_script_with_timeout(
 }
 
 fn zsh_snapshot_script() -> &'static str {
-    r##"print '# Snapshot file'
+    r##"if [[ -n "$ZDOTDIR" ]]; then
+  rc="$ZDOTDIR/.zshrc"
+else
+  rc="$HOME/.zshrc"
+fi
+[[ -r "$rc" ]] && . "$rc"
+print '# Snapshot file'
 print '# Unset all aliases to avoid conflicts with functions'
 print 'unalias -a 2>/dev/null || true'
 print '# Functions'
@@ -156,7 +162,10 @@ export -p
 }
 
 fn bash_snapshot_script() -> &'static str {
-    r##"echo '# Snapshot file'
+    r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
+  . "$HOME/.bashrc"
+fi
+echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
 unalias -a 2>/dev/null || true
 echo '# Functions'
@@ -180,7 +189,10 @@ export -p
 }
 
 fn sh_snapshot_script() -> &'static str {
-    r##"echo '# Snapshot file'
+    r##"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
+  . "$ENV"
+fi
+echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
 unalias -a 2>/dev/null || true
 echo '# Functions'

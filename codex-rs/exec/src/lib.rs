@@ -15,9 +15,11 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
+use codex_common::oss::ollama_chat_deprecation_notice;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
+use codex_core::OLLAMA_CHAT_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
@@ -27,6 +29,7 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -176,7 +179,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             Some(provider)
         } else {
             return Err(anyhow::anyhow!(
-                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to either {LMSTUDIO_OSS_PROVIDER_ID} or {OLLAMA_OSS_PROVIDER_ID} in config.toml"
+                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}, {OLLAMA_CHAT_PROVIDER_ID} in config.toml"
             ));
         }
     } else {
@@ -223,15 +226,25 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let otel =
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false);
+    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
+        Ok(notice) => notice,
+        Err(err) => {
+            tracing::warn!(?err, "Failed to detect Ollama wire API");
+            None
+        }
+    };
 
-    #[allow(clippy::print_stderr)]
-    let otel = match otel {
-        Ok(otel) => otel,
-        Err(e) => {
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
             eprintln!("Could not create otel exporter: {e}");
-            std::process::exit(1);
+            None
+        }
+        Err(_) => {
+            eprintln!("Could not create otel exporter: panicked during initialization");
+            None
         }
     };
 
@@ -253,6 +266,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             last_message_file.clone(),
         )),
     };
+    if let Some(notice) = ollama_chat_support_notice {
+        event_processor.process_event(Event {
+            id: String::new(),
+            msg: EventMsg::DeprecationNotice(notice),
+        });
+    }
 
     if oss {
         // We're in the oss section, so provider_id should be Some
@@ -294,7 +313,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     );
     let default_model = thread_manager
         .get_models_manager()
-        .get_model(&config.model, &config)
+        .get_default_model(&config.model, &config, RefreshStrategy::OnlineIfUncached)
         .await;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.

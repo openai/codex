@@ -14,7 +14,12 @@
 //! cache key is designed to change when the active cell mutates in place or when its transcript
 //! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
 //! every draw.
-
+//!
+//! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
+//! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
+//! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
+//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
+//! `update_task_running_state`.
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -352,6 +357,12 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+/// Maintains the per-session UI state for the chat screen.
+///
+/// This type owns the state derived from a `codex_core::protocol` event stream (history cells,
+/// active streaming buffers, bottom-pane overlays, and transient status text). It is not
+/// responsible for running the agent itself; it only reflects progress by updating UI state and by
+/// sending `Op` requests back to codex-core.
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -387,6 +398,16 @@ pub(crate) struct ChatWidget {
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    /// Tracks whether codex-core currently considers an agent turn to be in progress.
+    ///
+    /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
+    /// can update the status header without accidentally clearing the spinner for an active turn.
+    agent_turn_running: bool,
+    /// Tracks per-server MCP startup state while startup is in progress.
+    ///
+    /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
+    /// bottom pane is treated as "running" while this is populated, even if no agent turn is
+    /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -480,6 +501,15 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
+    ///
+    /// The bottom pane only has one running flag, but this module treats it as a derived state of
+    /// both the agent turn lifecycle and MCP startup lifecycle.
+    fn update_task_running_state(&mut self) {
+        self.bottom_pane
+            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+    }
+
     fn restore_reasoning_status_header(&mut self) {
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             self.set_status_header(header);
@@ -661,8 +691,9 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.agent_turn_running = true;
         self.bottom_pane.clear_ctrl_c_quit_hint();
-        self.bottom_pane.set_task_running(true);
+        self.update_task_running_state();
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
@@ -676,7 +707,8 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.flush_unified_exec_wait_streak();
         // Mark task stopped and request redraw now that all content is in history.
-        self.bottom_pane.set_task_running(false);
+        self.agent_turn_running = false;
+        self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -804,12 +836,16 @@ impl ChatWidget {
             self.rate_limit_snapshot = None;
         }
     }
-    /// Finalize any active exec as failed and stop/clear running UI state.
+    /// Finalize any active exec as failed and stop/clear agent-turn UI state.
+    ///
+    /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
+    /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
-        self.bottom_pane.set_task_running(false);
+        self.agent_turn_running = false;
+        self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -838,7 +874,7 @@ impl ChatWidget {
         }
         status.insert(ev.server, ev.status);
         self.mcp_startup_status = Some(status);
-        self.bottom_pane.set_task_running(true);
+        self.update_task_running_state();
         if let Some(current) = &self.mcp_startup_status {
             let total = current.len();
             let mut starting: Vec<_> = current
@@ -894,7 +930,7 @@ impl ChatWidget {
         }
 
         self.mcp_startup_status = None;
-        self.bottom_pane.set_task_running(false);
+        self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
     }
@@ -1527,7 +1563,7 @@ impl ChatWidget {
         let mut config = config;
         config.model = Some(model.clone());
         let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
         let mut widget = Self {
@@ -1568,6 +1604,7 @@ impl ChatWidget {
             unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            agent_turn_running: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1616,7 +1653,7 @@ impl ChatWidget {
             ..
         } = common;
         let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -1659,6 +1696,7 @@ impl ChatWidget {
             unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            agent_turn_running: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2102,7 +2140,7 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if self.bottom_pane.is_task_running() {
+        if self.bottom_pane.is_task_running() || self.is_review_mode {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
         } else {
@@ -2311,7 +2349,7 @@ impl ChatWidget {
                 }
             }
             EventMsg::EnteredReviewMode(review_request) => {
-                self.on_entered_review_mode(review_request)
+                self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
@@ -2325,10 +2363,14 @@ impl ChatWidget {
         }
     }
 
-    fn on_entered_review_mode(&mut self, review: ReviewRequest) {
+    fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         // Enter review mode and emit a concise banner
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
+        }
+        // Avoid toggling running state for replayed history events on resume.
+        if !from_replay && !self.bottom_pane.is_task_running() {
+            self.bottom_pane.set_task_running(true);
         }
         self.is_review_mode = true;
         let hint = review
@@ -3812,9 +3854,12 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
     /// Forward an `Op` directly to codex.
-    pub(crate) fn submit_op(&self, op: Op) {
+    pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
+        if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
+            self.bottom_pane.set_task_running(true);
+        }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
         }
@@ -4161,13 +4206,15 @@ impl Notification {
 
 const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
 
-const EXAMPLE_PROMPTS: [&str; 6] = [
+const PLACEHOLDERS: [&str; 8] = [
     "Explain this codebase",
     "Summarize recent commits",
     "Implement {feature}",
     "Find and fix a bug in @filename",
     "Write tests for @filename",
     "Improve documentation in @filename",
+    "Run /review on my current changes",
+    "Use /skills to list available skills",
 ];
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.

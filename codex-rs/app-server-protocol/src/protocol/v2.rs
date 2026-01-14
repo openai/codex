@@ -2107,6 +2107,16 @@ pub struct DeprecationNoticeNotification {
     pub details: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigWarningNotification {
+    /// Concise summary of the warning.
+    pub summary: String,
+    /// Optional extra guidance or error details.
+    pub details: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
