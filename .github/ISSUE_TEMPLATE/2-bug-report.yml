@@ -45,7 +45,7 @@ body:
     attributes:
       label: What terminal emulator are you using (if applicable)?
       description: |
-        For example: iTerm2, PowerShell, Ghostty, etc.
+        E.g, VSCode, Terminal.app, iTerm2, Ghostty, Windows Terminal (WSL / PowerShell)
   - type: textarea
     id: actual
     attributes:
