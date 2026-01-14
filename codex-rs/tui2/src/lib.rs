@@ -6,6 +6,7 @@
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
+pub use app::ExitReason;
 use codex_app_server_protocol::AuthMode;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
@@ -316,15 +317,23 @@ pub async fn run_main(
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
-    let otel =
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true);
-
-    #[allow(clippy::print_stderr)]
-    let otel = match otel {
-        Ok(otel) => otel,
-        Err(e) => {
-            eprintln!("Could not create otel exporter: {e}");
-            std::process::exit(1);
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: {e}");
+            }
+            None
+        }
+        Err(_) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: panicked during initialization");
+            }
+            None
         }
     };
 
@@ -395,6 +404,7 @@ async fn run_ratatui_app(
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
                         update_action: Some(action),
+                        exit_reason: ExitReason::UserRequested,
                         session_lines: Vec::new(),
                     });
                 }
@@ -435,6 +445,7 @@ async fn run_ratatui_app(
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
                 update_action: None,
+                exit_reason: ExitReason::UserRequested,
                 session_lines: Vec::new(),
             });
         }
@@ -464,16 +475,13 @@ async fn run_ratatui_app(
         restore();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
-        if let Err(err) = writeln!(
-            std::io::stdout(),
-            "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
-        ) {
-            error!("Failed to write session error message: {err}");
-        }
         Ok(AppExitInfo {
             token_usage: codex_core::protocol::TokenUsage::default(),
             conversation_id: None,
             update_action: None,
+            exit_reason: ExitReason::Fatal(format!(
+                "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
+            )),
             session_lines: Vec::new(),
         })
     };
@@ -520,6 +528,7 @@ async fn run_ratatui_app(
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
                         update_action: None,
+                        exit_reason: ExitReason::UserRequested,
                         session_lines: Vec::new(),
                     });
                 }
@@ -568,6 +577,7 @@ async fn run_ratatui_app(
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    exit_reason: ExitReason::UserRequested,
                     session_lines: Vec::new(),
                 });
             }

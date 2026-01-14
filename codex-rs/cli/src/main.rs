@@ -26,6 +26,7 @@ use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
+use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
@@ -353,6 +354,14 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
 /// Handle the app exit and print the results. Optionally run the update action.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
+    match exit_info.exit_reason {
+        ExitReason::Fatal(message) => {
+            eprintln!("ERROR: {message}");
+            std::process::exit(1);
+        }
+        ExitReason::UserRequested => { /* normal exit */ }
+    }
+
     let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
@@ -947,6 +956,7 @@ mod tests {
             token_usage,
             thread_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
             update_action: None,
+            exit_reason: ExitReason::UserRequested,
         }
     }
 
@@ -956,6 +966,7 @@ mod tests {
             token_usage: TokenUsage::default(),
             thread_id: None,
             update_action: None,
+            exit_reason: ExitReason::UserRequested,
         };
         let lines = format_exit_messages(exit_info, false);
         assert!(lines.is_empty());
