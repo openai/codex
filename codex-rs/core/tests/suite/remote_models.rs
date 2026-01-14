@@ -488,7 +488,7 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
         default_model == "gpt-5.2-codex",
         "get_model should return default model when refresh times out, got: {default_model}"
     );
-    server
+    let _ = server
         .received_requests()
         .await
         .expect("mock server should capture requests")
