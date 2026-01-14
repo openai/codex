@@ -266,7 +266,9 @@ impl TextArea {
                 code: KeyCode::Backspace,
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::ALT) => self.delete_backward_word(),
+            } if modifiers.contains(KeyModifiers::ALT) && !is_altgr(modifiers) => {
+                self.delete_backward_word()
+            }
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -280,7 +282,9 @@ impl TextArea {
                 code: KeyCode::Delete,
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::ALT) => self.delete_forward_word(),
+            } if modifiers.contains(KeyModifiers::ALT) && !is_altgr(modifiers) => {
+                self.delete_forward_word()
+            }
             KeyEvent {
                 code: KeyCode::Delete,
                 ..
@@ -1628,6 +1632,28 @@ mod tests {
         ));
         assert_eq!(t.text(), "c");
         assert_eq!(t.cursor(), 1);
+    }
+
+    #[cfg_attr(not(windows), ignore = "AltGr modifier only applies on Windows")]
+    #[test]
+    fn altgr_backspace_delete_are_single_char() {
+        let mut t = ta_with("hello");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(t.text(), "hell");
+        assert_eq!(t.cursor(), 4);
+
+        let mut t = ta_with("hello");
+        t.set_cursor(0);
+        t.input(KeyEvent::new(
+            KeyCode::Delete,
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(t.text(), "ello");
+        assert_eq!(t.cursor(), 0);
     }
 
     #[test]
