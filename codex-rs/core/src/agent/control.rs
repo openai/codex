@@ -115,7 +115,8 @@ mod tests {
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use assert_matches::assert_matches;
-    use codex_protocol::protocol::{ErrorEvent, EventMsg};
+    use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;

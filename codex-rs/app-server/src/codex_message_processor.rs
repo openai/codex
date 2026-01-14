@@ -230,7 +230,7 @@ pub(crate) struct CodexMessageProcessor {
     config: Arc<Config>,
     cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
-    listener_threads: HashMap<Uuid, ThreadId>,
+    listener_thread_ids_by_subscription: HashMap<Uuid, ThreadId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
@@ -288,7 +288,7 @@ impl CodexMessageProcessor {
             config,
             cli_overrides,
             conversation_listeners: HashMap::new(),
-            listener_threads: HashMap::new(),
+            listener_thread_ids_by_subscription: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
@@ -1682,9 +1682,11 @@ impl CodexMessageProcessor {
 
     /// Ensure we have a listener for thread_id
     pub(crate) async fn ensure_thread_listener(&mut self, thread_id: ThreadId) {
-        if self.listener_threads
+        if self
+            .listener_thread_ids_by_subscription
             .values()
-            .any(|entry| *entry == thread_id) {
+            .any(|entry| *entry == thread_id)
+        {
             return;
         }
 
@@ -3593,7 +3595,10 @@ impl CodexMessageProcessor {
             Some(sender) => {
                 // Signal the spawned task to exit and acknowledge.
                 let _ = sender.send(());
-                if let Some(thread_id) = self.listener_threads.remove(&subscription_id) {
+                if let Some(thread_id) = self
+                    .listener_thread_ids_by_subscription
+                    .remove(&subscription_id)
+                {
                     info!("removed listener for thread {thread_id}");
                 }
                 let response = RemoveConversationSubscriptionResponse {};
@@ -3631,7 +3636,7 @@ impl CodexMessageProcessor {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         self.conversation_listeners
             .insert(subscription_id, cancel_tx);
-        self.listener_threads
+        self.listener_thread_ids_by_subscription
             .insert(subscription_id, conversation_id);
 
         let outgoing_for_task = self.outgoing.clone();
