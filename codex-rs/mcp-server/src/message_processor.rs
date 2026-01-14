@@ -507,7 +507,9 @@ impl MessageProcessor {
                         annotations: None,
                     })],
                     is_error: Some(true),
-                    structured_content: None,
+                    structured_content: Some(json!({
+                        "conversationId": conversation_id,
+                    })),
                 };
                 outgoing.send_response(request_id, result).await;
                 return;
@@ -522,12 +524,12 @@ impl MessageProcessor {
 
             async move {
                 crate::codex_tool_runner::run_codex_tool_session_reply(
+                    conversation_id,
                     codex,
                     outgoing,
                     request_id,
                     prompt,
                     running_requests_id_to_codex_uuid,
-                    conversation_id,
                 )
                 .await;
             }
@@ -563,8 +565,8 @@ impl MessageProcessor {
             RequestId::Integer(i) => i.to_string(),
         };
 
-        // Obtain the conversation id while holding the first lock, then release.
-        let conversation_id = {
+        // Obtain the thread id while holding the first lock, then release.
+        let thread_id = {
             let map_guard = self.running_requests_id_to_codex_uuid.lock().await;
             match map_guard.get(&request_id) {
                 Some(id) => *id,
@@ -574,13 +576,13 @@ impl MessageProcessor {
                 }
             }
         };
-        tracing::info!("conversation_id: {conversation_id}");
+        tracing::info!("thread_id: {thread_id}");
 
-        // Obtain the Codex conversation from the server.
-        let codex_arc = match self.thread_manager.get_thread(conversation_id).await {
+        // Obtain the Codex thread from the server.
+        let codex_arc = match self.thread_manager.get_thread(thread_id).await {
             Ok(c) => c,
             Err(_) => {
-                tracing::warn!("Session not found for conversation_id: {conversation_id}");
+                tracing::warn!("Session not found for thread_id: {thread_id}");
                 return;
             }
         };
