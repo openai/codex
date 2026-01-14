@@ -490,18 +490,41 @@ impl ChatWidget {
         self.set_skills(None);
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
-        // Flush any placeholder header now that the session is configured.
-        self.flush_active_cell();
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.model = Some(model_for_header.clone());
         self.session_header.set_model(&model_for_header);
-        self.add_to_history(history_cell::new_session_info(
+        let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
             event,
             self.show_welcome_banner,
-        ));
+        );
+
+        let mut merged_header = false;
+        let mut session_info_to_add = Some(session_info_cell);
+        if let Some(active) = self.active_cell.take() {
+            if active
+                .as_any()
+                .is::<history_cell::SessionHeaderHistoryCell>()
+            {
+                if let Some(cell) = session_info_to_add.take() {
+                    self.active_cell = Some(Box::new(cell));
+                }
+                merged_header = true;
+            } else {
+                self.active_cell = Some(active);
+            }
+        }
+
+        self.flush_active_cell();
+
+        if !merged_header {
+            if let Some(cell) = session_info_to_add {
+                self.add_to_history(cell);
+            }
+        }
+
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -1635,7 +1658,11 @@ impl ChatWidget {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
-                        self.submit_user_message(user_message);
+                        if !self.is_session_configured() {
+                            self.queue_user_message(user_message);
+                        } else {
+                            self.submit_user_message(user_message);
+                        }
                     }
                     InputResult::Queued(text) => {
                         // Tab queues the message if a task is running, otherwise submits immediately
@@ -1916,7 +1943,13 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        if !cell.display_lines(u16::MAX).is_empty() {
+        let hold_session_header = !self.is_session_configured()
+            && self
+                .active_cell
+                .as_ref()
+                .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
+
+        if !hold_session_header && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
             self.needs_final_message_separator = true;
