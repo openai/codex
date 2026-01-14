@@ -11,8 +11,8 @@ use codex_core::sandboxing::SandboxPermissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
 use tempfile::NamedTempFile;
+use tokio::process::Command;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
@@ -183,6 +183,7 @@ async fn test_git_dir_write_blocked() {
         .arg(".")
         .current_dir(repo_root)
         .output()
+        .await
         .expect("git init .");
 
     let git_config = repo_root.join(".git").join("config");
@@ -204,6 +205,57 @@ async fn test_git_dir_write_blocked() {
             "bash",
             "-lc",
             &format!("echo pwned > {}", git_index_lock.to_string_lossy()),
+        ],
+        &[repo_root.to_path_buf()],
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_git_dir_move_blocked() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let repo_root = tmpdir.path();
+    Command::new("git")
+        .arg("init")
+        .arg(".")
+        .current_dir(repo_root)
+        .output()
+        .await
+        .expect("git init .");
+
+    let git_dir = repo_root.join(".git");
+    let git_dir_backup = repo_root.join(".git.bak");
+
+    assert_write_blocked(
+        &[
+            "bash",
+            "-lc",
+            &format!(
+                "mv {} {}",
+                git_dir.to_string_lossy(),
+                git_dir_backup.to_string_lossy()
+            ),
+        ],
+        &[repo_root.to_path_buf()],
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_codex_dir_write_blocked() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let repo_root = tmpdir.path();
+    std::fs::create_dir_all(repo_root.join(".codex")).unwrap();
+
+    let codex_config = repo_root.join(".codex").join("config.toml");
+
+    assert_write_blocked(
+        &[
+            "bash",
+            "-lc",
+            &format!("echo pwned > {}", codex_config.to_string_lossy()),
         ],
         &[repo_root.to_path_buf()],
         LONG_TIMEOUT_MS,
