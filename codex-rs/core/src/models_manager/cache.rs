@@ -97,11 +97,11 @@ impl ModelsCacheManager {
 
 /// Serialized snapshot of models and metadata cached on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ModelsCache {
-    fetched_at: DateTime<Utc>,
+pub(crate) struct ModelsCache {
+    pub(crate) fetched_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    etag: Option<String>,
-    models: Vec<ModelInfo>,
+    pub(crate) etag: Option<String>,
+    pub(crate) models: Vec<ModelInfo>,
 }
 
 impl ModelsCache {
