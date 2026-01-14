@@ -199,6 +199,28 @@ impl UnifiedExecWaitState {
     }
 }
 
+#[derive(Clone, Debug)]
+struct UnifiedExecWaitStreak {
+    process_id: String,
+    command_display: Option<String>,
+}
+
+impl UnifiedExecWaitStreak {
+    fn new(process_id: String, command_display: Option<String>) -> Self {
+        Self {
+            process_id,
+            command_display: command_display.filter(|display| !display.is_empty()),
+        }
+    }
+
+    fn update_command_display(&mut self, command_display: Option<String>) {
+        if self.command_display.is_some() {
+            return;
+        }
+        self.command_display = command_display.filter(|display| !display.is_empty());
+    }
+}
+
 fn is_unified_exec_source(source: ExecCommandSource) -> bool {
     matches!(
         source,
@@ -373,6 +395,7 @@ pub(crate) struct ChatWidget {
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
     last_unified_wait: Option<UnifiedExecWaitState>,
+    unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
@@ -486,6 +509,26 @@ impl ChatWidget {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
     }
+
+    fn restore_reasoning_status_header(&mut self) {
+        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+            self.set_status_header(header);
+        } else if self.bottom_pane.is_task_running() {
+            self.set_status_header(String::from("Working"));
+        }
+    }
+
+    fn flush_unified_exec_wait_streak(&mut self) {
+        let Some(wait) = self.unified_exec_wait_streak.take() else {
+            return;
+        };
+        self.needs_final_message_separator = true;
+        let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
+        self.app_event_tx
+            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.restore_reasoning_status_header();
+    }
+
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -610,6 +653,12 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
+        if self.unified_exec_wait_streak.is_some() {
+            // Unified exec waiting should take precedence over reasoning-derived status headers.
+            self.request_redraw();
+            return;
+        }
+
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.set_status_header(header);
@@ -656,13 +705,14 @@ impl ChatWidget {
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
-        self.flush_wait_cell();
+        self.flush_unified_exec_wait_streak();
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.unified_exec_wait_streak = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -982,50 +1032,38 @@ impl ChatWidget {
             .find(|process| process.key == ev.process_id)
             .map(|process| process.command_display.clone());
         if ev.stdin.is_empty() {
-            // Empty stdin means we are still waiting on background output; keep a live shimmer cell.
-            if let Some(wait_cell) = self.active_cell.as_mut().and_then(|cell| {
-                cell.as_any_mut()
-                    .downcast_mut::<history_cell::UnifiedExecWaitCell>()
-            }) && wait_cell.matches(command_display.as_deref())
-            {
-                // Same process still waiting; update command display if it shows up late.
-                if wait_cell.update_command_display(command_display) {
-                    self.bump_active_cell_revision();
+            // Empty stdin means we are polling for background output.
+            // Surface this in the status header (single "waiting" surface) instead of the transcript.
+            self.bottom_pane.ensure_status_indicator();
+            self.bottom_pane.set_interrupt_hint_visible(true);
+            let header = if let Some(command) = &command_display {
+                format!("Waiting for background terminal · {command}")
+            } else {
+                "Waiting for background terminal".to_string()
+            };
+            self.set_status_header(header);
+            match &mut self.unified_exec_wait_streak {
+                Some(wait) if wait.process_id == ev.process_id => {
+                    wait.update_command_display(command_display);
                 }
-                self.request_redraw();
-                return;
+                Some(_) => {
+                    self.flush_unified_exec_wait_streak();
+                    self.unified_exec_wait_streak =
+                        Some(UnifiedExecWaitStreak::new(ev.process_id, command_display));
+                }
+                None => {
+                    self.unified_exec_wait_streak =
+                        Some(UnifiedExecWaitStreak::new(ev.process_id, command_display));
+                }
             }
-            let has_non_wait_active = matches!(
-                self.active_cell.as_ref(),
-                Some(active)
-                    if active
-                        .as_any()
-                        .downcast_ref::<history_cell::UnifiedExecWaitCell>()
-                        .is_none()
-            );
-            if has_non_wait_active {
-                // Do not preempt non-wait active cells with a wait entry.
-                return;
-            }
-            self.flush_wait_cell();
-            self.active_cell = Some(Box::new(history_cell::new_unified_exec_wait_live(
-                command_display,
-                self.config.animations,
-            )));
-            self.bump_active_cell_revision();
             self.request_redraw();
         } else {
-            if let Some(wait_cell) = self.active_cell.as_ref().and_then(|cell| {
-                cell.as_any()
-                    .downcast_ref::<history_cell::UnifiedExecWaitCell>()
-            }) {
-                // Convert the live wait cell into a static "(waited)" entry before logging stdin.
-                let waited_command = wait_cell.command_display().or(command_display.clone());
-                self.active_cell = None;
-                self.add_to_history(history_cell::new_unified_exec_interaction(
-                    waited_command,
-                    String::new(),
-                ));
+            if self
+                .unified_exec_wait_streak
+                .as_ref()
+                .is_some_and(|wait| wait.process_id == ev.process_id)
+            {
+                self.flush_unified_exec_wait_streak();
             }
             self.add_to_history(history_cell::new_unified_exec_interaction(
                 command_display,
@@ -1060,6 +1098,14 @@ impl ChatWidget {
 
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
         if is_unified_exec_source(ev.source) {
+            if let Some(process_id) = ev.process_id.as_deref()
+                && self
+                    .unified_exec_wait_streak
+                    .as_ref()
+                    .is_some_and(|wait| wait.process_id == process_id)
+            {
+                self.flush_unified_exec_wait_streak();
+            }
             self.track_unified_exec_process_end(&ev);
             if !self.bottom_pane.is_task_running() {
                 return;
@@ -1555,6 +1601,7 @@ impl ChatWidget {
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
+            unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
@@ -1646,6 +1693,7 @@ impl ChatWidget {
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
+            unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
@@ -2072,32 +2120,10 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
-        self.flush_wait_cell();
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
-    }
-
-    // Only flush a live wait cell here; other active cells must finalize via their end events.
-    fn flush_wait_cell(&mut self) {
-        // Wait cells are transient: convert them into "(waited)" history entries if present.
-        // Leave non-wait active cells intact so their end events can finalize them.
-        let Some(active) = self.active_cell.take() else {
-            return;
-        };
-        let Some(wait_cell) = active
-            .as_any()
-            .downcast_ref::<history_cell::UnifiedExecWaitCell>()
-        else {
-            self.active_cell = Some(active);
-            return;
-        };
-        self.needs_final_message_separator = true;
-        let cell =
-            history_cell::new_unified_exec_interaction(wait_cell.command_display(), String::new());
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }
 
     pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
