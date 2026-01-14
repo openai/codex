@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.1.16
+
 - 追加: SESSIONS/Chat のセッションをプロジェクト（workspace folder）単位で色分け
   - Chat のセッションタブをプロジェクトごとに角丸グループ枠で囲って表示（Chrome のタブグループ風）
   - SESSIONS ツリーにも同色のマーカーを表示
@@ -18,7 +20,8 @@
   - 質問カードの表示と回答の送信
   - 選択肢（options）のクリック選択
   - 回答（answers）をチャット履歴に保持
-- 修正: Webview の state 更新 ACK が来ない場合に、デバッグ用メッセージ（`Webview did not acknowledge state update...`）が表示されることがある
+- 修正: Webview が非表示の間は state 更新を送らず、ACK 待ちもしない（表示に戻ったら `refresh` で追いつく）
+- 改善: state 更新 ACK のタイムアウトは UI エラー扱いせず、デバッグログに出す
 - 改善: チャット内のファイル参照リンク（Ctrl/Cmd+Click で開く）を安定化
   - `+` を含むパスでもリンクが途中で切れない
   - `README.md` などが外部リンク扱いになってブラウザが開く誤動作を防止

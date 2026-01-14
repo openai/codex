@@ -4875,7 +4875,11 @@ function applyGlobalNotification(
         text: lines.join("\n") || "(no details)",
       });
 
-      if (cwd && effectiveBackendKey && isMineSelectedForBackendKey(effectiveBackendKey)) {
+      if (
+        cwd &&
+        effectiveBackendKey &&
+        isMineSelectedForBackendKey(effectiveBackendKey)
+      ) {
         void refreshMcpConfiguredServersForBackend(effectiveBackendKey, cwd);
       }
 
