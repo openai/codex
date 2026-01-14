@@ -117,31 +117,38 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         return false;
     }
 
-    for (i, cmd) in remaining.iter().enumerate() {
-        // Classic `cmd /c ... start https://...` ShellExecute path.
-        // We check if "start" appears and if there's a URL in the *rest* of the command.
-        if cmd.eq_ignore_ascii_case("start") {
-            if args_have_url(&remaining[i..]) {
+    // We split on CMD operators: &, &&, |, ||
+    // and check the first token of each segment.
+    const CMD_SEPARATORS: &[&str] = &["&", "&&", "|", "||"];
+    remaining
+        .split(|t| CMD_SEPARATORS.contains(&t.as_str()))
+        .any(|segment| {
+            let Some(cmd) = segment.first() else {
+                return false;
+            };
+
+            // Classic `cmd /c ... start https://...` ShellExecute path.
+            if cmd.eq_ignore_ascii_case("start") && args_have_url(segment) {
                 return true;
             }
-        }
 
-        // Force delete: del /f, erase /f
-        if cmd.eq_ignore_ascii_case("del") || cmd.eq_ignore_ascii_case("erase") {
-            if has_force_flag_cmd(&remaining[i..]) {
+            // Force delete: del /f, erase /f
+            if (cmd.eq_ignore_ascii_case("del") || cmd.eq_ignore_ascii_case("erase"))
+                && has_force_flag_cmd(segment)
+            {
                 return true;
             }
-        }
 
-        // Recursive directory removal: rd /s /q, rmdir /s /q
-        if cmd.eq_ignore_ascii_case("rd") || cmd.eq_ignore_ascii_case("rmdir") {
-            if has_recursive_flag_cmd(&remaining[i..]) && has_quiet_flag_cmd(&remaining[i..]) {
+            // Recursive directory removal: rd /s /q, rmdir /s /q
+            if (cmd.eq_ignore_ascii_case("rd") || cmd.eq_ignore_ascii_case("rmdir"))
+                && has_recursive_flag_cmd(segment)
+                && has_quiet_flag_cmd(segment)
+            {
                 return true;
             }
-        }
-    }
 
-    false
+            false
+        })
 }
 
 fn is_direct_gui_launch(command: &[String]) -> bool {
@@ -193,7 +200,9 @@ fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
         t.split(|c| PS_SEPARATORS.contains(&c)).any(|segment| {
             let trimmed = segment.trim();
             trimmed.eq_ignore_ascii_case("-force")
-                || trimmed.to_ascii_lowercase().starts_with("-force:")
+                || trimmed
+                    .get(..7)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("-force:"))
         })
     });
     has_delete && has_force
@@ -543,6 +552,15 @@ mod tests {
             "powershell",
             "-Command",
             "del,-Force,C:\\foo"
+        ])));
+    }
+
+    #[test]
+    fn cmd_echo_del_is_not_dangerous() {
+        // "cmd /c echo del /f" -> should NOT be dangerous (it just prints text)
+        // Current implementation likely flags this because it scans all tokens.
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "echo", "del", "/f"
         ])));
     }
 }
