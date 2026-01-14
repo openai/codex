@@ -195,6 +195,7 @@ pub(crate) struct ChatComposer {
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
+    /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
 }
 
@@ -258,6 +259,12 @@ impl ChatComposer {
         self.skills = skills;
     }
 
+    /// Enables or disables "Steer" behavior for submission keys.
+    ///
+    /// When steer is enabled, `Enter` produces [`InputResult::Submitted`] (send immediately) and
+    /// `Tab` produces [`InputResult::Queued`] (eligible to queue if a task is running).
+    /// When steer is disabled, `Enter` produces [`InputResult::Queued`], preserving the default
+    /// "queue while a task is running" behavior.
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.steer_enabled = enabled;
     }
