@@ -3421,7 +3421,9 @@ impl CodexMessageProcessor {
                 })?;
 
         let mut config = self.config.as_ref().clone();
-        config.model = Some(self.config.review_model.clone());
+        if let Some(review_model) = &config.review_model {
+            config.model = Some(review_model.clone());
+        }
 
         let NewThread {
             thread_id,

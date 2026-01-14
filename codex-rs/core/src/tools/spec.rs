@@ -169,6 +169,15 @@ fn create_exec_command_tool() -> ToolSpec {
             },
         ),
         (
+            "tty".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to allocate a TTY for the command. Defaults to false (plain pipes); set to true to open a PTY and access TTY process."
+                        .to_string(),
+                ),
+            }
+        ),
+        (
             "yield_time_ms".to_string(),
             JsonSchema::Number {
                 description: Some(

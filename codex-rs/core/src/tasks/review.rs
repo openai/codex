@@ -92,7 +92,11 @@ async fn start_review_conversation(
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
 
-    sub_agent_config.model = Some(config.review_model.clone());
+    let model = config
+        .review_model
+        .clone()
+        .unwrap_or_else(|| ctx.client.get_model());
+    sub_agent_config.model = Some(model);
     (run_codex_thread_one_shot(
         sub_agent_config,
         session.auth_manager(),

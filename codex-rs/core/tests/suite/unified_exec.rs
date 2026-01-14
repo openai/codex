@@ -37,6 +37,7 @@ use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use tokio::time::Duration;
+use which::which;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -1288,6 +1289,180 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_defaults_to_pipe() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let python = match which("python").or_else(|_| which("python3")) {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python not found in PATH, skipping tty default test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-default-pipe";
+    let args = serde_json::json!({
+        "cmd": format!("{} -c \"import sys; print(sys.stdin.isatty())\"", python.display()),
+        "yield_time_ms": 1500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check default pipe mode".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing default pipe unified exec output");
+    let normalized = output.output.replace("\r\n", "\n");
+
+    assert!(
+        normalized.contains("False"),
+        "stdin should not be a tty by default: {normalized:?}"
+    );
+    assert_eq!(output.exit_code, Some(0));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_can_enable_tty() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let python = match which("python").or_else(|_| which("python3")) {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python not found in PATH, skipping tty enable test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-tty-enabled";
+    let args = serde_json::json!({
+        "cmd": format!("{} -c \"import sys; print(sys.stdin.isatty())\"", python.display()),
+        "yield_time_ms": 1500,
+        "tty": true,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check tty enabled".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing tty-enabled unified exec output");
+    let normalized = output.output.replace("\r\n", "\n");
+
+    assert!(
+        normalized.contains("True"),
+        "stdin should be a tty when tty=true: {normalized:?}"
+    );
+    assert_eq!(output.exit_code, Some(0));
+    assert!(output.process_id.is_none(), "process should have exited");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -1404,6 +1579,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     let start_args = serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 500,
+        "tty": true,
     });
     let send_args = serde_json::json!({
         "chars": "hello unified exec\n",
@@ -1563,6 +1739,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
     let start_args = serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 200,
+        "tty": true,
     });
 
     let echo_call_id = "uexec-end-on-exit-echo";
@@ -1903,6 +2080,7 @@ PY
     let first_args = serde_json::json!({
         "cmd": script,
         "yield_time_ms": 25,
+        "tty": true,
     });
 
     let second_call_id = "uexec-lag-poll";
@@ -2285,6 +2463,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     let startup_args = serde_json::json!({
         "cmd": format!("{} -i", python.display()),
         "yield_time_ms": 1_500,
+        "tty": true,
     });
 
     let exit_call_id = "uexec-python-exit";

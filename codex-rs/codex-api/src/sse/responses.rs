@@ -290,7 +290,6 @@ pub async fn process_sse(
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
     let mut stream = stream.eventsource();
-    let mut response_completed: Option<ResponseEvent> = None;
     let mut response_error: Option<ApiError> = None;
 
     loop {
@@ -307,17 +306,10 @@ pub async fn process_sse(
                 return;
             }
             Ok(None) => {
-                match response_completed.take() {
-                    Some(event) => {
-                        let _ = tx_event.send(Ok(event)).await;
-                    }
-                    None => {
-                        let error = response_error.unwrap_or(ApiError::Stream(
-                            "stream closed before response.completed".into(),
-                        ));
-                        let _ = tx_event.send(Err(error)).await;
-                    }
-                }
+                let error = response_error.unwrap_or(ApiError::Stream(
+                    "stream closed before response.completed".into(),
+                ));
+                let _ = tx_event.send(Err(error)).await;
                 return;
             }
             Err(_) => {
@@ -341,9 +333,11 @@ pub async fn process_sse(
 
         match process_responses_event(event) {
             Ok(Some(event)) => {
-                if matches!(event, ResponseEvent::Completed { .. }) {
-                    response_completed = Some(event);
-                } else if tx_event.send(Ok(event)).await.is_err() {
+                let is_completed = matches!(event, ResponseEvent::Completed { .. });
+                if tx_event.send(Ok(event)).await.is_err() {
+                    return;
+                }
+                if is_completed {
                     return;
                 }
             }
@@ -405,7 +399,9 @@ fn rate_limit_regex() -> &'static regex_lite::Regex {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
+    use bytes::Bytes;
     use codex_protocol::models::ResponseItem;
+    use futures::stream;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -601,6 +597,44 @@ mod tests {
                 token_usage,
             }) => {
                 assert_eq!(response_id, "");
+                assert!(token_usage.is_none());
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn emits_completed_without_stream_end() {
+        let completed = json!({
+            "type": "response.completed",
+            "response": { "id": "resp1" }
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.completed\ndata: {completed}\n\n");
+        let stream = stream::iter(vec![Ok(Bytes::from(sse1))]).chain(stream::pending());
+        let stream: ByteStream = Box::pin(stream);
+
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
+        tokio::spawn(process_sse(stream, tx, idle_timeout(), None));
+
+        let events = tokio::time::timeout(Duration::from_millis(1000), async {
+            let mut events = Vec::new();
+            while let Some(ev) = rx.recv().await {
+                events.push(ev);
+            }
+            events
+        })
+        .await
+        .expect("timed out collecting events");
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }) => {
+                assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
             }
             other => panic!("unexpected event: {other:?}"),
