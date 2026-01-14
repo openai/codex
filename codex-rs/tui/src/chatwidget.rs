@@ -109,6 +109,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
+const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+
 use crate::app_event::AppEvent;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -1530,7 +1532,7 @@ impl ChatWidget {
         let model_for_header = config
             .model
             .clone()
-            .unwrap_or_else(|| "loading".to_string());
+            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
 
         let mut widget = Self {
@@ -1550,7 +1552,7 @@ impl ChatWidget {
             active_cell: if model.is_none() {
                 Some(Box::new(
                     history_cell::SessionHeaderHistoryCell::new_with_style(
-                        "loading".to_string(),
+                        DEFAULT_MODEL_DISPLAY_NAME.to_string(),
                         placeholder_style,
                         None,
                         config.cwd.clone(),
@@ -2144,14 +2146,10 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if !self.is_session_configured() {
-            self.add_info_message(
-                "Messages are disabled until startup completes.".to_string(),
-                None,
-            );
-            return;
-        }
-        if self.bottom_pane.is_task_running() || self.is_review_mode {
+        if !self.is_session_configured()
+            || self.bottom_pane.is_task_running()
+            || self.is_review_mode
+        {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
         } else {
@@ -2160,13 +2158,6 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        if !self.is_session_configured() {
-            self.add_info_message(
-                "Messages are disabled until startup completes.".to_string(),
-                None,
-            );
-            return;
-        }
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
