@@ -57,7 +57,8 @@
 //! edits and renders a placeholder prompt instead of the editable textarea. This is part of the
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
-
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -168,7 +169,8 @@ pub(crate) struct ChatComposer {
     active_popup: ActivePopup,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
-    ctrl_c_quit_hint: bool,
+    quit_shortcut_expires_at: Option<Instant>,
+    quit_shortcut_key: KeyBinding,
     esc_backtrack_hint: bool,
     use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
@@ -222,7 +224,8 @@ impl ChatComposer {
             active_popup: ActivePopup::None,
             app_event_tx,
             history: ChatComposerHistory::new(),
-            ctrl_c_quit_hint: false,
+            quit_shortcut_expires_at: None,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             esc_backtrack_hint: false,
             use_shift_enter_hint,
             dismissed_file_popup_token: None,
@@ -578,14 +581,35 @@ impl ChatComposer {
         }
     }
 
-    pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
-        self.ctrl_c_quit_hint = show;
-        if show {
-            self.footer_mode = FooterMode::CtrlCReminder;
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
+    /// Show the transient "press again to quit" hint for `key`.
+    ///
+    /// The owner (`BottomPane`/`ChatWidget`) is responsible for scheduling a
+    /// redraw after [`super::QUIT_SHORTCUT_TIMEOUT`] so the hint can disappear
+    /// even when the UI is otherwise idle.
+    pub fn show_quit_shortcut_hint(&mut self, key: KeyBinding, has_focus: bool) {
+        self.quit_shortcut_expires_at = Instant::now()
+            .checked_add(super::QUIT_SHORTCUT_TIMEOUT)
+            .or_else(|| Some(Instant::now()));
+        self.quit_shortcut_key = key;
+        self.footer_mode = FooterMode::QuitShortcutReminder;
         self.set_has_focus(has_focus);
+    }
+
+    /// Clear the "press again to quit" hint immediately.
+    pub fn clear_quit_shortcut_hint(&mut self, has_focus: bool) {
+        self.quit_shortcut_expires_at = None;
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        self.set_has_focus(has_focus);
+    }
+
+    /// Whether the quit shortcut hint should currently be shown.
+    ///
+    /// This is time-based rather than event-based: it may become false without
+    /// any additional user input, so the UI schedules a redraw when the hint
+    /// expires.
+    pub(crate) fn quit_shortcut_hint_visible(&self) -> bool {
+        self.quit_shortcut_expires_at
+            .is_some_and(|expires_at| Instant::now() < expires_at)
     }
 
     fn next_large_paste_placeholder(&mut self, char_count: usize) -> String {
@@ -1497,10 +1521,7 @@ impl ChatComposer {
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
-            } if self.is_empty() => {
-                self.app_event_tx.send(AppEvent::ExitRequest);
-                (InputResult::None, true)
-            }
+            } if self.is_empty() => (InputResult::None, false),
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
             // empty or when the cursor is at the correct position, to avoid
@@ -1801,7 +1822,7 @@ impl ChatComposer {
             return false;
         }
 
-        let next = toggle_shortcut_mode(self.footer_mode, self.ctrl_c_quit_hint);
+        let next = toggle_shortcut_mode(self.footer_mode, self.quit_shortcut_hint_visible());
         let changed = next != self.footer_mode;
         self.footer_mode = next;
         changed
@@ -1813,6 +1834,7 @@ impl ChatComposer {
             esc_backtrack_hint: self.esc_backtrack_hint,
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
+            quit_shortcut_key: self.quit_shortcut_key,
             steer_enabled: self.steer_enabled,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
@@ -1823,8 +1845,13 @@ impl ChatComposer {
         match self.footer_mode {
             FooterMode::EscHint => FooterMode::EscHint,
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
-            FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutSummary if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
+            FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
+                FooterMode::QuitShortcutReminder
+            }
+            FooterMode::QuitShortcutReminder => FooterMode::ShortcutSummary,
+            FooterMode::ShortcutSummary if self.quit_shortcut_hint_visible() => {
+                FooterMode::QuitShortcutReminder
+            }
             FooterMode::ShortcutSummary if !self.is_empty() => FooterMode::ContextOnly,
             other => other,
         }
@@ -2365,16 +2392,16 @@ mod tests {
         });
 
         snapshot_composer_state("footer_mode_ctrl_c_quit", true, |composer| {
-            composer.set_ctrl_c_quit_hint(true, true);
+            composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
         });
 
         snapshot_composer_state("footer_mode_ctrl_c_interrupt", true, |composer| {
             composer.set_task_running(true);
-            composer.set_ctrl_c_quit_hint(true, true);
+            composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
         });
 
         snapshot_composer_state("footer_mode_ctrl_c_then_esc_hint", true, |composer| {
-            composer.set_ctrl_c_quit_hint(true, true);
+            composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         });
 

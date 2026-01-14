@@ -21,3 +21,9 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
+
+## Notices
+
+Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
+
+Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

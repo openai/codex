@@ -1,5 +1,6 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(target_os = "windows")]
@@ -858,9 +859,12 @@ impl App {
                 }
                 self.chat_widget.handle_codex_event(event);
             }
-            AppEvent::ExitRequest => {
-                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
-            }
+            AppEvent::Exit(mode) => match mode {
+                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::Immediate => {
+                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                }
+            },
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
