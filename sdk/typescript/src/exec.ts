@@ -99,6 +99,8 @@ export class CodexExec {
       commandArgs.push("--config", `web_search="${args.webSearchMode}"`);
     } else if (args.webSearchEnabled === true) {
       commandArgs.push("--config", `web_search="live"`);
+    } else if (args.webSearchEnabled === false) {
+      commandArgs.push("--config", `web_search="disabled"`);
     }
 
     if (args.approvalPolicy) {

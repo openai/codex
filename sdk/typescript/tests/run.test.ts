@@ -348,6 +348,37 @@ describe("Codex", () => {
     }
   });
 
+  it("passes webSearchEnabled false to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Web search disabled", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        webSearchEnabled: false,
+      });
+      await thread.run("test web search disabled");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", 'web_search="disabled"']);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
   it("passes approvalPolicy to exec", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
