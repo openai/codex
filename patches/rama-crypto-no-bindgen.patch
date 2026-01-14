@@ -1,0 +1,12 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index d23b5b0..a361f43 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -45,7 +45,6 @@ path = "src/lib.rs"
+ 
+ [dependencies.aws-lc-rs]
+ version = "1.13"
+-features = ["bindgen"]
+ 
+ [dependencies.base64]
+ version = "0.22"
