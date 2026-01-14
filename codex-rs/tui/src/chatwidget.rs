@@ -124,6 +124,7 @@ use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
@@ -3989,12 +3990,23 @@ impl ChatWidget {
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
-            if modal_or_popup_active {
-                self.quit_shortcut_expires_at = None;
-                self.quit_shortcut_key = None;
-                self.bottom_pane.clear_quit_shortcut_hint();
+            if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+                if modal_or_popup_active {
+                    self.quit_shortcut_expires_at = None;
+                    self.quit_shortcut_key = None;
+                    self.bottom_pane.clear_quit_shortcut_hint();
+                } else {
+                    self.arm_quit_shortcut(key);
+                }
+            }
+            return;
+        }
+
+        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+            if self.is_cancellable_work_active() {
+                self.submit_op(Op::Interrupt);
             } else {
-                self.arm_quit_shortcut(key);
+                self.request_quit_without_confirmation();
             }
             return;
         }
@@ -4019,6 +4031,16 @@ impl ChatWidget {
     /// Otherwise it should be routed to the active view and not attempt to quit.
     fn on_ctrl_d(&mut self) -> bool {
         let key = key_hint::ctrl(KeyCode::Char('d'));
+        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+            if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active()
+            {
+                return false;
+            }
+
+            self.request_quit_without_confirmation();
+            return true;
+        }
+
         if self.quit_shortcut_active_for(key) {
             self.quit_shortcut_expires_at = None;
             self.quit_shortcut_key = None;
