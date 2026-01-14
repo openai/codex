@@ -20,14 +20,17 @@ async fn prompt_list_reads_prompts_from_codex_home() -> Result<()> {
     let prompts_dir = codex_home.path().join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
-    let review_body = r#"---
-description: "Quick review command"
-argument-hint: "[file]"
+    let draft_pr_body = r#"---
+description: Prep a branch, commit, and open a draft PR
+argument-hint: [FILES=<paths>] [PR_TITLE="<title>"]
 ---
-Review the following changes..."#;
-    std::fs::write(prompts_dir.join("review.md"), review_body)?;
+
+Create a branch named `dev/<feature_name>` for this work.
+If files are specified, stage them first: $FILES.
+Commit the staged changes with a clear message.
+Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write a concise summary yourself."#;
+    std::fs::write(prompts_dir.join("draftpr.md"), draft_pr_body)?;
     std::fs::write(prompts_dir.join("note.txt"), "ignore")?;
-    std::fs::write(prompts_dir.join("quick.md"), "Quick check")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -51,24 +54,15 @@ Review the following changes..."#;
     assert_eq!(entry.root, expected_root);
     assert_eq!(entry.errors, Vec::new());
 
-    let mut prompts = entry.prompts;
-    prompts.sort_by(|left, right| left.id.cmp(&right.id));
-    let expected = vec![
-        PromptMetadata {
-            id: "quick".to_string(),
-            path: expected_root.join("quick.md"),
-            content: "Quick check".to_string(),
-            description: None,
-            argument_hint: None,
-        },
-        PromptMetadata {
-            id: "review".to_string(),
-            path: expected_root.join("review.md"),
-            content: "Review the following changes...".to_string(),
-            description: Some("Quick review command".to_string()),
-            argument_hint: Some("[file]".to_string()),
-        },
-    ];
+    let prompts = entry.prompts;
+    let expected_content = "\nCreate a branch named `dev/<feature_name>` for this work.\nIf files are specified, stage them first: $FILES.\nCommit the staged changes with a clear message.\nOpen a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write a concise summary yourself.".to_string();
+    let expected = vec![PromptMetadata {
+        id: "draftpr".to_string(),
+        path: expected_root.join("draftpr.md"),
+        content: expected_content,
+        description: Some("Prep a branch, commit, and open a draft PR".to_string()),
+        argument_hint: Some("[FILES=<paths>] [PR_TITLE=\"<title>\"]".to_string()),
+    }];
     assert_eq!(prompts, expected);
 
     Ok(())

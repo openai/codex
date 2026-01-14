@@ -530,6 +530,28 @@ Commit the staged changes with a clear message.
 Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write a concise summary yourself.
 ```
 
+The corresponding `prompt/list` response:
+```json
+{ "method": "prompt/list", "id": 26, "params": {} }
+{ "id": 26, "result": {
+    "data": [
+      {
+        "root": "/Users/me/.codex/prompts",
+        "prompts": [
+          {
+            "id": "draftpr",
+            "path": "/Users/me/.codex/prompts/draftpr.md",
+            "content": "Create a branch named `dev/<feature_name>` for this work.\nIf files are specified, stage them first: $FILES.\nCommit the staged changes with a clear message.\nOpen a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write a concise summary yourself.",
+            "description": "Prep a branch, commit, and open a draft PR",
+            "argumentHint": "[FILES=<paths>] [PR_TITLE=\"<title>\"]"
+          }
+        ],
+        "errors": []
+      }
+    ]
+} }
+```
+
 ## Auth endpoints
 
 The JSON-RPC auth/account surface exposes request/response methods plus server-initiated notifications (no `id`). Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
