@@ -399,7 +399,7 @@ async fn make_chatwidget_manual(
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
-        model: resolved_model.clone(),
+        model: Some(resolved_model.clone()),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
         session_header: SessionHeader::new(resolved_model),
