@@ -1231,6 +1231,58 @@ pub struct SkillsListResponse {
     pub data: Vec<SkillsListEntry>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PromptListParams {
+    /// When empty, defaults to the current session `CODEX_HOME/prompts`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<PathBuf>,
+
+    /// When true, bypass the prompt cache and re-scan prompts from disk.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_reload: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PromptListResponse {
+    pub data: Vec<PromptListEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PromptMetadata {
+    pub id: String,
+    pub path: PathBuf,
+    pub content: String,
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PromptErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PromptListEntry {
+    pub root: PathBuf,
+    pub prompts: Vec<PromptMetadata>,
+    pub errors: Vec<PromptErrorInfo>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]

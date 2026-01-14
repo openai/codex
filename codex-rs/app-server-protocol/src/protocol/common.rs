@@ -133,6 +133,10 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    PromptList => "prompt/list" {
+        params: v2::PromptListParams,
+        response: v2::PromptListResponse,
+    },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
         response: v2::TurnStartResponse,

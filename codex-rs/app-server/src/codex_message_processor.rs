@@ -66,6 +66,10 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::PromptListEntry;
+use codex_app_server_protocol::PromptListParams;
+use codex_app_server_protocol::PromptListResponse;
+use codex_app_server_protocol::PromptMetadata;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -396,6 +400,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
+            }
+            ClientRequest::PromptList { request_id, params } => {
+                self.prompt_list(request_id, params).await;
             }
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(request_id, params).await;
@@ -3217,6 +3224,44 @@ impl CodexMessageProcessor {
         }
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
+            .await;
+    }
+
+    async fn prompt_list(&self, request_id: RequestId, params: PromptListParams) {
+        let PromptListParams {
+            roots,
+            force_reload: _,
+        } = params;
+        let roots = if roots.is_empty() {
+            codex_core::custom_prompts::default_prompts_dir()
+                .map(|root| vec![root])
+                .unwrap_or_default()
+        } else {
+            roots
+        };
+
+        let mut data = Vec::new();
+        for root in roots {
+            let prompts = codex_core::custom_prompts::discover_prompts_in(&root).await;
+            let prompts = prompts
+                .into_iter()
+                .map(|prompt| PromptMetadata {
+                    id: prompt.name,
+                    path: prompt.path,
+                    content: prompt.content,
+                    description: prompt.description,
+                    argument_hint: prompt.argument_hint,
+                })
+                .collect();
+            data.push(PromptListEntry {
+                root,
+                prompts,
+                errors: Vec::new(),
+            });
+        }
+
+        self.outgoing
+            .send_response(request_id, PromptListResponse { data })
             .await;
     }
 

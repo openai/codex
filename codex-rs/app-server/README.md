@@ -492,6 +492,30 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/
         { "name": "skill-creator", "description": "Create or update a Codex skill" }
     ]
 } }
+
+## Prompts
+
+Use `prompt/list` to fetch user-defined prompt templates from `$CODEX_HOME/prompts`.
+
+```json
+{ "method": "prompt/list", "id": 26, "params": {} }
+{ "id": 26, "result": {
+    "data": [
+      {
+        "root": "/Users/me/.codex/prompts",
+        "prompts": [
+          {
+            "id": "review",
+            "path": "/Users/me/.codex/prompts/review.md",
+            "content": "Review the following changes...",
+            "description": "Quick review command",
+            "argumentHint": "[file]"
+          }
+        ],
+        "errors": []
+      }
+    ]
+} }
 ```
 
 ## Auth endpoints
