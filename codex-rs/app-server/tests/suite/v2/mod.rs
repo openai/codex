@@ -4,6 +4,7 @@ mod config_rpc;
 mod initialize;
 mod model_list;
 mod output_schema;
+mod prompt_list;
 mod rate_limits;
 mod review;
 mod thread_archive;

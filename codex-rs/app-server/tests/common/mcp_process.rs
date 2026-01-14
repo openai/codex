@@ -35,6 +35,7 @@ use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::PromptListParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
@@ -394,6 +395,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("model/list", params).await
+    }
+
+    /// Send a `prompt/list` JSON-RPC request.
+    pub async fn send_prompt_list_request(
+        &mut self,
+        params: PromptListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("prompt/list", params).await
     }
 
     /// Send a `resumeConversation` JSON-RPC request.
