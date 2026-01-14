@@ -524,20 +524,12 @@ impl ChatWidget {
         self.set_skills(None);
         self.thread_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
+        // Flush any placeholder header now that the session is configured.
+        self.flush_active_cell();
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.model = Some(model_for_header.clone());
         self.session_header.set_model(&model_for_header);
-        // Drop any placeholder header (used when model was unknown at startup) instead of flushing
-        // it into history; the real header will be inserted below.
-        if self
-            .active_cell
-            .as_ref()
-            .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>())
-        {
-            self.active_cell = None;
-            self.needs_final_message_separator = false;
-        }
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             &model_for_header,
