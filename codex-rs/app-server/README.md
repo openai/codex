@@ -492,30 +492,42 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/
         { "name": "skill-creator", "description": "Create or update a Codex skill" }
     ]
 } }
+```
 
 ## Prompts
 
-Use `prompt/list` to fetch user-defined prompt templates from `$CODEX_HOME/prompts`.
+Use `prompt/list` to fetch user-defined custom prompt templates from `$CODEX_HOME/prompts`.
+For additional details, please see:
 
-```json
-{ "method": "prompt/list", "id": 26, "params": {} }
-{ "id": 26, "result": {
-    "data": [
-      {
-        "root": "/Users/me/.codex/prompts",
-        "prompts": [
-          {
-            "id": "review",
-            "path": "/Users/me/.codex/prompts/review.md",
-            "content": "Review the following changes...",
-            "description": "Quick review command",
-            "argumentHint": "[file]"
-          }
-        ],
-        "errors": []
-      }
-    ]
-} }
+```
+https://developers.openai.com/codex/custom-prompts
+```
+
+Example end-to-end flow for clients implementing custom prompts:
+1. User saves a prompt file at `$CODEX_HOME/prompts/<id>.md`.
+   - Optional front matter keys: `description`, `argument-hint`.
+   - The prompt body is everything after the front matter.
+2. Client calls `prompt/list` and caches the returned templates.
+3. Client exposes a UI affordance to show and expand prompts. As an example,
+the VSCode IDE extension exposes it as a slash command like `/prompts:<id>`, which
+is populated from the cached list.
+4. When a user selects a prompt, the client expands `/prompts:<id>` to the prompt `content`.
+   - Any trailing arguments are appended to the expanded content.
+5. Client submits the expanded prompt text in the normal `turn/start` request.
+
+### Example: Draft PR custom prompt
+
+User creates `~/.codex/prompts/draftpr.md` with the following content:
+```text
+---
+description: Prep a branch, commit, and open a draft PR
+argument-hint: [FILES=<paths>] [PR_TITLE="<title>"]
+---
+
+Create a branch named `dev/<feature_name>` for this work.
+If files are specified, stage them first: $FILES.
+Commit the staged changes with a clear message.
+Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write a concise summary yourself.
 ```
 
 ## Auth endpoints
