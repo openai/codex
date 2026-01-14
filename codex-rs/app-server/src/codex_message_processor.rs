@@ -66,10 +66,10 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::Prompt;
 use codex_app_server_protocol::PromptListEntry;
 use codex_app_server_protocol::PromptListParams;
 use codex_app_server_protocol::PromptListResponse;
-use codex_app_server_protocol::PromptMetadata;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -3242,7 +3242,7 @@ impl CodexMessageProcessor {
             let prompts = codex_core::custom_prompts::discover_prompts_in(&root).await;
             let prompts = prompts
                 .into_iter()
-                .map(|prompt| PromptMetadata {
+                .map(|prompt| Prompt {
                     id: prompt.name,
                     path: prompt.path,
                     content: prompt.content,

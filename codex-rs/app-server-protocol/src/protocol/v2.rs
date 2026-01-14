@@ -1249,7 +1249,7 @@ pub struct PromptListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct PromptMetadata {
+pub struct Prompt {
     pub id: String,
     pub path: PathBuf,
     pub content: String,
@@ -1262,7 +1262,7 @@ pub struct PromptMetadata {
 #[ts(export_to = "v2/")]
 pub struct PromptListEntry {
     pub root: PathBuf,
-    pub prompts: Vec<PromptMetadata>,
+    pub prompts: Vec<Prompt>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

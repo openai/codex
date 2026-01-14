@@ -2,8 +2,8 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::Prompt;
 use codex_app_server_protocol::PromptListResponse;
-use codex_app_server_protocol::PromptMetadata;
 use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -50,7 +50,7 @@ Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write
 
     let prompts = entry.prompts;
     let expected_content = "\nCreate a branch named `dev/<feature_name>` for this work.\nIf files are specified, stage them first: $FILES.\nCommit the staged changes with a clear message.\nOpen a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write a concise summary yourself.".to_string();
-    let expected = vec![PromptMetadata {
+    let expected = vec![Prompt {
         id: "draftpr".to_string(),
         path: expected_root.join("draftpr.md"),
         content: expected_content,
