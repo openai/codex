@@ -1389,8 +1389,7 @@ impl Config {
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
 
-        let review_model = override_review_model
-            .or(cfg.review_model);
+        let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
 
