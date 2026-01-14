@@ -223,30 +223,63 @@ fn split_embedded_cmd_operators(token: &str) -> Vec<String> {
     parts
 }
 
-/// Check for PowerShell force delete cmdlets like `Remove-Item -Force`.
 fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
-    // PowerShell cmdlets/aliases for deletion
     const DELETE_CMDLETS: &[&str] = &["remove-item", "ri", "rm", "del", "erase", "rd", "rmdir"];
-    const PS_SEPARATORS: &[char] = &[';', '|', '&', '{', '}', '(', ')', '\n', '\r', '\t', ','];
 
-    let has_delete = tokens.iter().any(|t| {
-        // We split on common delimiters to catch chained commands.
-        // '&' is the PowerShell call operator and can prefix cmdlets without whitespace.
-        t.split(|c| PS_SEPARATORS.contains(&c)).any(|segment| {
-            let s = segment.trim();
-            DELETE_CMDLETS.iter().any(|cmd| s.eq_ignore_ascii_case(cmd))
-        })
-    });
-    let has_force = tokens.iter().any(|t| {
-        t.split(|c| PS_SEPARATORS.contains(&c)).any(|segment| {
-            let trimmed = segment.trim();
-            trimmed.eq_ignore_ascii_case("-force")
-                || trimmed
-                    .get(..7)
+    // Hard separators that end a command segment (so -Force must be in same segment)
+    const SEG_SEPS: &[char] = &[';', '|', '&', '\n', '\r', '\t'];
+
+    // Soft separators: punctuation that can stick to tokens (blocks, parens, brackets, commas, etc.)
+    const SOFT_SEPS: &[char] = &['{', '}', '(', ')', '[', ']', ',', ';'];
+
+    // Build rough command segments first
+    let mut segments: Vec<Vec<String>> = vec![Vec::new()];
+    for tok in tokens {
+        // If token itself contains segment separators, split it (best-effort)
+        let mut cur = String::new();
+        for ch in tok.chars() {
+            if SEG_SEPS.contains(&ch) {
+                if !cur.trim().is_empty() {
+                    segments.last_mut().unwrap().push(cur.trim().to_string());
+                }
+                cur.clear();
+                if !segments.last().unwrap().is_empty() {
+                    segments.push(Vec::new());
+                }
+            } else {
+                cur.push(ch);
+            }
+        }
+        if !cur.trim().is_empty() {
+            segments.last_mut().unwrap().push(cur.trim().to_string());
+        }
+    }
+
+    // Now, inside each segment, normalize tokens by splitting on soft punctuation
+    segments.into_iter().any(|seg| {
+        let atoms = seg
+            .iter()
+            .flat_map(|t| t.split(|c| SOFT_SEPS.contains(&c)))
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+
+        let mut has_delete = false;
+        let mut has_force = false;
+
+        for a in atoms {
+            if DELETE_CMDLETS.iter().any(|cmd| a.eq_ignore_ascii_case(cmd)) {
+                has_delete = true;
+            }
+            if a.eq_ignore_ascii_case("-force")
+                || a.get(..7)
                     .is_some_and(|p| p.eq_ignore_ascii_case("-force:"))
-        })
-    });
-    has_delete && has_force
+            {
+                has_force = true;
+            }
+        }
+
+        has_delete && has_force
+    })
 }
 
 /// Check for /f or /F flag in CMD del/erase arguments.
@@ -700,6 +733,15 @@ mod tests {
             "powershell",
             "-Command",
             "rm test -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_benign_force_separate_command_is_not_dangerous() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Get-ChildItem -Force; Remove-Item test"
         ])));
     }
 }
