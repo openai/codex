@@ -251,7 +251,7 @@ impl Codex {
 
         let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
             .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
+            .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
         let config = Arc::new(config);
         let _ = models_manager

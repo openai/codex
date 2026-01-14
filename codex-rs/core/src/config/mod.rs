@@ -460,6 +460,28 @@ impl Config {
             .await
     }
 
+    /// Load a default configuration when user config files are invalid.
+    pub fn load_default_with_cli_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+    ) -> std::io::Result<Self> {
+        let codex_home = find_codex_home()?;
+        let mut merged = toml::Value::try_from(ConfigToml::default()).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to serialize default config: {e}"),
+            )
+        })?;
+        let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
+        crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
+        let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
+        Self::load_config_with_layer_stack(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home,
+            ConfigLayerStack::default(),
+        )
+    }
+
     /// This is a secondary way of creating [Config], which is appropriate when
     /// the harness is meant to be used with a specific configuration that
     /// ignores user settings. For example, the `codex exec` subcommand is
