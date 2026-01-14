@@ -9,11 +9,17 @@ This crate is responsible for producing:
 
 ## Git safety mounts (Linux)
 
-When the sandbox policy allows workspace writes, the Linux sandbox now uses a
-user namespace plus a mount namespace to bind-mount `.git` read-only before
-applying Landlock rules. This keeps Git metadata immutable while still
-allowing writes to other workspace files, including worktree setups where
-`.git` is a pointer file.
+When the sandbox policy allows workspace writes, the Linux sandbox uses a user
+namespace plus a mount namespace to bind-mount sensitive subpaths read-only
+before applying Landlock rules. This keeps Git and Codex metadata immutable
+while still allowing writes to other workspace files, including worktree setups
+where `.git` is a pointer file.
+
+Protected subpaths under each writable root include:
+
+- `.git` (directory or pointer file)
+- the resolved `gitdir:` target when `.git` is a pointer file
+- `.codex` when present
 
 ### How this plays with Landlock
 
@@ -37,6 +43,7 @@ set -euo pipefail
 echo "should fail" > .git/config && exit 1 || true
 echo "should fail" > .git/hooks/pre-commit && exit 1 || true
 echo "should fail" > .git/index.lock && exit 1 || true
+echo "should fail" > .codex/config.toml && exit 1 || true
 echo "ok" > sandbox-write-test.txt
 '
 ```
@@ -46,4 +53,5 @@ Expected behavior:
 - Writes to `.git/config` fail with `Read-only file system`.
 - Creating or modifying files under `.git/hooks/` fails.
 - Writing `.git/index.lock` fails (since `.git` is read-only).
+- Writes under `.codex/` fail when the directory exists.
 - Writing a normal repo file succeeds.
