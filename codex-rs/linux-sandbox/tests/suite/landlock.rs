@@ -1,4 +1,5 @@
 #![cfg(target_os = "linux")]
+#![allow(clippy::unwrap_used)]
 use codex_core::config::types::ShellEnvironmentPolicy;
 use codex_core::error::CodexErr;
 use codex_core::error::SandboxErr;
@@ -11,6 +12,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+use tokio::process::Command;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
@@ -79,6 +81,51 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     }
 }
 
+#[expect(clippy::expect_used)]
+async fn assert_write_blocked(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
+    let cwd = std::env::current_dir().expect("cwd should exist");
+    let sandbox_cwd = cwd.clone();
+    let params = ExecParams {
+        command: cmd.iter().copied().map(str::to_owned).collect(),
+        cwd,
+        expiration: timeout_ms.into(),
+        env: create_env_from_core_vars(),
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        justification: None,
+        arg0: None,
+    };
+
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: writable_roots
+            .iter()
+            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
+            .collect(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
+    let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
+    let result = process_exec_tool_call(
+        params,
+        &sandbox_policy,
+        sandbox_cwd.as_path(),
+        &codex_linux_sandbox_exe,
+        None,
+    )
+    .await;
+
+    match result {
+        Ok(output) => {
+            if output.exit_code == 0 {
+                panic!("expected command to fail, but exit code was 0");
+            }
+        }
+        Err(CodexErr::Sandbox(SandboxErr::Denied { .. })) => {}
+        Err(err) => panic!("expected sandbox denial, got: {err:?}"),
+    }
+}
+
 #[tokio::test]
 async fn test_root_read() {
     run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS).await;
@@ -122,6 +169,134 @@ async fn test_writable_root() {
         &[tmpdir.path().to_path_buf()],
         // We have seen timeouts when running this test in CI on GitHub,
         // so we are using a generous timeout until we can diagnose further.
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_git_dir_write_blocked() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let repo_root = tmpdir.path();
+    Command::new("git")
+        .arg("init")
+        .arg(".")
+        .current_dir(repo_root)
+        .output()
+        .await
+        .expect("git init .");
+
+    let git_config = repo_root.join(".git").join("config");
+    let git_index_lock = repo_root.join(".git").join("index.lock");
+
+    assert_write_blocked(
+        &[
+            "bash",
+            "-lc",
+            &format!("echo pwned > {}", git_config.to_string_lossy()),
+        ],
+        &[repo_root.to_path_buf()],
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_write_blocked(
+        &[
+            "bash",
+            "-lc",
+            &format!("echo pwned > {}", git_index_lock.to_string_lossy()),
+        ],
+        &[repo_root.to_path_buf()],
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_git_dir_move_blocked() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let repo_root = tmpdir.path();
+    Command::new("git")
+        .arg("init")
+        .arg(".")
+        .current_dir(repo_root)
+        .output()
+        .await
+        .expect("git init .");
+
+    let git_dir = repo_root.join(".git");
+    let git_dir_backup = repo_root.join(".git.bak");
+
+    assert_write_blocked(
+        &[
+            "bash",
+            "-lc",
+            &format!(
+                "mv {} {}",
+                git_dir.to_string_lossy(),
+                git_dir_backup.to_string_lossy()
+            ),
+        ],
+        &[repo_root.to_path_buf()],
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_codex_dir_write_blocked() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let repo_root = tmpdir.path();
+    std::fs::create_dir_all(repo_root.join(".codex")).unwrap();
+
+    let codex_config = repo_root.join(".codex").join("config.toml");
+
+    assert_write_blocked(
+        &[
+            "bash",
+            "-lc",
+            &format!("echo pwned > {}", codex_config.to_string_lossy()),
+        ],
+        &[repo_root.to_path_buf()],
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_git_pointer_file_blocks_gitdir_writes() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let repo_root = tmpdir.path();
+    let gitdir = repo_root.join("actual-gitdir");
+    std::fs::create_dir_all(&gitdir).unwrap();
+
+    let gitdir_config = gitdir.join("config");
+    std::fs::write(&gitdir_config, "[core]\n\trepositoryformatversion = 0\n").unwrap();
+
+    std::fs::write(
+        repo_root.join(".git"),
+        format!("gitdir: {}\n", gitdir.to_string_lossy()),
+    )
+    .unwrap();
+
+    assert_write_blocked(
+        &[
+            "bash",
+            "-lc",
+            &format!("echo pwned > {}", gitdir_config.to_string_lossy()),
+        ],
+        &[repo_root.to_path_buf()],
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_write_blocked(
+        &[
+            "bash",
+            "-lc",
+            &format!("echo pwned > {}", repo_root.join(".git").to_string_lossy()),
+        ],
+        &[repo_root.to_path_buf()],
         LONG_TIMEOUT_MS,
     )
     .await;

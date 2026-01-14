@@ -902,21 +902,21 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
     // and a final long poll to capture the second marker.
     let first_poll_call_id = "uexec-delayed-poll-1";
     let first_poll_args = json!({
-        "chars": "",
+        "chars": "x",
         "session_id": 1000,
         "yield_time_ms": 10,
     });
 
     let second_poll_call_id = "uexec-delayed-poll-2";
     let second_poll_args = json!({
-        "chars": "",
+        "chars": "x",
         "session_id": 1000,
         "yield_time_ms": 4000,
     });
 
     let third_poll_call_id = "uexec-delayed-poll-3";
     let third_poll_args = json!({
-        "chars": "",
+        "chars": "x",
         "session_id": 1000,
         "yield_time_ms": 6000,
     });
@@ -1037,7 +1037,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             .iter()
             .map(|ev| ev.stdin.as_str())
             .collect::<Vec<_>>(),
-        vec!["", "", ""],
+        vec!["x", "x", "x"],
         "terminal interactions should reflect the three stdin polls"
     );
 

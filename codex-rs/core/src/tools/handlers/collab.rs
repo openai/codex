@@ -116,7 +116,7 @@ mod spawn {
         let result = session
             .services
             .agent_control
-            .spawn_agent(config, prompt.clone(), true)
+            .spawn_agent(config, prompt.clone())
             .await
             .map_err(collab_spawn_error);
         let (new_thread_id, status) = match &result {
