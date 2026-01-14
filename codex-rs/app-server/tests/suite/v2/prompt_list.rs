@@ -2,7 +2,6 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::PromptListParams;
 use codex_app_server_protocol::PromptListResponse;
 use codex_app_server_protocol::PromptMetadata;
 use codex_app_server_protocol::RequestId;
@@ -36,12 +35,7 @@ Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let req_id = mcp
-        .send_prompt_list_request(PromptListParams {
-            roots: Some(Vec::new()),
-            force_reload: Some(false),
-        })
-        .await?;
+    let req_id = mcp.send_request("prompt/list", Some(json!({}))).await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
@@ -64,15 +58,6 @@ Open a draft PR on the same branch. Use $PR_TITLE when supplied; otherwise write
         argument_hint: Some("[FILES=<paths>] [PR_TITLE=\"<title>\"]".to_string()),
     }];
     assert_eq!(prompts, expected);
-
-    let req_id = mcp.send_request("prompt/list", Some(json!({}))).await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
-    )
-    .await??;
-    let PromptListResponse { data: raw_data } = to_response::<PromptListResponse>(resp)?;
-    assert_eq!(raw_data.len(), 1);
 
     Ok(())
 }

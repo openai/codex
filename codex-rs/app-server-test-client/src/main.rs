@@ -27,7 +27,9 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::InputItem;
@@ -130,6 +132,9 @@ enum CliCommand {
     TestLogin,
     /// Fetch the current account rate limits from the Codex app-server.
     GetAccountRateLimits,
+    /// Fetch the current account info from the Codex app-server.
+    #[command(name = "account-read")]
+    AccountRead,
     /// List the available models from the Codex app-server.
     #[command(name = "model-list")]
     ModelList,
@@ -167,6 +172,7 @@ fn main() -> Result<()> {
         ),
         CliCommand::TestLogin => test_login(&codex_bin, &config_overrides),
         CliCommand::GetAccountRateLimits => get_account_rate_limits(&codex_bin, &config_overrides),
+        CliCommand::AccountRead => get_account(&codex_bin, &config_overrides),
         CliCommand::ModelList => model_list(&codex_bin, &config_overrides),
     }
 }
@@ -351,6 +357,20 @@ fn get_account_rate_limits(codex_bin: &str, config_overrides: &[String]) -> Resu
     Ok(())
 }
 
+fn get_account(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+
+    let response = client.get_account(GetAccountParams {
+        refresh_token: false,
+    })?;
+    println!("< account/read response: {response:?}");
+
+    Ok(())
+}
+
 fn model_list(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
     let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
@@ -516,6 +536,16 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "account/rateLimits/read")
+    }
+
+    fn get_account(&mut self, params: GetAccountParams) -> Result<GetAccountResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::GetAccount {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "account/read")
     }
 
     fn model_list(&mut self, params: ModelListParams) -> Result<ModelListResponse> {
