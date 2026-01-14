@@ -242,6 +242,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       imageKey: string,
     ) => Promise<{ mimeType: string; base64: string }>,
     private readonly onOpenLatestDiff: () => Promise<void>,
+    private readonly onUiDebug: (message: string) => void,
     private readonly onUiError: (message: string) => void,
   ) {
     this.viewReadyPromise = new Promise((resolve) => {
@@ -311,6 +312,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public refresh(): void {
     // Avoid flooding the Webview with full-state updates (especially during streaming).
     this.statePostDirty = true;
+    if (this.view && !this.view.visible) return;
     if (this.statePostInFlight) return;
     if (this.refreshTimer) return;
     this.refreshTimer = setTimeout(() => {
@@ -392,6 +394,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       void this.onMessage(msg).catch((err) => {
         this.onUiError(`Failed to handle webview message: ${String(err)}`);
       });
+    });
+    view.onDidChangeVisibility(() => {
+      if (view.visible) this.refresh();
     });
     this.resolveViewReady?.();
     this.resolveViewReady = null;
@@ -1026,6 +1031,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.view) return;
     if (this.statePostInFlight) return;
     if (!this.statePostDirty) return;
+    // Webviews can get throttled/suspended when not visible; don't wait on ACKs in that state.
+    if (!this.view.visible) return;
     this.statePostDirty = false;
     this.statePostInFlight = true;
     const seq = (this.lastStatePostSeq += 1);
@@ -1037,8 +1044,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!this.view) return;
       if (!this.statePostInFlight) return;
       this.statePostInFlight = false;
-      this.onUiError(
-        `Webview did not acknowledge state update (seq=${String(seq)}) within 2000ms; continuing.`,
+      this.onUiDebug(
+        `Webview state update ACK timed out (seq=${String(seq)}) after 2000ms; continuing.`,
       );
       if (this.statePostDirty) this.postControlState();
     }, 2000);

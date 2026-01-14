@@ -815,6 +815,9 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     },
     (message: string) => {
+      output.appendLine(`[ui] ${message}`);
+    },
+    (message: string) => {
       void vscode.window.showErrorMessage(message);
       const session = activeSessionId
         ? sessions?.getById(activeSessionId)
