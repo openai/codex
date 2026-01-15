@@ -20,7 +20,7 @@ fn repo_root() -> std::path::PathBuf {
 
 fn cli_responses_fixture() -> std::path::PathBuf {
     #[expect(clippy::expect_used)]
-    find_resource!("tests/cli_responses_fixture.sse").expect("failed to resolve fixture path")
+    find_resource!("../core/tests/cli_responses_fixture.sse").expect("failed to resolve fixture path")
 }
 
 /// Tests streaming chat completions through the CLI using a mock server.
@@ -101,7 +101,7 @@ async fn chat_mode_stream_cli() {
     // First line of head must be the SessionMeta payload (id/timestamp)
     let head0 = page.items[0].head.first().expect("missing head record");
     assert!(head0.get("id").is_some(), "head[0] missing id");
-    assert!(
+    assert!( 
         head0.get("timestamp").is_some(),
         "head[0] missing timestamp"
     );
@@ -240,7 +240,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        // Required for CLI arg parsing even though fixture short-circuits network usage.
+        // Required to force minimal token usage
         .env("OPENAI_BASE_URL", "http://unused.local");
 
     let output = cmd.output().unwrap();
@@ -260,7 +260,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         if p.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
             return false;
         }
-        let Ok(content) = std::fs::read_to_string(p) else {
+        let Ok(content) = std::fs::read_to_string(p) else { 
             return false;
         };
         content.contains(&marker_clone)
@@ -303,7 +303,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         assert!((1..=31).contains(&d), "Day out of range: {d}");
     }
 
-    let content =
+    let content = 
         std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read session file"));
     let mut lines = content.lines();
     let meta_line = lines
@@ -370,7 +370,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
 
     // Find the new session file containing the resumed marker.
     let marker2_clone = marker2.clone();
-    let resumed_path =
+    let resumed_path = 
         fs_wait::wait_for_matching_file(&sessions_dir, Duration::from_secs(10), move |p| {
             if p.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                 return false;
