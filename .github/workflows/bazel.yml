@@ -80,6 +80,19 @@ jobs:
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
 
+      - name: Install libclang (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libclang-dev
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install libclang (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
       # TODO(mbolin): Bring this back once we have caching working. Currently,
       # we never seem to get a cache hit but we still end up paying the cost of
       # uploading at the end of the build, which takes over a minute!
