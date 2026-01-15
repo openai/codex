@@ -274,6 +274,10 @@ When steps have been completed, use `update_plan` to mark each finished step as 
 
 If all steps are complete, ensure you call `update_plan` to mark all steps as `completed`.
 
+## MCP servers
+
+When asked what MCPs are available, check for tools with the `mcp__` prefix and report those back with the server names inferred from those tools.
+
 ## `apply_patch`
 
 Use the `apply_patch` shell command to edit files.

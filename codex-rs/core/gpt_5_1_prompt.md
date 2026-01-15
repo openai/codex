@@ -329,3 +329,7 @@ To create a new plan, call `update_plan` with a short list of 1‑sentence steps
 When steps have been completed, use `update_plan` to mark each finished step as `completed` and the next step you are working on as `in_progress`. There should always be exactly one `in_progress` step until everything is done. You can mark multiple items as complete in a single `update_plan` call.
 
 If all steps are complete, ensure you call `update_plan` to mark all steps as `completed`.
+
+## MCP servers
+
+When asked what MCPs are available, check for tools with the `mcp__` prefix and report those back with the server names inferred from those tools.
