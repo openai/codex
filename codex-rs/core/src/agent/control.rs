@@ -71,6 +71,12 @@ impl AgentControl {
         result
     }
 
+    /// Interrupt the current task for an existing agent thread.
+    pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        state.send_op(agent_id, Op::Interrupt).await
+    }
+
     /// Submit a shutdown request to an existing agent thread.
     pub(crate) async fn shutdown_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;

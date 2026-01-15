@@ -478,6 +478,15 @@ fn create_send_input_tool() -> ToolSpec {
             description: Some("Message to send to the agent.".to_string()),
         },
     );
+    properties.insert(
+        "interrupt".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, interrupt the agent's current task before sending the message. When false (default), the message will be processed when the agent is done on its current task."
+                    .to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),
