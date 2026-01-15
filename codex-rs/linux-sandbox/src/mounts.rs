@@ -15,9 +15,18 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Apply read-only bind mounts for protected subpaths before Landlock.
 ///
-/// This unshares mount namespaces (and user namespaces for non-root) so the
-/// read-only remounts do not affect the host, then bind-mounts each protected
-/// target onto itself and remounts it read-only.
+/// Strategy overview:
+/// - Root path: try to unshare the mount namespace first. If that is denied
+///   (EPERM/PermissionDenied), fall back to unsharing a user namespace plus a
+///   mount namespace to gain CAP_SYS_ADMIN inside the userns (bwrap-style).
+/// - Non-root path: unshare user+mount namespaces up front to gain the
+///   capabilities needed for remounting.
+/// - If namespace setup is denied in either path, skip mount-based protections
+///   and continue with Landlock-only sandboxing, emitting a debug log when
+///   CODEX_SANDBOX_DEBUG=1.
+///
+/// Once in the namespace(s), we make mounts private, bind each protected
+/// target onto itself, remount read-only, and drop any userns-granted caps.
 pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<()> {
     let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
     let mount_targets = collect_read_only_mount_targets(&writable_roots)?;
@@ -32,6 +41,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
         match unshare_mount_namespace() {
             Ok(()) => {}
             Err(err) if is_permission_denied(&err) => {
+                // Root fallback: try userns+mountns to acquire mount powers.
                 let original_euid = unsafe { libc::geteuid() };
                 let original_egid = unsafe { libc::getegid() };
                 match unshare_user_and_mount_namespaces() {
@@ -40,6 +50,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
                         used_userns = true;
                     }
                     Err(err) if is_permission_denied(&err) => {
+                        // No namespaces available; continue with Landlock-only.
                         log_namespace_fallback(&err);
                         return Ok(());
                     }
@@ -57,6 +68,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
                 used_userns = true;
             }
             Err(err) if is_permission_denied(&err) => {
+                // No namespaces available; continue with Landlock-only.
                 log_namespace_fallback(&err);
                 return Ok(());
             }
@@ -183,12 +195,11 @@ fn is_running_as_root() -> bool {
 fn is_permission_denied(err: &CodexErr) -> bool {
     let mut current: Option<&(dyn Error + 'static)> = Some(err);
     while let Some(error) = current {
-        if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
-            if io_error.kind() == std::io::ErrorKind::PermissionDenied
-                || io_error.raw_os_error() == Some(libc::EPERM)
-            {
-                return true;
-            }
+        if let Some(io_error) = error.downcast_ref::<std::io::Error>()
+            && (io_error.kind() == std::io::ErrorKind::PermissionDenied
+                || io_error.raw_os_error() == Some(libc::EPERM))
+        {
+            return true;
         }
         current = error.source();
     }
