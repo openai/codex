@@ -64,7 +64,7 @@ use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
-pub const WEB_SEARCH_DISABLED_HEADER: &str = "x-openai-web-search-disabled";
+pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -639,9 +639,14 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
 
 fn build_responses_headers(config: &Config) -> ApiHeaderMap {
     let mut headers = beta_feature_headers(config);
-    if config.explicit_web_search_disabled == Some(true) {
-        headers.insert(WEB_SEARCH_DISABLED_HEADER, HeaderValue::from_static("true"));
-    }
+    headers.insert(
+        WEB_SEARCH_ELIGIBLE_HEADER,
+        HeaderValue::from_static(if config.web_search_eligible {
+            "true"
+        } else {
+            "false"
+        }),
+    );
     headers
 }
 
