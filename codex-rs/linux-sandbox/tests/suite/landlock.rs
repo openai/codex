@@ -9,6 +9,7 @@ use codex_core::exec_env::create_env;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -36,8 +37,22 @@ fn create_env_from_core_vars() -> HashMap<String, String> {
     create_env(&policy)
 }
 
-#[expect(clippy::print_stdout, clippy::expect_used, clippy::unwrap_used)]
+#[expect(clippy::print_stdout)]
 async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
+    let output = run_cmd_output(cmd, writable_roots, timeout_ms).await;
+    if output.exit_code != 0 {
+        println!("stdout:\n{}", output.stdout.text);
+        println!("stderr:\n{}", output.stderr.text);
+        panic!("exit code: {}", output.exit_code);
+    }
+}
+
+#[expect(clippy::expect_used, clippy::unwrap_used)]
+async fn run_cmd_output(
+    cmd: &[&str],
+    writable_roots: &[PathBuf],
+    timeout_ms: u64,
+) -> codex_core::exec::ExecToolCallOutput {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
@@ -64,7 +79,8 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
-    let res = process_exec_tool_call(
+
+    process_exec_tool_call(
         params,
         &sandbox_policy,
         sandbox_cwd.as_path(),
@@ -72,13 +88,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         None,
     )
     .await
-    .unwrap();
-
-    if res.exit_code != 0 {
-        println!("stdout:\n{}", res.stdout.text);
-        println!("stderr:\n{}", res.stderr.text);
-        panic!("exit code: {}", res.exit_code);
-    }
+    .unwrap()
 }
 
 #[expect(clippy::expect_used)]
@@ -172,6 +182,23 @@ async fn test_writable_root() {
         LONG_TIMEOUT_MS,
     )
     .await;
+}
+
+#[tokio::test]
+async fn test_no_new_privs_is_enabled() {
+    let output = run_cmd_output(
+        &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
+        &[],
+        SHORT_TIMEOUT_MS,
+    )
+    .await;
+    let line = output
+        .stdout
+        .text
+        .lines()
+        .find(|line| line.starts_with("NoNewPrivs:"))
+        .unwrap_or("");
+    assert_eq!(line.trim(), "NoNewPrivs:\t1");
 }
 
 #[tokio::test]
