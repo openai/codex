@@ -127,11 +127,25 @@ impl SlashPopupContext {
 
     /// Return the prefix used to filter slash commands.
     fn popup_prefix(&self) -> &str {
-        let prefix_end = if self.cursor_on_first_line() {
-            self.cursor.max(1).min(self.first_line_end)
+        let mut prefix_end = if self.cursor_on_first_line() {
+            let cursor = if self.cursor == 0 && self.text.starts_with('/') {
+                1
+            } else {
+                self.cursor
+            };
+            cursor.min(self.first_line_end)
         } else {
             self.first_line_end
         };
+        if prefix_end < self.text.len() && !self.text.is_char_boundary(prefix_end) {
+            prefix_end = self
+                .text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= prefix_end)
+                .last()
+                .unwrap_or(0);
+        }
         &self.text[..prefix_end]
     }
 }
@@ -4390,6 +4404,28 @@ mod tests {
         assert!(
             matches!(composer.active_popup, ActivePopup::Command(_)),
             "'/zzz' should activate slash popup even without a match"
+        );
+    }
+
+    #[test]
+    fn slash_popup_ignores_non_ascii_prefix_at_start() {
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("あ".to_string());
+
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "non-ASCII prefix should not activate slash popup"
         );
     }
 
