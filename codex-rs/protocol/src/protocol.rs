@@ -2309,6 +2309,48 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn user_input_text_serializes_empty_text_elements() -> Result<()> {
+        let input = UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        };
+
+        let json_input = serde_json::to_value(input)?;
+        assert_eq!(
+            json_input,
+            json!({
+                "type": "text",
+                "text": "hello",
+                "text_elements": [],
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_message_event_serializes_empty_metadata_vectors() -> Result<()> {
+        let event = UserMessageEvent {
+            message: "hello".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        };
+
+        let json_event = serde_json::to_value(event)?;
+        assert_eq!(
+            json_event,
+            json!({
+                "message": "hello",
+                "local_images": [],
+                "text_elements": [],
+            })
+        );
+
+        Ok(())
+    }
+
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
     #[test]
