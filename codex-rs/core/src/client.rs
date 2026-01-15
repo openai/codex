@@ -31,6 +31,7 @@ use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -641,11 +642,13 @@ fn build_responses_headers(config: &Config) -> ApiHeaderMap {
     let mut headers = beta_feature_headers(config);
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
-        HeaderValue::from_static(if config.web_search_eligible {
-            "true"
-        } else {
-            "false"
-        }),
+        HeaderValue::from_static(
+            if matches!(config.web_search_mode, Some(WebSearchMode::Disabled)) {
+                "false"
+            } else {
+                "true"
+            },
+        ),
     );
     headers
 }

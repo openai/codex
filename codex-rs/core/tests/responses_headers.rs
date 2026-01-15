@@ -15,6 +15,7 @@ use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
@@ -261,7 +262,7 @@ async fn responses_stream_includes_web_search_eligible_header_false_when_disable
 
     let test = test_codex()
         .with_config(|config| {
-            config.web_search_eligible = false;
+            config.web_search_mode = Some(WebSearchMode::Disabled);
         })
         .build(&server)
         .await
