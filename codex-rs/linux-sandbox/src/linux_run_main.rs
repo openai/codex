@@ -2,6 +2,7 @@ use clap::Parser;
 use std::ffi::CString;
 use std::path::PathBuf;
 
+use crate::landlock::SandboxSetupError;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 
 #[derive(Debug, Parser)]
@@ -27,7 +28,20 @@ pub fn run_main() -> ! {
     } = LandlockCommand::parse();
 
     if let Err(e) = apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd) {
-        panic!("error running landlock: {e:?}");
+        match e {
+            SandboxSetupError::Namespaces(err) => {
+                panic!("error setting up namespaces/mounts: {err:?}");
+            }
+            SandboxSetupError::NoNewPrivs(err) => {
+                panic!("error setting no_new_privs: {err:?}");
+            }
+            SandboxSetupError::Seccomp(err) => {
+                panic!("error installing seccomp filter: {err:?}");
+            }
+            SandboxSetupError::Landlock(err) => {
+                panic!("error running landlock: {err:?}");
+            }
+        }
     }
 
     if command.is_empty() {

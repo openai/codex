@@ -1,8 +1,11 @@
 #![allow(dead_code)]
 
+use std::error::Error;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
@@ -25,11 +28,23 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
     // Root can unshare the mount namespace directly; non-root needs a user
     // namespace to gain capabilities for remounting.
     if is_running_as_root() {
-        unshare_mount_namespace()?;
+        if let Err(err) = unshare_mount_namespace() {
+            if is_permission_denied(&err) {
+                log_namespace_fallback(&err);
+                return Ok(());
+            }
+            return Err(err);
+        }
     } else {
         let original_euid = unsafe { libc::geteuid() };
         let original_egid = unsafe { libc::getegid() };
-        unshare_user_and_mount_namespaces()?;
+        if let Err(err) = unshare_user_and_mount_namespaces() {
+            if is_permission_denied(&err) {
+                log_namespace_fallback(&err);
+                return Ok(());
+            }
+            return Err(err);
+        }
         write_user_namespace_maps(original_euid, original_egid)?;
     }
     make_mounts_private()?;
@@ -121,6 +136,10 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Result<AbsolutePathBuf
 
 /// Unshare the mount namespace so mount changes are isolated to the sandboxed process.
 fn unshare_mount_namespace() -> Result<()> {
+    #[cfg(test)]
+    if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    }
     let result = unsafe { libc::unshare(libc::CLONE_NEWNS) };
     if result != 0 {
         return Err(std::io::Error::last_os_error().into());
@@ -130,6 +149,10 @@ fn unshare_mount_namespace() -> Result<()> {
 
 /// Unshare user + mount namespaces so the process can remount read-only without privileges.
 fn unshare_user_and_mount_namespaces() -> Result<()> {
+    #[cfg(test)]
+    if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    }
     let result = unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) };
     if result != 0 {
         return Err(std::io::Error::last_os_error().into());
@@ -139,6 +162,39 @@ fn unshare_user_and_mount_namespaces() -> Result<()> {
 
 fn is_running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
+}
+
+fn is_permission_denied(err: &CodexErr) -> bool {
+    let mut current: Option<&(dyn Error + 'static)> = Some(err);
+    while let Some(error) = current {
+        if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
+            if io_error.kind() == std::io::ErrorKind::PermissionDenied
+                || io_error.raw_os_error() == Some(libc::EPERM)
+            {
+                return true;
+            }
+        }
+        current = error.source();
+    }
+    false
+}
+
+#[cfg(test)]
+static FORCE_UNSHARE_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
+
+fn sandbox_debug_enabled() -> bool {
+    matches!(
+        std::env::var("CODEX_SANDBOX_DEBUG").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+fn log_namespace_fallback(err: &CodexErr) {
+    if sandbox_debug_enabled() {
+        eprintln!(
+            "codex-linux-sandbox: falling back to Landlock-only sandboxing because namespaces are unavailable (seccomp/caps likely): {err}"
+        );
+    }
 }
 
 #[repr(C)]
@@ -335,5 +391,42 @@ mod tests {
                 path = dot_git.display()
             )
         );
+    }
+
+    #[test]
+    fn is_permission_denied_detects_permission_denied_kind() {
+        let err: CodexErr =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope").into();
+        assert_eq!(is_permission_denied(&err), true);
+    }
+
+    #[test]
+    fn is_permission_denied_detects_eperm_os_error() {
+        let err: CodexErr = std::io::Error::from_raw_os_error(libc::EPERM).into();
+        assert_eq!(is_permission_denied(&err), true);
+    }
+
+    #[test]
+    fn is_permission_denied_returns_false_for_other_errors() {
+        let err = CodexErr::UnsupportedOperation("nope".to_string());
+        assert_eq!(is_permission_denied(&err), false);
+    }
+
+    #[test]
+    fn apply_read_only_mounts_falls_back_on_permission_denied() {
+        FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tempdir.path().join(".git")).expect("create .git");
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
+
+        FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(result.is_ok(), true);
     }
 }
