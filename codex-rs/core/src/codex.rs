@@ -2950,7 +2950,7 @@ async fn try_run_turn(
                 should_emit_turn_diff = true;
 
                 needs_follow_up |= sess.has_pending_input().await;
-                error!("needs_follow_up: {needs_follow_up}");
+                debug!("needs_follow_up: {needs_follow_up}");
 
                 break Ok(TurnRunResult {
                     needs_follow_up,
