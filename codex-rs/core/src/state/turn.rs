@@ -3,6 +3,7 @@
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -19,14 +20,12 @@ use crate::tasks::SessionTask;
 pub(crate) struct ActiveTurn {
     pub(crate) tasks: IndexMap<String, RunningTask>,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
+    pub(crate) started_at: Instant,
 }
 
 impl Default for ActiveTurn {
     fn default() -> Self {
-        Self {
-            tasks: IndexMap::new(),
-            turn_state: Arc::new(Mutex::new(TurnState::default())),
-        }
+        Self::new()
     }
 }
 
@@ -48,6 +47,14 @@ pub(crate) struct RunningTask {
 }
 
 impl ActiveTurn {
+    pub(crate) fn new() -> Self {
+        Self {
+            tasks: IndexMap::new(),
+            turn_state: Arc::new(Mutex::new(TurnState::default())),
+            started_at: Instant::now(),
+        }
+    }
+
     pub(crate) fn add_task(&mut self, task: RunningTask) {
         let sub_id = task.turn_context.sub_id.clone();
         self.tasks.insert(sub_id, task);

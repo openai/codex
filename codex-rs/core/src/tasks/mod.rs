@@ -168,9 +168,11 @@ impl Session {
         last_agent_message: Option<String>,
     ) {
         let mut active = self.active_turn.lock().await;
+        let mut completed_turn = None;
         let should_close_processes = if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
+            completed_turn = Some(at.started_at);
             *active = None;
             true
         } else {
@@ -180,13 +182,20 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
+        if let Some(started_at) = completed_turn {
+            self.services.otel_manager.record_duration(
+                "codex.turn.end_to_end_duration",
+                started_at.elapsed(),
+                &[],
+            );
+        }
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
         let mut active = self.active_turn.lock().await;
-        let mut turn = ActiveTurn::default();
+        let mut turn = ActiveTurn::new();
         turn.add_task(task);
         *active = Some(turn);
     }
