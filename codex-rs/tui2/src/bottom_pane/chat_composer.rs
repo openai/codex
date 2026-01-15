@@ -201,6 +201,7 @@ pub(crate) struct ChatComposer {
     transcript_copy_feedback: Option<TranscriptCopyFeedback>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
+    /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
 }
 
@@ -269,6 +270,12 @@ impl ChatComposer {
         self.skills = skills;
     }
 
+    /// Enables or disables "Steer" behavior for submission keys.
+    ///
+    /// When steer is enabled, `Enter` produces [`InputResult::Submitted`] (send immediately) and
+    /// `Tab` produces [`InputResult::Queued`] (eligible to queue if a task is running).
+    /// When steer is disabled, `Enter` produces [`InputResult::Queued`], preserving the default
+    /// "queue while a task is running" behavior.
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.steer_enabled = enabled;
     }
@@ -1494,19 +1501,13 @@ impl ChatComposer {
                 ..
             } => self.handle_submission(true),
             KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                // Tab queues the message instead of submitting immediately
-                self.handle_submission(true)
-            }
-            KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => self.handle_submission(false),
+            } => {
+                let should_queue = !self.steer_enabled;
+                self.handle_submission(should_queue)
+            }
             input => self.handle_input_basic(input),
         }
     }
@@ -2905,6 +2906,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_steer_enabled(true);
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
 

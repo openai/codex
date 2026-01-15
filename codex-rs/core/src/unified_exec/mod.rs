@@ -79,6 +79,7 @@ pub(crate) struct ExecCommandRequest {
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
+    pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
 }
@@ -200,6 +201,7 @@ mod tests {
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
+                    tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
                 },

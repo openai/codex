@@ -1061,45 +1061,21 @@ async fn streaming_final_answer_keeps_task_running_state() {
         Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
-    assert!(chat.bottom_pane.quit_shortcut_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 }
 
 #[tokio::test]
-async fn ctrl_c_shutdown_ignores_caps_lock() {
+async fn ctrl_c_shutdown_works_with_caps_lock() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
-
-    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
 #[tokio::test]
-async fn ctrl_d_double_press_quits_without_prompt() {
+async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
-    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
-
-    let width = 100;
-    let height = chat.desired_height(width);
-    let mut terminal =
-        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw after ctrl+d");
-    assert!(
-        terminal
-            .backend()
-            .vt100()
-            .screen()
-            .contents()
-            .contains("ctrl + d again to quit")
-    );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
@@ -1131,7 +1107,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(chat.bottom_pane.composer_text().is_empty());
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-    assert!(chat.bottom_pane.quit_shortcut_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     let restored_text = chat.bottom_pane.composer_text();

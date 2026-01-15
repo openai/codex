@@ -34,6 +34,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
@@ -537,6 +538,7 @@ impl Session {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &per_turn_config.features,
+            web_search_mode: per_turn_config.web_search_mode,
         });
 
         let base_instructions = if per_turn_config.features.enabled(Feature::Collab) {
@@ -2409,9 +2411,11 @@ async fn spawn_review_thread(
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
         .disable(crate::features::Feature::WebSearchCached);
+    let review_web_search_mode = WebSearchMode::Disabled;
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
+        web_search_mode: review_web_search_mode,
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -2424,6 +2428,7 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
+    per_turn_config.web_search_mode = review_web_search_mode;
 
     let otel_manager = parent_turn_context
         .client

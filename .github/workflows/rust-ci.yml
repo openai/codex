@@ -88,7 +88,7 @@ jobs:
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
     name: Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
     # Keep job-level if to avoid spinning up runners when not needed
@@ -106,47 +106,74 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: dev
-          - runner: macos-14
+          - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             profile: dev
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
-          - runner: windows-latest
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-          - runner: windows-11-arm
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
           # Hopefully this also pre-populates the build cache to speed up
           # releases.
-          - runner: macos-14
+          - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: release
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: release
-          - runner: windows-latest
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
-          - runner: windows-11-arm
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: release
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@v6
@@ -336,7 +363,7 @@ jobs:
 
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
     if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
@@ -353,39 +380,36 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: dev
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
-          - runner: windows-latest
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-          - runner: windows-11-arm
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@v6
-
-      # We have been running out of space when running this job on Linux for
-      # x86_64-unknown-linux-gnu, so remove some unnecessary dependencies.
-      - name: Remove unnecessary dependencies to save space
-        if: ${{ startsWith(matrix.runner, 'ubuntu') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo rm -rf \
-            /usr/local/lib/android \
-            /usr/share/dotnet \
-            /usr/local/share/boost \
-            /usr/local/lib/node_modules \
-            /opt/ghc
-          sudo apt-get remove -y docker.io docker-compose podman buildah
 
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.

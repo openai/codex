@@ -11,6 +11,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -52,7 +53,13 @@ fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
             .as_array()
             .unwrap()
             .iter()
-            .map(|t| t["name"].as_str().unwrap().to_string())
+            .map(|t| {
+                t.get("name")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| t.get("type").and_then(|value| value.as_str()))
+                    .unwrap()
+                    .to_string()
+            })
             .collect::<Vec<_>>(),
         expected_names
     );
@@ -80,6 +87,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
+            // Keep tool expectations stable when the default web_search mode changes.
+            config.web_search_mode = WebSearchMode::Cached;
         })
         .build(&server)
         .await?;
@@ -122,6 +131,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "read_mcp_resource",
         "update_plan",
         "apply_patch",
+        "web_search",
         "view_image",
     ];
     let body0 = req1.single_request().body_json();

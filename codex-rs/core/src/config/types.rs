@@ -4,6 +4,7 @@
 // definitions that do not contain business logic.
 
 pub use codex_protocol::config_types::AltScreenMode;
+pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
