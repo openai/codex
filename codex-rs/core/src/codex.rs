@@ -249,7 +249,8 @@ impl Codex {
             );
         }
 
-        let user_instructions = get_user_instructions(&config, Some(&loaded_skills.skills)).await;
+        let enabled_skills = loaded_skills.enabled_skills();
+        let user_instructions = get_user_instructions(&config, Some(&enabled_skills)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
             .await
@@ -2221,7 +2222,8 @@ mod handlers {
         for cwd in cwds {
             let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
             let errors = super::errors_to_info(&outcome.errors);
-            let skills_metadata = super::skills_to_info(&outcome.skills);
+            let enabled_skills = outcome.enabled_skills();
+            let skills_metadata = super::skills_to_info(&enabled_skills);
             skills.push(SkillsListEntry {
                 cwd,
                 skills: skills_metadata,

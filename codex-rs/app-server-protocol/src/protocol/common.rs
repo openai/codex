@@ -133,6 +133,10 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    SkillsConfigWrite => "skills/config/write" {
+        params: v2::SkillsConfigWriteParams,
+        response: v2::SkillsConfigWriteResponse,
+    },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
         response: v2::TurnStartResponse,
