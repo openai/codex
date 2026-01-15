@@ -39,6 +39,7 @@ members = [
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
+    "utils/home",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -97,6 +98,7 @@ codex-tui2 = { path = "tui2" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
+codex-utils-home = { path = "utils/home" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-pty = { path = "utils/pty" }
