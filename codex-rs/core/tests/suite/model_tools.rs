@@ -54,8 +54,8 @@ async fn model_selects_expected_tools() {
         codex_tools,
         vec![
             "local_shell".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
+            "mcp_list_resources".to_string(),
+            "mcp_list_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "view_image".to_string()
@@ -68,8 +68,8 @@ async fn model_selects_expected_tools() {
         gpt5_codex_tools,
         vec![
             "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
+            "mcp_list_resources".to_string(),
+            "mcp_list_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "apply_patch".to_string(),
@@ -83,8 +83,8 @@ async fn model_selects_expected_tools() {
         gpt51_codex_tools,
         vec![
             "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
+            "mcp_list_resources".to_string(),
+            "mcp_list_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "apply_patch".to_string(),
@@ -98,8 +98,8 @@ async fn model_selects_expected_tools() {
         gpt5_tools,
         vec![
             "shell".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
+            "mcp_list_resources".to_string(),
+            "mcp_list_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "view_image".to_string()
@@ -112,8 +112,8 @@ async fn model_selects_expected_tools() {
         gpt51_tools,
         vec![
             "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
+            "mcp_list_resources".to_string(),
+            "mcp_list_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "apply_patch".to_string(),
@@ -127,8 +127,8 @@ async fn model_selects_expected_tools() {
         vec![
             "exec_command".to_string(),
             "write_stdin".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
+            "mcp_list_resources".to_string(),
+            "mcp_list_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "apply_patch".to_string(),

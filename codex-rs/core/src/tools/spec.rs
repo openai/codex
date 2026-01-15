@@ -790,7 +790,7 @@ fn create_list_dir_tool() -> ToolSpec {
     })
 }
 
-fn create_list_mcp_resources_tool() -> ToolSpec {
+fn create_mcp_list_resources_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "server".to_string(),
@@ -805,7 +805,7 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
             "cursor".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Opaque cursor returned by a previous list_mcp_resources call for the same server."
+                    "Opaque cursor returned by a previous mcp_list_resources call for the same server."
                         .to_string(),
                 ),
             },
@@ -813,7 +813,7 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "list_mcp_resources".to_string(),
+        name: "mcp_list_resources".to_string(),
         description: "Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -824,7 +824,7 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
     })
 }
 
-fn create_list_mcp_resource_templates_tool() -> ToolSpec {
+fn create_mcp_list_resource_templates_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "server".to_string(),
@@ -839,7 +839,7 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
             "cursor".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
+                    "Opaque cursor returned by a previous mcp_list_resource_templates call for the same server."
                         .to_string(),
                 ),
             },
@@ -847,7 +847,7 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "list_mcp_resource_templates".to_string(),
+        name: "mcp_list_resource_templates".to_string(),
         description: "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters and provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -864,7 +864,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
             "server".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
+                    "MCP server name exactly as configured. Must match the 'server' field returned by mcp_list_resources."
                         .to_string(),
                 ),
             },
@@ -873,7 +873,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
             "uri".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
+                    "Resource URI to read. Must be one of the URIs returned by mcp_list_resources."
                         .to_string(),
                 ),
             },
@@ -1157,11 +1157,11 @@ pub(crate) fn build_specs(
         builder.register_handler("shell_command", shell_command_handler);
     }
 
-    builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-    builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
+    builder.push_spec_with_parallel_support(create_mcp_list_resources_tool(), true);
+    builder.push_spec_with_parallel_support(create_mcp_list_resource_templates_tool(), true);
     builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
-    builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
-    builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
+    builder.register_handler("mcp_list_resources", mcp_resource_handler.clone());
+    builder.register_handler("mcp_list_resource_templates", mcp_resource_handler.clone());
     builder.register_handler("read_mcp_resource", mcp_resource_handler);
 
     builder.push_spec(PLAN_TOOL.clone());
@@ -1393,8 +1393,8 @@ mod tests {
         for spec in [
             create_exec_command_tool(),
             create_write_stdin_tool(),
-            create_list_mcp_resources_tool(),
-            create_list_mcp_resource_templates_tool(),
+            create_mcp_list_resources_tool(),
+            create_mcp_list_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_apply_patch_freeform_tool(),
@@ -1502,8 +1502,8 @@ mod tests {
             &Features::with_defaults(),
             &[
                 "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
@@ -1519,8 +1519,8 @@ mod tests {
             &Features::with_defaults(),
             &[
                 "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
@@ -1539,8 +1539,8 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
@@ -1560,8 +1560,8 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
@@ -1578,8 +1578,8 @@ mod tests {
             &Features::with_defaults(),
             &[
                 "local_shell",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "view_image",
@@ -1594,8 +1594,8 @@ mod tests {
             &Features::with_defaults(),
             &[
                 "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
@@ -1611,8 +1611,8 @@ mod tests {
             &Features::with_defaults(),
             &[
                 "shell",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "view_image",
@@ -1627,8 +1627,8 @@ mod tests {
             &Features::with_defaults(),
             &[
                 "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
@@ -1645,8 +1645,8 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
@@ -1665,8 +1665,8 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
+                "mcp_list_resources",
+                "mcp_list_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "web_search",
