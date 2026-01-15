@@ -339,7 +339,8 @@ pub struct Config {
     /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
-    pub web_search_mode: WebSearchMode,
+    /// Explicit or feature-derived web search mode.
+    pub web_search_mode: Option<WebSearchMode>,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -1191,24 +1192,22 @@ pub fn resolve_oss_provider(
     }
 }
 
-/// Resolve the web search mode from the config, profile, and features.
+/// Resolve the web search mode from explicit config and feature flags.
 fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
-) -> WebSearchMode {
-    // Enum gets precedence over features flags
+) -> Option<WebSearchMode> {
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return mode;
+        return Some(mode);
     }
     if features.enabled(Feature::WebSearchCached) {
-        return WebSearchMode::Cached;
+        return Some(WebSearchMode::Cached);
     }
     if features.enabled(Feature::WebSearchRequest) {
-        return WebSearchMode::Live;
+        return Some(WebSearchMode::Live);
     }
-    // Fall back to default
-    WebSearchMode::default()
+    None
 }
 
 impl Config {
@@ -2232,15 +2231,12 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_uses_default_if_unset() {
+    fn web_search_mode_uses_none_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
 
-        assert_eq!(
-            resolve_web_search_mode(&cfg, &profile, &features),
-            WebSearchMode::default()
-        );
+        assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
     }
 
     #[test]
@@ -2255,7 +2251,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            WebSearchMode::Live
+            Some(WebSearchMode::Live)
         );
     }
 
@@ -2271,7 +2267,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            WebSearchMode::Disabled
+            Some(WebSearchMode::Disabled)
         );
     }
 
@@ -3623,7 +3619,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                web_search_mode: WebSearchMode::default(),
+                web_search_mode: None,
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3710,7 +3706,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::default(),
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3812,7 +3808,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::default(),
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3900,7 +3896,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::default(),
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),

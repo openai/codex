@@ -120,6 +120,7 @@ use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::SkillErrorInfo;
+use crate::protocol::SkillInterface as ProtocolSkillInterface;
 use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
@@ -2404,7 +2405,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
-        web_search_mode: review_web_search_mode,
+        web_search_mode: Some(review_web_search_mode),
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -2417,7 +2418,7 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.web_search_mode = review_web_search_mode;
+    per_turn_config.web_search_mode = Some(review_web_search_mode);
 
     let otel_manager = parent_turn_context
         .client
@@ -2480,6 +2481,17 @@ fn skills_to_info(skills: &[SkillMetadata]) -> Vec<ProtocolSkillMetadata> {
             name: skill.name.clone(),
             description: skill.description.clone(),
             short_description: skill.short_description.clone(),
+            interface: skill
+                .interface
+                .clone()
+                .map(|interface| ProtocolSkillInterface {
+                    display_name: interface.display_name,
+                    short_description: interface.short_description,
+                    icon_small: interface.icon_small,
+                    icon_large: interface.icon_large,
+                    brand_color: interface.brand_color,
+                    default_prompt: interface.default_prompt,
+                }),
             path: skill.path.clone(),
             scope: skill.scope,
         })
