@@ -178,7 +178,9 @@ fn unshare_mount_namespace() -> Result<()> {
 /// Unshare user + mount namespaces so the process can remount read-only without privileges.
 fn unshare_user_and_mount_namespaces() -> Result<()> {
     #[cfg(test)]
-    if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+    if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst)
+        && !FORCE_UNSHARE_USERNS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst)
+    {
         return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
     }
     let result = unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) };
@@ -208,6 +210,8 @@ fn is_permission_denied(err: &CodexErr) -> bool {
 
 #[cfg(test)]
 static FORCE_UNSHARE_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_UNSHARE_USERNS_SUCCESS: AtomicBool = AtomicBool::new(false);
 
 fn sandbox_debug_enabled() -> bool {
     matches!(
@@ -454,6 +458,27 @@ mod tests {
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
         FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(result.is_ok(), true);
+    }
+
+    #[test]
+    fn apply_read_only_mounts_root_falls_back_to_userns() {
+        FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tempdir.path().join(".git")).expect("create .git");
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
+
+        FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(result.is_ok(), true);
     }
 }
