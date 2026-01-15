@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fs::File;
+use std::fs::FileTimes;
 use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
@@ -15,6 +16,7 @@ use uuid::Uuid;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadItem;
+use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::ThreadsPage;
 use crate::rollout::list::get_threads;
 use anyhow::Result;
@@ -122,6 +124,8 @@ fn write_session_file_with_provider(
         });
         writeln!(file, "{rec}")?;
     }
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
     Ok((dt, uuid))
 }
 
@@ -166,6 +170,7 @@ async fn test_list_conversations_latest_first() {
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -315,6 +320,7 @@ async fn test_pagination_cursor() {
         home,
         2,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -382,6 +388,7 @@ async fn test_pagination_cursor() {
         home,
         2,
         page1.next_cursor.as_ref(),
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -449,6 +456,7 @@ async fn test_pagination_cursor() {
         home,
         2,
         page2.next_cursor.as_ref(),
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -501,6 +509,7 @@ async fn test_get_thread_contents() {
         home,
         1,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -630,6 +639,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         home,
         1,
         None,
+        ThreadSortKey::UpdatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -669,6 +679,7 @@ async fn test_stable_ordering_same_second_pagination() {
         home,
         2,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -728,6 +739,7 @@ async fn test_stable_ordering_same_second_pagination() {
         home,
         2,
         page1.next_cursor.as_ref(),
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -786,6 +798,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -803,9 +816,17 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         path.ends_with("rollout-2025-08-02T10-00-00-00000000-0000-0000-0000-00000000002a.jsonl")
     }));
 
-    let all_sessions = get_threads(home, 10, None, NO_SOURCE_FILTER, None, TEST_PROVIDER)
-        .await
-        .unwrap();
+    let all_sessions = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
     let all_paths: Vec<_> = all_sessions
         .items
         .into_iter()
@@ -861,6 +882,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(openai_filter.as_slice()),
         "openai",
@@ -886,6 +908,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(beta_filter.as_slice()),
         "openai",
@@ -906,6 +929,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(unknown_filter.as_slice()),
         "openai",
@@ -913,7 +937,16 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
     .await?;
     assert!(unknown_sessions.items.is_empty());
 
-    let all_sessions = get_threads(home, 10, None, NO_SOURCE_FILTER, None, "openai").await?;
+    let all_sessions = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        "openai",
+    )
+    .await?;
     assert_eq!(all_sessions.items.len(), 3);
 
     Ok(())

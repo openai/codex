@@ -6,6 +6,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use serde_json::json;
 use std::fs;
+use std::fs::FileTimes;
 use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -84,7 +85,13 @@ pub fn create_fake_rollout(
         .to_string(),
     ];
 
-    fs::write(file_path, lines.join("\n") + "\n")?;
+    fs::write(&file_path, lines.join("\n") + "\n")?;
+    let parsed = chrono::DateTime::parse_from_rfc3339(meta_rfc3339)?.with_timezone(&chrono::Utc);
+    let times = FileTimes::new().set_modified(parsed.into());
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file_path)?
+        .set_times(times)?;
     Ok(uuid_str)
 }
 

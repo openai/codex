@@ -22,6 +22,7 @@ use tracing::warn;
 
 use super::SESSIONS_SUBDIR;
 use super::list::Cursor;
+use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
 use super::list::get_threads;
 use super::policy::is_persisted_response_item;
@@ -99,6 +100,7 @@ impl RolloutRecorder {
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -107,6 +109,7 @@ impl RolloutRecorder {
             codex_home,
             page_size,
             cursor,
+            sort_key,
             allowed_sources,
             model_providers,
             default_provider,
@@ -115,19 +118,24 @@ impl RolloutRecorder {
     }
 
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
+    #[allow(clippy::too_many_arguments)]
     pub async fn find_latest_thread_path(
         codex_home: &Path,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
-        let mut cursor: Option<Cursor> = None;
+        let mut cursor = cursor.cloned();
         loop {
             let page = Self::list_threads(
                 codex_home,
-                25,
+                page_size,
                 cursor.as_ref(),
+                sort_key,
                 allowed_sources,
                 model_providers,
                 default_provider,
