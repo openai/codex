@@ -45,6 +45,7 @@ mod bottom_pane;
 mod chatwidget;
 mod cli;
 mod clipboard_paste;
+mod collab;
 mod color;
 pub mod custom_terminal;
 mod diff_render;
