@@ -27,19 +27,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
     } else {
         let original_euid = unsafe { libc::geteuid() };
         let original_egid = unsafe { libc::getegid() };
-        if let Err(err) = unshare_user_and_mount_namespaces() {
-            match &err {
-                CodexErr::Io(io_err)
-                    if io_err.kind() == std::io::ErrorKind::PermissionDenied
-                        || io_err.raw_os_error() == Some(libc::EPERM) =>
-                {
-                    // Unprivileged user namespaces can be disabled on some systems; fall back
-                    // to Landlock-only protections when we cannot set up the mount namespace.
-                    return Ok(());
-                }
-                _ => return Err(err),
-            }
-        }
+        unshare_user_and_mount_namespaces()?;
         write_user_namespace_maps(original_euid, original_egid)?;
     }
     make_mounts_private()?;
