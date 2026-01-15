@@ -313,6 +313,7 @@ async fn exec_windows_sandbox(
         stderr,
         aggregated_output,
         timed_out: capture.timed_out,
+        os_pid: None,
     })
 }
 
@@ -352,6 +353,7 @@ fn finalize_exec_result(
                 aggregated_output,
                 duration,
                 timed_out,
+                os_pid: raw_output.os_pid,
             };
 
             if timed_out {
@@ -469,6 +471,7 @@ struct RawExecToolCallOutput {
     pub stderr: StreamOutput<Vec<u8>>,
     pub aggregated_output: StreamOutput<Vec<u8>>,
     pub timed_out: bool,
+    pub os_pid: Option<u32>,
 }
 
 impl StreamOutput<String> {
@@ -502,6 +505,7 @@ pub struct ExecToolCallOutput {
     pub aggregated_output: StreamOutput<String>,
     pub duration: Duration,
     pub timed_out: bool,
+    pub os_pid: Option<u32>,
 }
 
 impl Default for ExecToolCallOutput {
@@ -513,6 +517,7 @@ impl Default for ExecToolCallOutput {
             aggregated_output: StreamOutput::new(String::new()),
             duration: Duration::ZERO,
             timed_out: false,
+            os_pid: None,
         }
     }
 }
@@ -573,6 +578,7 @@ async fn consume_truncated_output(
     // above, therefore `take()` should normally return `Some`.  If it doesn't
     // we treat it as an exceptional I/O error
 
+    let os_pid = child.id();
     let stdout_reader = child.stdout.take().ok_or_else(|| {
         CodexErr::Io(io::Error::other(
             "stdout pipe was unexpectedly not available",
@@ -680,6 +686,7 @@ async fn consume_truncated_output(
         stderr,
         aggregated_output,
         timed_out,
+        os_pid,
     })
 }
 
@@ -769,6 +776,7 @@ mod tests {
             aggregated_output: StreamOutput::new(aggregated.to_string()),
             duration: Duration::from_millis(1),
             timed_out: false,
+            os_pid: None,
         }
     }
 

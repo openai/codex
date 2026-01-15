@@ -3538,6 +3538,7 @@ mod tests {
             aggregated_output: StreamOutput::new("Command output".to_string()),
             duration: StdDuration::from_secs(1),
             timed_out: true,
+            os_pid: None,
         };
         let (_, turn_context) = make_session_and_context().await;
 

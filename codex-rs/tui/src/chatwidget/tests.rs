@@ -891,6 +891,7 @@ fn begin_exec_with_source(
     let event = ExecCommandBeginEvent {
         call_id: call_id.to_string(),
         process_id: None,
+        os_pid: None,
         turn_id: "turn-1".to_string(),
         command,
         cwd,
@@ -916,6 +917,7 @@ fn begin_unified_exec_startup(
     let event = ExecCommandBeginEvent {
         call_id: call_id.to_string(),
         process_id: Some(process_id.to_string()),
+        os_pid: None,
         turn_id: "turn-1".to_string(),
         command,
         cwd,
@@ -966,12 +968,14 @@ fn end_exec(
         source,
         interaction_input,
         process_id,
+        os_pid,
     } = begin_event;
     chat.handle_codex_event(Event {
         id: call_id.clone(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id,
             process_id,
+            os_pid,
             turn_id,
             command,
             cwd,
@@ -1244,6 +1248,7 @@ async fn exec_end_without_begin_uses_event_command() {
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "call-orphan".to_string(),
             process_id: None,
+            os_pid: None,
             turn_id: "turn-1".to_string(),
             command,
             cwd,
@@ -3712,6 +3717,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "c1".into(),
             process_id: None,
+            os_pid: None,
             turn_id: "turn-1".into(),
             command: command.clone(),
             cwd: cwd.clone(),
@@ -3725,6 +3731,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "c1".into(),
             process_id: None,
+            os_pid: None,
             turn_id: "turn-1".into(),
             command,
             cwd,

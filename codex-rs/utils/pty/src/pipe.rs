@@ -209,6 +209,7 @@ pub async fn spawn_process(
         writer_tx,
         output_tx,
         initial_output_rx,
+        Some(pid),
         Box::new(PipeChildTerminator {
             #[cfg(windows)]
             pid,

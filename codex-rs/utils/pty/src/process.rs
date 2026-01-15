@@ -31,6 +31,7 @@ impl fmt::Debug for PtyHandles {
 pub struct ProcessHandle {
     writer_tx: mpsc::Sender<Vec<u8>>,
     output_tx: broadcast::Sender<Vec<u8>>,
+    os_pid: Option<u32>,
     killer: StdMutex<Option<Box<dyn ChildTerminator>>>,
     reader_handle: StdMutex<Option<JoinHandle<()>>>,
     reader_abort_handles: StdMutex<Vec<AbortHandle>>,
@@ -55,6 +56,7 @@ impl ProcessHandle {
         writer_tx: mpsc::Sender<Vec<u8>>,
         output_tx: broadcast::Sender<Vec<u8>>,
         initial_output_rx: broadcast::Receiver<Vec<u8>>,
+        os_pid: Option<u32>,
         killer: Box<dyn ChildTerminator>,
         reader_handle: JoinHandle<()>,
         reader_abort_handles: Vec<AbortHandle>,
@@ -68,6 +70,7 @@ impl ProcessHandle {
             Self {
                 writer_tx,
                 output_tx,
+                os_pid,
                 killer: StdMutex::new(Some(killer)),
                 reader_handle: StdMutex::new(Some(reader_handle)),
                 reader_abort_handles: StdMutex::new(reader_abort_handles),
@@ -89,6 +92,11 @@ impl ProcessHandle {
     /// Returns a broadcast receiver that yields stdout/stderr chunks.
     pub fn output_receiver(&self) -> broadcast::Receiver<Vec<u8>> {
         self.output_tx.subscribe()
+    }
+
+    /// Process identifier reported by the underlying OS, if available.
+    pub fn os_pid(&self) -> Option<u32> {
+        self.os_pid
     }
 
     /// True if the child process has exited.

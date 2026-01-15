@@ -86,6 +86,7 @@ pub async fn spawn_process(
     }
 
     let mut child = pair.slave.spawn_command(command_builder)?;
+    let os_pid = child.process_id();
     let killer = child.clone_killer();
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
@@ -156,6 +157,7 @@ pub async fn spawn_process(
         writer_tx,
         output_tx,
         initial_output_rx,
+        os_pid,
         Box::new(PtyChildTerminator { killer }),
         reader_handle,
         Vec::new(),

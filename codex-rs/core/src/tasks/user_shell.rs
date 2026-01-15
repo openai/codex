@@ -89,6 +89,7 @@ impl SessionTask for UserShellCommandTask {
                 EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                     call_id: call_id.clone(),
                     process_id: None,
+                    os_pid: None,
                     turn_id: turn_context.sub_id.clone(),
                     command: command.clone(),
                     cwd: cwd.clone(),
@@ -133,6 +134,7 @@ impl SessionTask for UserShellCommandTask {
                     aggregated_output: StreamOutput::new(aborted_message.clone()),
                     duration: Duration::ZERO,
                     timed_out: false,
+                    os_pid: None,
                 };
                 let output_items = [user_shell_command_record_item(
                     &raw_command,
@@ -148,6 +150,7 @@ impl SessionTask for UserShellCommandTask {
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
                             process_id: None,
+                            os_pid: None,
                             turn_id: turn_context.sub_id.clone(),
                             command: command.clone(),
                             cwd: cwd.clone(),
@@ -171,6 +174,7 @@ impl SessionTask for UserShellCommandTask {
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id: call_id.clone(),
                             process_id: None,
+                            os_pid: output.os_pid,
                             turn_id: turn_context.sub_id.clone(),
                             command: command.clone(),
                             cwd: cwd.clone(),
@@ -209,6 +213,7 @@ impl SessionTask for UserShellCommandTask {
                     aggregated_output: StreamOutput::new(message.clone()),
                     duration: Duration::ZERO,
                     timed_out: false,
+                    os_pid: None,
                 };
                 session
                     .send_event(
@@ -216,6 +221,7 @@ impl SessionTask for UserShellCommandTask {
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
                             process_id: None,
+                            os_pid: None,
                             turn_id: turn_context.sub_id.clone(),
                             command,
                             cwd,

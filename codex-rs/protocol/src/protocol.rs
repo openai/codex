@@ -1679,6 +1679,10 @@ pub struct ExecCommandBeginEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub process_id: Option<String>,
+    /// OS process identifier for the spawned command (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub os_pid: Option<u32>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
     /// The command to be executed.
@@ -1703,6 +1707,10 @@ pub struct ExecCommandEndEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub process_id: Option<String>,
+    /// OS process identifier for the spawned command (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub os_pid: Option<u32>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
     /// The command that was executed.
