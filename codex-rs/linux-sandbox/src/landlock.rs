@@ -37,6 +37,10 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
         apply_read_only_mounts(sandbox_policy, cwd)?;
     }
 
+    if !sandbox_policy.has_full_disk_write_access() || !sandbox_policy.has_full_network_access() {
+        set_no_new_privs()?;
+    }
+
     if !sandbox_policy.has_full_network_access() {
         install_network_seccomp_filter_on_current_thread()?;
     }
@@ -53,6 +57,14 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     // TODO(ragona): Add appropriate restrictions if
     // `sandbox_policy.has_full_disk_read_access()` is `false`.
 
+    Ok(())
+}
+
+fn set_no_new_privs() -> Result<()> {
+    let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
     Ok(())
 }
 
