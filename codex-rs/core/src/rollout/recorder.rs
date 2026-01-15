@@ -479,7 +479,13 @@ fn session_cwd_matches(head: &[serde_json::Value], cwd: &Path) -> bool {
     let Some(session_cwd) = extract_session_cwd(head) else {
         return false;
     };
-    paths_match(&session_cwd, cwd)
+    if let (Ok(ca), Ok(cb)) = (
+        path_utils::normalize_for_path_comparison(&session_cwd),
+        path_utils::normalize_for_path_comparison(cwd),
+    ) {
+        return ca == cb;
+    }
+    session_cwd == cwd
 }
 
 fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
@@ -487,14 +493,4 @@ fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
         let meta_line = serde_json::from_value::<SessionMetaLine>(value.clone()).ok()?;
         Some(meta_line.meta.cwd)
     })
-}
-
-fn paths_match(a: &Path, b: &Path) -> bool {
-    if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(a),
-        path_utils::normalize_for_path_comparison(b),
-    ) {
-        return ca == cb;
-    }
-    a == b
 }
