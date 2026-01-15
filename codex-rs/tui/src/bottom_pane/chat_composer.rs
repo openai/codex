@@ -351,7 +351,11 @@ impl ChatComposer {
             let placeholder = self.next_large_paste_placeholder(char_count);
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
-        } else if char_count > 1 && self.handle_paste_image_path(pasted.clone()) {
+        } else if char_count > 1
+            // Keep shell commands like `!open /path/to.png` intact; users expect the raw path.
+            && !self.is_user_shell_command_input()
+            && self.handle_paste_image_path(pasted.clone())
+        {
             self.textarea.insert_str(" ");
         } else {
             self.textarea.insert_str(&pasted);
@@ -383,6 +387,10 @@ impl ChatComposer {
                 false
             }
         }
+    }
+
+    fn is_user_shell_command_input(&self) -> bool {
+        self.textarea.text().starts_with('!')
     }
 
     /// Enable or disable paste-burst handling.
@@ -4130,6 +4138,35 @@ mod tests {
 
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs, vec![tmp_path]);
+    }
+
+    #[test]
+    fn pasting_filepath_with_shell_prefix_keeps_text() {
+        let tmp = tempdir().expect("create TempDir");
+        let tmp_path: PathBuf = tmp.path().join("codex_tui_test_paste_shell.png");
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(3, 2, |_x, _y| Rgba([1, 2, 3, 255]));
+        img.save(&tmp_path).expect("failed to write temp png");
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.insert_str("!open ");
+        let pasted = tmp_path.to_string_lossy().to_string();
+        let needs_redraw = composer.handle_paste(pasted.clone());
+        assert!(needs_redraw);
+        assert!(composer.attached_images.is_empty());
+        assert_eq!(composer.textarea.text(), format!("!open {pasted}"));
+
+        let imgs = composer.take_recent_submission_images();
+        assert!(imgs.is_empty());
     }
 
     #[test]
