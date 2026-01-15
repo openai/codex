@@ -261,7 +261,9 @@ mod wait {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::watch::Receiver;
-    use tokio::time::timeout;
+    use tokio::time::Instant;
+    
+    use tokio::time::timeout_at;
 
     #[derive(Debug, Deserialize)]
     struct WaitArgs {
@@ -359,10 +361,18 @@ mod wait {
                 futures.push(wait_for_final_status(session, id, rx));
             }
             let mut results = Vec::new();
-            if let Ok(Some(Some(result))) =
-                timeout(Duration::from_millis(timeout_ms as u64), futures.next()).await
-            {
-                results.push(result);
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+            loop {
+                match timeout_at(deadline, futures.next()).await {
+                    Ok(Some(Some(result))) => {
+                        results.push(result);
+                        break;
+                    }
+                    Ok(Some(None)) => continue,
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            if !results.is_empty() {
                 // Drain the unlikely last elements to prevent race.
                 loop {
                     match futures.next().now_or_never() {
@@ -870,7 +880,9 @@ mod tests {
 
     #[tokio::test]
     async fn wait_returns_not_found_for_missing_agents() {
-        let (session, turn) = make_session_and_context().await;
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
         let id_a = ThreadId::new();
         let id_b = ThreadId::new();
         let invocation = invocation(
