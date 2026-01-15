@@ -262,7 +262,7 @@ mod wait {
     use std::time::Duration;
     use tokio::sync::watch::Receiver;
     use tokio::time::Instant;
-    
+
     use tokio::time::timeout_at;
 
     #[derive(Debug, Deserialize)]
