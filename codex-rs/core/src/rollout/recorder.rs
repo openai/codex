@@ -57,6 +57,7 @@ pub struct RolloutRecorder {
 pub enum RolloutRecorderParams {
     Create {
         conversation_id: ThreadId,
+        forked_from_id: Option<ThreadId>,
         instructions: Option<String>,
         source: SessionSource,
     },
@@ -79,11 +80,13 @@ enum RolloutCmd {
 impl RolloutRecorderParams {
     pub fn new(
         conversation_id: ThreadId,
+        forked_from_id: Option<ThreadId>,
         instructions: Option<String>,
         source: SessionSource,
     ) -> Self {
         Self::Create {
             conversation_id,
+            forked_from_id,
             instructions,
             source,
         }
@@ -158,6 +161,7 @@ impl RolloutRecorder {
         let (file, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
                 conversation_id,
+                forked_from_id,
                 instructions,
                 source,
             } => {
@@ -181,6 +185,7 @@ impl RolloutRecorder {
                     path,
                     Some(SessionMeta {
                         id: session_id,
+                        forked_from_id,
                         timestamp,
                         cwd: config.cwd.clone(),
                         originator: originator().value,
