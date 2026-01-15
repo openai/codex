@@ -254,6 +254,7 @@ mod send_input {
 mod wait {
     use super::*;
     use crate::agent::status::is_final;
+    use futures::FutureExt;
     use futures::StreamExt;
     use futures::stream::FuturesUnordered;
     use std::collections::HashMap;
@@ -357,10 +358,21 @@ mod wait {
                 let session = session.clone();
                 futures.push(wait_for_final_status(session, id, rx));
             }
-            match timeout(Duration::from_millis(timeout_ms as u64), futures.next()).await {
-                Ok(Some(Some(result))) => vec![result],
-                _ => Vec::new(),
+            let mut results = Vec::new();
+            if let Ok(Some(Some(result))) =
+                timeout(Duration::from_millis(timeout_ms as u64), futures.next()).await
+            {
+                results.push(result);
+                // Drain the unlikely last elements to prevent race.
+                loop {
+                    match futures.next().now_or_never() {
+                        Some(Some(Some(result))) => results.push(result),
+                        Some(Some(None)) => continue,
+                        Some(None) | None => break,
+                    }
+                }
             }
+            results
         };
 
         // Convert payload.
