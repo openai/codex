@@ -31,6 +31,7 @@ use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -63,6 +64,8 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
+
+pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -319,7 +322,7 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: beta_feature_headers(&self.state.config),
+            extra_headers: build_responses_headers(&self.state.config),
             compression,
         }
     }
@@ -632,6 +635,21 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
     {
         headers.insert("x-codex-beta-features", header_value);
     }
+    headers
+}
+
+fn build_responses_headers(config: &Config) -> ApiHeaderMap {
+    let mut headers = beta_feature_headers(config);
+    headers.insert(
+        WEB_SEARCH_ELIGIBLE_HEADER,
+        HeaderValue::from_static(
+            if matches!(config.web_search_mode, Some(WebSearchMode::Disabled)) {
+                "false"
+            } else {
+                "true"
+            },
+        ),
+    );
     headers
 }
 
