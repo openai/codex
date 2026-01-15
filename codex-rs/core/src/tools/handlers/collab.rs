@@ -244,20 +244,23 @@ mod send_input {
 mod wait {
     use super::*;
     use crate::agent::status::is_final;
+    use futures::StreamExt;
+    use futures::stream::FuturesUnordered;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::time::Instant;
-    use tokio::time::timeout_at;
+    use tokio::sync::watch::Receiver;
+    use tokio::time::timeout;
 
     #[derive(Debug, Deserialize)]
     struct WaitArgs {
-        id: String,
+        ids: Vec<String>,
         timeout_ms: Option<i64>,
     }
 
     #[derive(Debug, Serialize)]
     struct WaitResult {
-        status: AgentStatus,
+        status: HashMap<ThreadId, AgentStatus>,
         timed_out: bool,
     }
 
@@ -268,7 +271,11 @@ mod wait {
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: WaitArgs = parse_arguments(&arguments)?;
-        let receiver_thread_id = agent_id(&args.id)?;
+        let receiver_thread_ids = args
+            .ids
+            .iter()
+            .map(|id| agent_id(id))
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Validate timeout.
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
@@ -286,105 +293,118 @@ mod wait {
                 &turn,
                 CollabWaitingBeginEvent {
                     sender_thread_id: session.conversation_id,
-                    receiver_thread_id,
+                    receiver_thread_ids: receiver_thread_ids.clone(),
                     call_id: call_id.clone(),
                 }
                 .into(),
             )
             .await;
-        let status_rx = match session
-            .services
-            .agent_control
-            .subscribe_status(receiver_thread_id)
-            .await
-        {
-            Ok(status_rx) => status_rx,
-            Err(err) => {
-                let status = session
-                    .services
-                    .agent_control
-                    .get_status(receiver_thread_id)
-                    .await;
-                session
-                    .send_event(
-                        &turn,
-                        CollabWaitingEndEvent {
-                            sender_thread_id: session.conversation_id,
-                            receiver_thread_id,
-                            call_id: call_id.clone(),
-                            status,
-                        }
-                        .into(),
-                    )
-                    .await;
-                return Err(collab_agent_error(receiver_thread_id, err));
+
+        let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
+        for id in &receiver_thread_ids {
+            status_rxs.push((
+                *id,
+                subscribe_id(&session, &turn, *id, call_id.as_str()).await?,
+            ));
+        }
+
+        // Check if some agents are already in final states.
+        let initial_final_statuses = status_rxs
+            .iter_mut()
+            .filter_map(|(id, rx)| {
+                let status = rx.borrow().clone();
+                if is_final(&status) {
+                    Some((*id, status))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let statuses = if !initial_final_statuses.is_empty() {
+            initial_final_statuses
+        } else {
+            // Wait for the first agent to be done.
+            let mut futures = FuturesUnordered::new();
+            for (id, mut rx) in status_rxs.into_iter() {
+                futures.push(async move {
+                    rx.changed().await.ok()?;
+                    let value = rx.borrow().clone();
+                    Some((id, value))
+                });
+            }
+            match timeout(Duration::from_millis(timeout_ms as u64), futures.next()).await {
+                Ok(Some(Some(result))) => {
+                    vec![result]
+                }
+                _ => Vec::new(),
             }
         };
-        let result =
-            wait_for_status(session.as_ref(), receiver_thread_id, timeout_ms, status_rx).await;
+
+        // Convert payload.
+        let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let result = WaitResult {
+            status: statuses_map.clone(),
+            timed_out: statuses.is_empty(),
+        };
+
+        // Final event emission.
         session
             .send_event(
                 &turn,
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
-                    receiver_thread_id,
                     call_id,
-                    status: result.status.clone(),
+                    statuses: statuses_map,
                 }
                 .into(),
             )
             .await;
 
-        if matches!(result.status, AgentStatus::NotFound) {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "agent with id {receiver_thread_id} not found"
-            )));
-        }
-
         let content = serde_json::to_string(&result).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
         })?;
 
-        let success = !result.timed_out && !matches!(result.status, AgentStatus::Errored(_));
-
         Ok(ToolOutput::Function {
             content,
-            success: Some(success),
+            success: None,
             content_items: None,
         })
     }
 
-    async fn wait_for_status(
+    async fn subscribe_id(
         session: &Session,
-        agent_id: ThreadId,
-        timeout_ms: i64,
-        mut status_rx: tokio::sync::watch::Receiver<AgentStatus>,
-    ) -> WaitResult {
-        // Get last known status.
-        let mut status = status_rx.borrow_and_update().clone();
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-
-        let timed_out = loop {
-            if is_final(&status) {
-                break false;
+        turn: &TurnContext,
+        thread_id: ThreadId,
+        call_id: &str,
+    ) -> Result<Receiver<AgentStatus>, FunctionCallError> {
+        match session
+            .services
+            .agent_control
+            .subscribe_status(thread_id)
+            .await
+        {
+            Ok(status_rx) => Ok(status_rx),
+            Err(err) => {
+                let mut statuses = HashMap::with_capacity(1);
+                statuses.insert(
+                    thread_id,
+                    session.services.agent_control.get_status(thread_id).await,
+                );
+                session
+                    .send_event(
+                        turn,
+                        CollabWaitingEndEvent {
+                            sender_thread_id: session.conversation_id,
+                            call_id: call_id.to_owned(),
+                            statuses,
+                        }
+                        .into(),
+                    )
+                    .await;
+                Err(collab_agent_error(thread_id, err))
             }
-
-            match timeout_at(deadline, status_rx.changed()).await {
-                Ok(Ok(())) => status = status_rx.borrow().clone(),
-                Ok(Err(_)) => {
-                    let last_status = session.services.agent_control.get_status(agent_id).await;
-                    if last_status != AgentStatus::NotFound {
-                        // On-purpose we keep the last known status if the agent gets dropped. This
-                        // event is not supposed to happen.
-                        status = last_status;
-                    }
-                    break false;
-                }
-                Err(_) => break true,
-            }
-        };
-
-        WaitResult { status, timed_out }
+        }
     }
 }
 

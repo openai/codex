@@ -2157,8 +2157,8 @@ pub struct CollabAgentInteractionEndEvent {
 pub struct CollabWaitingBeginEvent {
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
+    /// Thread ID of the receivers.
+    pub receiver_thread_ids: Vec<ThreadId>,
     /// ID of the waiting call.
     pub call_id: String,
 }
@@ -2167,12 +2167,10 @@ pub struct CollabWaitingBeginEvent {
 pub struct CollabWaitingEndEvent {
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
     /// ID of the waiting call.
     pub call_id: String,
-    /// Last known status of the receiver agent reported to the sender agent.
-    pub status: AgentStatus,
+    /// Last known status of the receiver agents reported to the sender agent.
+    pub statuses: HashMap<ThreadId, AgentStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
