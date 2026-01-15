@@ -178,9 +178,11 @@ fn unshare_mount_namespace() -> Result<()> {
 /// Unshare user + mount namespaces so the process can remount read-only without privileges.
 fn unshare_user_and_mount_namespaces() -> Result<()> {
     #[cfg(test)]
-    if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst)
-        && !FORCE_UNSHARE_USERNS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst)
-    {
+    if FORCE_UNSHARE_USERNS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    #[cfg(test)]
+    if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
     }
     let result = unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) };
@@ -191,6 +193,10 @@ fn unshare_user_and_mount_namespaces() -> Result<()> {
 }
 
 fn is_running_as_root() -> bool {
+    #[cfg(test)]
+    if FORCE_RUNNING_AS_ROOT.load(std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
     unsafe { libc::geteuid() == 0 }
 }
 
@@ -212,6 +218,8 @@ fn is_permission_denied(err: &CodexErr) -> bool {
 static FORCE_UNSHARE_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static FORCE_UNSHARE_USERNS_SUCCESS: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_RUNNING_AS_ROOT: AtomicBool = AtomicBool::new(false);
 
 fn sandbox_debug_enabled() -> bool {
     matches!(
@@ -428,28 +436,35 @@ mod tests {
     fn is_permission_denied_detects_permission_denied_kind() {
         let err: CodexErr =
             std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope").into();
-        assert_eq!(is_permission_denied(&err), true);
+        assert!(is_permission_denied(&err));
     }
 
     #[test]
     fn is_permission_denied_detects_eperm_os_error() {
         let err: CodexErr = std::io::Error::from_raw_os_error(libc::EPERM).into();
-        assert_eq!(is_permission_denied(&err), true);
+        assert!(is_permission_denied(&err));
     }
 
     #[test]
     fn is_permission_denied_returns_false_for_other_errors() {
         let err = CodexErr::UnsupportedOperation("nope".to_string());
-        assert_eq!(is_permission_denied(&err), false);
+        assert!(!is_permission_denied(&err));
     }
 
     #[test]
     fn apply_read_only_mounts_falls_back_on_permission_denied() {
         FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(tempdir.path().join(".git")).expect("create .git");
+        let protected = tempdir.path().join("protected");
+        std::fs::create_dir_all(&protected).expect("create protected");
+        let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
+            writable_roots: vec![WritableRoot {
+                root,
+                read_only_subpaths: vec![
+                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
+                ],
+            }],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -459,17 +474,24 @@ mod tests {
 
         FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
         FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(result.is_ok(), true);
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn apply_read_only_mounts_root_falls_back_to_userns() {
+    fn apply_read_only_mounts_root_falls_back_on_permission_denied() {
+        FORCE_RUNNING_AS_ROOT.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
-        FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(tempdir.path().join(".git")).expect("create .git");
+        let protected = tempdir.path().join("protected");
+        std::fs::create_dir_all(&protected).expect("create protected");
+        let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
+            writable_roots: vec![WritableRoot {
+                root,
+                read_only_subpaths: vec![
+                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
+                ],
+            }],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -477,8 +499,9 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
+        FORCE_RUNNING_AS_ROOT.store(false, std::sync::atomic::Ordering::SeqCst);
         FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
         FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(result.is_ok(), true);
+        assert!(result.is_ok());
     }
 }

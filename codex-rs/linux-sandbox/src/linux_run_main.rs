@@ -15,6 +15,10 @@ pub struct LandlockCommand {
     #[arg(long = "sandbox-policy")]
     pub sandbox_policy: codex_core::protocol::SandboxPolicy,
 
+    /// Enable experimental bind-mount protections for read-only subpaths.
+    #[arg(long = "enable-bind-mounts")]
+    pub enable_bind_mounts: bool,
+
     /// Full command args to run under landlock.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
@@ -24,10 +28,15 @@ pub fn run_main() -> ! {
     let LandlockCommand {
         sandbox_policy_cwd,
         sandbox_policy,
+        enable_bind_mounts,
         command,
     } = LandlockCommand::parse();
 
-    if let Err(e) = apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd) {
+    if let Err(e) = apply_sandbox_policy_to_current_thread(
+        &sandbox_policy,
+        &sandbox_policy_cwd,
+        enable_bind_mounts,
+    ) {
         match e {
             SandboxSetupError::Namespaces(err) => {
                 panic!("error setting up namespaces/mounts: {err:?}");

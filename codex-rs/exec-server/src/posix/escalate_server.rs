@@ -93,6 +93,7 @@ impl EscalateServer {
             &sandbox_state.sandbox_policy,
             &sandbox_state.sandbox_cwd,
             &sandbox_state.codex_linux_sandbox_exe,
+            sandbox_state.linux_sandbox_bind_mounts,
             None,
         )
         .await?;

@@ -100,6 +100,7 @@ impl SandboxManager {
         sandbox: SandboxType,
         sandbox_policy_cwd: &Path,
         codex_linux_sandbox_exe: Option<&PathBuf>,
+        linux_sandbox_bind_mounts: bool,
     ) -> Result<ExecEnv, SandboxTransformError> {
         let mut env = spec.env;
         if !policy.has_full_network_access() {
@@ -131,8 +132,12 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let mut args =
-                    create_linux_sandbox_command_args(command.clone(), policy, sandbox_policy_cwd);
+                let mut args = create_linux_sandbox_command_args(
+                    command.clone(),
+                    policy,
+                    sandbox_policy_cwd,
+                    linux_sandbox_bind_mounts,
+                );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
                 full_command.append(&mut args);

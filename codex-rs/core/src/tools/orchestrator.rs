@@ -101,6 +101,7 @@ impl ToolOrchestrator {
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
+            linux_sandbox_bind_mounts: turn_ctx.tools_config.linux_sandbox_bind_mounts,
         };
 
         match tool.run(req, &initial_attempt, tool_ctx).await {
@@ -151,6 +152,7 @@ impl ToolOrchestrator {
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
+                    linux_sandbox_bind_mounts: turn_ctx.tools_config.linux_sandbox_bind_mounts,
                 };
 
                 // Second attempt.

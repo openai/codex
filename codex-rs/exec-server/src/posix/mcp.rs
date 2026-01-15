@@ -126,6 +126,7 @@ impl ExecTool {
                     sandbox_policy: SandboxPolicy::ReadOnly,
                     codex_linux_sandbox_exe: None,
                     sandbox_cwd: PathBuf::from(&params.workdir),
+                    linux_sandbox_bind_mounts: false,
                 });
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),

@@ -39,8 +39,9 @@ pub(crate) enum SandboxSetupError {
 pub(crate) fn apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
+    enable_bind_mounts: bool,
 ) -> std::result::Result<(), SandboxSetupError> {
-    if !sandbox_policy.has_full_disk_write_access() {
+    if enable_bind_mounts && !sandbox_policy.has_full_disk_write_access() {
         apply_read_only_mounts(sandbox_policy, cwd).map_err(SandboxSetupError::Namespaces)?;
     }
     if !sandbox_policy.has_full_disk_write_access() || !sandbox_policy.has_full_network_access() {

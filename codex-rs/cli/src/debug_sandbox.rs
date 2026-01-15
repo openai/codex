@@ -234,6 +234,9 @@ async fn run_command_under_sandbox(
                 cwd,
                 config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
+                config
+                    .features
+                    .enabled(codex_core::features::Feature::LinuxSandboxBindMounts),
                 stdio_policy,
                 env,
             )

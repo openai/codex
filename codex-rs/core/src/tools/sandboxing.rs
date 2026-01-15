@@ -274,6 +274,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
+    pub linux_sandbox_bind_mounts: bool,
 }
 
 impl<'a> SandboxAttempt<'a> {
@@ -287,6 +288,7 @@ impl<'a> SandboxAttempt<'a> {
             self.sandbox,
             self.sandbox_cwd,
             self.codex_linux_sandbox_exe,
+            self.linux_sandbox_bind_mounts,
         )
     }
 }
