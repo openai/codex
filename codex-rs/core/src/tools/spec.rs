@@ -472,7 +472,7 @@ fn create_send_input_tool() -> ToolSpec {
         "interrupt".to_string(),
         JsonSchema::Boolean {
             description: Some(
-                "When true, interrupt the agent's current task before sending the message. Defaults to false."
+                "When true, interrupt the agent's current task before sending the message. When false (default), the message will be processed when the agent is done on its current task."
                     .to_string(),
             ),
         },
