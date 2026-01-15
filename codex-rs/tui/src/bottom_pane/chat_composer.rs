@@ -352,7 +352,7 @@ impl ChatComposer {
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
         } else if char_count > 1
-            // Keep shell commands like `!open /path/to.png` intact; users expect the raw path.
+            // Keep shell commands like `!open /path/to.png` intact (not replacing with [Image]) so they can be run in shell
             && !self.is_user_shell_command_input()
             && self.handle_paste_image_path(pasted.clone())
         {
