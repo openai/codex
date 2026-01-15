@@ -27,14 +27,37 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
     } else {
         let original_euid = unsafe { libc::geteuid() };
         let original_egid = unsafe { libc::getegid() };
-        unshare_user_and_mount_namespaces()?;
-        write_user_namespace_maps(original_euid, original_egid)?;
+        if let Err(err) = unshare_user_and_mount_namespaces() {
+            if is_permission_denied(&err) {
+                // If user namespaces are restricted, skip read-only mounts and
+                // rely on Landlock-only enforcement (pre-0.81 behavior).
+                return Ok(());
+            }
+            return Err(err);
+        }
+        if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
+            if is_permission_denied(&err) {
+                // Writing uid/gid maps can be blocked by system policy.
+                return Ok(());
+            }
+            return Err(err);
+        }
     }
-    make_mounts_private()?;
+    if let Err(err) = make_mounts_private() {
+        if is_permission_denied(&err) {
+            return Ok(());
+        }
+        return Err(err);
+    }
 
     for target in mount_targets {
         // Bind and remount read-only works for both files and directories.
-        bind_mount_read_only(target.as_path())?;
+        if let Err(err) = bind_mount_read_only(target.as_path()) {
+            if is_permission_denied(&err) {
+                return Ok(());
+            }
+            return Err(err);
+        }
     }
 
     // Drop ambient capabilities acquired from the user namespace so the
@@ -254,10 +277,15 @@ fn bind_mount_read_only(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn is_permission_denied(err: &CodexErr) -> bool {
+    matches!(err, CodexErr::Io(io_err) if io_err.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::io;
 
     #[test]
     fn collect_read_only_mount_targets_errors_on_missing_path() {
@@ -333,5 +361,11 @@ mod tests {
                 path = dot_git.display()
             )
         );
+    }
+
+    #[test]
+    fn permission_denied_detection_handles_io_error() {
+        let err = CodexErr::Io(io::Error::from(io::ErrorKind::PermissionDenied));
+        assert!(is_permission_denied(&err));
     }
 }
