@@ -27,25 +27,41 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
 
     // Root can unshare the mount namespace directly; non-root needs a user
     // namespace to gain capabilities for remounting.
+    let mut used_userns = false;
     if is_running_as_root() {
-        if let Err(err) = unshare_mount_namespace() {
-            if is_permission_denied(&err) {
-                log_namespace_fallback(&err);
-                return Ok(());
+        match unshare_mount_namespace() {
+            Ok(()) => {}
+            Err(err) if is_permission_denied(&err) => {
+                let original_euid = unsafe { libc::geteuid() };
+                let original_egid = unsafe { libc::getegid() };
+                match unshare_user_and_mount_namespaces() {
+                    Ok(()) => {
+                        write_user_namespace_maps(original_euid, original_egid)?;
+                        used_userns = true;
+                    }
+                    Err(err) if is_permission_denied(&err) => {
+                        log_namespace_fallback(&err);
+                        return Ok(());
+                    }
+                    Err(err) => return Err(err),
+                }
             }
-            return Err(err);
+            Err(err) => return Err(err),
         }
     } else {
         let original_euid = unsafe { libc::geteuid() };
         let original_egid = unsafe { libc::getegid() };
-        if let Err(err) = unshare_user_and_mount_namespaces() {
-            if is_permission_denied(&err) {
+        match unshare_user_and_mount_namespaces() {
+            Ok(()) => {
+                write_user_namespace_maps(original_euid, original_egid)?;
+                used_userns = true;
+            }
+            Err(err) if is_permission_denied(&err) => {
                 log_namespace_fallback(&err);
                 return Ok(());
             }
-            return Err(err);
+            Err(err) => return Err(err),
         }
-        write_user_namespace_maps(original_euid, original_egid)?;
     }
     make_mounts_private()?;
 
@@ -56,7 +72,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
 
     // Drop ambient capabilities acquired from the user namespace so the
     // sandboxed command cannot remount or create new bind mounts.
-    if !is_running_as_root() {
+    if used_userns {
         drop_caps()?;
     }
 
