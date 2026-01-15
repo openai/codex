@@ -7,17 +7,14 @@ use serde::Serialize;
 const ORCHESTRATOR_PROMPT: &str = include_str!("../../templates/agents/orchestrator.md");
 /// Base instructions for the worker role.
 const WORKER_PROMPT: &str = include_str!("../../gpt-5.2-codex_prompt.md");
-/// Base instructions for the verifier role.
-const VERIFIER_PROMPT: &str = include_str!("../../review_prompt.md");
 /// Default worker model override used by the worker role.
 const WORKER_MODEL: &str = "gpt-5.2-codex";
 
 /// Enumerated list of all supported agent roles.
-const ALL_ROLES: [AgentRole; 4] = [
+const ALL_ROLES: [AgentRole; 3] = [
     AgentRole::Default,
     AgentRole::Orchestrator,
     AgentRole::Worker,
-    AgentRole::Verifier,
 ];
 
 /// Hard-coded agent role selection used when spawning sub-agents.
@@ -30,8 +27,6 @@ pub enum AgentRole {
     Orchestrator,
     /// Task-executing agent with a fixed model override.
     Worker,
-    /// Read-only reviewer that verifies outputs without editing.
-    Verifier,
 }
 
 /// Immutable profile data that drives per-agent configuration overrides.
@@ -65,11 +60,6 @@ impl AgentRole {
             AgentRole::Worker => AgentProfile {
                 base_instructions: Some(WORKER_PROMPT),
                 model: Some(WORKER_MODEL),
-                ..Default::default()
-            },
-            AgentRole::Verifier => AgentProfile {
-                base_instructions: Some(VERIFIER_PROMPT),
-                read_only: true,
                 ..Default::default()
             },
         }
