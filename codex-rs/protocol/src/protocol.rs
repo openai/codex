@@ -1255,8 +1255,19 @@ pub struct AgentMessageEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UserMessageEvent {
     pub message: String,
+    /// Image URLs sourced from `UserInput::Image`. These are safe
+    /// to replay in legacy UI history events and correspond to images sent to
+    /// the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
+    /// Local file paths sourced from `UserInput::LocalImage`. These are kept so
+    /// the UI can reattach images when editing history, and should not be sent
+    /// to the model or treated as API-ready URLs.
+    #[serde(default)]
+    pub local_images: Vec<std::path::PathBuf>,
+    /// UI-defined spans within `message` used to render or persist special elements.
+    #[serde(default)]
+    pub text_elements: Vec<crate::user_input::TextElement>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2292,6 +2303,48 @@ mod tests {
                 "type": "user_input",
                 "items": [],
                 "final_output_json_schema": schema,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_text_serializes_empty_text_elements() -> Result<()> {
+        let input = UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        };
+
+        let json_input = serde_json::to_value(input)?;
+        assert_eq!(
+            json_input,
+            json!({
+                "type": "text",
+                "text": "hello",
+                "text_elements": [],
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_message_event_serializes_empty_metadata_vectors() -> Result<()> {
+        let event = UserMessageEvent {
+            message: "hello".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        };
+
+        let json_event = serde_json::to_value(event)?;
+        assert_eq!(
+            json_event,
+            json!({
+                "message": "hello",
+                "local_images": [],
+                "text_elements": [],
             })
         );
 

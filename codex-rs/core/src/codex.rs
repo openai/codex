@@ -541,24 +541,12 @@ impl Session {
             web_search_mode: per_turn_config.web_search_mode,
         });
 
-        let base_instructions = if per_turn_config.features.enabled(Feature::Collab) {
-            const COLLAB_INSTRUCTIONS: &str =
-                include_str!("../templates/collab/experimental_prompt.md");
-            let base = session_configuration
-                .base_instructions
-                .as_deref()
-                .unwrap_or(model_info.base_instructions.as_str());
-            Some(format!("{base}\n\n{COLLAB_INSTRUCTIONS}"))
-        } else {
-            session_configuration.base_instructions.clone()
-        };
-
         TurnContext {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            base_instructions,
+            base_instructions: session_configuration.base_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
@@ -2260,6 +2248,7 @@ mod handlers {
             Arc::clone(&turn_context),
             vec![UserInput::Text {
                 text: turn_context.compact_prompt().to_string(),
+                text_elements: Vec::new(),
             }],
             CompactTask,
         )
@@ -2470,6 +2459,7 @@ async fn spawn_review_thread(
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<UserInput> = vec![UserInput::Text {
         text: review_prompt,
+        text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
@@ -3964,6 +3954,7 @@ mod tests {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
+            text_elements: Vec::new(),
         }];
         sess.spawn_task(
             Arc::clone(&tc),
@@ -3996,6 +3987,7 @@ mod tests {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
+            text_elements: Vec::new(),
         }];
         sess.spawn_task(
             Arc::clone(&tc),
@@ -4028,6 +4020,7 @@ mod tests {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
+            text_elements: Vec::new(),
         }];
         sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
             .await;

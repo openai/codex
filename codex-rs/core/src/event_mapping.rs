@@ -45,7 +45,11 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 if is_session_prefix(text) || is_user_shell_command_text(text) {
                     return None;
                 }
-                content.push(UserInput::Text { text: text.clone() });
+                content.push(UserInput::Text {
+                    text: text.clone(),
+                    // Plain text conversion has no UI element ranges.
+                    text_elements: Vec::new(),
+                });
             }
             ContentItem::InputImage { image_url } => {
                 content.push(UserInput::Image {
@@ -174,6 +178,7 @@ mod tests {
                 let expected_content = vec![
                     UserInput::Text {
                         text: "Hello world".to_string(),
+                        text_elements: Vec::new(),
                     },
                     UserInput::Image { image_url: img1 },
                     UserInput::Image { image_url: img2 },
@@ -213,7 +218,10 @@ mod tests {
             TurnItem::UserMessage(user) => {
                 let expected_content = vec![
                     UserInput::Image { image_url },
-                    UserInput::Text { text: user_text },
+                    UserInput::Text {
+                        text: user_text,
+                        text_elements: Vec::new(),
+                    },
                 ];
                 assert_eq!(user.content, expected_content);
             }
@@ -250,7 +258,10 @@ mod tests {
             TurnItem::UserMessage(user) => {
                 let expected_content = vec![
                     UserInput::Image { image_url },
-                    UserInput::Text { text: user_text },
+                    UserInput::Text {
+                        text: user_text,
+                        text_elements: Vec::new(),
+                    },
                 ];
                 assert_eq!(user.content, expected_content);
             }
