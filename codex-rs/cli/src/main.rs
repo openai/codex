@@ -735,6 +735,25 @@ async fn run_interactive_tui(
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
+
+    let terminal_info = codex_core::terminal::terminal_info();
+    if terminal_info.name == TerminalName::Dumb {
+        if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+            return Ok(AppExitInfo::fatal(
+                "TERM is set to \"dumb\". Refusing to start the interactive TUI because no terminal is available for a confirmation prompt (stdin/stderr is not a TTY). Run in a supported terminal or unset TERM.",
+            ));
+        }
+
+        eprintln!(
+            "WARNING: TERM is set to \"dumb\". Codex's interactive TUI may not work in this terminal."
+        );
+        if !confirm("Continue anyway? [y/N]: ")? {
+            return Ok(AppExitInfo::fatal(
+                "Refusing to start the interactive TUI because TERM is set to \"dumb\". Run in a supported terminal or unset TERM.",
+            ));
+        }
+    }
+
     if is_tui2_enabled(&interactive).await? {
         let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
         Ok(result.into())
