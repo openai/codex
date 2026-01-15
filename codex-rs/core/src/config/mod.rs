@@ -2201,7 +2201,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_uses_default_if_unset() {
+    fn web_search_mode_uses_none_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
