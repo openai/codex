@@ -30,6 +30,7 @@ use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -353,7 +354,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
-fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
+fn handle_app_exit(exit_info: AppExitInfo, restart_args: &[OsString]) -> anyhow::Result<()> {
     match exit_info.exit_reason {
         ExitReason::Fatal(message) => {
             eprintln!("ERROR: {message}");
@@ -368,13 +369,13 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
         println!("{line}");
     }
     if let Some(action) = update_action {
-        run_update_action(action)?;
+        run_update_action(action, restart_args)?;
     }
     Ok(())
 }
 
 /// Run the update action and print the result.
-fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
+fn run_update_action(action: UpdateAction, restart_args: &[OsString]) -> anyhow::Result<()> {
     println!();
     let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
@@ -404,7 +405,16 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
     println!();
-    println!("🎉 Update ran successfully! Please restart Codex.");
+    println!("🎉 Update ran successfully! Restarting Codex...");
+    restart_codex(restart_args)?;
+    Ok(())
+}
+
+fn restart_codex(restart_args: &[OsString]) -> anyhow::Result<()> {
+    let Some((command, args)) = restart_args.split_first() else {
+        anyhow::bail!("No command found to restart Codex");
+    };
+    std::process::Command::new(command).args(args).status()?;
     Ok(())
 }
 
@@ -477,6 +487,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    let restart_args: Vec<OsString> = std::env::args_os().collect();
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -495,7 +506,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, &restart_args)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -556,7 +567,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 config_overrides,
             );
             let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, &restart_args)?;
         }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
@@ -573,7 +584,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 config_overrides,
             );
             let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, &restart_args)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
