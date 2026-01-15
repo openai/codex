@@ -1204,6 +1204,7 @@ fn resolve_web_search_mode(
     WebSearchMode::default()
 }
 
+/// Returns Some(true) only when the user explicitly disables web search
 fn resolve_explicit_web_search_disabled(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
@@ -1212,20 +1213,16 @@ fn resolve_explicit_web_search_disabled(
         return (mode == WebSearchMode::Disabled).then_some(true);
     }
 
-    if config_profile.tools_web_search == Some(false) {
-        return Some(true);
+    if let Some(profile_tools_web_search) = config_profile.tools_web_search {
+        return (!profile_tools_web_search).then_some(true);
     }
 
-    if config_toml
+    (config_toml
         .tools
         .as_ref()
         .and_then(|tools| tools.web_search)
-        == Some(false)
-    {
-        return Some(true);
-    }
-
-    None
+        == Some(false))
+    .then_some(true)
 }
 
 impl Config {
@@ -2317,6 +2314,23 @@ trust_level = "trusted"
             resolve_explicit_web_search_disabled(&cfg, &profile),
             Some(true)
         );
+    }
+
+    #[test]
+    fn explicit_web_search_disabled_respects_profile_tools_override() {
+        let cfg = ConfigToml {
+            tools: Some(ToolsToml {
+                web_search: Some(false),
+                view_image: None,
+            }),
+            ..Default::default()
+        };
+        let profile = ConfigProfile {
+            tools_web_search: Some(true),
+            ..Default::default()
+        };
+
+        assert_eq!(resolve_explicit_web_search_disabled(&cfg, &profile), None);
     }
 
     #[test]
