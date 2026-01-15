@@ -2071,6 +2071,13 @@ impl ChatComposer {
             }
         };
 
+        if !Self::skill_query_matches(&skills, &query) {
+            if !matches!(self.active_popup, ActivePopup::None) {
+                self.active_popup = ActivePopup::None;
+            }
+            return;
+        }
+
         match &mut self.active_popup {
             ActivePopup::Skill(popup) => {
                 popup.set_query(&query);
@@ -2082,6 +2089,16 @@ impl ChatComposer {
                 self.active_popup = ActivePopup::Skill(popup);
             }
         }
+    }
+
+    fn skill_query_matches(skills: &[SkillMetadata], query: &str) -> bool {
+        let filter = query.trim();
+        if filter.is_empty() {
+            return true;
+        }
+        skills
+            .iter()
+            .any(|skill| fuzzy_match(&skill.name, filter).is_some())
     }
 
     fn set_has_focus(&mut self, has_focus: bool) {
@@ -4871,6 +4888,52 @@ mod tests {
             matches!(composer.active_popup, ActivePopup::None),
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
         );
+    }
+
+    #[test]
+    fn skill_popup_not_opened_when_query_has_no_matches() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use std::path::PathBuf;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "lint".to_string(),
+            description: "lint".to_string(),
+            short_description: None,
+            path: PathBuf::from("skills/lint"),
+            scope: codex_protocol::protocol::SkillScope::User,
+        }]));
+
+        composer.set_text_content("@README.md".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::File(_)),
+            "expected file popup before switching to skill token"
+        );
+
+        composer.set_text_content("$HOME".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "expected no skill popup for unmatched token"
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Queued(text) => assert_eq!(text, "$HOME".to_string()),
+            other => panic!("expected queued submit, got {other:?}"),
+        }
     }
 
     #[test]
