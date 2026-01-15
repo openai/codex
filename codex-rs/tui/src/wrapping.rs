@@ -82,7 +82,6 @@ impl From<usize> for RtOptions<'_> {
     }
 }
 
-#[allow(dead_code)]
 impl<'a> RtOptions<'a> {
     pub fn new(width: usize) -> Self {
         RtOptions {
@@ -99,17 +98,6 @@ impl<'a> RtOptions<'a> {
             }),
             word_splitter: textwrap::WordSplitter::HyphenSplitter,
         }
-    }
-
-    pub fn line_ending(self, line_ending: textwrap::LineEnding) -> Self {
-        RtOptions {
-            line_ending,
-            ..self
-        }
-    }
-
-    pub fn width(self, width: usize) -> Self {
-        RtOptions { width, ..self }
     }
 
     pub fn initial_indent(self, initial_indent: Line<'a>) -> Self {
@@ -129,20 +117,6 @@ impl<'a> RtOptions<'a> {
     pub fn break_words(self, break_words: bool) -> Self {
         RtOptions {
             break_words,
-            ..self
-        }
-    }
-
-    pub fn word_separator(self, word_separator: textwrap::WordSeparator) -> RtOptions<'a> {
-        RtOptions {
-            word_separator,
-            ..self
-        }
-    }
-
-    pub fn wrap_algorithm(self, wrap_algorithm: textwrap::WrapAlgorithm) -> RtOptions<'a> {
-        RtOptions {
-            wrap_algorithm,
             ..self
         }
     }

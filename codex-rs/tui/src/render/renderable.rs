@@ -200,15 +200,6 @@ impl<'a> ColumnRenderable<'a> {
     pub fn push(&mut self, child: impl Into<Box<dyn Renderable + 'a>>) {
         self.children.push(RenderableItem::Owned(child.into()));
     }
-
-    #[allow(dead_code)]
-    pub fn push_ref<R>(&mut self, child: &'a R)
-    where
-        R: Renderable + 'a,
-    {
-        self.children
-            .push(RenderableItem::Borrowed(child as &'a dyn Renderable));
-    }
 }
 
 pub struct FlexChild<'a> {
@@ -374,15 +365,6 @@ impl<'a> RowRenderable<'a> {
     pub fn push(&mut self, width: u16, child: impl Into<Box<dyn Renderable>>) {
         self.children
             .push((width, RenderableItem::Owned(child.into())));
-    }
-
-    #[allow(dead_code)]
-    pub fn push_ref<R>(&mut self, width: u16, child: &'a R)
-    where
-        R: Renderable + 'a,
-    {
-        self.children
-            .push((width, RenderableItem::Borrowed(child as &'a dyn Renderable)));
     }
 }
 

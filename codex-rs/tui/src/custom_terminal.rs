@@ -352,14 +352,6 @@ where
         Ok(())
     }
 
-    /// Gets the current cursor position.
-    ///
-    /// This is the position of the cursor after the last draw call.
-    #[allow(dead_code)]
-    pub fn get_cursor_position(&mut self) -> io::Result<Position> {
-        self.backend.get_cursor_position()
-    }
-
     /// Sets the cursor position.
     pub fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
         let position = position.into();
