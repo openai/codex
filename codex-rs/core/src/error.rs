@@ -277,6 +277,7 @@ pub enum RefreshTokenFailedReason {
 pub struct UnexpectedResponseError {
     pub status: StatusCode,
     pub body: String,
+    pub url: Option<String>,
     pub request_id: Option<String>,
 }
 
@@ -293,7 +294,11 @@ impl UnexpectedResponseError {
             return None;
         }
 
-        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {})", self.status);
+        let status = self.status;
+        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status})");
+        if let Some(url) = &self.url {
+            message.push_str(&format!(", url: {url}"));
+        }
         if let Some(id) = &self.request_id {
             message.push_str(&format!(", request id: {id}"));
         }
@@ -307,16 +312,16 @@ impl std::fmt::Display for UnexpectedResponseError {
         if let Some(friendly) = self.friendly_message() {
             write!(f, "{friendly}")
         } else {
-            write!(
-                f,
-                "unexpected status {}: {}{}",
-                self.status,
-                self.body,
-                self.request_id
-                    .as_ref()
-                    .map(|id| format!(", request id: {id}"))
-                    .unwrap_or_default()
-            )
+            let status = self.status;
+            let body = &self.body;
+            let mut message = format!("unexpected status {status}: {body}");
+            if let Some(url) = &self.url {
+                message.push_str(&format!(", url: {url}"));
+            }
+            if let Some(id) = &self.request_id {
+                message.push_str(&format!(", request id: {id}"));
+            }
+            write!(f, "{message}")
         }
     }
 }
@@ -826,12 +831,16 @@ mod tests {
             status: StatusCode::FORBIDDEN,
             body: "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>"
                 .to_string(),
+            url: Some("http://example.com/blocked".to_string()),
             request_id: Some("ray-id".to_string()),
         };
         let status = StatusCode::FORBIDDEN.to_string();
+        let url = "http://example.com/blocked";
         assert_eq!(
             err.to_string(),
-            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), request id: ray-id")
+            format!(
+                "{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), url: {url}, request id: ray-id"
+            )
         );
     }
 
@@ -840,12 +849,14 @@ mod tests {
         let err = UnexpectedResponseError {
             status: StatusCode::FORBIDDEN,
             body: "plain text error".to_string(),
+            url: Some("http://example.com/plain".to_string()),
             request_id: None,
         };
         let status = StatusCode::FORBIDDEN.to_string();
+        let url = "http://example.com/plain";
         assert_eq!(
             err.to_string(),
-            format!("unexpected status {status}: plain text error")
+            format!("unexpected status {status}: plain text error, url: {url}")
         );
     }
 

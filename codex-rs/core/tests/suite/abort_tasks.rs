@@ -48,6 +48,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "start sleep".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -101,6 +102,7 @@ async fn interrupt_tool_records_history_entries() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "start history recording".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -118,13 +120,14 @@ async fn interrupt_tool_records_history_entries() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "follow up".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = response_mock.requests();
     assert!(

@@ -4,6 +4,7 @@
 //! between user and agent.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -60,6 +61,13 @@ pub struct Submission {
     pub op: Op,
 }
 
+/// Config payload for refreshing MCP servers.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+pub struct McpServerRefreshConfig {
+    pub mcp_servers: Value,
+    pub mcp_oauth_credentials_store_mode: Value,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -95,7 +103,7 @@ pub enum Op {
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
-        /// Must be a valid model slug for the [`crate::client::ModelClient`]
+        /// Must be a valid model slug for the configured client session
         /// associated with this conversation.
         model: String,
 
@@ -186,6 +194,9 @@ pub enum Op {
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
 
+    /// Request MCP servers to reinitialize and refresh cached tool lists.
+    RefreshMcpServers { config: McpServerRefreshConfig },
+
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
@@ -231,7 +242,7 @@ pub enum Op {
     ///
     /// The command string is executed using the user's default shell and may
     /// include shell syntax (pipes, redirects, etc.). Output is streamed via
-    /// `ExecCommand*` events and the UI regains control upon `TaskComplete`.
+    /// `ExecCommand*` events and the UI regains control upon `TurnComplete`.
     RunUserShellCommand {
         /// The raw command string after '!'
         command: String,
@@ -500,12 +511,26 @@ impl SandboxPolicy {
                 roots
                     .into_iter()
                     .map(|writable_root| {
-                        let mut subpaths = Vec::new();
+                        let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
                         #[allow(clippy::expect_used)]
                         let top_level_git = writable_root
                             .join(".git")
                             .expect(".git is a valid relative path");
-                        if top_level_git.as_path().is_dir() {
+                        // This applies to typical repos (directory .git), worktrees/submodules
+                        // (file .git with gitdir pointer), and bare repos when the gitdir is the
+                        // writable root itself.
+                        let top_level_git_is_file = top_level_git.as_path().is_file();
+                        let top_level_git_is_dir = top_level_git.as_path().is_dir();
+                        if top_level_git_is_dir || top_level_git_is_file {
+                            if top_level_git_is_file
+                                && is_git_pointer_file(&top_level_git)
+                                && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
+                                && !subpaths
+                                    .iter()
+                                    .any(|subpath| subpath.as_path() == gitdir.as_path())
+                            {
+                                subpaths.push(gitdir);
+                            }
                             subpaths.push(top_level_git);
                         }
                         #[allow(clippy::expect_used)]
@@ -524,6 +549,71 @@ impl SandboxPolicy {
             }
         }
     }
+}
+
+fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
+    path.as_path().is_file() && path.as_path().file_name() == Some(OsStr::new(".git"))
+}
+
+fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
+    let contents = match std::fs::read_to_string(dot_git.as_path()) {
+        Ok(contents) => contents,
+        Err(err) => {
+            error!(
+                "Failed to read {path} for gitdir pointer: {err}",
+                path = dot_git.as_path().display()
+            );
+            return None;
+        }
+    };
+
+    let trimmed = contents.trim();
+    let (_, gitdir_raw) = match trimmed.split_once(':') {
+        Some(parts) => parts,
+        None => {
+            error!(
+                "Expected {path} to contain a gitdir pointer, but it did not match `gitdir: <path>`.",
+                path = dot_git.as_path().display()
+            );
+            return None;
+        }
+    };
+    let gitdir_raw = gitdir_raw.trim();
+    if gitdir_raw.is_empty() {
+        error!(
+            "Expected {path} to contain a gitdir pointer, but it was empty.",
+            path = dot_git.as_path().display()
+        );
+        return None;
+    }
+    let base = match dot_git.as_path().parent() {
+        Some(base) => base,
+        None => {
+            error!(
+                "Unable to resolve parent directory for {path}.",
+                path = dot_git.as_path().display()
+            );
+            return None;
+        }
+    };
+    let gitdir_path = match AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base) {
+        Ok(path) => path,
+        Err(err) => {
+            error!(
+                "Failed to resolve gitdir path {gitdir_raw} from {path}: {err}",
+                path = dot_git.as_path().display()
+            );
+            return None;
+        }
+    };
+    if !gitdir_path.as_path().exists() {
+        error!(
+            "Resolved gitdir path {path} does not exist.",
+            path = gitdir_path.as_path().display()
+        );
+        return None;
+    }
+    Some(gitdir_path)
 }
 
 /// Event Queue Entry - events from agent
@@ -546,7 +636,7 @@ pub enum EventMsg {
     Error(ErrorEvent),
 
     /// Warning issued while processing a submission. Unlike `Error`, this
-    /// indicates the task continued but the user should still be notified.
+    /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
     /// Conversation history was compacted (either automatically or manually).
@@ -555,11 +645,15 @@ pub enum EventMsg {
     /// Conversation history was rolled back by dropping the last N user turns.
     ThreadRolledBack(ThreadRolledBackEvent),
 
-    /// Agent has started a task
-    TaskStarted(TaskStartedEvent),
+    /// Agent has started a turn.
+    /// v1 wire format uses `task_started`; accept `turn_started` for v2 interop.
+    #[serde(rename = "task_started", alias = "turn_started")]
+    TurnStarted(TurnStartedEvent),
 
-    /// Agent has completed all actions
-    TaskComplete(TaskCompleteEvent),
+    /// Agent has completed all actions.
+    /// v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.
+    #[serde(rename = "task_complete", alias = "turn_complete")]
+    TurnComplete(TurnCompleteEvent),
 
     /// Usage update for the current session, including totals and last turn.
     /// Optional means unknown — UIs should not display when `None`.
@@ -687,6 +781,71 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+
+    /// Collab interaction: agent spawn begin.
+    CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent),
+    /// Collab interaction: agent spawn end.
+    CollabAgentSpawnEnd(CollabAgentSpawnEndEvent),
+    /// Collab interaction: agent interaction begin.
+    CollabAgentInteractionBegin(CollabAgentInteractionBeginEvent),
+    /// Collab interaction: agent interaction end.
+    CollabAgentInteractionEnd(CollabAgentInteractionEndEvent),
+    /// Collab interaction: waiting begin.
+    CollabWaitingBegin(CollabWaitingBeginEvent),
+    /// Collab interaction: waiting end.
+    CollabWaitingEnd(CollabWaitingEndEvent),
+    /// Collab interaction: close begin.
+    CollabCloseBegin(CollabCloseBeginEvent),
+    /// Collab interaction: close end.
+    CollabCloseEnd(CollabCloseEndEvent),
+}
+
+impl From<CollabAgentSpawnBeginEvent> for EventMsg {
+    fn from(event: CollabAgentSpawnBeginEvent) -> Self {
+        EventMsg::CollabAgentSpawnBegin(event)
+    }
+}
+
+impl From<CollabAgentSpawnEndEvent> for EventMsg {
+    fn from(event: CollabAgentSpawnEndEvent) -> Self {
+        EventMsg::CollabAgentSpawnEnd(event)
+    }
+}
+
+impl From<CollabAgentInteractionBeginEvent> for EventMsg {
+    fn from(event: CollabAgentInteractionBeginEvent) -> Self {
+        EventMsg::CollabAgentInteractionBegin(event)
+    }
+}
+
+impl From<CollabAgentInteractionEndEvent> for EventMsg {
+    fn from(event: CollabAgentInteractionEndEvent) -> Self {
+        EventMsg::CollabAgentInteractionEnd(event)
+    }
+}
+
+impl From<CollabWaitingBeginEvent> for EventMsg {
+    fn from(event: CollabWaitingBeginEvent) -> Self {
+        EventMsg::CollabWaitingBegin(event)
+    }
+}
+
+impl From<CollabWaitingEndEvent> for EventMsg {
+    fn from(event: CollabWaitingEndEvent) -> Self {
+        EventMsg::CollabWaitingEnd(event)
+    }
+}
+
+impl From<CollabCloseBeginEvent> for EventMsg {
+    fn from(event: CollabCloseBeginEvent) -> Self {
+        EventMsg::CollabCloseBegin(event)
+    }
+}
+
+impl From<CollabCloseEndEvent> for EventMsg {
+    fn from(event: CollabCloseEndEvent) -> Self {
+        EventMsg::CollabCloseEnd(event)
+    }
 }
 
 /// Agent lifecycle status, derived from emitted events.
@@ -703,7 +862,7 @@ pub enum AgentStatus {
     Completed(Option<String>),
     /// Agent encountered an error.
     Errored(String),
-    /// Agent has been shutdowned.
+    /// Agent has been shutdown.
     Shutdown,
     /// Agent is not found.
     NotFound,
@@ -876,12 +1035,12 @@ pub struct WarningEvent {
 pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct TaskCompleteEvent {
+pub struct TurnCompleteEvent {
     pub last_agent_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct TaskStartedEvent {
+pub struct TurnStartedEvent {
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
 }
@@ -1104,8 +1263,19 @@ pub struct AgentMessageEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UserMessageEvent {
     pub message: String,
+    /// Image URLs sourced from `UserInput::Image`. These are safe
+    /// to replay in legacy UI history events and correspond to images sent to
+    /// the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
+    /// Local file paths sourced from `UserInput::LocalImage`. These are kept so
+    /// the UI can reattach images when editing history, and should not be sent
+    /// to the model or treated as API-ready URLs.
+    #[serde(default)]
+    pub local_images: Vec<std::path::PathBuf>,
+    /// UI-defined spans within `message` used to render or persist special elements.
+    #[serde(default)]
+    pub text_elements: Vec<crate::user_input::TextElement>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1898,6 +2068,20 @@ pub enum ReviewDecision {
     Abort,
 }
 
+impl ReviewDecision {
+    /// Returns an opaque version of the decision without PII. We can't use an ignored flag
+    /// on `serde` because the serialization is required by some surfaces.
+    pub fn to_opaque_string(&self) -> &'static str {
+        match self {
+            ReviewDecision::Approved => "approved",
+            ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
+            ReviewDecision::ApprovedForSession => "approved_for_session",
+            ReviewDecision::Denied => "denied",
+            ReviewDecision::Abort => "abort",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
@@ -1933,6 +2117,105 @@ pub enum TurnAbortReason {
     Interrupted,
     Replaced,
     ReviewEnded,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabAgentSpawnBeginEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
+    /// beginning.
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabAgentSpawnEndEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the newly spawned agent, if it was created.
+    pub new_thread_id: Option<ThreadId>,
+    /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
+    /// beginning.
+    pub prompt: String,
+    /// Last known status of the new agent reported to the sender agent.
+    pub status: AgentStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabAgentInteractionBeginEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
+    /// leaking at the beginning.
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabAgentInteractionEndEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
+    /// leaking at the beginning.
+    pub prompt: String,
+    /// Last known status of the receiver agent reported to the sender agent.
+    pub status: AgentStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabWaitingBeginEvent {
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// ID of the waiting call.
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabWaitingEndEvent {
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// ID of the waiting call.
+    pub call_id: String,
+    /// Last known status of the receiver agent reported to the sender agent.
+    pub status: AgentStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabCloseBeginEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabCloseEndEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// Last known status of the receiver agent reported to the sender agent before
+    /// the close.
+    pub status: AgentStatus,
 }
 
 #[cfg(test)]
@@ -2040,6 +2323,48 @@ mod tests {
                 "type": "user_input",
                 "items": [],
                 "final_output_json_schema": schema,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_text_serializes_empty_text_elements() -> Result<()> {
+        let input = UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        };
+
+        let json_input = serde_json::to_value(input)?;
+        assert_eq!(
+            json_input,
+            json!({
+                "type": "text",
+                "text": "hello",
+                "text_elements": [],
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_message_event_serializes_empty_metadata_vectors() -> Result<()> {
+        let event = UserMessageEvent {
+            message: "hello".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        };
+
+        let json_event = serde_json::to_value(event)?;
+        assert_eq!(
+            json_event,
+            json!({
+                "message": "hello",
+                "local_images": [],
+                "text_elements": [],
             })
         );
 

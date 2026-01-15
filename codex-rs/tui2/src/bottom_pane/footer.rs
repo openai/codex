@@ -1,3 +1,13 @@
+//! The bottom-pane footer renders transient hints and context indicators.
+//!
+//! The footer is pure rendering: it formats `FooterProps` into `Line`s without mutating any state.
+//! It intentionally does not decide *which* footer content should be shown; that is owned by the
+//! `ChatComposer` (which selects a `FooterMode`) and by higher-level state machines like
+//! `ChatWidget` (which decides when quit/interrupt is allowed).
+//!
+//! Some footer content is time-based rather than event-based, such as the "press again to quit"
+//! hint. The owning widgets schedule redraws so time-based hints can expire even if the UI is
+//! otherwise idle.
 #[cfg(target_os = "linux")]
 use crate::clipboard_paste::is_probably_wsl;
 use crate::key_hint;
@@ -15,12 +25,23 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+/// The rendering inputs for the footer area under the composer.
+///
+/// Callers are expected to construct `FooterProps` from higher-level state (`ChatComposer`,
+/// `BottomPane`, and `ChatWidget`) and pass it to `render_footer`. The footer treats these values as
+/// authoritative and does not attempt to infer missing state (for example, it does not query
+/// whether a task is running).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
+    pub(crate) steer_enabled: bool,
+    /// Which key the user must press again to quit.
+    ///
+    /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
+    pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
     pub(crate) transcript_scrolled: bool,
@@ -30,9 +51,14 @@ pub(crate) struct FooterProps {
     pub(crate) transcript_copy_feedback: Option<TranscriptCopyFeedback>,
 }
 
+/// Selects which footer content is rendered.
+///
+/// The current mode is owned by `ChatComposer`, which may override it based on transient state
+/// (for example, showing `QuitShortcutReminder` only while its timer is active).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FooterMode {
-    CtrlCReminder,
+    /// Transient "press again to quit" reminder (Ctrl+C/Ctrl+D).
+    QuitShortcutReminder,
     ShortcutSummary,
     ShortcutOverlay,
     EscHint,
@@ -40,12 +66,14 @@ pub(crate) enum FooterMode {
 }
 
 pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
-    if ctrl_c_hint && matches!(current, FooterMode::CtrlCReminder) {
+    if ctrl_c_hint && matches!(current, FooterMode::QuitShortcutReminder) {
         return current;
     }
 
     match current {
-        FooterMode::ShortcutOverlay | FooterMode::CtrlCReminder => FooterMode::ShortcutSummary,
+        FooterMode::ShortcutOverlay | FooterMode::QuitShortcutReminder => {
+            FooterMode::ShortcutSummary
+        }
         _ => FooterMode::ShortcutOverlay,
     }
 }
@@ -62,7 +90,7 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     match current {
         FooterMode::EscHint
         | FooterMode::ShortcutOverlay
-        | FooterMode::CtrlCReminder
+        | FooterMode::QuitShortcutReminder
         | FooterMode::ContextOnly => FooterMode::ShortcutSummary,
         other => other,
     }
@@ -102,9 +130,9 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     // the shortcut hint is hidden). Hide it only for the multi-line
     // ShortcutOverlay.
     let mut lines = match props.mode {
-        FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
-            is_task_running: props.is_task_running,
-        })],
+        FooterMode::QuitShortcutReminder => {
+            vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
+        }
         FooterMode::ShortcutSummary => {
             let mut line = context_window_line(
                 props.context_window_percent,
@@ -152,18 +180,21 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             shortcut_overlay_lines(state)
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::ContextOnly => vec![context_window_line(
-            props.context_window_percent,
-            props.context_window_used_tokens,
-        )],
+        FooterMode::ContextOnly => {
+            let mut line = context_window_line(
+                props.context_window_percent,
+                props.context_window_used_tokens,
+            );
+            if props.is_task_running && props.steer_enabled {
+                line.push_span(" · ".dim());
+                line.push_span(key_hint::plain(KeyCode::Tab));
+                line.push_span(" to queue message".dim());
+            }
+            vec![line]
+        }
     };
     apply_copy_feedback(&mut lines, props.transcript_copy_feedback);
     lines
-}
-
-#[derive(Clone, Copy, Debug)]
-struct CtrlCReminderState {
-    is_task_running: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -173,17 +204,8 @@ struct ShortcutsState {
     is_wsl: bool,
 }
 
-fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
-    let action = if state.is_task_running {
-        "interrupt"
-    } else {
-        "quit"
-    };
-    Line::from(vec![
-        key_hint::ctrl(KeyCode::Char('c')).into(),
-        format!(" again to {action}").into(),
-    ])
-    .dim()
+fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
+    Line::from(vec![key.into(), " again to quit".into()]).dim()
 }
 
 fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
@@ -205,6 +227,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
+    let mut queue_message_tab = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
     let mut edit_previous = Line::from("");
@@ -217,6 +240,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::Commands => commands = text,
                 ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
+                ShortcutId::QueueMessageTab => queue_message_tab = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::EditPrevious => edit_previous = text,
@@ -230,6 +254,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         commands,
         shell_commands,
         newline,
+        queue_message_tab,
         file_paths,
         paste_image,
         edit_previous,
@@ -307,6 +332,7 @@ enum ShortcutId {
     Commands,
     ShellCommands,
     InsertNewline,
+    QueueMessageTab,
     FilePaths,
     PasteImage,
     EditPrevious,
@@ -413,6 +439,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " for newline",
     },
     ShortcutDescriptor {
+        id: ShortcutId::QueueMessageTab,
+        bindings: &[ShortcutBinding {
+            key: key_hint::plain(KeyCode::Tab),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to queue message",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::FilePaths,
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Char('@')),
@@ -495,6 +530,8 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -512,6 +549,8 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: true,
@@ -529,6 +568,8 @@ mod tests {
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: true,
                 is_task_running: false,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -542,10 +583,12 @@ mod tests {
         snapshot_footer(
             "footer_ctrl_c_quit_idle",
             FooterProps {
-                mode: FooterMode::CtrlCReminder,
+                mode: FooterMode::QuitShortcutReminder,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -559,10 +602,12 @@ mod tests {
         snapshot_footer(
             "footer_ctrl_c_quit_running",
             FooterProps {
-                mode: FooterMode::CtrlCReminder,
+                mode: FooterMode::QuitShortcutReminder,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -580,6 +625,8 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -597,6 +644,8 @@ mod tests {
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -614,6 +663,8 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
                 transcript_scrolled: false,
@@ -631,8 +682,48 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
+                transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_context_only_queue_hint_disabled",
+            FooterProps {
+                mode: FooterMode::ContextOnly,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: true,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                context_window_percent: None,
+                context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
+                transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_context_only_queue_hint_enabled",
+            FooterProps {
+                mode: FooterMode::ContextOnly,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: true,
+                steer_enabled: true,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                context_window_percent: None,
+                context_window_used_tokens: None,
                 transcript_scrolled: false,
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
@@ -648,6 +739,8 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                steer_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 transcript_scrolled: false,

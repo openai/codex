@@ -15,11 +15,13 @@ codex-core = { workspace = true, features = ["test-support"] }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+futures = { workspace = true }
 notify = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["net", "time"] }
+tokio-tungstenite = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }

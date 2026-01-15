@@ -5,6 +5,7 @@ use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
 use std::path::PathBuf;
+use tokio::sync::watch;
 
 pub struct CodexThread {
     codex: Codex,
@@ -36,6 +37,10 @@ impl CodexThread {
 
     pub async fn agent_status(&self) -> AgentStatus {
         self.codex.agent_status().await
+    }
+
+    pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
+        self.codex.agent_status.clone()
     }
 
     pub fn rollout_path(&self) -> PathBuf {
