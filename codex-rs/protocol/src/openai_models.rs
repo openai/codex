@@ -178,7 +178,7 @@ pub struct ModelInfo {
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
-    pub upgrade: Option<String>,
+    pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
@@ -208,6 +208,21 @@ impl ModelInfo {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelInfoUpgrade {
+    pub model: String,
+    pub migration_markdown: String,
+}
+
+impl From<&ModelUpgrade> for ModelInfoUpgrade {
+    fn from(upgrade: &ModelUpgrade) -> Self {
+        ModelInfoUpgrade {
+            model: upgrade.id.clone(),
+            migration_markdown: upgrade.migration_markdown.clone().unwrap_or_default(),
+        }
+    }
+}
+
 /// Response wrapper for `/models`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
 pub struct ModelsResponse {
@@ -227,8 +242,8 @@ impl From<ModelInfo> for ModelPreset {
                 .unwrap_or(ReasoningEffort::None),
             supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             is_default: false, // default is the highest priority available model
-            upgrade: info.upgrade.as_ref().map(|upgrade_slug| ModelUpgrade {
-                id: upgrade_slug.clone(),
+            upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
+                id: upgrade.model.clone(),
                 reasoning_effort_mapping: reasoning_effort_mapping_from_presets(
                     &info.supported_reasoning_levels,
                 ),
@@ -236,7 +251,7 @@ impl From<ModelInfo> for ModelPreset {
                 // todo(aibrahim): add the model link here.
                 model_link: None,
                 upgrade_copy: None,
-                migration_markdown: None,
+                migration_markdown: Some(upgrade.migration_markdown.clone()),
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
             supported_in_api: info.supported_in_api,
