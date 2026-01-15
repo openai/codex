@@ -741,6 +741,14 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            // Preserve inline `/review ...` args when the popup stays open.
+                            if cmd == SlashCommand::Review
+                                && let Some((_, rest)) = parse_slash_name(expanded_first_line)
+                                && !rest.is_empty()
+                            {
+                                self.textarea.set_text("");
+                                return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
+                            }
                             if self.should_clear_after_bare_slash_command(cmd) {
                                 self.textarea.set_text("");
                             }
@@ -4591,6 +4599,39 @@ mod tests {
             matches!(composer.active_popup, ActivePopup::Command(_)),
             "slash popup should stay open when args follow the command name"
         );
+    }
+
+    #[test]
+    fn slash_popup_enter_preserves_review_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("/review please summarize".to_string());
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.sync_popups();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::CommandWithArgs(cmd, args) => {
+                assert_eq!(cmd, SlashCommand::Review);
+                assert_eq!(args, "please summarize");
+            }
+            other => panic!("expected CommandWithArgs, got: {other:?}"),
+        }
+        assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
 
     #[test]
