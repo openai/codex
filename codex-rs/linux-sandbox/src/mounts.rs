@@ -28,12 +28,17 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
         let original_euid = unsafe { libc::geteuid() };
         let original_egid = unsafe { libc::getegid() };
         if let Err(err) = unshare_user_and_mount_namespaces() {
-            if is_permission_denied(&err) {
-                // Unprivileged user namespaces can be disabled on some systems; fall back
-                // to Landlock-only protections when we cannot set up the mount namespace.
-                return Ok(());
+            match &err {
+                CodexErr::Io(io_err)
+                    if io_err.kind() == std::io::ErrorKind::PermissionDenied
+                        || io_err.raw_os_error() == Some(libc::EPERM) =>
+                {
+                    // Unprivileged user namespaces can be disabled on some systems; fall back
+                    // to Landlock-only protections when we cannot set up the mount namespace.
+                    return Ok(());
+                }
+                _ => return Err(err),
             }
-            return Err(err);
         }
         write_user_namespace_maps(original_euid, original_egid)?;
     }
@@ -144,16 +149,6 @@ fn unshare_user_and_mount_namespaces() -> Result<()> {
 
 fn is_running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
-}
-
-fn is_permission_denied(err: &CodexErr) -> bool {
-    match err {
-        CodexErr::Io(io_err) => {
-            io_err.kind() == std::io::ErrorKind::PermissionDenied
-                || io_err.raw_os_error() == Some(libc::EPERM)
-        }
-        _ => false,
-    }
 }
 
 #[repr(C)]
