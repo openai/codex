@@ -95,7 +95,8 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
             assert_eq!(
                 content,
                 &vec![UserInput::Text {
-                    text: preview.to_string()
+                    text: preview.to_string(),
+                    text_elements: Vec::new(),
                 }]
             );
         }

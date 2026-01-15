@@ -492,6 +492,7 @@ async fn submit_turn(
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: prompt.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),

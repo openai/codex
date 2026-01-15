@@ -184,7 +184,11 @@ impl AppServerClient {
             request_id: request_id.clone(),
             params: TurnStartParams {
                 thread_id: thread_id.to_string(),
-                input: vec![UserInput::Text { text }],
+                input: vec![UserInput::Text {
+                    text,
+                    // Plain text conversion has no UI element ranges.
+                    text_elements: Vec::new(),
+                }],
                 ..Default::default()
             },
         };

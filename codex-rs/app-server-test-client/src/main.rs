@@ -256,7 +256,11 @@ fn send_message_v2_with_policies(
     println!("< thread/start response: {thread_response:?}");
     let mut turn_params = TurnStartParams {
         thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text { text: user_message }],
+        input: vec![V2UserInput::Text {
+            text: user_message,
+            // Plain text conversion has no UI element ranges.
+            text_elements: Vec::new(),
+        }],
         ..Default::default()
     };
     turn_params.approval_policy = approval_policy;
@@ -288,6 +292,7 @@ fn send_follow_up_v2(
         thread_id: thread_response.thread.id.clone(),
         input: vec![V2UserInput::Text {
             text: first_message,
+            text_elements: Vec::new(),
         }],
         ..Default::default()
     };
@@ -299,6 +304,7 @@ fn send_follow_up_v2(
         thread_id: thread_response.thread.id.clone(),
         input: vec![V2UserInput::Text {
             text: follow_up_message,
+            text_elements: Vec::new(),
         }],
         ..Default::default()
     };

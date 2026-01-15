@@ -70,6 +70,7 @@ async fn fork_thread_twice_drops_to_first_message() {
             .submit(Op::UserInput {
                 items: vec![UserInput::Text {
                     text: text.to_string(),
+                    text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
             })

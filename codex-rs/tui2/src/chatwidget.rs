@@ -2017,7 +2017,11 @@ impl ChatWidget {
         }
 
         if !text.is_empty() {
-            items.push(UserInput::Text { text: text.clone() });
+            // TODO: Thread text element ranges from the composer input. Empty keeps old behavior.
+            items.push(UserInput::Text {
+                text: text.clone(),
+                text_elements: Vec::new(),
+            });
         }
 
         if let Some(skills) = self.bottom_pane.skills() {

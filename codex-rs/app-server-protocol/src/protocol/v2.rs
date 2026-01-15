@@ -1543,21 +1543,55 @@ pub struct TurnInterruptParams {
 pub struct TurnInterruptResponse {}
 
 // User input types
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ByteRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TextElement {
+    /// Byte range in the parent `text` buffer that this element occupies.
+    pub byte_range: ByteRange,
+    /// Optional human-readable placeholder for the element, displayed in the UI.
+    pub placeholder: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum UserInput {
-    Text { text: String },
-    Image { url: String },
-    LocalImage { path: PathBuf },
-    Skill { name: String, path: PathBuf },
+    Text {
+        text: String,
+        /// UI-defined spans within `text` used to render or persist special elements.
+        #[serde(default)]
+        text_elements: Vec<TextElement>,
+    },
+    Image {
+        url: String,
+    },
+    LocalImage {
+        path: PathBuf,
+    },
+    Skill {
+        name: String,
+        path: PathBuf,
+    },
 }
 
 impl UserInput {
     pub fn into_core(self) -> CoreUserInput {
         match self {
-            UserInput::Text { text } => CoreUserInput::Text { text },
+            UserInput::Text { text, .. } => CoreUserInput::Text {
+                text,
+                // TODO: Thread text element ranges into v2 inputs. Empty keeps old behavior.
+                text_elements: Vec::new(),
+            },
             UserInput::Image { url } => CoreUserInput::Image { image_url: url },
             UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
             UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
@@ -1568,7 +1602,11 @@ impl UserInput {
 impl From<CoreUserInput> for UserInput {
     fn from(value: CoreUserInput) -> Self {
         match value {
-            CoreUserInput::Text { text } => UserInput::Text { text },
+            CoreUserInput::Text { text, .. } => UserInput::Text {
+                text,
+                // TODO: Thread text element ranges from core into v2 inputs.
+                text_elements: Vec::new(),
+            },
             CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
             CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
@@ -2160,6 +2198,7 @@ mod tests {
             content: vec![
                 CoreUserInput::Text {
                     text: "hello".to_string(),
+                    text_elements: Vec::new(),
                 },
                 CoreUserInput::Image {
                     image_url: "https://example.com/image.png".to_string(),
@@ -2181,6 +2220,7 @@ mod tests {
                 content: vec![
                     UserInput::Text {
                         text: "hello".to_string(),
+                        text_elements: Vec::new(),
                     },
                     UserInput::Image {
                         url: "https://example.com/image.png".to_string(),

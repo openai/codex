@@ -100,6 +100,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "first prompt".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -115,6 +116,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "second prompt".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
