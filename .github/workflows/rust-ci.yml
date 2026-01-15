@@ -302,7 +302,7 @@ jobs:
         continue-on-error: true
         run: |
           find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
-            | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
+            | xargs -0 -n1 -P$(nproc) -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
 
       # Save caches explicitly; make non-fatal so cache packaging
       # never fails the overall job. Only save when key wasn't hit.
