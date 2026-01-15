@@ -64,6 +64,8 @@ use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
+pub const WEB_SEARCH_DISABLED_HEADER: &str = "x-openai-web-search-disabled";
+
 #[derive(Debug)]
 struct ModelClientState {
     config: Arc<Config>,
@@ -319,7 +321,7 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: beta_feature_headers(&self.state.config),
+            extra_headers: build_responses_headers(&self.state.config),
             compression,
         }
     }
@@ -631,6 +633,14 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
         && let Ok(header_value) = HeaderValue::from_str(value.as_str())
     {
         headers.insert("x-codex-beta-features", header_value);
+    }
+    headers
+}
+
+fn build_responses_headers(config: &Config) -> ApiHeaderMap {
+    let mut headers = beta_feature_headers(config);
+    if config.explicit_web_search_disabled {
+        headers.insert(WEB_SEARCH_DISABLED_HEADER, HeaderValue::from_static("true"));
     }
     headers
 }
