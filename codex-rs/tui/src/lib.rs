@@ -371,6 +371,13 @@ async fn run_ratatui_app(
 
     let mut tui = Tui::new(terminal);
 
+    // Set alt screen mode EARLY, before any pickers or overlays run.
+    // This ensures resume_picker, fork_picker, onboarding, etc. all respect
+    // the setting when they call enter_alt_screen().
+    let use_alt_screen =
+        determine_alt_screen_mode(cli.no_alt_screen, initial_config.tui_alternate_screen);
+    tui.set_alt_screen_enabled(use_alt_screen);
+
     #[cfg(not(debug_assertions))]
     {
         use crate::update_prompt::UpdatePromptOutcome;
@@ -563,15 +570,7 @@ async fn run_ratatui_app(
         resume_picker::SessionSelection::StartFresh
     };
 
-    let Cli {
-        prompt,
-        images,
-        no_alt_screen,
-        ..
-    } = cli;
-
-    let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
-    tui.set_alt_screen_enabled(use_alt_screen);
+    let Cli { prompt, images, .. } = cli;
 
     let app_result = App::run(
         &mut tui,

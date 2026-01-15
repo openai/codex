@@ -390,6 +390,28 @@ async fn run_ratatui_app(
 
     let mut tui = Tui::new(terminal);
 
+    // Determine whether to use alternate screen EARLY, before any pickers or
+    // overlays run. This ensures resume_picker, fork_picker, onboarding, etc.
+    // all respect the setting when they call enter_alt_screen().
+    //
+    // Alternate screen prevents scrollback in terminal multiplexers like Zellij
+    // that strictly follow the xterm spec (which disallows scrollback in
+    // alternate screen buffers). This auto-detects the terminal and disables
+    // alternate screen in Zellij while keeping it enabled elsewhere.
+    let use_alt_screen = if cli.no_alt_screen {
+        false
+    } else {
+        match initial_config.tui_alternate_screen {
+            AltScreenMode::Always => true,
+            AltScreenMode::Never => false,
+            AltScreenMode::Auto => {
+                let terminal_info = codex_core::terminal::terminal_info();
+                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
+            }
+        }
+    };
+    tui.set_alt_screen_enabled(use_alt_screen);
+
     #[cfg(not(debug_assertions))]
     {
         use crate::update_prompt::UpdatePromptOutcome;
@@ -587,39 +609,9 @@ async fn run_ratatui_app(
         resume_picker::SessionSelection::StartFresh
     };
 
-    let Cli {
-        prompt,
-        images,
-        no_alt_screen,
-        ..
-    } = cli;
+    let Cli { prompt, images, .. } = cli;
 
-    // Run the main chat + transcript UI on the terminal's alternate screen so
-    // the entire viewport can be used without polluting normal scrollback. This
-    // mirrors the behavior of the legacy TUI but keeps inline mode available
-    // for smaller prompts like onboarding and model migration.
-    //
-    // However, alternate screen prevents scrollback in terminal multiplexers like
-    // Zellij that strictly follow the xterm spec (which disallows scrollback in
-    // alternate screen buffers). This auto-detects the terminal and disables
-    // alternate screen in Zellij while keeping it enabled elsewhere.
-    let use_alt_screen = if no_alt_screen {
-        // CLI flag explicitly disables alternate screen
-        false
-    } else {
-        match config.tui_alternate_screen {
-            AltScreenMode::Always => true,
-            AltScreenMode::Never => false,
-            AltScreenMode::Auto => {
-                // Auto-detect: disable in Zellij, enable elsewhere
-                let terminal_info = codex_core::terminal::terminal_info();
-                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
-            }
-        }
-    };
-
-    // Set flag on Tui so all enter_alt_screen() calls respect the setting
-    tui.set_alt_screen_enabled(use_alt_screen);
+    // Enter alt screen for the main app (will be a no-op if alt_screen_enabled is false)
     let _ = tui.enter_alt_screen();
 
     let app_result = App::run(
