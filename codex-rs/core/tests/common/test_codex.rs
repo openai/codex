@@ -8,6 +8,7 @@ use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
+use codex_core::WireApi;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
@@ -23,6 +24,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::load_default_config_for_test;
+use crate::responses::WebSocketTestServer;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
 use crate::wait_for_event;
@@ -98,6 +100,21 @@ impl TestCodexBuilder {
         let base_url = server.uri();
         let home = Arc::new(TempDir::new()?);
         self.build_with_home_and_base_url(format!("{base_url}/v1"), home, None)
+            .await
+    }
+
+    pub async fn build_with_websocket_server(
+        &mut self,
+        server: &WebSocketTestServer,
+    ) -> anyhow::Result<TestCodex> {
+        let base_url = format!("{}/v1", server.uri());
+        let home = Arc::new(TempDir::new()?);
+        let base_url_clone = base_url.clone();
+        self.config_mutators.push(Box::new(move |config| {
+            config.model_provider.base_url = Some(base_url_clone);
+            config.model_provider.wire_api = WireApi::ResponsesWebsocket;
+        }));
+        self.build_with_home_and_base_url(base_url, home, None)
             .await
     }
 

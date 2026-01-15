@@ -1,10 +1,34 @@
+//! The main Codex TUI chat surface.
+//!
+//! `ChatWidget` consumes protocol events, builds and updates history cells, and drives rendering
+//! for both the main viewport and overlay UIs.
+//!
+//! The UI has both committed transcript cells (finalized `HistoryCell`s) and an in-flight active
+//! cell (`ChatWidget.active_cell`) that can mutate in place while streaming (often representing a
+//! coalesced exec/tool group). The transcript overlay (`Ctrl+T`) renders committed cells plus a
+//! cached, render-only live tail derived from the current active cell so in-flight tool calls are
+//! visible immediately.
+//!
+//! The transcript overlay is kept in sync by `App::overlay_forward_event`, which syncs a live tail
+//! during draws using `active_cell_transcript_key()` and `active_cell_transcript_lines()`. The
+//! cache key is designed to change when the active cell mutates in place or when its transcript
+//! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
+//! every draw.
+//!
+//! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
+//! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
+//! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
+//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
+//! `update_task_running_state`.
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
+use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
@@ -32,6 +56,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandOutputDeltaEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
@@ -76,6 +101,8 @@ use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -84,7 +111,10 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
+const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
@@ -94,8 +124,10 @@ use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -113,6 +145,8 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -174,6 +208,28 @@ impl UnifiedExecWaitState {
 
     fn is_duplicate(&self, command_display: &str) -> bool {
         self.command_display == command_display
+    }
+}
+
+#[derive(Clone, Debug)]
+struct UnifiedExecWaitStreak {
+    process_id: String,
+    command_display: Option<String>,
+}
+
+impl UnifiedExecWaitStreak {
+    fn new(process_id: String, command_display: Option<String>) -> Self {
+        Self {
+            process_id,
+            command_display: command_display.filter(|display| !display.is_empty()),
+        }
+    }
+
+    fn update_command_display(&mut self, command_display: Option<String>) {
+        if self.command_display.is_some() {
+            return;
+        }
+        self.command_display = command_display.filter(|display| !display.is_empty());
     }
 }
 
@@ -294,7 +350,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) model: String,
+    pub(crate) model: Option<String>,
 }
 
 #[derive(Default)]
@@ -313,13 +369,35 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+/// Maintains the per-session UI state and interaction state machines for the chat screen.
+///
+/// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
+/// buffers, bottom-pane overlays, and transient status text) and turns key presses into user
+/// intent (`Op` submissions and `AppEvent` requests).
+///
+/// It is not responsible for running the agent itself; it reflects progress by updating UI state
+/// and by sending requests back to codex-core.
+///
+/// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
+/// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
+/// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
+    /// Monotonic-ish counter used to invalidate transcript overlay caching.
+    ///
+    /// The transcript overlay appends a cached "live tail" for the current active cell. Most
+    /// active-cell updates are mutations of the *existing* cell (not a replacement), so pointer
+    /// identity alone is not a good cache key.
+    ///
+    /// Callers bump this whenever the active cell's transcript output could change without
+    /// flushing. It is intentionally allowed to wrap, which implies a rare one-time cache collision
+    /// where the overlay may briefly treat new tail content as already cached.
+    active_cell_revision: u64,
     config: Config,
-    model: String,
+    model: Option<String>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -335,8 +413,19 @@ pub(crate) struct ChatWidget {
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
     last_unified_wait: Option<UnifiedExecWaitState>,
+    unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    /// Tracks whether codex-core currently considers an agent turn to be in progress.
+    ///
+    /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
+    /// can update the status header without accidentally clearing the spinner for an active turn.
+    agent_turn_running: bool,
+    /// Tracks per-server MCP startup state while startup is in progress.
+    ///
+    /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
+    /// bottom pane is treated as "running" while this is populated, even if no agent turn is
+    /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -359,6 +448,14 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
+    /// When `Some`, the user has pressed a quit shortcut and the second press
+    /// must occur before `quit_shortcut_expires_at`.
+    quit_shortcut_expires_at: Option<Instant>,
+    /// Tracks which quit shortcut key was pressed first.
+    ///
+    /// We require the second press to match this key so `Ctrl+C` followed by
+    /// `Ctrl+D` (or vice versa) doesn't quit accidentally.
+    quit_shortcut_key: Option<KeyBinding>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
@@ -372,6 +469,30 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+}
+
+/// Snapshot of active-cell state that affects transcript overlay rendering.
+///
+/// The overlay keeps a cached "live tail" for the in-flight cell; this key lets
+/// it cheaply decide when to recompute that tail as the active cell evolves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ActiveCellTranscriptKey {
+    /// Cache-busting revision for in-place updates.
+    ///
+    /// Many active cells are updated incrementally while streaming (for example when exec groups
+    /// add output or change status), and the transcript overlay caches its live tail, so this
+    /// revision gives a cheap way to say "same active cell, but its transcript output is different
+    /// now". Callers bump it on any mutation that can affect `HistoryCell::transcript_lines`.
+    pub(crate) revision: u64,
+    /// Whether the active cell continues the prior stream, which affects
+    /// spacing between transcript blocks.
+    pub(crate) is_stream_continuation: bool,
+    /// Optional animation tick for time-dependent transcript output.
+    ///
+    /// When this changes, the overlay recomputes the cached tail even if the revision and width
+    /// are unchanged, which is how shimmer/spinner visuals can animate in the overlay without any
+    /// underlying data change.
+    pub(crate) animation_tick: Option<u64>,
 }
 
 struct UserMessage {
@@ -406,6 +527,34 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
+    ///
+    /// The bottom pane only has one running flag, but this module treats it as a derived state of
+    /// both the agent turn lifecycle and MCP startup lifecycle.
+    fn update_task_running_state(&mut self) {
+        self.bottom_pane
+            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+    }
+
+    fn restore_reasoning_status_header(&mut self) {
+        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+            self.set_status_header(header);
+        } else if self.bottom_pane.is_task_running() {
+            self.set_status_header(String::from("Working"));
+        }
+    }
+
+    fn flush_unified_exec_wait_streak(&mut self) {
+        let Some(wait) = self.unified_exec_wait_streak.take() else {
+            return;
+        };
+        self.needs_final_message_separator = true;
+        let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
+        self.app_event_tx
+            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.restore_reasoning_status_header();
+    }
+
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -443,13 +592,16 @@ impl ChatWidget {
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
+        self.model = Some(model_for_header.clone());
         self.session_header.set_model(&model_for_header);
-        self.add_to_history(history_cell::new_session_info(
+        let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
             event,
             self.show_welcome_banner,
-        ));
+        );
+        self.apply_session_info_cell(session_info_cell);
+
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -530,6 +682,12 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
+        if self.unified_exec_wait_streak.is_some() {
+            // Unified exec waiting should take precedence over reasoning-derived status headers.
+            self.request_redraw();
+            return;
+        }
+
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.set_status_header(header);
@@ -562,8 +720,11 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
-        self.bottom_pane.clear_ctrl_c_quit_hint();
-        self.bottom_pane.set_task_running(true);
+        self.agent_turn_running = true;
+        self.bottom_pane.clear_quit_shortcut_hint();
+        self.quit_shortcut_expires_at = None;
+        self.quit_shortcut_key = None;
+        self.update_task_running_state();
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
@@ -575,12 +736,14 @@ impl ChatWidget {
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
-        self.flush_wait_cell();
+        self.flush_unified_exec_wait_streak();
         // Mark task stopped and request redraw now that all content is in history.
-        self.bottom_pane.set_task_running(false);
+        self.agent_turn_running = false;
+        self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.unified_exec_wait_streak = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -682,7 +845,7 @@ impl ChatWidget {
 
             if high_usage
                 && !self.rate_limit_switch_prompt_hidden()
-                && self.model != NUDGE_MODEL_SLUG
+                && self.current_model() != Some(NUDGE_MODEL_SLUG)
                 && !matches!(
                     self.rate_limit_switch_prompt,
                     RateLimitSwitchPromptState::Shown
@@ -704,12 +867,16 @@ impl ChatWidget {
             self.rate_limit_snapshot = None;
         }
     }
-    /// Finalize any active exec as failed and stop/clear running UI state.
+    /// Finalize any active exec as failed and stop/clear agent-turn UI state.
+    ///
+    /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
+    /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
-        self.bottom_pane.set_task_running(false);
+        self.agent_turn_running = false;
+        self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -738,7 +905,7 @@ impl ChatWidget {
         }
         status.insert(ev.server, ev.status);
         self.mcp_startup_status = Some(status);
-        self.bottom_pane.set_task_running(true);
+        self.update_task_running_state();
         if let Some(current) = &self.mcp_startup_status {
             let total = current.len();
             let mut starting: Vec<_> = current
@@ -794,7 +961,7 @@ impl ChatWidget {
         }
 
         self.mcp_startup_status = None;
-        self.bottom_pane.set_task_running(false);
+        self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
     }
@@ -881,11 +1048,19 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
 
-    fn on_exec_command_output_delta(
-        &mut self,
-        _ev: codex_core::protocol::ExecCommandOutputDeltaEvent,
-    ) {
-        // TODO: Handle streaming exec output if/when implemented
+    fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
+        let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        else {
+            return;
+        };
+
+        if cell.append_output(&ev.call_id, std::str::from_utf8(&ev.chunk).unwrap_or("")) {
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
     }
 
     fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
@@ -896,47 +1071,38 @@ impl ChatWidget {
             .find(|process| process.key == ev.process_id)
             .map(|process| process.command_display.clone());
         if ev.stdin.is_empty() {
-            // Empty stdin means we are still waiting on background output; keep a live shimmer cell.
-            if let Some(wait_cell) = self.active_cell.as_mut().and_then(|cell| {
-                cell.as_any_mut()
-                    .downcast_mut::<history_cell::UnifiedExecWaitCell>()
-            }) && wait_cell.matches(command_display.as_deref())
-            {
-                // Same process still waiting; update command display if it shows up late.
-                wait_cell.update_command_display(command_display);
-                self.request_redraw();
-                return;
+            // Empty stdin means we are polling for background output.
+            // Surface this in the status header (single "waiting" surface) instead of the transcript.
+            self.bottom_pane.ensure_status_indicator();
+            self.bottom_pane.set_interrupt_hint_visible(true);
+            let header = if let Some(command) = &command_display {
+                format!("Waiting for background terminal · {command}")
+            } else {
+                "Waiting for background terminal".to_string()
+            };
+            self.set_status_header(header);
+            match &mut self.unified_exec_wait_streak {
+                Some(wait) if wait.process_id == ev.process_id => {
+                    wait.update_command_display(command_display);
+                }
+                Some(_) => {
+                    self.flush_unified_exec_wait_streak();
+                    self.unified_exec_wait_streak =
+                        Some(UnifiedExecWaitStreak::new(ev.process_id, command_display));
+                }
+                None => {
+                    self.unified_exec_wait_streak =
+                        Some(UnifiedExecWaitStreak::new(ev.process_id, command_display));
+                }
             }
-            let has_non_wait_active = matches!(
-                self.active_cell.as_ref(),
-                Some(active)
-                    if active
-                        .as_any()
-                        .downcast_ref::<history_cell::UnifiedExecWaitCell>()
-                        .is_none()
-            );
-            if has_non_wait_active {
-                // Do not preempt non-wait active cells with a wait entry.
-                return;
-            }
-            self.flush_wait_cell();
-            self.active_cell = Some(Box::new(history_cell::new_unified_exec_wait_live(
-                command_display,
-                self.config.animations,
-            )));
             self.request_redraw();
         } else {
-            if let Some(wait_cell) = self.active_cell.as_ref().and_then(|cell| {
-                cell.as_any()
-                    .downcast_ref::<history_cell::UnifiedExecWaitCell>()
-            }) {
-                // Convert the live wait cell into a static "(waited)" entry before logging stdin.
-                let waited_command = wait_cell.command_display().or(command_display.clone());
-                self.active_cell = None;
-                self.add_to_history(history_cell::new_unified_exec_interaction(
-                    waited_command,
-                    String::new(),
-                ));
+            if self
+                .unified_exec_wait_streak
+                .as_ref()
+                .is_some_and(|wait| wait.process_id == ev.process_id)
+            {
+                self.flush_unified_exec_wait_streak();
             }
             self.add_to_history(history_cell::new_unified_exec_interaction(
                 command_display,
@@ -971,6 +1137,14 @@ impl ChatWidget {
 
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
         if is_unified_exec_source(ev.source) {
+            if let Some(process_id) = ev.process_id.as_deref()
+                && self
+                    .unified_exec_wait_streak
+                    .as_ref()
+                    .is_some_and(|wait| wait.process_id == process_id)
+            {
+                self.flush_unified_exec_wait_streak();
+            }
             self.track_unified_exec_process_end(&ev);
             if !self.bottom_pane.is_task_running() {
                 return;
@@ -1053,7 +1227,7 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
-        self.request_exit();
+        self.request_immediate_exit();
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
@@ -1228,6 +1402,9 @@ impl ChatWidget {
             cell.complete_call(&ev.call_id, output, ev.duration);
             if cell.should_flush() {
                 self.flush_active_cell();
+            } else {
+                self.bump_active_cell_revision();
+                self.request_redraw();
             }
         }
     }
@@ -1344,6 +1521,7 @@ impl ChatWidget {
             )
         {
             *cell = new_exec;
+            self.bump_active_cell_revision();
         } else {
             self.flush_active_cell();
 
@@ -1355,6 +1533,7 @@ impl ChatWidget {
                 interaction_input,
                 self.config.animations,
             )));
+            self.bump_active_cell_revision();
         }
 
         self.request_redraw();
@@ -1368,6 +1547,7 @@ impl ChatWidget {
             ev.invocation,
             self.config.animations,
         )));
+        self.bump_active_cell_revision();
         self.request_redraw();
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
@@ -1420,10 +1600,21 @@ impl ChatWidget {
             model,
         } = common;
         let mut config = config;
-        config.model = Some(model.clone());
+        let model = model.filter(|m| !m.trim().is_empty());
+        config.model = model.clone();
         let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
+
+        let model_for_header = config
+            .model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let active_cell = if model.is_none() {
+            Some(Self::placeholder_session_header_cell(&config))
+        } else {
+            None
+        };
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -1439,12 +1630,13 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            active_cell: None,
+            active_cell,
+            active_cell_revision: 0,
             config,
-            model: model.clone(),
+            model,
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model),
+            session_header: SessionHeader::new(model_for_header),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1459,8 +1651,10 @@ impl ChatWidget {
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
+            unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            agent_turn_running: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1472,6 +1666,8 @@ impl ChatWidget {
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
+            quit_shortcut_expires_at: None,
+            quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -1482,6 +1678,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        widget
+            .bottom_pane
+            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
 
         widget
     }
@@ -1505,8 +1704,11 @@ impl ChatWidget {
             model,
             ..
         } = common;
+        let model = model.filter(|m| !m.trim().is_empty());
         let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
+
+        let header_model = model.unwrap_or_else(|| session_configured.model.clone());
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -1526,11 +1728,12 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
+            active_cell_revision: 0,
             config,
-            model: model.clone(),
+            model: Some(header_model.clone()),
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model),
+            session_header: SessionHeader::new(header_model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1545,8 +1748,10 @@ impl ChatWidget {
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
+            unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            agent_turn_running: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1558,6 +1763,8 @@ impl ChatWidget {
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
+            quit_shortcut_expires_at: None,
+            quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -1568,6 +1775,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        widget
+            .bottom_pane
+            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
 
         widget
     }
@@ -1588,30 +1798,29 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                && c.eq_ignore_ascii_case(&'v') =>
-            {
-                match paste_image_to_temp_png() {
-                    Ok((path, info)) => {
-                        tracing::debug!(
-                            "pasted image size={}x{} format={}",
-                            info.width,
-                            info.height,
-                            info.encoded_format.label()
-                        );
-                        self.attach_image(path);
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to paste image: {err}");
-                        self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to paste image: {err}",
-                        )));
-                    }
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'d') => {
+                if self.on_ctrl_d() {
+                    return;
                 }
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if c.eq_ignore_ascii_case(&'v')
+                && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.paste_image_from_clipboard();
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
-                self.bottom_pane.clear_ctrl_c_quit_hint();
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
             }
             _ => {}
         }
@@ -1633,7 +1842,23 @@ impl ChatWidget {
             _ => {
                 match self.bottom_pane.handle_key_event(key_event) {
                     InputResult::Submitted(text) => {
-                        // If a task is running, queue the user input to be sent after the turn completes.
+                        // Enter always sends messages immediately (bypasses queue check)
+                        // Clear any reasoning status header when submitting a new message
+                        self.reasoning_buffer.clear();
+                        self.full_reasoning_buffer.clear();
+                        self.set_status_header(String::from("Working"));
+                        let user_message = UserMessage {
+                            text,
+                            image_paths: self.bottom_pane.take_recent_submission_images(),
+                        };
+                        if !self.is_session_configured() {
+                            self.queue_user_message(user_message);
+                        } else {
+                            self.submit_user_message(user_message);
+                        }
+                    }
+                    InputResult::Queued(text) => {
+                        // Tab queues the message if a task is running, otherwise submits immediately
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
@@ -1656,6 +1881,32 @@ impl ChatWidget {
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
+    }
+
+    /// Attempt to attach an image from the system clipboard.
+    ///
+    /// This is a best-effort path used when we receive an empty paste event,
+    /// which some terminals emit when the clipboard contains non-text data
+    /// (like images). When the clipboard can't be read or no image exists,
+    /// surface a helpful follow-up so the user can retry with a file path.
+    fn paste_image_from_clipboard(&mut self) {
+        match paste_image_to_temp_png() {
+            Ok((path, info)) => {
+                tracing::debug!(
+                    "pasted image size={}x{} format={}",
+                    info.width,
+                    info.height,
+                    info.encoded_format.label()
+                );
+                self.attach_image(path);
+            }
+            Err(err) => {
+                tracing::warn!("failed to paste image: {err}");
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Failed to paste image: {err}. Try saving the image to a file and pasting the file path instead.",
+                )));
+            }
+        }
     }
 
     pub(crate) fn composer_text_with_pending(&self) -> String {
@@ -1784,7 +2035,7 @@ impl ChatWidget {
                 self.open_experimental_popup();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
-                self.request_exit();
+                self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_core::auth::logout(
@@ -1793,7 +2044,7 @@ impl ChatWidget {
                 ) {
                     tracing::error!("failed to logout: {e}");
                 }
-                self.request_exit();
+                self.request_quit_without_confirmation();
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
@@ -1912,6 +2163,20 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
+    /// Route paste events through image detection.
+    ///
+    /// Terminals vary in how they represent paste: some emit an empty paste
+    /// payload when the clipboard isn't text (common for image-only clipboard
+    /// contents). Treat the empty payload as a hint to attempt a clipboard
+    /// image read; otherwise, fall back to text handling.
+    pub(crate) fn handle_paste_event(&mut self, text: String) {
+        if text.is_empty() {
+            self.paste_image_from_clipboard();
+        } else {
+            self.handle_paste(text);
+        }
+    }
+
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
     pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
         if self.bottom_pane.flush_paste_burst_if_due() {
@@ -1931,32 +2196,10 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
-        self.flush_wait_cell();
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
-    }
-
-    // Only flush a live wait cell here; other active cells must finalize via their end events.
-    fn flush_wait_cell(&mut self) {
-        // Wait cells are transient: convert them into "(waited)" history entries if present.
-        // Leave non-wait active cells intact so their end events can finalize them.
-        let Some(active) = self.active_cell.take() else {
-            return;
-        };
-        let Some(wait_cell) = active
-            .as_any()
-            .downcast_ref::<history_cell::UnifiedExecWaitCell>()
-        else {
-            self.active_cell = Some(active);
-            return;
-        };
-        self.needs_final_message_separator = true;
-        let cell =
-            history_cell::new_unified_exec_interaction(wait_cell.command_display(), String::new());
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }
 
     pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
@@ -1964,7 +2207,15 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        if !cell.display_lines(u16::MAX).is_empty() {
+        // Keep the placeholder session header as the active cell until real session info arrives,
+        // so we can merge headers instead of committing a duplicate box to history.
+        let keep_placeholder_header_active = !self.is_session_configured()
+            && self
+                .active_cell
+                .as_ref()
+                .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
+
+        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
             self.needs_final_message_separator = true;
@@ -1973,7 +2224,10 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if self.bottom_pane.is_task_running() {
+        if !self.is_session_configured()
+            || self.bottom_pane.is_task_running()
+            || self.is_review_mode
+        {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
         } else {
@@ -2047,6 +2301,7 @@ impl ChatWidget {
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
+
         self.needs_final_message_separator = false;
     }
 
@@ -2181,10 +2436,20 @@ impl ChatWidget {
                 }
             }
             EventMsg::EnteredReviewMode(review_request) => {
-                self.on_entered_review_mode(review_request)
+                self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::CollabAgentSpawnBegin(_)
+            | EventMsg::CollabAgentSpawnEnd(_)
+            | EventMsg::CollabAgentInteractionBegin(_)
+            | EventMsg::CollabAgentInteractionEnd(_)
+            | EventMsg::CollabWaitingBegin(_)
+            | EventMsg::CollabWaitingEnd(_)
+            | EventMsg::CollabCloseBegin(_)
+            | EventMsg::CollabCloseEnd(_) => {
+                // TODO(jif) handle collab tools.
+            }
             EventMsg::ThreadRolledBack(_) => {}
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
@@ -2195,10 +2460,14 @@ impl ChatWidget {
         }
     }
 
-    fn on_entered_review_mode(&mut self, review: ReviewRequest) {
+    fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         // Enter review mode and emit a concise banner
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
+        }
+        // Avoid toggling running state for replayed history events on resume.
+        if !from_replay && !self.bottom_pane.is_task_running() {
+            self.bottom_pane.set_task_running(true);
         }
         self.is_review_mode = true;
         let hint = review
@@ -2251,12 +2520,31 @@ impl ChatWidget {
         }
     }
 
-    fn request_exit(&self) {
-        self.app_event_tx.send(AppEvent::ExitRequest);
+    /// Exit the UI immediately without waiting for shutdown.
+    ///
+    /// Prefer [`Self::request_quit_without_confirmation`] for user-initiated exits;
+    /// this is mainly a fallback for shutdown completion or emergency exits.
+    fn request_immediate_exit(&self) {
+        self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+    }
+
+    /// Request a shutdown-first quit.
+    ///
+    /// This is used for explicit quit commands (`/quit`, `/exit`, `/logout`) and for
+    /// the double-press Ctrl+C/Ctrl+D quit shortcut.
+    fn request_quit_without_confirmation(&self) {
+        self.app_event_tx
+            .send(AppEvent::Exit(ExitMode::ShutdownFirst));
     }
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
+    }
+
+    fn bump_active_cell_revision(&mut self) {
+        // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
+        // worst causes a one-time cache-key collision.
+        self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
     }
 
     fn notify(&mut self, notification: Notification) {
@@ -2331,7 +2619,7 @@ impl ChatWidget {
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
             Local::now(),
-            &self.model,
+            self.model_display_name(),
         ));
     }
 
@@ -2485,6 +2773,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Model selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+
         let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
             Ok(models) => models,
             Err(_) => {
@@ -2543,11 +2839,12 @@ impl ChatWidget {
             .filter(|preset| preset.show_in_picker)
             .collect();
 
+        let current_model = self.current_model();
         let current_label = presets
             .iter()
-            .find(|preset| preset.model == self.model)
+            .find(|preset| Some(preset.model.as_str()) == current_model)
             .map(|preset| preset.display_name.to_string())
-            .unwrap_or_else(|| self.model.clone());
+            .unwrap_or_else(|| self.model_display_name().to_string());
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
             .into_iter()
@@ -2573,7 +2870,7 @@ impl ChatWidget {
                 SelectionItem {
                     name: preset.display_name.clone(),
                     description,
-                    is_current: model == self.model,
+                    is_current: Some(model.as_str()) == current_model,
                     is_default: preset.is_default,
                     actions,
                     dismiss_on_select: true,
@@ -2643,7 +2940,7 @@ impl ChatWidget {
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = preset.model == self.model;
+            let is_current = Some(preset.model.as_str()) == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -2769,7 +3066,7 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.model == preset.model;
+        let is_current_model = self.current_model() == Some(preset.model.as_str());
         let highlight_choice = if is_current_model {
             self.config.model_reasoning_effort
         } else {
@@ -3566,6 +3863,9 @@ impl ChatWidget {
         } else {
             self.config.features.disable(feature);
         }
+        if feature == Feature::Steer {
+            self.bottom_pane.set_steer_enabled(enabled);
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -3599,7 +3899,55 @@ impl ChatWidget {
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
-        self.model = model.to_string();
+        self.model = Some(model.to_string());
+    }
+
+    fn current_model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    fn model_display_name(&self) -> &str {
+        self.model.as_deref().unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
+    }
+
+    /// Build a placeholder header cell while the session is configuring.
+    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
+        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
+            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+            placeholder_style,
+            None,
+            config.cwd.clone(),
+            CODEX_CLI_VERSION,
+        ))
+    }
+
+    /// Merge the real session info cell with any placeholder header to avoid double boxes.
+    fn apply_session_info_cell(&mut self, cell: history_cell::SessionInfoCell) {
+        let mut session_info_cell = Some(Box::new(cell) as Box<dyn HistoryCell>);
+        let merged_header = if let Some(active) = self.active_cell.take() {
+            if active
+                .as_any()
+                .is::<history_cell::SessionHeaderHistoryCell>()
+            {
+                // Reuse the existing placeholder header to avoid rendering two boxes.
+                if let Some(cell) = session_info_cell.take() {
+                    self.active_cell = Some(cell);
+                }
+                true
+            } else {
+                self.active_cell = Some(active);
+                false
+            }
+        } else {
+            false
+        };
+
+        self.flush_active_cell();
+
+        if !merged_header && let Some(cell) = session_info_cell {
+            self.add_boxed_history(cell);
+        }
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
@@ -3630,19 +3978,108 @@ impl ChatWidget {
         self.bottom_pane.on_file_search_result(query, matches);
     }
 
-    /// Handle Ctrl-C key press.
+    /// Handles a Ctrl+C press at the chat-widget layer.
+    ///
+    /// The first press arms a time-bounded quit shortcut and shows a footer hint via the bottom
+    /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
+    /// is armed.
+    ///
+    /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
+    /// quit.
     fn on_ctrl_c(&mut self) {
+        let key = key_hint::ctrl(KeyCode::Char('c'));
+        let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+                if modal_or_popup_active {
+                    self.quit_shortcut_expires_at = None;
+                    self.quit_shortcut_key = None;
+                    self.bottom_pane.clear_quit_shortcut_hint();
+                } else {
+                    self.arm_quit_shortcut(key);
+                }
+            }
             return;
         }
 
-        if self.bottom_pane.is_task_running() {
-            self.bottom_pane.show_ctrl_c_quit_hint();
+        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+            if self.is_cancellable_work_active() {
+                self.submit_op(Op::Interrupt);
+            } else {
+                self.request_quit_without_confirmation();
+            }
+            return;
+        }
+
+        if self.quit_shortcut_active_for(key) {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_quit_without_confirmation();
+            return;
+        }
+
+        self.arm_quit_shortcut(key);
+
+        if self.is_cancellable_work_active() {
             self.submit_op(Op::Interrupt);
-            return;
+        }
+    }
+
+    /// Handles a Ctrl+D press at the chat-widget layer.
+    ///
+    /// Ctrl-D only participates in quit when the composer is empty and no modal/popup is active.
+    /// Otherwise it should be routed to the active view and not attempt to quit.
+    fn on_ctrl_d(&mut self) -> bool {
+        let key = key_hint::ctrl(KeyCode::Char('d'));
+        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+            if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active()
+            {
+                return false;
+            }
+
+            self.request_quit_without_confirmation();
+            return true;
         }
 
-        self.submit_op(Op::Shutdown);
+        if self.quit_shortcut_active_for(key) {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_quit_without_confirmation();
+            return true;
+        }
+
+        if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active() {
+            return false;
+        }
+
+        self.arm_quit_shortcut(key);
+        true
+    }
+
+    /// True if `key` matches the armed quit shortcut and the window has not expired.
+    fn quit_shortcut_active_for(&self, key: KeyBinding) -> bool {
+        self.quit_shortcut_key == Some(key)
+            && self
+                .quit_shortcut_expires_at
+                .is_some_and(|expires_at| Instant::now() < expires_at)
+    }
+
+    /// Arm the double-press quit shortcut and show the footer hint.
+    ///
+    /// This keeps the state machine (`quit_shortcut_*`) in `ChatWidget`, since
+    /// it is the component that interprets Ctrl+C vs Ctrl+D and decides whether
+    /// quitting is currently allowed, while delegating rendering to `BottomPane`.
+    fn arm_quit_shortcut(&mut self, key: KeyBinding) {
+        self.quit_shortcut_expires_at = Instant::now()
+            .checked_add(QUIT_SHORTCUT_TIMEOUT)
+            .or_else(|| Some(Instant::now()));
+        self.quit_shortcut_key = Some(key);
+        self.bottom_pane.show_quit_shortcut_hint(key);
+    }
+
+    // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
+    fn is_cancellable_work_active(&self) -> bool {
+        self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -3673,9 +4110,12 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
     /// Forward an `Op` directly to codex.
-    pub(crate) fn submit_op(&self, op: Op) {
+    pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
+        if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
+            self.bottom_pane.set_task_running(true);
+        }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
         }
@@ -3872,8 +4312,43 @@ impl ChatWidget {
         self.thread_id
     }
 
+    fn is_session_configured(&self) -> bool {
+        self.thread_id.is_some()
+    }
+
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
+    }
+
+    /// Returns a cache key describing the current in-flight active cell for the transcript overlay.
+    ///
+    /// `Ctrl+T` renders committed transcript cells plus a render-only live tail derived from the
+    /// current active cell, and the overlay caches that tail; this key is what it uses to decide
+    /// whether it must recompute. When there is no active cell, this returns `None` so the overlay
+    /// can drop the tail entirely.
+    ///
+    /// If callers mutate the active cell's transcript output without bumping the revision (or
+    /// providing an appropriate animation tick), the overlay will keep showing a stale tail while
+    /// the main viewport updates.
+    pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
+        let cell = self.active_cell.as_ref()?;
+        Some(ActiveCellTranscriptKey {
+            revision: self.active_cell_revision,
+            is_stream_continuation: cell.is_stream_continuation(),
+            animation_tick: cell.transcript_animation_tick(),
+        })
+    }
+
+    /// Returns the active cell's transcript lines for a given terminal width.
+    ///
+    /// This is a convenience for the transcript overlay live-tail path, and it intentionally
+    /// filters out empty results so the overlay can treat "nothing to render" as "no tail". Callers
+    /// should pass the same width the overlay uses; using a different width will cause wrapping
+    /// mismatches between the main viewport and the transcript overlay.
+    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+        let cell = self.active_cell.as_ref()?;
+        let lines = cell.transcript_lines(width);
+        (!lines.is_empty()).then_some(lines)
     }
 
     /// Return a reference to the widget's current config (includes any
@@ -3991,13 +4466,15 @@ impl Notification {
 
 const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
 
-const EXAMPLE_PROMPTS: [&str; 6] = [
+const PLACEHOLDERS: [&str; 8] = [
     "Explain this codebase",
     "Summarize recent commits",
     "Implement {feature}",
     "Find and fix a bug in @filename",
     "Write tests for @filename",
     "Improve documentation in @filename",
+    "Run /review on my current changes",
+    "Use /skills to list available skills",
 ];
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.

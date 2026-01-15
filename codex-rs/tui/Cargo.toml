@@ -113,7 +113,10 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
+codex-cli = { workspace = true }
 codex-core = { workspace = true, features = ["test-support"] }
+codex-utils-cargo-bin = { workspace = true }
+codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
