@@ -281,6 +281,11 @@ mod wait {
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: WaitArgs = parse_arguments(&arguments)?;
+        if args.ids.is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "ids must be non-empty".to_owned(),
+            ));
+        }
         let receiver_thread_ids = args
             .ids
             .iter()
@@ -311,25 +316,37 @@ mod wait {
             .await;
 
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
+        let mut initial_final_statuses = Vec::new();
         for id in &receiver_thread_ids {
-            status_rxs.push((
-                *id,
-                subscribe_id(&session, &turn, *id, call_id.as_str()).await?,
-            ));
-        }
-
-        // Check if some agents are already in final states.
-        let initial_final_statuses = status_rxs
-            .iter_mut()
-            .filter_map(|(id, rx)| {
-                let status = rx.borrow().clone();
-                if is_final(&status) {
-                    Some((*id, status))
-                } else {
-                    None
+            match session.services.agent_control.subscribe_status(*id).await {
+                Ok(rx) => {
+                    let status = rx.borrow().clone();
+                    if is_final(&status) {
+                        initial_final_statuses.push((*id, status));
+                    }
+                    status_rxs.push((*id, rx));
                 }
-            })
-            .collect::<Vec<_>>();
+                Err(CodexErr::ThreadNotFound(_)) => {
+                    initial_final_statuses.push((*id, AgentStatus::NotFound));
+                }
+                Err(err) => {
+                    let mut statuses = HashMap::with_capacity(1);
+                    statuses.insert(*id, session.services.agent_control.get_status(*id).await);
+                    session
+                        .send_event(
+                            &turn,
+                            CollabWaitingEndEvent {
+                                sender_thread_id: session.conversation_id,
+                                call_id: call_id.clone(),
+                                statuses,
+                            }
+                            .into(),
+                        )
+                        .await;
+                    return Err(collab_agent_error(*id, err));
+                }
+            }
+        }
 
         let statuses = if !initial_final_statuses.is_empty() {
             initial_final_statuses
@@ -375,41 +392,6 @@ mod wait {
             success: None,
             content_items: None,
         })
-    }
-
-    async fn subscribe_id(
-        session: &Session,
-        turn: &TurnContext,
-        thread_id: ThreadId,
-        call_id: &str,
-    ) -> Result<Receiver<AgentStatus>, FunctionCallError> {
-        match session
-            .services
-            .agent_control
-            .subscribe_status(thread_id)
-            .await
-        {
-            Ok(status_rx) => Ok(status_rx),
-            Err(err) => {
-                let mut statuses = HashMap::with_capacity(1);
-                statuses.insert(
-                    thread_id,
-                    session.services.agent_control.get_status(thread_id).await,
-                );
-                session
-                    .send_event(
-                        turn,
-                        CollabWaitingEndEvent {
-                            sender_thread_id: session.conversation_id,
-                            call_id: call_id.to_owned(),
-                            statuses,
-                        }
-                        .into(),
-                    )
-                    .await;
-                Err(collab_agent_error(thread_id, err))
-            }
-        }
     }
 
     async fn wait_for_final_status(
@@ -854,6 +836,63 @@ mod tests {
             panic!("expected respond-to-model error");
         };
         assert!(msg.starts_with("invalid agent id invalid:"));
+    }
+
+    #[tokio::test]
+    async fn wait_rejects_empty_ids() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({"ids": []})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("empty ids should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel("ids must be non-empty".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_returns_not_found_for_missing_agents() {
+        let (session, turn) = make_session_and_context().await;
+        let id_a = ThreadId::new();
+        let id_b = ThreadId::new();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({
+                "ids": [id_a.to_string(), id_b.to_string()],
+                "timeout_ms": 1000
+            })),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        let mut expected_status = HashMap::new();
+        expected_status.insert(id_a, AgentStatus::NotFound);
+        expected_status.insert(id_b, AgentStatus::NotFound);
+        assert_eq!(
+            result,
+            WaitResult {
+                status: expected_status,
+                timed_out: false
+            }
+        );
+        assert_eq!(success, None);
     }
 
     #[tokio::test]
