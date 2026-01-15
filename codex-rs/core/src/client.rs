@@ -639,7 +639,7 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
 
 fn build_responses_headers(config: &Config) -> ApiHeaderMap {
     let mut headers = beta_feature_headers(config);
-    if config.explicit_web_search_disabled {
+    if config.explicit_web_search_disabled == Some(true) {
         headers.insert(WEB_SEARCH_DISABLED_HEADER, HeaderValue::from_static("true"));
     }
     headers

@@ -339,7 +339,7 @@ pub struct Config {
 
     pub web_search_mode: WebSearchMode,
     /// Set when the user explicitly disables web search in config.
-    pub explicit_web_search_disabled: bool,
+    pub explicit_web_search_disabled: Option<bool>,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -1207,20 +1207,25 @@ fn resolve_web_search_mode(
 fn resolve_explicit_web_search_disabled(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
-) -> bool {
+) -> Option<bool> {
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return mode == WebSearchMode::Disabled;
+        return (mode == WebSearchMode::Disabled).then_some(true);
     }
 
     if config_profile.tools_web_search == Some(false) {
-        return true;
+        return Some(true);
     }
 
-    config_toml
+    if config_toml
         .tools
         .as_ref()
         .and_then(|tools| tools.web_search)
         == Some(false)
+    {
+        return Some(true);
+    }
+
+    None
 }
 
 impl Config {
@@ -2277,7 +2282,10 @@ trust_level = "trusted"
         };
         let profile = ConfigProfile::default();
 
-        assert!(resolve_explicit_web_search_disabled(&cfg, &profile));
+        assert_eq!(
+            resolve_explicit_web_search_disabled(&cfg, &profile),
+            Some(true)
+        );
     }
 
     #[test]
@@ -2291,7 +2299,7 @@ trust_level = "trusted"
             ..Default::default()
         };
 
-        assert!(!resolve_explicit_web_search_disabled(&cfg, &profile));
+        assert_eq!(resolve_explicit_web_search_disabled(&cfg, &profile), None);
     }
 
     #[test]
@@ -2305,7 +2313,10 @@ trust_level = "trusted"
         };
         let profile = ConfigProfile::default();
 
-        assert!(resolve_explicit_web_search_disabled(&cfg, &profile));
+        assert_eq!(
+            resolve_explicit_web_search_disabled(&cfg, &profile),
+            Some(true)
+        );
     }
 
     #[test]
@@ -3645,7 +3656,7 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 web_search_mode: WebSearchMode::default(),
-                explicit_web_search_disabled: false,
+                explicit_web_search_disabled: None,
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3733,7 +3744,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: WebSearchMode::default(),
-            explicit_web_search_disabled: false,
+            explicit_web_search_disabled: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3836,7 +3847,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: WebSearchMode::default(),
-            explicit_web_search_disabled: false,
+            explicit_web_search_disabled: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3925,7 +3936,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: WebSearchMode::default(),
-            explicit_web_search_disabled: false,
+            explicit_web_search_disabled: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
