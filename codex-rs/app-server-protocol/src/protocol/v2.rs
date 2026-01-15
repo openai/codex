@@ -1587,7 +1587,13 @@ pub enum ThreadItem {
     UserMessage { id: String, content: Vec<UserInput> },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    AgentMessage { id: String, text: String },
+    AgentMessage {
+        id: String,
+        text: String,
+        /// The amount of time it took the model to generate the AgentMessage item.
+        #[ts(type = "number | null")]
+        sampling_duration_ms: Option<i64>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Reasoning {
@@ -1596,6 +1602,9 @@ pub enum ThreadItem {
         summary: Vec<String>,
         #[serde(default)]
         content: Vec<String>,
+        /// The amount of time it took the model to generate the Reasoning item.
+        #[ts(type = "number | null")]
+        sampling_duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1619,6 +1628,11 @@ pub enum ThreadItem {
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        /// The amount of time it took the model to generate the CommandExecution item.
+        /// Does not include the time it took to run the command, which is captured by
+        /// the `duration_ms` field instead.
+        #[ts(type = "number | null")]
+        sampling_duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1626,6 +1640,10 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
+        /// The amount of time it took the model to generate the FileChange item.
+        /// Does not include the time it took to apply the changes.
+        #[ts(type = "number | null")]
+        sampling_duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1640,6 +1658,11 @@ pub enum ThreadItem {
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        /// The amount of time it took the model to generate the McpToolCall item.
+        /// Does not include the time it took to run the MCP tool call, which is captured by
+        /// the `duration_ms` field instead.
+        #[ts(type = "number | null")]
+        sampling_duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
