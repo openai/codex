@@ -477,6 +477,7 @@ impl CodexClient {
                 conversation_id: *conversation_id,
                 items: vec![InputItem::Text {
                     text: message.to_string(),
+                    text_elements: Vec::new(),
                 }],
             },
         };
