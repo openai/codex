@@ -87,6 +87,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -745,6 +746,7 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        self.clear_unified_exec_processes();
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -881,6 +883,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.clear_unified_exec_processes();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -973,8 +976,6 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
-        self.unified_exec_processes.clear();
-        self.sync_unified_exec_footer();
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1193,6 +1194,14 @@ impl ChatWidget {
             .map(|process| process.command_display.clone())
             .collect();
         self.bottom_pane.set_unified_exec_processes(processes);
+    }
+
+    fn clear_unified_exec_processes(&mut self) {
+        if self.unified_exec_processes.is_empty() {
+            return;
+        }
+        self.unified_exec_processes.clear();
+        self.sync_unified_exec_footer();
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -4586,6 +4595,14 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                     name: skill.name.clone(),
                     description: skill.description.clone(),
                     short_description: skill.short_description.clone(),
+                    interface: skill.interface.clone().map(|interface| SkillInterface {
+                        display_name: interface.display_name,
+                        short_description: interface.short_description,
+                        icon_small: interface.icon_small,
+                        icon_large: interface.icon_large,
+                        brand_color: interface.brand_color,
+                        default_prompt: interface.default_prompt,
+                    }),
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })
