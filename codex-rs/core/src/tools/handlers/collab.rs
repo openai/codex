@@ -76,11 +76,13 @@ impl ToolHandler for CollabHandler {
 
 mod spawn {
     use super::*;
+    use crate::agent::AgentRole;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
     struct SpawnAgentArgs {
         message: String,
+        agent_type: Option<AgentRole>,
     }
 
     #[derive(Debug, Serialize)]
@@ -95,6 +97,7 @@ mod spawn {
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+        let agent_role = args.agent_type.unwrap_or(AgentRole::Default);
         let prompt = args.message;
         if prompt.trim().is_empty() {
             return Err(FunctionCallError::RespondToModel(
@@ -112,7 +115,10 @@ mod spawn {
                 .into(),
             )
             .await;
-        let config = build_agent_spawn_config(turn.as_ref())?;
+        let mut config = build_agent_spawn_config(turn.as_ref())?;
+        agent_role
+            .apply_to_config(&mut config)
+            .map_err(FunctionCallError::RespondToModel)?;
         let result = session
             .services
             .agent_control

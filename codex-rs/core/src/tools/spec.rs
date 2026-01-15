@@ -1,3 +1,4 @@
+use crate::agent::AgentRole;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
@@ -439,6 +440,15 @@ fn create_spawn_agent_tool() -> ToolSpec {
         "message".to_string(),
         JsonSchema::String {
             description: Some("Initial message to send to the new agent.".to_string()),
+        },
+    );
+    properties.insert(
+        "agent_type".to_string(),
+        JsonSchema::String {
+            description: Some(format!(
+                "Optional agent type to spawn ({}).",
+                AgentRole::enum_values().join(", ")
+            )),
         },
     );
 
