@@ -15,6 +15,8 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -49,6 +51,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::ReviewDecision;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -71,9 +74,6 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::unbounded_channel;
-
-#[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 
@@ -885,7 +885,7 @@ impl App {
                 self.handle_codex_event_now(event);
             }
             AppEvent::ExternalApprovalRequest { thread_id, event } => {
-                self.handle_external_approval(thread_id, event);
+                self.handle_external_approval_request(thread_id, event);
             }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
@@ -897,6 +897,10 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => match op {
+                // Catch potential approvals coming from an external thread and treat them
+                // directly. This support both command and patch approval. In such case
+                // the approval get transferred to the corresponding thread and the external
+                // approval map (`external_approval_routes`) is updated.
                 Op::ExecApproval { id, decision } => {
                     if let Some((thread_id, original_id)) =
                         self.external_approval_routes.remove(&id)
@@ -912,6 +916,7 @@ impl App {
                         .await;
                         self.finish_external_approval();
                     } else {
+                        // This is an approval but not external.
                         self.chat_widget
                             .submit_op(Op::ExecApproval { id, decision });
                     }
@@ -931,10 +936,12 @@ impl App {
                         .await;
                         self.finish_external_approval();
                     } else {
+                        // This is an approval but not external.
                         self.chat_widget
                             .submit_op(Op::PatchApproval { id, decision });
                     }
                 }
+                // Standard path where this is not an external approval response.
                 _ => self.chat_widget.submit_op(op),
             },
             AppEvent::DiffResult(text) => {
@@ -1424,7 +1431,13 @@ impl App {
         self.chat_widget.handle_codex_event(event);
     }
 
-    fn handle_external_approval(&mut self, thread_id: ThreadId, mut event: Event) {
+    /// Routes external approval request events through the chat widget by
+    /// rewriting the event id to include the originating thread.
+    ///
+    /// `thread_id` is the external thread that issued the approval request.
+    /// `event` is the approval request event whose id is rewritten so replies
+    /// can be routed back to the correct thread.
+    fn handle_external_approval_request(&mut self, thread_id: ThreadId, mut event: Event) {
         match &mut event.msg {
             EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
                 let original_id = event.id.clone();
