@@ -481,6 +481,8 @@ impl App {
                     app_event_tx: app_event_tx.clone(),
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
+                    // CLI prompt args are plain strings, so they don't provide element ranges.
+                    initial_text_elements: Vec::new(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
@@ -504,6 +506,8 @@ impl App {
                     app_event_tx: app_event_tx.clone(),
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
+                    // CLI prompt args are plain strings, so they don't provide element ranges.
+                    initial_text_elements: Vec::new(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
@@ -527,6 +531,8 @@ impl App {
                     app_event_tx: app_event_tx.clone(),
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
+                    // CLI prompt args are plain strings, so they don't provide element ranges.
+                    initial_text_elements: Vec::new(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
@@ -1441,6 +1447,8 @@ impl App {
                     app_event_tx: self.app_event_tx.clone(),
                     initial_prompt: None,
                     initial_images: Vec::new(),
+                    // New sessions start without prefilled message content.
+                    initial_text_elements: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
                     models_manager: self.server.get_models_manager(),
@@ -1490,6 +1498,8 @@ impl App {
                                     app_event_tx: self.app_event_tx.clone(),
                                     initial_prompt: None,
                                     initial_images: Vec::new(),
+                                    // Fork/resume bootstraps here don't carry any prefilled message content.
+                                    initial_text_elements: Vec::new(),
                                     enhanced_keys_supported: self.enhanced_keys_supported,
                                     auth_manager: self.auth_manager.clone(),
                                     models_manager: self.server.get_models_manager(),
@@ -1558,6 +1568,8 @@ impl App {
                                     app_event_tx: self.app_event_tx.clone(),
                                     initial_prompt: None,
                                     initial_images: Vec::new(),
+                                    // Fork/resume bootstraps here don't carry any prefilled message content.
+                                    initial_text_elements: Vec::new(),
                                     enhanced_keys_supported: self.enhanced_keys_supported,
                                     auth_manager: self.auth_manager.clone(),
                                     models_manager: self.server.get_models_manager(),
@@ -2625,6 +2637,8 @@ mod tests {
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
