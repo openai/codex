@@ -38,6 +38,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: prompt.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
@@ -353,6 +354,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "stream delayed completion".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),

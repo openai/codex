@@ -72,6 +72,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run shell command".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),

@@ -65,6 +65,10 @@ impl UserMessageItem {
         EventMsg::UserMessage(UserMessageEvent {
             message: self.message(),
             images: Some(self.image_urls()),
+            // TODO: Thread text element ranges into legacy user message events.
+            text_elements: Vec::new(),
+            // TODO: Thread local image paths into legacy user message events.
+            local_images: Vec::new(),
         })
     }
 
@@ -72,7 +76,7 @@ impl UserMessageItem {
         self.content
             .iter()
             .map(|c| match c {
-                UserInput::Text { text } => text.clone(),
+                UserInput::Text { text, .. } => text.clone(),
                 _ => String::new(),
             })
             .collect::<Vec<String>>()
