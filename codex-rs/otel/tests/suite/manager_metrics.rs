@@ -1,6 +1,7 @@
 use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
+use crate::harness::histogram_data;
 use crate::harness::latest_metrics;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
@@ -11,6 +12,7 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 // Ensures OtelManager attaches metadata tags when forwarding metrics.
 #[test]
@@ -98,6 +100,65 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
     };
 
     let expected = BTreeMap::from([("source".to_string(), "tui".to_string())]);
+    assert_eq!(attrs, expected);
+
+    Ok(())
+}
+
+// Ensures duration metrics from OtelManager emit histograms with metadata tags.
+#[test]
+fn manager_records_turn_end_to_end_duration_histogram() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[("service", "codex-cli")])?;
+    let manager = OtelManager::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        Some("account-id".to_string()),
+        None,
+        Some(AuthMode::ApiKey),
+        true,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics(metrics);
+
+    manager.record_duration(
+        "codex.turn.end_to_end_duration",
+        Duration::from_millis(120),
+        &[],
+    );
+    manager.shutdown_metrics()?;
+
+    let resource_metrics = latest_metrics(&exporter);
+    let (_bounds, bucket_counts, sum, count) =
+        histogram_data(&resource_metrics, "codex.turn.end_to_end_duration");
+    assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+    assert_eq!(sum, 120.0);
+    assert_eq!(count, 1);
+
+    let metric = find_metric(&resource_metrics, "codex.turn.end_to_end_duration")
+        .expect("duration metric missing");
+    let attrs = match metric.data() {
+        AggregatedMetrics::F64(data) => match data {
+            MetricData::Histogram(histogram) => {
+                let points: Vec<_> = histogram.data_points().collect();
+                assert_eq!(points.len(), 1);
+                attributes_to_map(points[0].attributes())
+            }
+            _ => panic!("unexpected histogram aggregation"),
+        },
+        _ => panic!("unexpected metric data type"),
+    };
+
+    let expected = BTreeMap::from([
+        (
+            "app.version".to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        ),
+        ("auth_mode".to_string(), AuthMode::ApiKey.to_string()),
+        ("model".to_string(), "gpt-5.1".to_string()),
+        ("service".to_string(), "codex-cli".to_string()),
+    ]);
     assert_eq!(attrs, expected);
 
     Ok(())
