@@ -19,11 +19,11 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::openai_models::models_manager::ModelsManager;
+use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
-use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
+use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
@@ -159,6 +159,7 @@ impl Session {
         for task in self.take_all_running_tasks().await {
             self.handle_task_abort(task, reason.clone()).await;
         }
+        self.close_unified_exec_processes().await;
     }
 
     pub async fn on_task_finished(
@@ -167,13 +168,19 @@ impl Session {
         last_agent_message: Option<String>,
     ) {
         let mut active = self.active_turn.lock().await;
-        if let Some(at) = active.as_mut()
+        let should_close_processes = if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
             *active = None;
-        }
+            true
+        } else {
+            false
+        };
         drop(active);
-        let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
+        if should_close_processes {
+            self.close_unified_exec_processes().await;
+        }
+        let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
     }
 
@@ -194,6 +201,13 @@ impl Session {
             }
             None => Vec::new(),
         }
+    }
+
+    async fn close_unified_exec_processes(&self) {
+        self.services
+            .unified_exec_manager
+            .terminate_all_processes()
+            .await;
     }
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {

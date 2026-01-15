@@ -25,7 +25,7 @@ fn sse_incomplete() -> String {
 }
 
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -67,7 +67,7 @@ async fn retries_on_early_close() {
         name: "openai".into(),
         base_url: Some(format!("{}/v1", server.uri())),
         // Environment variable that should exist in the test environment.
-        // ModelClient will return an error if the environment variable for the
+        // ModelClientSession will return an error if the environment variable for the
         // provider is not set.
         env_key: Some("PATH".into()),
         env_key_instructions: None,
@@ -95,11 +95,13 @@ async fn retries_on_early_close() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    // Wait until TaskComplete (should succeed after retry).
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    // Wait until TurnComplete (should succeed after retry).
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }

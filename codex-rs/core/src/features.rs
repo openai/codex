@@ -7,21 +7,54 @@
 
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use codex_otel::OtelManager;
+use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
+pub(crate) use legacy::legacy_feature_keys;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     Experimental,
-    Beta,
+    Beta {
+        name: &'static str,
+        menu_description: &'static str,
+        announcement: &'static str,
+    },
     Stable,
     Deprecated,
     Removed,
+}
+
+impl Stage {
+    pub fn beta_menu_name(self) -> Option<&'static str> {
+        match self {
+            Stage::Beta { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    pub fn beta_menu_description(self) -> Option<&'static str> {
+        match self {
+            Stage::Beta {
+                menu_description, ..
+            } => Some(menu_description),
+            _ => None,
+        }
+    }
+
+    pub fn beta_announcement(self) -> Option<&'static str> {
+        match self {
+            Stage::Beta { announcement, .. } => Some(announcement),
+            _ => None,
+        }
+    }
 }
 
 /// Unique features toggled via configuration.
@@ -30,36 +63,43 @@ pub enum Feature {
     // Stable.
     /// Create a ghost commit at each turn.
     GhostCommit,
-    /// Include the view_image tool.
-    ViewImageTool,
-    /// Send warnings to the model to correct it on the tool usage.
-    ModelWarnings,
     /// Enable the default shell tool.
     ShellTool,
 
     // Experimental
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
-    /// Enable experimental RMCP features such as OAuth login.
-    RmcpClient,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
-    /// Allow the model to request web searches.
+    /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
+    /// Allow the model to request web searches that fetch cached content.
+    /// Takes precedence over `WebSearchRequest`.
+    WebSearchCached,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
-    /// Enable the model-based risk assessments for sandboxed commands.
-    SandboxCommandAssessment,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
+    /// Use the elevated Windows sandbox pipeline (setup + runner).
+    WindowsSandboxElevated,
     /// Remote compaction enabled (only for ChatGPT auth)
     RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
-    /// Allow model to call multiple tools in parallel (only for models supporting it).
-    ParallelToolCalls,
-    /// Experimental skills injection (CLI flag-driven).
-    Skills,
+    /// Experimental shell snapshotting.
+    ShellSnapshot,
+    /// Append additional AGENTS.md guidance to user instructions.
+    ChildAgentsMd,
+    /// Experimental TUI v2 (viewport) implementation.
+    Tui2,
+    /// Enforce UTF8 output in Powershell.
+    PowershellUtf8,
+    /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
+    EnableRequestCompression,
+    /// Enable collab tools.
+    Collab,
+    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
+    Steer,
 }
 
 impl Feature {
@@ -100,7 +140,6 @@ pub struct Features {
 pub struct FeatureOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub web_search_request: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
 }
 
 impl FeatureOverrides {
@@ -163,6 +202,21 @@ impl Features {
             .map(|usage| (usage.alias.as_str(), usage.feature))
     }
 
+    pub fn emit_metrics(&self, otel: &OtelManager) {
+        for feature in FEATURES {
+            if self.enabled(feature.id) != feature.default_enabled {
+                otel.counter(
+                    "codex.feature.state",
+                    1,
+                    &[
+                        ("feature", feature.key),
+                        ("value", &self.enabled(feature.id).to_string()),
+                    ],
+                );
+            }
+        }
+    }
+
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
@@ -192,12 +246,9 @@ impl Features {
         let mut features = Features::with_defaults();
 
         let base_legacy = LegacyFeatureToggles {
-            experimental_sandbox_command_assessment: cfg.experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
-            tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
             ..Default::default()
         };
         base_legacy.apply(&mut features);
@@ -208,15 +259,11 @@ impl Features {
 
         let profile_legacy = LegacyFeatureToggles {
             include_apply_patch_tool: config_profile.include_apply_patch_tool,
-            experimental_sandbox_command_assessment: config_profile
-                .experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: config_profile
                 .experimental_use_freeform_apply_patch,
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: config_profile.experimental_use_rmcp_client,
             tools_web_search: config_profile.tools_web_search,
-            tools_view_image: config_profile.tools_view_image,
         };
         profile_legacy.apply(&mut features);
         if let Some(profile_features) = config_profile.features.as_ref() {
@@ -226,6 +273,10 @@ impl Features {
         overrides.apply(&mut features);
 
         features
+    }
+
+    pub fn enabled_features(&self) -> Vec<Feature> {
+        self.enabled.iter().copied().collect()
     }
 }
 
@@ -245,7 +296,7 @@ pub fn is_known_feature_key(key: &str) -> bool {
 }
 
 /// Deserializable features table for TOML.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct FeaturesToml {
     #[serde(flatten)]
     pub entries: BTreeMap<String, bool>,
@@ -266,13 +317,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GhostCommit,
         key: "undo",
         stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::ViewImageTool,
-        key: "view_image_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellTool,
@@ -281,34 +326,48 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::ModelWarnings,
-        key: "warnings",
+        id: Feature::WebSearchRequest,
+        key: "web_search_request",
         stage: Stage::Stable,
-        default_enabled: true,
-    },
-    // Unstable features.
-    FeatureSpec {
-        id: Feature::UnifiedExec,
-        key: "unified_exec",
-        stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::RmcpClient,
-        key: "rmcp_client",
+        id: Feature::WebSearchCached,
+        key: "web_search_cached",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    // Beta program. Rendered in the `/experimental` menu for users.
+    FeatureSpec {
+        id: Feature::UnifiedExec,
+        key: "unified_exec",
+        stage: Stage::Beta {
+            name: "Background terminal",
+            menu_description: "Run long-running terminal commands in the background.",
+            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Beta {
+            name: "Shell snapshot",
+            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
+            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ChildAgentsMd,
+        key: "child_agents_md",
         stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::Beta,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::WebSearchRequest,
-        key: "web_search_request",
-        stage: Stage::Stable,
+        stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
@@ -318,14 +377,14 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::SandboxCommandAssessment,
-        key: "experimental_sandbox_command_assessment",
+        id: Feature::WindowsSandbox,
+        key: "experimental_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::WindowsSandbox,
-        key: "enable_experimental_windows_sandbox",
+        id: Feature::WindowsSandboxElevated,
+        key: "elevated_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
     },
@@ -342,15 +401,37 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ParallelToolCalls,
-        key: "parallel",
+        id: Feature::PowershellUtf8,
+        key: "powershell_utf8",
         stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Skills,
-        key: "skills",
+        id: Feature::EnableRequestCompression,
+        key: "enable_request_compression",
         stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Collab,
+        key: "collab",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Tui2,
+        key: "tui2",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Steer,
+        key: "steer",
+        stage: Stage::Beta {
+            name: "Steer conversation",
+            menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
+            announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
+        },
         default_enabled: false,
     },
 ];

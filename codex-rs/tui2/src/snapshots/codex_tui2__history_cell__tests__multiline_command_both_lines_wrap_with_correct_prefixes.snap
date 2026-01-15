@@ -1,0 +1,9 @@
+---
+source: tui2/src/history_cell.rs
+expression: rendered
+---
+• Ran first_token_is_long_en
+  │ ough_to_wrap
+  │ second_token_is_also_lon
+  │ … +1 lines
+  └ (no output)

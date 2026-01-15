@@ -59,7 +59,7 @@ Request `newConversation` params (subset):
 - `profile`: optional named profile
 - `cwd`: optional working directory
 - `approvalPolicy`: `untrusted` | `on-request` | `on-failure` | `never`
-- `sandbox`: `read-only` | `workspace-write` | `danger-full-access`
+- `sandbox`: `read-only` | `workspace-write` | `external-sandbox` (honors `networkAccess` restricted/enabled) | `danger-full-access`
 - `config`: map of additional config overrides
 - `baseInstructions`: optional instruction override
 - `compactPrompt`: optional replacement for the default compaction prompt
@@ -70,7 +70,9 @@ Response: `{ conversationId, model, reasoningEffort?, rolloutPath }`
 Send input to the active turn:
 
 - `sendUserMessage` → enqueue items to the conversation
-- `sendUserTurn` → structured turn with explicit `cwd`, `approvalPolicy`, `sandboxPolicy`, `model`, optional `effort`, and `summary`
+- `sendUserTurn` → structured turn with explicit `cwd`, `approvalPolicy`, `sandboxPolicy`, `model`, optional `effort`, `summary`, and optional `outputSchema` (JSON Schema for the final assistant message)
+
+For v2 threads, `turn/start` also accepts `outputSchema` to constrain the final assistant message for that turn.
 
 Interrupt a running turn: `interruptConversation`.
 

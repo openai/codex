@@ -5,9 +5,11 @@ use crate::provider::Provider;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
+use http::header::ETAG;
 use std::sync::Arc;
 
 pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {
@@ -40,7 +42,7 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
         &self,
         client_version: &str,
         extra_headers: HeaderMap,
-    ) -> Result<ModelsResponse, ApiError> {
+    ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
         let builder = || {
             let mut req = self.provider.build_request(Method::GET, self.path());
             req.headers.extend(extra_headers.clone());
@@ -59,12 +61,21 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
         )
         .await?;
 
-        serde_json::from_slice::<ModelsResponse>(&resp.body).map_err(|e| {
-            ApiError::Stream(format!(
-                "failed to decode models response: {e}; body: {}",
-                String::from_utf8_lossy(&resp.body)
-            ))
-        })
+        let header_etag = resp
+            .headers
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+
+        let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
+            .map_err(|e| {
+                ApiError::Stream(format!(
+                    "failed to decode models response: {e}; body: {}",
+                    String::from_utf8_lossy(&resp.body)
+                ))
+            })?;
+
+        Ok((models, header_etag))
     }
 }
 
@@ -86,10 +97,21 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct CapturingTransport {
         last_request: Arc<Mutex<Option<Request>>>,
         body: Arc<ModelsResponse>,
+        etag: Option<String>,
+    }
+
+    impl Default for CapturingTransport {
+        fn default() -> Self {
+            Self {
+                last_request: Arc::new(Mutex::new(None)),
+                body: Arc::new(ModelsResponse { models: Vec::new() }),
+                etag: None,
+            }
+        }
     }
 
     #[async_trait]
@@ -97,9 +119,13 @@ mod tests {
         async fn execute(&self, req: Request) -> Result<Response, TransportError> {
             *self.last_request.lock().unwrap() = Some(req);
             let body = serde_json::to_vec(&*self.body).unwrap();
+            let mut headers = HeaderMap::new();
+            if let Some(etag) = &self.etag {
+                headers.insert(ETAG, etag.parse().unwrap());
+            }
             Ok(Response {
                 status: StatusCode::OK,
-                headers: HeaderMap::new(),
+                headers,
                 body: body.into(),
             })
         }
@@ -143,6 +169,7 @@ mod tests {
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
             body: Arc::new(response),
+            etag: None,
         };
 
         let client = ModelsClient::new(
@@ -151,12 +178,12 @@ mod tests {
             DummyAuth,
         );
 
-        let result = client
+        let (models, _) = client
             .list_models("0.99.0", HeaderMap::new())
             .await
             .expect("request should succeed");
 
-        assert_eq!(result.models.len(), 0);
+        assert_eq!(models.len(), 0);
 
         let url = transport
             .last_request
@@ -188,6 +215,15 @@ mod tests {
                     "supported_in_api": true,
                     "priority": 1,
                     "upgrade": null,
+                    "base_instructions": "base instructions",
+                    "supports_reasoning_summaries": false,
+                    "support_verbosity": false,
+                    "default_verbosity": null,
+                    "apply_patch_tool_type": null,
+                    "truncation_policy": {"mode": "bytes", "limit": 10_000},
+                    "supports_parallel_tool_calls": false,
+                    "context_window": 272_000,
+                    "experimental_supported_tools": [],
                 }))
                 .unwrap(),
             ],
@@ -196,6 +232,7 @@ mod tests {
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
             body: Arc::new(response),
+            etag: None,
         };
 
         let client = ModelsClient::new(
@@ -204,14 +241,39 @@ mod tests {
             DummyAuth,
         );
 
-        let result = client
+        let (models, _) = client
             .list_models("0.99.0", HeaderMap::new())
             .await
             .expect("request should succeed");
 
-        assert_eq!(result.models.len(), 1);
-        assert_eq!(result.models[0].slug, "gpt-test");
-        assert_eq!(result.models[0].supported_in_api, true);
-        assert_eq!(result.models[0].priority, 1);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "gpt-test");
+        assert_eq!(models[0].supported_in_api, true);
+        assert_eq!(models[0].priority, 1);
+    }
+
+    #[tokio::test]
+    async fn list_models_includes_etag() {
+        let response = ModelsResponse { models: Vec::new() };
+
+        let transport = CapturingTransport {
+            last_request: Arc::new(Mutex::new(None)),
+            body: Arc::new(response),
+            etag: Some("\"abc\"".to_string()),
+        };
+
+        let client = ModelsClient::new(
+            transport,
+            provider("https://example.com/api/codex"),
+            DummyAuth,
+        );
+
+        let (models, etag) = client
+            .list_models("0.1.0", HeaderMap::new())
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(models.len(), 0);
+        assert_eq!(etag, Some("\"abc\"".to_string()));
     }
 }

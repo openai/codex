@@ -1,7 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
-use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server_unchecked;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -44,10 +43,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         "overall_confidence_score": 0.75
     })
     .to_string();
-    let responses = vec![create_final_assistant_message_sse_response(
-        &review_payload,
-    )?];
-    let server = create_mock_chat_completions_server_unchecked(responses).await;
+    let server = create_mock_responses_server_repeating_assistant(&review_payload).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -135,7 +131,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
 
 #[tokio::test]
 async fn review_start_rejects_empty_base_branch() -> Result<()> {
-    let server = create_mock_chat_completions_server_unchecked(vec![]).await;
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -176,10 +172,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
         "overall_confidence_score": 0.5
     })
     .to_string();
-    let responses = vec![create_final_assistant_message_sse_response(
-        &review_payload,
-    )?];
-    let server = create_mock_chat_completions_server_unchecked(responses).await;
+    let server = create_mock_responses_server_repeating_assistant(&review_payload).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -219,7 +212,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
 
 #[tokio::test]
 async fn review_start_rejects_empty_commit_sha() -> Result<()> {
-    let server = create_mock_chat_completions_server_unchecked(vec![]).await;
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -254,7 +247,7 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
 
 #[tokio::test]
 async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
-    let server = create_mock_chat_completions_server_unchecked(vec![]).await;
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -320,7 +313,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider"
 base_url = "{server_uri}/v1"
-wire_api = "chat"
+wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

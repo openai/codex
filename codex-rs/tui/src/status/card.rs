@@ -7,14 +7,17 @@ use chrono::DateTime;
 use chrono::Local;
 use codex_common::create_config_summary_entries;
 use codex_core::config::Config;
+use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
-use codex_protocol::ConversationId;
+use codex_core::protocol::TokenUsageInfo;
+use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use url::Url;
 
 use super::account::StatusAccountDisplay;
 use super::format::FieldFormatter;
@@ -60,6 +63,7 @@ struct StatusHistoryCell {
     approval: String,
     sandbox: String,
     agents_summary: String,
+    model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
     token_usage: StatusTokenUsageData,
@@ -70,23 +74,25 @@ struct StatusHistoryCell {
 pub(crate) fn new_status_output(
     config: &Config,
     auth_manager: &AuthManager,
+    token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
-    context_usage: Option<&TokenUsage>,
-    session_id: &Option<ConversationId>,
+    session_id: &Option<ThreadId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
+    model_name: &str,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
         config,
         auth_manager,
+        token_info,
         total_usage,
-        context_usage,
         session_id,
         rate_limits,
         plan_type,
         now,
+        model_name,
     );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
@@ -97,34 +103,46 @@ impl StatusHistoryCell {
     fn new(
         config: &Config,
         auth_manager: &AuthManager,
+        token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
-        context_usage: Option<&TokenUsage>,
-        session_id: &Option<ConversationId>,
+        session_id: &Option<ThreadId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
         plan_type: Option<PlanType>,
         now: DateTime<Local>,
+        model_name: &str,
     ) -> Self {
-        let config_entries = create_config_summary_entries(config);
-        let (model_name, model_details) = compose_model_display(config, &config_entries);
+        let config_entries = create_config_summary_entries(config, model_name);
+        let (model_name, model_details) = compose_model_display(model_name, &config_entries);
         let approval = config_entries
             .iter()
             .find(|(k, _)| *k == "approval")
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let sandbox = match &config.sandbox_policy {
+        let sandbox = match config.sandbox_policy.get() {
             SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
             SandboxPolicy::ReadOnly => "read-only".to_string(),
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
+            SandboxPolicy::ExternalSandbox { network_access } => {
+                if matches!(network_access, NetworkAccess::Enabled) {
+                    "external-sandbox (network access enabled)".to_string()
+                } else {
+                    "external-sandbox".to_string()
+                }
+            }
         };
         let agents_summary = compose_agents_summary(config);
+        let model_provider = format_model_provider(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
-        let context_window = config.model_context_window.and_then(|window| {
-            context_usage.map(|usage| StatusContextWindowData {
-                percent_remaining: usage.percent_of_context_window_remaining(window),
-                tokens_in_context: usage.tokens_in_context_window(),
-                window,
-            })
+        let default_usage = TokenUsage::default();
+        let (context_usage, context_window) = match token_info {
+            Some(info) => (&info.last_token_usage, info.model_context_window),
+            None => (&default_usage, config.model_context_window),
+        };
+        let context_window = context_window.map(|window| StatusContextWindowData {
+            percent_remaining: context_usage.percent_of_context_window_remaining(window),
+            tokens_in_context: context_usage.tokens_in_context_window(),
+            window,
         });
 
         let token_usage = StatusTokenUsageData {
@@ -142,6 +160,7 @@ impl StatusHistoryCell {
             approval,
             sandbox,
             agents_summary,
+            model_provider,
             account,
             session_id,
             token_usage,
@@ -323,6 +342,9 @@ impl HistoryCell for StatusHistoryCell {
                 .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
 
+        if self.model_provider.is_some() {
+            push_label(&mut labels, &mut seen, "Model provider");
+        }
         if account_value.is_some() {
             push_label(&mut labels, &mut seen, "Account");
         }
@@ -333,6 +355,7 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
+
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
@@ -365,6 +388,9 @@ impl HistoryCell for StatusHistoryCell {
         let directory_value = format_directory_display(&self.directory, Some(value_width));
 
         lines.push(formatter.line("Model", model_spans));
+        if let Some(model_provider) = self.model_provider.as_ref() {
+            lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
+        }
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
         lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
@@ -399,4 +425,40 @@ impl HistoryCell for StatusHistoryCell {
 
         with_border_with_inner_width(truncated_lines, inner_width)
     }
+}
+
+fn format_model_provider(config: &Config) -> Option<String> {
+    let provider = &config.model_provider;
+    let name = provider.name.trim();
+    let provider_name = if name.is_empty() {
+        config.model_provider_id.as_str()
+    } else {
+        name
+    };
+    let base_url = provider.base_url.as_deref().and_then(sanitize_base_url);
+    let is_default_openai = provider.is_openai() && base_url.is_none();
+    if is_default_openai {
+        return None;
+    }
+
+    Some(match base_url {
+        Some(base_url) => format!("{provider_name} - {base_url}"),
+        None => provider_name.to_string(),
+    })
+}
+
+fn sanitize_base_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let Ok(mut url) = Url::parse(trimmed) else {
+        return None;
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string().trim_end_matches('/').to_string()).filter(|value| !value.is_empty())
 }

@@ -1,4 +1,4 @@
-use codex_core::CodexAuth;
+use codex_core::AuthManager;
 use std::path::Path;
 use std::sync::LazyLock;
 use std::sync::RwLock;
@@ -23,9 +23,10 @@ pub async fn init_chatgpt_token_from_auth(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
-    let auth = CodexAuth::from_auth_storage(codex_home, auth_credentials_store_mode)?;
-    if let Some(auth) = auth {
-        let token_data = auth.get_token_data().await?;
+    let auth_manager =
+        AuthManager::new(codex_home.to_path_buf(), false, auth_credentials_store_mode);
+    if let Some(auth) = auth_manager.auth().await {
+        let token_data = auth.get_token_data()?;
         set_chatgpt_token_data(token_data);
     }
     Ok(())

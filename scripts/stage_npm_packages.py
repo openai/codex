@@ -25,6 +25,7 @@ if _SPEC is None or _SPEC.loader is None:
 _BUILD_MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
+WINDOWS_ONLY_COMPONENTS = getattr(_BUILD_MODULE, "WINDOWS_ONLY_COMPONENTS", {})
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,6 +64,7 @@ def collect_native_components(packages: list[str]) -> set[str]:
     components: set[str] = set()
     for package in packages:
         components.update(PACKAGE_NATIVE_COMPONENTS.get(package, []))
+        components.update(WINDOWS_ONLY_COMPONENTS.get(package, []))
     return components
 
 

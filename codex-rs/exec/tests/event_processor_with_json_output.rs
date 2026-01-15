@@ -48,6 +48,8 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecOutputStream;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -67,8 +69,7 @@ fn event(id: &str, msg: EventMsg) -> Event {
 fn session_configured_produces_thread_started_event() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let session_id =
-        codex_protocol::ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")
-            .unwrap();
+        codex_protocol::ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
     let rollout_path = PathBuf::from("/tmp/rollout.json");
     let ev = event(
         "e1",
@@ -100,7 +101,7 @@ fn task_started_produces_turn_started_event() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "t1",
-        EventMsg::TaskStarted(codex_core::protocol::TaskStartedEvent {
+        EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
             model_context_window: Some(32_000),
         }),
     ));
@@ -216,7 +217,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
     // Task completes => item.completed (same id, latest state)
     let complete = event(
         "p3",
-        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+        EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -460,7 +461,7 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
     let _ = ep.collect_thread_events(&start);
     let complete = event(
         "t2",
-        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+        EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -581,6 +582,7 @@ fn stream_error_event_produces_error() {
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
         }),
     ));
     assert_eq!(
@@ -611,7 +613,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
 
     let complete_event = event(
         "e2",
-        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+        EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -691,6 +693,93 @@ fn exec_command_end_success_produces_completed_command_item() {
                 details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc 'echo hi'".to_string(),
                     aggregated_output: "hi\n".to_string(),
+                    exit_code: Some(0),
+                    status: CommandExecutionStatus::Completed,
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn command_execution_output_delta_updates_item_progress() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo delta".to_string(),
+    ];
+    let cwd = std::env::current_dir().unwrap();
+    let parsed_cmd = Vec::new();
+
+    let begin = event(
+        "d1",
+        EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "delta-1".to_string(),
+            process_id: Some("42".to_string()),
+            turn_id: "turn-1".to_string(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            parsed_cmd: parsed_cmd.clone(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+        }),
+    );
+    let out_begin = ep.collect_thread_events(&begin);
+    assert_eq!(
+        out_begin,
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                    command: "bash -lc 'echo delta'".to_string(),
+                    aggregated_output: String::new(),
+                    exit_code: None,
+                    status: CommandExecutionStatus::InProgress,
+                }),
+            },
+        })]
+    );
+
+    let delta = event(
+        "d2",
+        EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: "delta-1".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: b"partial output\n".to_vec(),
+        }),
+    );
+    let out_delta = ep.collect_thread_events(&delta);
+    assert_eq!(out_delta, Vec::<ThreadEvent>::new());
+
+    let end = event(
+        "d3",
+        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "delta-1".to_string(),
+            process_id: Some("42".to_string()),
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: String::new(),
+            exit_code: 0,
+            duration: Duration::from_millis(3),
+            formatted_output: String::new(),
+        }),
+    );
+    let out_end = ep.collect_thread_events(&end);
+    assert_eq!(
+        out_end,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                    command: "bash -lc 'echo delta'".to_string(),
+                    aggregated_output: String::new(),
                     exit_code: Some(0),
                     status: CommandExecutionStatus::Completed,
                 }),
@@ -968,10 +1057,10 @@ fn task_complete_produces_turn_completed_with_usage() {
     );
     assert!(ep.collect_thread_events(&token_count_event).is_empty());
 
-    // Then TaskComplete should produce turn.completed with the captured usage.
+    // Then TurnComplete should produce turn.completed with the captured usage.
     let complete_event = event(
         "e2",
-        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+        EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
             last_agent_message: Some("done".to_string()),
         }),
     );

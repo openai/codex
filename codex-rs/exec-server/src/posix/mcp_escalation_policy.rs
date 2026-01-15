@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use codex_core::sandboxing::SandboxPermissions;
 use codex_execpolicy::Policy;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
@@ -18,10 +19,10 @@ use tokio::sync::RwLock;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ExecPolicyOutcome {
     Allow {
-        run_with_escalated_permissions: bool,
+        sandbox_permissions: SandboxPermissions,
     },
     Prompt {
-        run_with_escalated_permissions: bool,
+        sandbox_permissions: SandboxPermissions,
     },
     Forbidden,
 }
@@ -108,16 +109,16 @@ impl EscalationPolicy for McpEscalationPolicy {
             crate::posix::evaluate_exec_policy(&policy, file, argv, self.preserve_program_paths)?;
         let action = match outcome {
             ExecPolicyOutcome::Allow {
-                run_with_escalated_permissions,
+                sandbox_permissions,
             } => {
-                if run_with_escalated_permissions {
+                if sandbox_permissions.requires_escalated_permissions() {
                     EscalateAction::Escalate
                 } else {
                     EscalateAction::Run
                 }
             }
             ExecPolicyOutcome::Prompt {
-                run_with_escalated_permissions,
+                sandbox_permissions,
             } => {
                 let result = self
                     .prompt(file, argv, workdir, self.context.clone())
@@ -125,7 +126,7 @@ impl EscalationPolicy for McpEscalationPolicy {
                 // TODO: Extract reason from `result.content`.
                 match result.action {
                     ElicitationAction::Accept => {
-                        if run_with_escalated_permissions {
+                        if sandbox_permissions.requires_escalated_permissions() {
                             EscalateAction::Escalate
                         } else {
                             EscalateAction::Run

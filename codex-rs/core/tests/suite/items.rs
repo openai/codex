@@ -42,7 +42,9 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: (vec![UserInput::Text {
                 text: "please inspect sample.txt".into(),
+                text_elements: Vec::new(),
             }]),
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -68,12 +70,14 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
         started_item.content,
         vec![UserInput::Text {
             text: "please inspect sample.txt".into(),
+            text_elements: Vec::new(),
         }]
     );
     assert_eq!(
         completed_item.content,
         vec![UserInput::Text {
             text: "please inspect sample.txt".into(),
+            text_elements: Vec::new(),
         }]
     );
     Ok(())
@@ -98,7 +102,9 @@ async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "please summarize results".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -154,7 +160,9 @@ async fn reasoning_item_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "explain your reasoning".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -212,7 +220,9 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "find the weather".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -264,7 +274,9 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "please stream text".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -329,7 +341,9 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "reason through it".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -386,7 +400,9 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "show raw reasoning".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 

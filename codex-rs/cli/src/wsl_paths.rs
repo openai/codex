@@ -1,24 +1,7 @@
 use std::ffi::OsStr;
 
-/// WSL-specific path helpers used by the updater logic.
-///
-/// See https://github.com/openai/codex/issues/6086.
-pub fn is_wsl() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var_os("WSL_DISTRO_NAME").is_some() {
-            return true;
-        }
-        match std::fs::read_to_string("/proc/version") {
-            Ok(version) => version.to_lowercase().contains("microsoft"),
-            Err(_) => false,
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
-    }
-}
+/// Returns true if the current process is running under WSL.
+pub use codex_core::env::is_wsl;
 
 /// Convert a Windows absolute path (`C:\foo\bar` or `C:/foo/bar`) to a WSL mount path (`/mnt/c/foo/bar`).
 /// Returns `None` if the input does not look like a Windows drive path.

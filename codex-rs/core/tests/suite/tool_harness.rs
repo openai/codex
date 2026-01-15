@@ -82,6 +82,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please run the shell command".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -93,7 +94,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = second_mock.single_request();
     let (output_text, _) = call_output(&req, call_id);
@@ -148,6 +149,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -171,7 +173,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             assert_matches!(update.plan[1].status, StepStatus::Pending);
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -224,6 +226,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -241,7 +244,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             saw_plan_update = true;
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -312,6 +315,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -336,7 +340,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
             patch_end_success = Some(end.success);
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -408,6 +412,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -419,7 +424,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = second_mock.single_request();
     let (output_text, success_flag) = call_output(&req, call_id);

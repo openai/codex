@@ -1,6 +1,7 @@
 #![cfg(unix)]
 use codex_core::protocol::SandboxPolicy;
 use codex_core::spawn::StdioPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
@@ -41,7 +42,8 @@ async fn spawn_command_under_sandbox(
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
     use codex_core::landlock::spawn_command_under_linux_sandbox;
-    let codex_linux_sandbox_exe = assert_cmd::cargo::cargo_bin("codex-exec");
+    let codex_linux_sandbox_exe = codex_utils_cargo_bin::cargo_bin("codex-exec")
+        .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
     spawn_command_under_linux_sandbox(
         codex_linux_sandbox_exe,
         command,
@@ -58,14 +60,14 @@ async fn spawn_command_under_sandbox(
 async fn python_multiprocessing_lock_works_under_sandbox() {
     core_test_support::skip_if_sandbox!();
     #[cfg(target_os = "macos")]
-    let writable_roots = Vec::<PathBuf>::new();
+    let writable_roots = Vec::<AbsolutePathBuf>::new();
 
     // From https://man7.org/linux/man-pages/man7/sem_overview.7.html
     //
     // > On Linux, named semaphores are created in a virtual filesystem,
     // > normally mounted under /dev/shm.
     #[cfg(target_os = "linux")]
-    let writable_roots = vec![PathBuf::from("/dev/shm")];
+    let writable_roots: Vec<AbsolutePathBuf> = vec!["/dev/shm".try_into().unwrap()];
 
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots,

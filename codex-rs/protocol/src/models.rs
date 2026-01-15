@@ -1,6 +1,6 @@
 use std::collections::HashMap;
+use std::path::Path;
 
-use base64::Engine;
 use codex_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
@@ -10,10 +10,34 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::config_types::SandboxMode;
+use crate::protocol::AskForApproval;
+use crate::protocol::NetworkAccess;
+use crate::protocol::SandboxPolicy;
+use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
+
+/// Controls whether a command should use the session sandbox or bypass it.
+#[derive(
+    Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxPermissions {
+    /// Run with the configured sandbox
+    #[default]
+    UseDefault,
+    /// Request to run outside the sandbox
+    RequireEscalated,
+}
+
+impl SandboxPermissions {
+    pub fn requires_escalated_permissions(self) -> bool {
+        matches!(self, SandboxPermissions::RequireEscalated)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -132,12 +156,165 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
-    #[serde(alias = "compaction")]
-    CompactionSummary {
+    #[serde(alias = "compaction_summary")]
+    Compaction {
         encrypted_content: String,
     },
     #[serde(other)]
     Other,
+}
+
+/// Developer-provided guidance that is injected into a turn as a developer role
+/// message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(rename = "developer_instructions", rename_all = "snake_case")]
+pub struct DeveloperInstructions {
+    text: String,
+}
+
+const APPROVAL_POLICY_NEVER: &str = include_str!("prompts/permissions/approval_policy/never.md");
+const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
+    include_str!("prompts/permissions/approval_policy/unless_trusted.md");
+const APPROVAL_POLICY_ON_FAILURE: &str =
+    include_str!("prompts/permissions/approval_policy/on_failure.md");
+const APPROVAL_POLICY_ON_REQUEST: &str =
+    include_str!("prompts/permissions/approval_policy/on_request.md");
+
+const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
+    include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
+const SANDBOX_MODE_WORKSPACE_WRITE: &str =
+    include_str!("prompts/permissions/sandbox_mode/workspace_write.md");
+const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_mode/read_only.md");
+
+impl DeveloperInstructions {
+    pub fn new<T: Into<String>>(text: T) -> Self {
+        Self { text: text.into() }
+    }
+
+    pub fn into_text(self) -> String {
+        self.text
+    }
+
+    pub fn concat(self, other: impl Into<DeveloperInstructions>) -> Self {
+        let mut text = self.text;
+        text.push_str(&other.into().text);
+        Self { text }
+    }
+
+    pub fn from_policy(
+        sandbox_policy: &SandboxPolicy,
+        approval_policy: AskForApproval,
+        cwd: &Path,
+    ) -> Self {
+        let network_access = if sandbox_policy.has_full_network_access() {
+            NetworkAccess::Enabled
+        } else {
+            NetworkAccess::Restricted
+        };
+
+        let (sandbox_mode, writable_roots) = match sandbox_policy {
+            SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
+            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, None),
+            SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+                (SandboxMode::WorkspaceWrite, Some(roots))
+            }
+        };
+
+        DeveloperInstructions::from_permissions_with_network(
+            sandbox_mode,
+            network_access,
+            approval_policy,
+            writable_roots,
+        )
+    }
+
+    fn from_permissions_with_network(
+        sandbox_mode: SandboxMode,
+        network_access: NetworkAccess,
+        approval_policy: AskForApproval,
+        writable_roots: Option<Vec<WritableRoot>>,
+    ) -> Self {
+        let start_tag = DeveloperInstructions::new("<permissions instructions>");
+        let end_tag = DeveloperInstructions::new("</permissions instructions>");
+        start_tag
+            .concat(DeveloperInstructions::sandbox_text(
+                sandbox_mode,
+                network_access,
+            ))
+            .concat(DeveloperInstructions::from(approval_policy))
+            .concat(DeveloperInstructions::from_writable_roots(writable_roots))
+            .concat(end_tag)
+    }
+
+    fn from_writable_roots(writable_roots: Option<Vec<WritableRoot>>) -> Self {
+        let Some(roots) = writable_roots else {
+            return DeveloperInstructions::new("");
+        };
+
+        if roots.is_empty() {
+            return DeveloperInstructions::new("");
+        }
+
+        let roots_list: Vec<String> = roots
+            .iter()
+            .map(|r| format!("`{}`", r.root.to_string_lossy()))
+            .collect();
+        let text = if roots_list.len() == 1 {
+            format!(" The writable root is {}.", roots_list[0])
+        } else {
+            format!(" The writable roots are {}.", roots_list.join(", "))
+        };
+        DeveloperInstructions::new(text)
+    }
+
+    fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
+        let template = match mode {
+            SandboxMode::DangerFullAccess => SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end(),
+            SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
+            SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
+        };
+        let text = template.replace("{network_access}", &network_access.to_string());
+
+        DeveloperInstructions::new(text)
+    }
+}
+
+impl From<DeveloperInstructions> for ResponseItem {
+    fn from(di: DeveloperInstructions) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: di.into_text(),
+            }],
+        }
+    }
+}
+
+impl From<SandboxMode> for DeveloperInstructions {
+    fn from(mode: SandboxMode) -> Self {
+        let network_access = match mode {
+            SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
+            SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
+        };
+
+        DeveloperInstructions::sandbox_text(mode, network_access)
+    }
+}
+
+impl From<AskForApproval> for DeveloperInstructions {
+    fn from(mode: AskForApproval) -> Self {
+        let text = match mode {
+            AskForApproval::Never => APPROVAL_POLICY_NEVER.trim_end(),
+            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.trim_end(),
+            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.trim_end(),
+            AskForApproval::OnRequest => APPROVAL_POLICY_ON_REQUEST.trim_end(),
+        };
+
+        DeveloperInstructions::new(text)
+    }
 }
 
 fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
@@ -162,6 +339,48 @@ fn local_image_error_placeholder(
     }
 }
 
+pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
+
+const IMAGE_OPEN_TAG: &str = "<image>";
+const IMAGE_CLOSE_TAG: &str = "</image>";
+const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
+const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
+const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
+
+pub fn image_open_tag_text() -> String {
+    IMAGE_OPEN_TAG.to_string()
+}
+
+pub fn image_close_tag_text() -> String {
+    IMAGE_CLOSE_TAG.to_string()
+}
+
+pub fn local_image_label_text(label_number: usize) -> String {
+    format!("[Image #{label_number}]")
+}
+
+pub fn local_image_open_tag_text(label_number: usize) -> String {
+    let label = local_image_label_text(label_number);
+    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
+}
+
+pub fn is_local_image_open_tag_text(text: &str) -> bool {
+    text.strip_prefix(LOCAL_IMAGE_OPEN_TAG_PREFIX)
+        .is_some_and(|rest| rest.ends_with(LOCAL_IMAGE_OPEN_TAG_SUFFIX))
+}
+
+pub fn is_local_image_close_tag_text(text: &str) -> bool {
+    is_image_close_tag_text(text)
+}
+
+pub fn is_image_open_tag_text(text: &str) -> bool {
+    text == IMAGE_OPEN_TAG
+}
+
+pub fn is_image_close_tag_text(text: &str) -> bool {
+    text == IMAGE_CLOSE_TAG
+}
+
 fn invalid_image_error_placeholder(
     path: &std::path::Path,
     error: impl std::fmt::Display,
@@ -172,6 +391,63 @@ fn invalid_image_error_placeholder(
             path.display(),
             error
         ),
+    }
+}
+
+fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
+    ContentItem::InputText {
+        text: format!(
+            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
+            path.display(),
+            mime
+        ),
+    }
+}
+
+pub fn local_image_content_items_with_label_number(
+    path: &std::path::Path,
+    label_number: Option<usize>,
+) -> Vec<ContentItem> {
+    match load_and_resize_to_fit(path) {
+        Ok(image) => {
+            let mut items = Vec::with_capacity(3);
+            if let Some(label_number) = label_number {
+                items.push(ContentItem::InputText {
+                    text: local_image_open_tag_text(label_number),
+                });
+            }
+            items.push(ContentItem::InputImage {
+                image_url: image.into_data_url(),
+            });
+            if label_number.is_some() {
+                items.push(ContentItem::InputText {
+                    text: LOCAL_IMAGE_CLOSE_TAG.to_string(),
+                });
+            }
+            items
+        }
+        Err(err) => {
+            if matches!(&err, ImageProcessingError::Read { .. }) {
+                vec![local_image_error_placeholder(path, &err)]
+            } else if err.is_invalid_image() {
+                vec![invalid_image_error_placeholder(path, &err)]
+            } else {
+                let Some(mime_guess) = mime_guess::from_path(path).first() else {
+                    return vec![local_image_error_placeholder(
+                        path,
+                        "unsupported MIME type (unknown)",
+                    )];
+                };
+                let mime = mime_guess.essence_str().to_owned();
+                if !mime.starts_with("image/") {
+                    return vec![local_image_error_placeholder(
+                        path,
+                        format!("unsupported MIME type `{mime}`"),
+                    )];
+                }
+                vec![unsupported_image_error_placeholder(path, &mime)]
+            }
+        }
     }
 }
 
@@ -268,57 +544,27 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
+        let mut image_index = 0;
         Self::Message {
             role: "user".to_string(),
             content: items
                 .into_iter()
-                .map(|c| match c {
-                    UserInput::Text { text } => ContentItem::InputText { text },
-                    UserInput::Image { image_url } => ContentItem::InputImage { image_url },
-                    UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
-                        Ok(image) => ContentItem::InputImage {
-                            image_url: image.into_data_url(),
+                .flat_map(|c| match c {
+                    UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
+                    UserInput::Image { image_url } => vec![
+                        ContentItem::InputText {
+                            text: image_open_tag_text(),
                         },
-                        Err(err) => {
-                            if matches!(&err, ImageProcessingError::Read { .. }) {
-                                local_image_error_placeholder(&path, &err)
-                            } else if err.is_invalid_image() {
-                                invalid_image_error_placeholder(&path, &err)
-                            } else {
-                                match std::fs::read(&path) {
-                                    Ok(bytes) => {
-                                        let Some(mime_guess) = mime_guess::from_path(&path).first()
-                                        else {
-                                            return local_image_error_placeholder(
-                                                &path,
-                                                "unsupported MIME type (unknown)",
-                                            );
-                                        };
-                                        let mime = mime_guess.essence_str().to_owned();
-                                        if !mime.starts_with("image/") {
-                                            return local_image_error_placeholder(
-                                                &path,
-                                                format!("unsupported MIME type `{mime}`"),
-                                            );
-                                        }
-                                        let encoded =
-                                            base64::engine::general_purpose::STANDARD.encode(bytes);
-                                        ContentItem::InputImage {
-                                            image_url: format!("data:{mime};base64,{encoded}"),
-                                        }
-                                    }
-                                    Err(read_err) => {
-                                        tracing::warn!(
-                                            "Skipping image {} – could not read file: {}",
-                                            path.display(),
-                                            read_err
-                                        );
-                                        local_image_error_placeholder(&path, &read_err)
-                                    }
-                                }
-                            }
-                        }
-                    },
+                        ContentItem::InputImage { image_url },
+                        ContentItem::InputText {
+                            text: image_close_tag_text(),
+                        },
+                    ],
+                    UserInput::LocalImage { path } => {
+                        image_index += 1;
+                        local_image_content_items_with_label_number(&path, Some(image_index))
+                    }
+                    UserInput::Skill { .. } => Vec::new(), // Skill bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
         }
@@ -335,8 +581,9 @@ pub struct ShellToolCallParams {
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub with_escalated_permissions: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_permissions: Option<SandboxPermissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -354,8 +601,9 @@ pub struct ShellCommandToolCallParams {
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub with_escalated_permissions: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_permissions: Option<SandboxPermissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -383,7 +631,6 @@ pub struct FunctionCallOutputPayload {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
-    // TODO(jif) drop this.
     pub success: Option<bool>,
 }
 
@@ -402,7 +649,6 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
-        tracing::debug!("Function call output payload: {:?}", self);
         if let Some(items) = &self.content_items {
             items.serialize(serializer)
         } else {
@@ -538,11 +784,70 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_types::SandboxMode;
+    use crate::protocol::AskForApproval;
     use anyhow::Result;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn converts_sandbox_mode_into_developer_instructions() {
+        assert_eq!(
+            DeveloperInstructions::from(SandboxMode::WorkspaceWrite),
+            DeveloperInstructions::new(
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
+            )
+        );
+
+        assert_eq!(
+            DeveloperInstructions::from(SandboxMode::ReadOnly),
+            DeveloperInstructions::new(
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
+            )
+        );
+    }
+
+    #[test]
+    fn builds_permissions_with_network_access_override() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            AskForApproval::OnRequest,
+            None,
+        );
+
+        let text = instructions.into_text();
+        assert!(
+            text.contains("Network access is enabled."),
+            "expected network access to be enabled in message"
+        );
+        assert!(
+            text.contains("`approval_policy` is `on-request`"),
+            "expected approval guidance to be included"
+        );
+    }
+
+    #[test]
+    fn builds_permissions_from_policy() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        let instructions = DeveloperInstructions::from_policy(
+            &policy,
+            AskForApproval::UnlessTrusted,
+            &PathBuf::from("/tmp"),
+        );
+        let text = instructions.into_text();
+        assert!(text.contains("Network access is enabled."));
+        assert!(text.contains("`approval_policy` is `unless-trusted`"));
+    }
 
     #[test]
     fn serializes_success_as_plain_string() -> Result<()> {
@@ -657,13 +962,13 @@ mod tests {
 
     #[test]
     fn deserializes_compaction_alias() -> Result<()> {
-        let json = r#"{"type":"compaction","encrypted_content":"abc"}"#;
+        let json = r#"{"type":"compaction_summary","encrypted_content":"abc"}"#;
 
         let item: ResponseItem = serde_json::from_str(json)?;
 
         assert_eq!(
             item,
-            ResponseItem::CompactionSummary {
+            ResponseItem::Compaction {
                 encrypted_content: "abc".into(),
             }
         );
@@ -750,11 +1055,38 @@ mod tests {
                 command: vec!["ls".to_string(), "-l".to_string()],
                 workdir: Some("/tmp".to_string()),
                 timeout_ms: Some(1000),
-                with_escalated_permissions: None,
+                sandbox_permissions: None,
                 justification: None,
             },
             params
         );
+        Ok(())
+    }
+
+    #[test]
+    fn wraps_image_user_input_with_tags() -> Result<()> {
+        let image_url = "data:image/png;base64,abc".to_string();
+
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: image_url.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                let expected = vec![
+                    ContentItem::InputText {
+                        text: image_open_tag_text(),
+                    },
+                    ContentItem::InputImage { image_url },
+                    ContentItem::InputText {
+                        text: image_close_tag_text(),
+                    },
+                ];
+                assert_eq!(content, expected);
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
         Ok(())
     }
 
@@ -815,6 +1147,38 @@ mod tests {
                             "placeholder should mention path: {text}"
                         );
                     }
+                    other => panic!("expected placeholder text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_unsupported_image_format_adds_placeholder() -> Result<()> {
+        let dir = tempdir()?;
+        let svg_path = dir.path().join("example.svg");
+        std::fs::write(
+            &svg_path,
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
+        )?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: svg_path.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 1);
+                let expected = format!(
+                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    svg_path.display()
+                );
+                match &content[0] {
+                    ContentItem::InputText { text } => assert_eq!(text, &expected),
                     other => panic!("expected placeholder text but found {other:?}"),
                 }
             }

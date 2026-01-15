@@ -1,7 +1,7 @@
 use assert_cmd::Command as AssertCommand;
-use assert_cmd::cargo::cargo_bin;
 use codex_core::RolloutRecorder;
 use codex_core::protocol::GitInfo;
+use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
 use core_test_support::skip_if_no_network;
 use std::time::Duration;
@@ -12,6 +12,16 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+fn repo_root() -> std::path::PathBuf {
+    #[expect(clippy::expect_used)]
+    find_resource!(".").expect("failed to resolve repo root")
+}
+
+fn cli_responses_fixture() -> std::path::PathBuf {
+    #[expect(clippy::expect_used)]
+    find_resource!("tests/cli_responses_fixture.sse").expect("failed to resolve fixture path")
+}
 
 /// Tests streaming chat completions through the CLI using a mock server.
 /// This test:
@@ -24,6 +34,7 @@ async fn chat_mode_stream_cli() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
+    let repo_root = repo_root();
     let sse = concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{}}]}\n\n",
@@ -45,7 +56,7 @@ async fn chat_mode_stream_cli() {
         "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"chat\" }}",
         server.uri()
     );
-    let bin = cargo_bin("codex");
+    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -54,7 +65,7 @@ async fn chat_mode_stream_cli() {
         .arg("-c")
         .arg("model_provider=\"mock\"")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
@@ -73,7 +84,7 @@ async fn chat_mode_stream_cli() {
 
     // Verify a new session rollout was created and is discoverable via list_conversations
     let provider_filter = vec!["mock".to_string()];
-    let page = RolloutRecorder::list_conversations(
+    let page = RolloutRecorder::list_threads(
         home.path(),
         10,
         None,
@@ -128,7 +139,8 @@ async fn exec_cli_applies_experimental_instructions_file() {
     );
 
     let home = TempDir::new().unwrap();
-    let bin = cargo_bin("codex");
+    let repo_root = repo_root();
+    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -141,7 +153,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
             "experimental_instructions_file=\"{custom_path_str}\""
         ))
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
@@ -178,16 +190,16 @@ async fn exec_cli_applies_experimental_instructions_file() {
 async fn responses_api_stream_cli() {
     skip_if_no_network!();
 
-    let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
+    let fixture = cli_responses_fixture();
+    let repo_root = repo_root();
 
     let home = TempDir::new().unwrap();
-    let bin = cargo_bin("codex");
+    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
@@ -214,16 +226,16 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let prompt = format!("echo {marker}");
 
     // 3. Use the same offline SSE fixture as responses_api_stream_cli so the test is hermetic.
-    let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
+    let fixture = cli_responses_fixture();
+    let repo_root = repo_root();
 
     // 4. Run the codex CLI and invoke `exec`, which is what records a session.
-    let bin = cargo_bin("codex");
+    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt);
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
@@ -339,12 +351,12 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    let bin2 = cargo_bin("codex");
+    let bin2 = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd2 = AssertCommand::new(bin2);
     cmd2.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg(&prompt2)
         .arg("resume")
         .arg("--last");

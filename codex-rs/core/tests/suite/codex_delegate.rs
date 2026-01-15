@@ -1,3 +1,4 @@
+use codex_core::config::Constrained;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -5,6 +6,7 @@ use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::sandboxing::SandboxPermissions;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -31,7 +33,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     let args = serde_json::json!({
         "command": "rm -rf delegated",
         "timeout_ms": 1000,
-        "with_escalated_permissions": true,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
     })
     .to_string();
     let sse1 = sse(vec![
@@ -60,8 +62,8 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // Build a conversation configured to require approvals so the delegate
     // routes ExecApprovalRequest via the parent.
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
-        config.approval_policy = AskForApproval::OnRequest;
-        config.sandbox_policy = SandboxPolicy::ReadOnly;
+        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.sandbox_policy = Constrained::allow_any(SandboxPolicy::ReadOnly);
     });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -78,7 +80,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
         .await
         .expect("submit review");
 
-    // Lifecycle: Entered -> ExecApprovalRequest -> Exited(Some) -> TaskComplete.
+    // Lifecycle: Entered -> ExecApprovalRequest -> Exited(Some) -> TurnComplete.
     wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::EnteredReviewMode(_))
     })
@@ -103,7 +105,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
         matches!(ev, EventMsg::ExitedReviewMode(_))
     })
     .await;
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
 /// Delegate should surface ApplyPatchApprovalRequest and honor parent decision
@@ -136,9 +138,9 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
-        config.approval_policy = AskForApproval::OnRequest;
+        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         // Use a restricted sandbox so patch approval is required
-        config.sandbox_policy = SandboxPolicy::ReadOnly;
+        config.sandbox_policy = Constrained::allow_any(SandboxPolicy::ReadOnly);
         config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await.expect("build test codex");
@@ -177,7 +179,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
         matches!(ev, EventMsg::ExitedReviewMode(_))
     })
     .await;
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -219,7 +221,7 @@ async fn codex_delegate_ignores_legacy_deltas() {
         match ev {
             EventMsg::ReasoningContentDelta(_) => reasoning_delta_count += 1,
             EventMsg::AgentReasoningDelta(_) => legacy_reasoning_delta_count += 1,
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }

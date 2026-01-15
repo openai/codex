@@ -22,8 +22,9 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::SandboxPolicy;
-use crate::protocol::TaskStartedEvent;
+use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecEnv;
+use crate::sandboxing::SandboxPermissions;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::user_shell_command::user_shell_command_record_item;
@@ -57,7 +58,13 @@ impl SessionTask for UserShellCommandTask {
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
-        let event = EventMsg::TaskStarted(TaskStartedEvent {
+        let _ = session
+            .session
+            .services
+            .otel_manager
+            .counter("codex.task.user_shell", 1, &[]);
+
+        let event = EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: turn_context.client.get_model_context_window(),
         });
         let session = session.clone_session();
@@ -100,7 +107,7 @@ impl SessionTask for UserShellCommandTask {
             // should use that instead of an "arbitrarily large" timeout here.
             expiration: USER_SHELL_TIMEOUT_MS.into(),
             sandbox: SandboxType::None,
-            with_escalated_permissions: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
         };

@@ -1,0 +1,14 @@
+---
+source: tui2/src/chatwidget/tests.rs
+expression: popup
+---
+  Select Approval Mode
+
+› 1. Read Only (current)  Requires approval to edit files and run commands.
+  2. Agent                Read and edit files, and run commands.
+  3. Agent (full access)  Codex can edit files outside this workspace and run
+                          commands with network access. Exercise caution when
+                          using.
+
+  Press enter to confirm or esc to go back
+

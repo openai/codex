@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use std::sync::Arc;
 
 use codex_app_server_protocol::AuthMode;
@@ -10,10 +12,11 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
-use codex_core::openai_models::models_manager::ModelsManager;
-use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::ConversationId;
+use codex_core::models_manager::manager::ModelsManager;
+use codex_otel::OtelManager;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
@@ -62,7 +65,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         Ok(dir) => dir,
         Err(e) => panic!("failed to create TempDir: {e}"),
     };
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     config.show_raw_agent_reasoning = true;
@@ -70,35 +73,38 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
 
-    let conversation_id = ConversationId::new();
-    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
-    let otel_event_manager = OtelEventManager::new(
+    let conversation_id = ThreadId::new();
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let otel_manager = OtelManager::new(
         conversation_id,
-        config.model.as_str(),
-        model_family.slug.as_str(),
+        model.as_str(),
+        model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         Some(AuthMode::ApiKey),
         false,
         "test".to_string(),
+        SessionSource::Exec,
     );
 
-    let client = ModelClient::new(
+    let mut client_session = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_family,
-        otel_event_manager,
+        model_info,
+        otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
-        codex_protocol::protocol::SessionSource::Exec,
-    );
+        SessionSource::Exec,
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = input;
 
-    let mut stream = match client.stream(&prompt).await {
+    let mut stream = match client_session.stream(&prompt).await {
         Ok(s) => s,
         Err(e) => panic!("stream chat failed: {e}"),
     };
@@ -108,11 +114,15 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         }
     }
 
-    let requests = match server.received_requests().await {
-        Some(reqs) => reqs,
-        None => panic!("request not made"),
-    };
-    match requests[0].body_json() {
+    let all_requests = server.received_requests().await.expect("received requests");
+    let requests: Vec<_> = all_requests
+        .iter()
+        .filter(|req| req.method == "POST" && req.url.path().ends_with("/chat/completions"))
+        .collect();
+    let request = requests
+        .first()
+        .unwrap_or_else(|| panic!("expected POST request to /chat/completions"));
+    match request.body_json() {
         Ok(v) => v,
         Err(e) => panic!("invalid json body: {e}"),
     }

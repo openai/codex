@@ -68,7 +68,7 @@ pub fn compute_allow_paths(
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
             for root in writable_roots {
                 add_writable_root(
-                    root.clone(),
+                    root.clone().into(),
                     policy_cwd,
                     &mut add_allow_path,
                     &mut add_deny_path,
@@ -92,12 +92,10 @@ pub fn compute_allow_paths(
 
 #[cfg(test)]
 mod tests {
-    use super::compute_allow_paths;
+    use super::*;
     use codex_protocol::protocol::SandboxPolicy;
-    use std::collections::HashMap;
-    use std::collections::HashSet;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -109,7 +107,7 @@ mod tests {
         let _ = fs::create_dir_all(&extra_root);
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![extra_root.clone()],
+            writable_roots: vec![AbsolutePathBuf::try_from(extra_root.as_path()).unwrap()],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

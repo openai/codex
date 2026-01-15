@@ -3,6 +3,8 @@ mod mock_model_server;
 mod responses;
 
 pub use core_test_support::format_with_current_shell;
+pub use core_test_support::format_with_current_shell_display_non_login;
+pub use core_test_support::format_with_current_shell_non_login;
 pub use mcp_process::McpProcess;
 use mcp_types::JSONRPCResponse;
 pub use mock_model_server::create_mock_chat_completions_server;

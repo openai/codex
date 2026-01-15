@@ -1,0 +1,6 @@
+---
+source: tui2/src/chatwidget/tests.rs
+expression: exec_blob
+---
+• Ran sleep 1
+  └ (no output)

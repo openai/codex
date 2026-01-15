@@ -1,6 +1,6 @@
 use anyhow::Context;
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
+use codex_core::NewThread;
+use codex_core::ThreadManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
@@ -39,16 +39,15 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
 
     // Load config and pin cwd to the temp dir so ls/cat operate there.
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.cwd = cwd.path().to_path_buf();
 
-    let conversation_manager =
-        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
+    let thread_manager = ThreadManager::with_models_provider(
+        codex_core::CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
+    let NewThread { thread: codex, .. } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -98,14 +97,13 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
 async fn user_shell_cmd_can_be_interrupted() {
     // Set up isolated config and conversation.
     let codex_home = TempDir::new().unwrap();
-    let config = load_default_config_for_test(&codex_home);
-    let conversation_manager =
-        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
+    let config = load_default_config_for_test(&codex_home).await;
+    let thread_manager = ThreadManager::with_models_provider(
+        codex_core::CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
+    let NewThread { thread: codex, .. } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -177,7 +175,7 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     assert_eq!(end_event.exit_code, 0);
     assert_eq!(end_event.stdout.trim(), "not-set");
 
-    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let responses = vec![responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -235,7 +233,7 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
     .await;
     assert_eq!(end_event.exit_code, 0);
 
-    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let responses = vec![responses::sse(vec![
         responses::ev_response_created("resp-1"),

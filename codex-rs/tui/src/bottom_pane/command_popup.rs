@@ -15,6 +15,13 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
+fn windows_degraded_sandbox_active() -> bool {
+    cfg!(target_os = "windows")
+        && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+        && codex_core::get_platform_sandbox().is_some()
+        && !codex_core::is_windows_elevated_sandbox_enabled()
+}
+
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
@@ -32,9 +39,11 @@ pub(crate) struct CommandPopup {
 
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, skills_enabled: bool) -> Self {
+        let allow_elevate_sandbox = windows_degraded_sandbox_active();
         let builtins: Vec<(&'static str, SlashCommand)> = built_in_slash_commands()
             .into_iter()
             .filter(|(_, cmd)| skills_enabled || *cmd != SlashCommand::Skills)
+            .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
@@ -185,6 +194,7 @@ impl CommandPopup {
                     display_shortcut: None,
                     description: Some(description),
                     wrap_indent: None,
+                    disabled_reason: None,
                 }
             })
             .collect()
@@ -372,5 +382,24 @@ mod tests {
         let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
         let description = rows.first().and_then(|row| row.description.as_deref());
         assert_eq!(description, Some("send saved prompt"));
+    }
+
+    #[test]
+    fn fuzzy_filter_matches_subsequence_for_ac() {
+        let mut popup = CommandPopup::new(Vec::new(), false);
+        popup.on_composer_text_change("/ac".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            cmds.contains(&"compact") && cmds.contains(&"feedback"),
+            "expected fuzzy search for '/ac' to include compact and feedback, got {cmds:?}"
+        );
     }
 }

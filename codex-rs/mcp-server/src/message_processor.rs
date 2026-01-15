@@ -7,11 +7,11 @@ use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
@@ -40,8 +40,8 @@ pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
     codex_linux_sandbox_exe: Option<PathBuf>,
-    conversation_manager: Arc<ConversationManager>,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
+    thread_manager: Arc<ThreadManager>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 }
 
 impl MessageProcessor {
@@ -58,13 +58,16 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let conversation_manager =
-            Arc::new(ConversationManager::new(auth_manager, SessionSource::Mcp));
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
+            auth_manager,
+            SessionSource::Mcp,
+        ));
         Self {
             outgoing,
             initialized: false,
             codex_linux_sandbox_exe,
-            conversation_manager,
+            thread_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -403,7 +406,7 @@ impl MessageProcessor {
 
         // Clone outgoing and server to move into async task.
         let outgoing = self.outgoing.clone();
-        let conversation_manager = self.conversation_manager.clone();
+        let thread_manager = self.thread_manager.clone();
         let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
 
         // Spawn an async task to handle the Codex session so that we do not
@@ -415,7 +418,7 @@ impl MessageProcessor {
                 initial_prompt,
                 config,
                 outgoing,
-                conversation_manager,
+                thread_manager,
                 running_requests_id_to_codex_uuid,
             )
             .await;
@@ -430,10 +433,7 @@ impl MessageProcessor {
         tracing::info!("tools/call -> params: {:?}", arguments);
 
         // parse arguments
-        let CodexToolCallReplyParam {
-            conversation_id,
-            prompt,
-        } = match arguments {
+        let codex_tool_call_reply_param: CodexToolCallReplyParam = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallReplyParam>(json_val) {
                 Ok(params) => params,
                 Err(e) => {
@@ -454,12 +454,12 @@ impl MessageProcessor {
             },
             None => {
                 tracing::error!(
-                    "Missing arguments for codex-reply tool-call; the `conversation_id` and `prompt` fields are required."
+                    "Missing arguments for codex-reply tool-call; the `thread_id` and `prompt` fields are required."
                 );
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_owned(),
-                        text: "Missing arguments for codex-reply tool-call; the `conversation_id` and `prompt` fields are required.".to_owned(),
+                        text: "Missing arguments for codex-reply tool-call; the `thread_id` and `prompt` fields are required.".to_owned(),
                         annotations: None,
                     })],
                     is_error: Some(true),
@@ -470,14 +470,15 @@ impl MessageProcessor {
                 return;
             }
         };
-        let conversation_id = match ConversationId::from_string(&conversation_id) {
+
+        let thread_id = match codex_tool_call_reply_param.get_thread_id() {
             Ok(id) => id,
             Err(e) => {
-                tracing::error!("Failed to parse conversation_id: {e}");
+                tracing::error!("Failed to parse thread_id: {e}");
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_owned(),
-                        text: format!("Failed to parse conversation_id: {e}"),
+                        text: format!("Failed to parse thread_id: {e}"),
                         annotations: None,
                     })],
                     is_error: Some(true),
@@ -493,22 +494,20 @@ impl MessageProcessor {
         let outgoing = self.outgoing.clone();
         let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
 
-        let codex = match self
-            .conversation_manager
-            .get_conversation(conversation_id)
-            .await
-        {
+        let codex = match self.thread_manager.get_thread(thread_id).await {
             Ok(c) => c,
             Err(_) => {
-                tracing::warn!("Session not found for conversation_id: {conversation_id}");
+                tracing::warn!("Session not found for thread_id: {thread_id}");
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_owned(),
-                        text: format!("Session not found for conversation_id: {conversation_id}"),
+                        text: format!("Session not found for thread_id: {thread_id}"),
                         annotations: None,
                     })],
                     is_error: Some(true),
-                    structured_content: None,
+                    structured_content: Some(json!({
+                        "threadId": thread_id,
+                    })),
                 };
                 outgoing.send_response(request_id, result).await;
                 return;
@@ -516,19 +515,19 @@ impl MessageProcessor {
         };
 
         // Spawn the long-running reply handler.
+        let prompt = codex_tool_call_reply_param.prompt.clone();
         tokio::spawn({
             let outgoing = outgoing.clone();
-            let prompt = prompt.clone();
             let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();
 
             async move {
                 crate::codex_tool_runner::run_codex_tool_session_reply(
+                    thread_id,
                     codex,
                     outgoing,
                     request_id,
                     prompt,
                     running_requests_id_to_codex_uuid,
-                    conversation_id,
                 )
                 .await;
             }
@@ -564,8 +563,8 @@ impl MessageProcessor {
             RequestId::Integer(i) => i.to_string(),
         };
 
-        // Obtain the conversation id while holding the first lock, then release.
-        let conversation_id = {
+        // Obtain the thread id while holding the first lock, then release.
+        let thread_id = {
             let map_guard = self.running_requests_id_to_codex_uuid.lock().await;
             match map_guard.get(&request_id) {
                 Some(id) => *id,
@@ -575,17 +574,13 @@ impl MessageProcessor {
                 }
             }
         };
-        tracing::info!("conversation_id: {conversation_id}");
+        tracing::info!("thread_id: {thread_id}");
 
-        // Obtain the Codex conversation from the server.
-        let codex_arc = match self
-            .conversation_manager
-            .get_conversation(conversation_id)
-            .await
-        {
+        // Obtain the Codex thread from the server.
+        let codex_arc = match self.thread_manager.get_thread(thread_id).await {
             Ok(c) => c,
             Err(_) => {
-                tracing::warn!("Session not found for conversation_id: {conversation_id}");
+                tracing::warn!("Session not found for thread_id: {thread_id}");
                 return;
             }
         };

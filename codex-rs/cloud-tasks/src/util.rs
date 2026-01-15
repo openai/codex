@@ -5,7 +5,6 @@ use chrono::Utc;
 use reqwest::header::HeaderMap;
 
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 use codex_login::AuthManager;
 
 pub fn set_user_agent_suffix(suffix: &str) {
@@ -62,9 +61,7 @@ pub fn extract_chatgpt_account_id(token: &str) -> Option<String> {
 
 pub async fn load_auth_manager() -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
-    let config = Config::load_with_cli_overrides(Vec::new(), ConfigOverrides::default())
-        .await
-        .ok()?;
+    let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
     Some(AuthManager::new(
         config.codex_home,
         false,
@@ -88,8 +85,8 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
     if let Some(am) = load_auth_manager().await
-        && let Some(auth) = am.auth()
-        && let Ok(tok) = auth.get_token().await
+        && let Some(auth) = am.auth().await
+        && let Ok(tok) = auth.get_token()
         && !tok.is_empty()
     {
         let v = format!("Bearer {tok}");

@@ -78,6 +78,7 @@ impl From<&KeyBinding> for Span<'static> {
         let modifiers = modifiers_to_string(*modifiers);
         let key = match key {
             KeyCode::Enter => "enter".to_string(),
+            KeyCode::Char(' ') => "space".to_string(),
             KeyCode::Up => "↑".to_string(),
             KeyCode::Down => "↓".to_string(),
             KeyCode::Left => "←".to_string(),

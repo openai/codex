@@ -1,0 +1,20 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "tui2",
+    crate_name = "codex_tui2",
+    compile_data = glob(
+        include = ["**"],
+        exclude = [
+            "**/* *",
+            "BUILD.bazel",
+            "Cargo.toml",
+        ],
+        allow_empty = True,
+    ),
+    test_data_extra = glob(["src/**/snapshots/**"]),
+    integration_compile_data_extra = ["src/test_backend.rs"],
+    extra_binaries = [
+        "//codex-rs/cli:codex",
+    ],
+)

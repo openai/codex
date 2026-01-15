@@ -8,7 +8,12 @@ use tempfile::TempDir;
 #[test]
 fn execpolicy_check_matches_expected_json() -> Result<(), Box<dyn std::error::Error>> {
     let codex_home = TempDir::new()?;
-    let policy_path = codex_home.path().join("policy.codexpolicy");
+    let policy_path = codex_home.path().join("rules").join("policy.rules");
+    fs::create_dir_all(
+        policy_path
+            .parent()
+            .expect("policy path should have a parent"),
+    )?;
     fs::write(
         &policy_path,
         r#"
@@ -19,12 +24,12 @@ prefix_rule(
 "#,
     )?;
 
-    let output = Command::cargo_bin("codex")?
+    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
         .env("CODEX_HOME", codex_home.path())
         .args([
             "execpolicy",
             "check",
-            "--policy",
+            "--rules",
             policy_path
                 .to_str()
                 .expect("policy path should be valid UTF-8"),
@@ -46,6 +51,64 @@ prefix_rule(
                     "prefixRuleMatch": {
                         "matchedPrefix": ["git", "push"],
                         "decision": "forbidden"
+                    }
+                }
+            ]
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+fn execpolicy_check_includes_justification_when_present() -> Result<(), Box<dyn std::error::Error>>
+{
+    let codex_home = TempDir::new()?;
+    let policy_path = codex_home.path().join("rules").join("policy.rules");
+    fs::create_dir_all(
+        policy_path
+            .parent()
+            .expect("policy path should have a parent"),
+    )?;
+    fs::write(
+        &policy_path,
+        r#"
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "forbidden",
+    justification = "pushing is blocked in this repo",
+)
+"#,
+    )?;
+
+    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+        .env("CODEX_HOME", codex_home.path())
+        .args([
+            "execpolicy",
+            "check",
+            "--rules",
+            policy_path
+                .to_str()
+                .expect("policy path should be valid UTF-8"),
+            "git",
+            "push",
+            "origin",
+            "main",
+        ])
+        .output()?;
+
+    assert!(output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        result,
+        json!({
+            "decision": "forbidden",
+            "matchedRules": [
+                {
+                    "prefixRuleMatch": {
+                        "matchedPrefix": ["git", "push"],
+                        "decision": "forbidden",
+                        "justification": "pushing is blocked in this repo"
                     }
                 }
             ]
