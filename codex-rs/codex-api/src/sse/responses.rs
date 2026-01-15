@@ -320,8 +320,7 @@ pub async fn process_sse(
             }
         };
 
-        let raw = sse.data.clone();
-        trace!("SSE event: {raw}");
+        trace!("SSE event: {}", &sse.data);
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,

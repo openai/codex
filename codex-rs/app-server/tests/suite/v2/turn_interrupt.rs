@@ -73,6 +73,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run sleep".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(working_directory.clone()),
             ..Default::default()

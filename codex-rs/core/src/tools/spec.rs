@@ -1,3 +1,4 @@
+use crate::agent::AgentRole;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
@@ -441,6 +442,15 @@ fn create_spawn_agent_tool() -> ToolSpec {
             description: Some("Initial message to send to the new agent.".to_string()),
         },
     );
+    properties.insert(
+        "agent_type".to_string(),
+        JsonSchema::String {
+            description: Some(format!(
+                "Optional agent type to spawn ({}).",
+                AgentRole::enum_values().join(", ")
+            )),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -466,6 +476,15 @@ fn create_send_input_tool() -> ToolSpec {
         "message".to_string(),
         JsonSchema::String {
             description: Some("Message to send to the agent.".to_string()),
+        },
+    );
+    properties.insert(
+        "interrupt".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, interrupt the agent's current task before sending the message. When false (default), the message will be processed when the agent is done on its current task."
+                    .to_string(),
+            ),
         },
     );
 
