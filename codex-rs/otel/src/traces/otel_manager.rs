@@ -481,6 +481,7 @@ impl OtelManager {
             }
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
             ResponseEvent::ModelsEtag(_) => "models_etag".into(),
+            ResponseEvent::TurnState(_) => "turn_state".into(),
         }
     }
 

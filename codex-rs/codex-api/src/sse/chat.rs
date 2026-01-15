@@ -1,5 +1,6 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
+use crate::common::TURN_STATE_HEADER;
 use crate::error::ApiError;
 use crate::telemetry::SseTelemetry;
 use codex_client::StreamResponse;
@@ -23,9 +24,20 @@ pub(crate) fn spawn_chat_stream(
     idle_timeout: Duration,
     telemetry: Option<std::sync::Arc<dyn SseTelemetry>>,
 ) -> ResponseStream {
+    let turn_state = stream_response
+        .headers
+        .get(TURN_STATE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let bytes = stream_response.bytes;
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
-        process_chat_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+        if let Some(turn_state) = turn_state {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::TurnState(turn_state)))
+                .await;
+        }
+        process_chat_sse(bytes, tx_event, idle_timeout, telemetry).await;
     });
     ResponseStream { rx_event }
 }

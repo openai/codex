@@ -1,5 +1,6 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
+use crate::common::TURN_STATE_HEADER;
 use crate::error::ApiError;
 use crate::rate_limits::parse_rate_limit;
 use crate::telemetry::SseTelemetry;
@@ -51,6 +52,11 @@ pub fn spawn_response_stream(
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) -> ResponseStream {
     let rate_limits = parse_rate_limit(&stream_response.headers);
+    let turn_state = stream_response
+        .headers
+        .get(TURN_STATE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
     let models_etag = stream_response
         .headers
         .get("X-Models-Etag")
@@ -58,6 +64,11 @@ pub fn spawn_response_stream(
         .map(ToString::to_string);
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
+        if let Some(turn_state) = turn_state {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::TurnState(turn_state)))
+                .await;
+        }
         if let Some(snapshot) = rate_limits {
             let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
         }

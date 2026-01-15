@@ -382,6 +382,7 @@ pub(crate) struct Session {
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) client: ModelClient,
+    pub(crate) turn_state_header: Arc<std::sync::Mutex<Option<String>>>,
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -402,6 +403,21 @@ pub(crate) struct TurnContext {
 }
 
 impl TurnContext {
+    pub(crate) fn capture_turn_state_header(&self, value: String) {
+        let mut header = self
+            .turn_state_header
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *header = Some(value);
+    }
+
+    pub(crate) fn turn_state_header(&self) -> Option<String> {
+        self.turn_state_header
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
@@ -544,6 +560,7 @@ impl Session {
         TurnContext {
             sub_id,
             client,
+            turn_state_header: Arc::new(std::sync::Mutex::new(None)),
             cwd: session_configuration.cwd.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             base_instructions: session_configuration.base_instructions.clone(),
@@ -2442,6 +2459,7 @@ async fn spawn_review_thread(
         client,
         tools_config,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
+        turn_state_header: Arc::new(std::sync::Mutex::new(None)),
         developer_instructions: None,
         user_instructions: None,
         base_instructions: Some(base_instructions.clone()),
@@ -2565,7 +2583,10 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let mut client_session = turn_context.client.new_session();
+    let mut client_session = turn_context
+        .client
+        .new_session()
+        .with_turn_state_header(Arc::clone(&turn_context.turn_state_header));
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -2940,6 +2961,9 @@ async fn try_run_turn(
                     .models_manager
                     .refresh_if_new_etag(etag, &config)
                     .await;
+            }
+            ResponseEvent::TurnState(value) => {
+                turn_context.capture_turn_state_header(value);
             }
             ResponseEvent::Completed {
                 response_id: _,

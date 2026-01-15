@@ -2,6 +2,7 @@ use crate::auth::AuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
+use crate::common::TURN_STATE_HEADER;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::sse::responses::ResponsesStreamEvent;
@@ -32,13 +33,15 @@ pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
     // TODO (pakrym): is this the right place for timeout?
     idle_timeout: Duration,
+    turn_state_header: Option<String>,
 }
 
 impl ResponsesWebsocketConnection {
-    fn new(stream: WsStream, idle_timeout: Duration) -> Self {
+    fn new(stream: WsStream, idle_timeout: Duration, turn_state_header: Option<String>) -> Self {
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
             idle_timeout,
+            turn_state_header,
         }
     }
 
@@ -54,11 +57,17 @@ impl ResponsesWebsocketConnection {
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
         let stream = Arc::clone(&self.stream);
         let idle_timeout = self.idle_timeout;
+        let turn_state = self.turn_state_header.clone();
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
 
         tokio::spawn(async move {
+            if let Some(turn_state) = turn_state {
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::TurnState(turn_state)))
+                    .await;
+            }
             let mut guard = stream.lock().await;
             let Some(ws_stream) = guard.as_mut() else {
                 let _ = tx_event
@@ -108,10 +117,15 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         headers.extend(extra_headers);
         apply_auth_headers(&mut headers, &self.auth);
 
-        let stream = connect_websocket(ws_url, headers).await?;
+        let (stream, response_headers) = connect_websocket(ws_url, headers).await?;
+        let turn_state_header = response_headers
+            .get(TURN_STATE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
+            turn_state_header,
         ))
     }
 }
@@ -130,17 +144,20 @@ fn apply_auth_headers(headers: &mut HeaderMap, auth: &impl AuthProvider) {
     }
 }
 
-async fn connect_websocket(url: Url, headers: HeaderMap) -> Result<WsStream, ApiError> {
+async fn connect_websocket(
+    url: Url,
+    headers: HeaderMap,
+) -> Result<(WsStream, HeaderMap), ApiError> {
     let mut request = url
         .clone()
         .into_client_request()
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    let (stream, _) = tokio_tungstenite::connect_async(request)
+    let (stream, response) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|err| map_ws_error(err, &url))?;
-    Ok(stream)
+    Ok((stream, response.headers().clone()))
 }
 
 fn map_ws_error(err: WsError, url: &Url) -> ApiError {

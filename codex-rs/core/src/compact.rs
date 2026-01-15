@@ -301,7 +301,10 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut client_session = turn_context.client.new_session();
+    let mut client_session = turn_context
+        .client
+        .new_session()
+        .with_turn_state_header(Arc::clone(&turn_context.turn_state_header));
     let mut stream = client_session.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
@@ -318,6 +321,9 @@ async fn drain_to_completed(
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(turn_context, snapshot).await;
+            }
+            Ok(ResponseEvent::TurnState(value)) => {
+                turn_context.capture_turn_state_header(value);
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())

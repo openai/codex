@@ -13,6 +13,8 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
+pub const TURN_STATE_HEADER: &str = "x-codex-turn-state";
+
 /// Canonical prompt input for Chat and Responses endpoints.
 #[derive(Debug, Clone)]
 pub struct Prompt {
@@ -60,6 +62,7 @@ pub enum ResponseEvent {
     },
     RateLimits(RateLimitSnapshot),
     ModelsEtag(String),
+    TurnState(String),
 }
 
 #[derive(Debug, Serialize, Clone)]

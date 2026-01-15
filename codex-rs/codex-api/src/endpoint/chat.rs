@@ -56,6 +56,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         prompt: &ApiPrompt,
         conversation_id: Option<String>,
         session_source: Option<SessionSource>,
+        extra_headers: HeaderMap,
     ) -> Result<ResponseStream, ApiError> {
         use crate::requests::ChatRequestBuilder;
 
@@ -63,6 +64,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
             ChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
                 .conversation_id(conversation_id)
                 .session_source(session_source)
+                .extra_headers(extra_headers)
                 .build(self.streaming.provider())?;
 
         self.stream_request(request).await
@@ -158,6 +160,9 @@ impl Stream for AggregatedStream {
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
                     return Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot))));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::TurnState(state)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::TurnState(state))));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::ModelsEtag(etag)))) => {
                     return Poll::Ready(Some(Ok(ResponseEvent::ModelsEtag(etag))));

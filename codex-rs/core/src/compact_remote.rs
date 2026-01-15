@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::Prompt;
+use crate::client::insert_turn_state_header;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
@@ -10,6 +11,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
 use codex_protocol::models::ResponseItem;
+use http::HeaderMap;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -58,9 +60,14 @@ async fn run_remote_compact_task_inner_impl(
         output_schema: None,
     };
 
+    let mut extra_headers = HeaderMap::new();
+    insert_turn_state_header(
+        &mut extra_headers,
+        turn_context.turn_state_header().as_deref(),
+    );
     let mut new_history = turn_context
         .client
-        .compact_conversation_history(&prompt)
+        .compact_conversation_history_with_headers(&prompt, extra_headers)
         .await?;
 
     if !ghost_snapshots.is_empty() {

@@ -26,6 +26,7 @@ pub struct ChatRequestBuilder<'a> {
     tools: &'a [Value],
     conversation_id: Option<String>,
     session_source: Option<SessionSource>,
+    extra_headers: HeaderMap,
 }
 
 impl<'a> ChatRequestBuilder<'a> {
@@ -42,6 +43,7 @@ impl<'a> ChatRequestBuilder<'a> {
             tools,
             conversation_id: None,
             session_source: None,
+            extra_headers: HeaderMap::new(),
         }
     }
 
@@ -52,6 +54,11 @@ impl<'a> ChatRequestBuilder<'a> {
 
     pub fn session_source(mut self, source: Option<SessionSource>) -> Self {
         self.session_source = source;
+        self
+    }
+
+    pub fn extra_headers(mut self, headers: HeaderMap) -> Self {
+        self.extra_headers = headers;
         self
     }
 
@@ -298,7 +305,8 @@ impl<'a> ChatRequestBuilder<'a> {
             "tools": self.tools,
         });
 
-        let mut headers = build_conversation_headers(self.conversation_id);
+        let mut headers = self.extra_headers;
+        headers.extend(build_conversation_headers(self.conversation_id));
         if let Some(subagent) = subagent_header(&self.session_source) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
@@ -23,6 +24,7 @@ use codex_api::TransportError;
 use codex_api::build_conversation_headers;
 use codex_api::common::Reasoning;
 use codex_api::common::ResponsesWsRequest;
+use codex_api::common::TURN_STATE_HEADER;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
@@ -86,6 +88,8 @@ pub struct ModelClientSession {
     state: Arc<ModelClientState>,
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
+    turn_state_header: Option<Arc<Mutex<Option<String>>>>,
+    websocket_turn_state_header: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -121,6 +125,8 @@ impl ModelClient {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
+            turn_state_header: None,
+            websocket_turn_state_header: None,
         }
     }
 }
@@ -182,6 +188,16 @@ impl ModelClient {
     /// This is a unary call (no streaming) that returns a new list of
     /// `ResponseItem`s representing the compacted transcript.
     pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
+        self.compact_conversation_history_with_headers(prompt, ApiHeaderMap::new())
+            .await
+    }
+
+    /// Compacts the current conversation history using the Compact endpoint with extra headers.
+    pub async fn compact_conversation_history_with_headers(
+        &self,
+        prompt: &Prompt,
+        mut extra_headers: ApiHeaderMap,
+    ) -> Result<Vec<ResponseItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
@@ -209,7 +225,6 @@ impl ModelClient {
             instructions: &instructions,
         };
 
-        let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.state.session_source {
             let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
                 label.clone()
@@ -232,6 +247,14 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
+    pub(crate) fn with_turn_state_header(
+        mut self,
+        turn_state_header: Arc<Mutex<Option<String>>>,
+    ) -> Self {
+        self.turn_state_header = Some(turn_state_header);
+        self
+    }
+
     /// Streams a single model turn using either the Responses or Chat
     /// Completions wire API, depending on the configured provider.
     ///
@@ -311,6 +334,9 @@ impl ModelClientSession {
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
         let conversation_id = self.state.conversation_id.to_string();
 
+        let mut extra_headers = beta_feature_headers(&self.state.config);
+        self.insert_turn_state_header(&mut extra_headers);
+
         ApiResponsesOptions {
             reasoning,
             include,
@@ -319,7 +345,7 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: beta_feature_headers(&self.state.config),
+            extra_headers,
             compression,
         }
     }
@@ -384,12 +410,16 @@ impl ModelClientSession {
         api_auth: CoreAuthProvider,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
+        let turn_state_header = self.turn_state_header_value();
         let needs_new = match self.connection.as_ref() {
             Some(conn) => conn.is_closed().await,
             None => true,
         };
+        let needs_refresh = !needs_new
+            && turn_state_header.is_some()
+            && self.websocket_turn_state_header != turn_state_header;
 
-        if needs_new {
+        if needs_new || needs_refresh {
             let mut headers = options.extra_headers.clone();
             headers.extend(build_conversation_headers(options.conversation_id.clone()));
             let new_conn: ApiWebSocketConnection =
@@ -397,6 +427,8 @@ impl ModelClientSession {
                     .connect(headers)
                     .await?;
             self.connection = Some(new_conn);
+            self.websocket_turn_state_header = turn_state_header;
+            self.websocket_last_items.clear();
         }
 
         self.connection.as_ref().ok_or(ApiError::Stream(
@@ -456,12 +488,16 @@ impl ModelClientSession {
             let client = ApiChatClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
+            let mut extra_headers = ApiHeaderMap::new();
+            self.insert_turn_state_header(&mut extra_headers);
+
             let stream_result = client
                 .stream_prompt(
                     &self.state.model_info.slug,
                     &api_prompt,
                     Some(conversation_id.clone()),
                     Some(session_source.clone()),
+                    extra_headers,
                 )
                 .await;
 
@@ -585,6 +621,19 @@ impl ModelClientSession {
         }
     }
 
+    fn turn_state_header_value(&self) -> Option<String> {
+        self.turn_state_header.as_ref().and_then(|turn_state| {
+            turn_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        })
+    }
+
+    fn insert_turn_state_header(&self, headers: &mut ApiHeaderMap) {
+        insert_turn_state_header(headers, self.turn_state_header_value().as_deref());
+    }
+
     /// Builds request and SSE telemetry for streaming API calls (Chat/Responses).
     fn build_streaming_telemetry(&self) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
         let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
@@ -611,6 +660,14 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
+    }
+}
+
+pub(crate) fn insert_turn_state_header(headers: &mut ApiHeaderMap, value: Option<&str>) {
+    if let Some(value) = value
+        && let Ok(header_value) = HeaderValue::from_str(value)
+    {
+        headers.insert(TURN_STATE_HEADER, header_value);
     }
 }
 
