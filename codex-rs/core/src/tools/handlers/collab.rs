@@ -170,6 +170,8 @@ mod send_input {
     struct SendInputArgs {
         id: String,
         message: String,
+        #[serde(default)]
+        interrupt: bool,
     }
 
     #[derive(Debug, Serialize)]
@@ -190,6 +192,14 @@ mod send_input {
             return Err(FunctionCallError::RespondToModel(
                 "Empty message can't be sent to an agent".to_string(),
             ));
+        }
+        if args.interrupt {
+            session
+                .services
+                .agent_control
+                .interrupt_agent(receiver_thread_id)
+                .await
+                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
         }
         session
             .send_event(
@@ -721,6 +731,45 @@ mod tests {
             err,
             FunctionCallError::RespondToModel(format!("agent with id {agent_id} not found"))
         );
+    }
+
+    #[tokio::test]
+    async fn send_input_interrupts_before_prompt() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "send_input",
+            function_payload(json!({
+                "id": agent_id.to_string(),
+                "message": "hi",
+                "interrupt": true
+            })),
+        );
+        CollabHandler
+            .handle(invocation)
+            .await
+            .expect("send_input should succeed");
+
+        let ops = manager.captured_ops();
+        let ops_for_agent: Vec<&Op> = ops
+            .iter()
+            .filter_map(|(id, op)| (*id == agent_id).then_some(op))
+            .collect();
+        assert_eq!(ops_for_agent.len(), 2);
+        assert!(matches!(ops_for_agent[0], Op::Interrupt));
+        assert!(matches!(ops_for_agent[1], Op::UserInput { .. }));
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
     }
 
     #[tokio::test]
