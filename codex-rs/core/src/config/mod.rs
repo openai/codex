@@ -67,6 +67,7 @@ use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
 mod constraint;
+mod document_helpers;
 pub mod edit;
 pub mod profile;
 pub mod schema;
