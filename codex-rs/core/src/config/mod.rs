@@ -2,7 +2,6 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
-use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::Notice;
 use crate::config::types::Notifications;
@@ -20,7 +19,6 @@ use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::McpServerIdentity;
 use crate::config_loader::McpServerRequirement;
-use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
@@ -339,8 +337,7 @@ pub struct Config {
     /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
-    /// Explicit or feature-derived web search mode.
-    pub web_search_mode: Option<WebSearchMode>,
+    pub web_search_mode: WebSearchMode,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -542,32 +539,25 @@ fn deserialize_config_toml_with_base(
 
 fn filter_mcp_servers_by_requirements(
     mcp_servers: &mut HashMap<String, McpServerConfig>,
-    mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
+    mcp_requirements: Option<&BTreeMap<String, McpServerRequirement>>,
 ) {
     let Some(allowlist) = mcp_requirements else {
         return;
     };
 
-    let source = allowlist.source.clone();
     for (name, server) in mcp_servers.iter_mut() {
         let allowed = allowlist
-            .value
             .get(name)
             .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
-        if allowed {
-            server.disabled_reason = None;
-        } else {
+        if !allowed {
             server.enabled = false;
-            server.disabled_reason = Some(McpServerDisabledReason::Requirements {
-                source: source.clone(),
-            });
         }
     }
 }
 
 fn constrain_mcp_servers(
     mcp_servers: HashMap<String, McpServerConfig>,
-    mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
+    mcp_requirements: Option<&BTreeMap<String, McpServerRequirement>>,
 ) -> ConstraintResult<Constrained<HashMap<String, McpServerConfig>>> {
     if mcp_requirements.is_none() {
         return Ok(Constrained::allow_any(mcp_servers));
@@ -1192,22 +1182,24 @@ pub fn resolve_oss_provider(
     }
 }
 
-/// Resolve the web search mode from explicit config and feature flags.
+/// Resolve the web search mode from the config, profile, and features.
 fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
-) -> Option<WebSearchMode> {
+) -> WebSearchMode {
+    // Enum gets precedence over features flags
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return Some(mode);
+        return mode;
     }
     if features.enabled(Feature::WebSearchCached) {
-        return Some(WebSearchMode::Cached);
+        return WebSearchMode::Cached;
     }
     if features.enabled(Feature::WebSearchRequest) {
-        return Some(WebSearchMode::Live);
+        return WebSearchMode::Live;
     }
-    None
+    // Fall back to default
+    WebSearchMode::default()
 }
 
 impl Config {
@@ -1715,7 +1707,6 @@ mod tests {
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
-    use crate::config_loader::RequirementSource;
     use crate::features::Feature;
 
     use super::*;
@@ -1737,7 +1728,6 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
-            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
@@ -1754,7 +1744,6 @@ mod tests {
                 env_http_headers: None,
             },
             enabled: true,
-            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
@@ -1987,9 +1976,9 @@ trust_level = "trusted"
             (MATCHED_URL_SERVER.to_string(), http_mcp(GOOD_URL)),
             (DIFFERENT_NAME_SERVER.to_string(), stdio_mcp("same-cmd")),
         ]);
-        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
-        let requirements = Sourced::new(
-            BTreeMap::from([
+        filter_mcp_servers_by_requirements(
+            &mut servers,
+            Some(&BTreeMap::from([
                 (
                     MISMATCHED_URL_SERVER.to_string(),
                     McpServerRequirement {
@@ -2022,29 +2011,20 @@ trust_level = "trusted"
                         },
                     },
                 ),
-            ]),
-            source.clone(),
+            ])),
         );
-        filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
 
-        let reason = Some(McpServerDisabledReason::Requirements { source });
         assert_eq!(
             servers
                 .iter()
-                .map(|(name, server)| (
-                    name.clone(),
-                    (server.enabled, server.disabled_reason.clone())
-                ))
-                .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+                .map(|(name, server)| (name.clone(), server.enabled))
+                .collect::<HashMap<String, bool>>(),
             HashMap::from([
-                (MISMATCHED_URL_SERVER.to_string(), (false, reason.clone())),
-                (
-                    MISMATCHED_COMMAND_SERVER.to_string(),
-                    (false, reason.clone()),
-                ),
-                (MATCHED_URL_SERVER.to_string(), (true, None)),
-                (MATCHED_COMMAND_SERVER.to_string(), (true, None)),
-                (DIFFERENT_NAME_SERVER.to_string(), (false, reason)),
+                (MISMATCHED_URL_SERVER.to_string(), false),
+                (MISMATCHED_COMMAND_SERVER.to_string(), false),
+                (MATCHED_URL_SERVER.to_string(), true),
+                (MATCHED_COMMAND_SERVER.to_string(), true),
+                (DIFFERENT_NAME_SERVER.to_string(), false),
             ])
         );
     }
@@ -2061,14 +2041,11 @@ trust_level = "trusted"
         assert_eq!(
             servers
                 .iter()
-                .map(|(name, server)| (
-                    name.clone(),
-                    (server.enabled, server.disabled_reason.clone())
-                ))
-                .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+                .map(|(name, server)| (name.clone(), server.enabled))
+                .collect::<HashMap<String, bool>>(),
             HashMap::from([
-                ("server-a".to_string(), (true, None)),
-                ("server-b".to_string(), (true, None)),
+                ("server-a".to_string(), true),
+                ("server-b".to_string(), true),
             ])
         );
     }
@@ -2080,22 +2057,16 @@ trust_level = "trusted"
             ("server-b".to_string(), http_mcp("https://example.com/b")),
         ]);
 
-        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
-        let requirements = Sourced::new(BTreeMap::new(), source.clone());
-        filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
+        filter_mcp_servers_by_requirements(&mut servers, Some(&BTreeMap::new()));
 
-        let reason = Some(McpServerDisabledReason::Requirements { source });
         assert_eq!(
             servers
                 .iter()
-                .map(|(name, server)| (
-                    name.clone(),
-                    (server.enabled, server.disabled_reason.clone())
-                ))
-                .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+                .map(|(name, server)| (name.clone(), server.enabled))
+                .collect::<HashMap<String, bool>>(),
             HashMap::from([
-                ("server-a".to_string(), (false, reason.clone())),
-                ("server-b".to_string(), (false, reason)),
+                ("server-a".to_string(), false),
+                ("server-b".to_string(), false),
             ])
         );
     }
@@ -2231,12 +2202,15 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_uses_none_if_unset() {
+    fn web_search_mode_uses_default_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
 
-        assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features),
+            WebSearchMode::default()
+        );
     }
 
     #[test]
@@ -2251,7 +2225,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            Some(WebSearchMode::Live)
+            WebSearchMode::Live
         );
     }
 
@@ -2267,7 +2241,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            Some(WebSearchMode::Disabled)
+            WebSearchMode::Disabled
         );
     }
 
@@ -2517,7 +2491,6 @@ trust_level = "trusted"
                     cwd: None,
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
                 enabled_tools: None,
@@ -2671,7 +2644,6 @@ bearer_token = "secret"
                     cwd: None,
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2740,7 +2712,6 @@ ZIG_VAR = "3"
                     cwd: None,
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2789,7 +2760,6 @@ ZIG_VAR = "3"
                     cwd: Some(cwd_path.clone()),
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2836,7 +2806,6 @@ ZIG_VAR = "3"
                     env_http_headers: None,
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2899,7 +2868,6 @@ startup_timeout_sec = 2.0
                     )])),
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2974,7 +2942,6 @@ X-Auth = "DOCS_AUTH"
                     )])),
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -3002,7 +2969,6 @@ X-Auth = "DOCS_AUTH"
                     env_http_headers: None,
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -3068,7 +3034,6 @@ url = "https://example.com/mcp"
                         )])),
                     },
                     enabled: true,
-                    disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(2)),
                     tool_timeout_sec: None,
                     enabled_tools: None,
@@ -3086,7 +3051,6 @@ url = "https://example.com/mcp"
                         cwd: None,
                     },
                     enabled: true,
-                    disabled_reason: None,
                     startup_timeout_sec: None,
                     tool_timeout_sec: None,
                     enabled_tools: None,
@@ -3167,7 +3131,6 @@ url = "https://example.com/mcp"
                     cwd: None,
                 },
                 enabled: false,
-                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -3210,7 +3173,6 @@ url = "https://example.com/mcp"
                     cwd: None,
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["allowed".to_string()]),
@@ -3619,7 +3581,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                web_search_mode: None,
+                web_search_mode: WebSearchMode::default(),
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3706,7 +3668,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::default(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3808,7 +3770,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::default(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3896,7 +3858,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::default(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),

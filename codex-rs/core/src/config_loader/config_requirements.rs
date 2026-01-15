@@ -44,7 +44,7 @@ impl fmt::Display for RequirementSource {
 pub struct ConfigRequirements {
     pub approval_policy: Constrained<AskForApproval>,
     pub sandbox_policy: Constrained<SandboxPolicy>,
-    pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
 }
 
 impl Default for ConfigRequirements {
@@ -273,7 +273,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         Ok(ConfigRequirements {
             approval_policy,
             sandbox_policy,
-            mcp_servers,
+            mcp_servers: mcp_servers.map(|sourced| sourced.value),
         })
     }
 }
@@ -571,27 +571,24 @@ mod tests {
 
         assert_eq!(
             requirements.mcp_servers,
-            Some(Sourced::new(
-                BTreeMap::from([
-                    (
-                        "docs".to_string(),
-                        McpServerRequirement {
-                            identity: McpServerIdentity::Command {
-                                command: "codex-mcp".to_string(),
-                            },
+            Some(BTreeMap::from([
+                (
+                    "docs".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: "codex-mcp".to_string(),
                         },
-                    ),
-                    (
-                        "remote".to_string(),
-                        McpServerRequirement {
-                            identity: McpServerIdentity::Url {
-                                url: "https://example.com/mcp".to_string(),
-                            },
+                    },
+                ),
+                (
+                    "remote".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Url {
+                            url: "https://example.com/mcp".to_string(),
                         },
-                    ),
-                ]),
-                RequirementSource::Unknown,
-            ))
+                    },
+                ),
+            ]))
         );
         Ok(())
     }

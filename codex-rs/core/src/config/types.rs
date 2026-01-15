@@ -3,13 +3,11 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
-use crate::config_loader::RequirementSource;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
@@ -22,23 +20,6 @@ use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum McpServerDisabledReason {
-    Unknown,
-    Requirements { source: RequirementSource },
-}
-
-impl fmt::Display for McpServerDisabledReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            McpServerDisabledReason::Unknown => write!(f, "unknown"),
-            McpServerDisabledReason::Requirements { source } => {
-                write!(f, "requirements ({source})")
-            }
-        }
-    }
-}
-
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
@@ -47,10 +28,6 @@ pub struct McpServerConfig {
     /// When `false`, Codex skips initializing this MCP server.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-
-    /// Reason this server was disabled after applying requirements.
-    #[serde(skip)]
-    pub disabled_reason: Option<McpServerDisabledReason>,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
@@ -183,7 +160,6 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             startup_timeout_sec,
             tool_timeout_sec,
             enabled,
-            disabled_reason: None,
             enabled_tools,
             disabled_tools,
         })

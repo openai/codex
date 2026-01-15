@@ -16,7 +16,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
-use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
@@ -25,11 +24,12 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
-use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::user_input::ByteRange as CoreByteRange;
+use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::ContentBlock as McpContentBlock;
@@ -1253,33 +1253,11 @@ pub enum SkillScope {
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    /// Legacy short_description from SKILL.md. Prefer SKILL.toml interface.short_description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub interface: Option<SkillInterface>,
     pub path: PathBuf,
     pub scope: SkillScope,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillInterface {
-    #[ts(optional)]
-    pub display_name: Option<String>,
-    #[ts(optional)]
-    pub short_description: Option<String>,
-    #[ts(optional)]
-    pub icon_small: Option<PathBuf>,
-    #[ts(optional)]
-    pub icon_large: Option<PathBuf>,
-    #[ts(optional)]
-    pub brand_color: Option<String>,
-    #[ts(optional)]
-    pub default_prompt: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1305,22 +1283,8 @@ impl From<CoreSkillMetadata> for SkillMetadata {
             name: value.name,
             description: value.description,
             short_description: value.short_description,
-            interface: value.interface.map(SkillInterface::from),
             path: value.path,
             scope: value.scope.into(),
-        }
-    }
-}
-
-impl From<CoreSkillInterface> for SkillInterface {
-    fn from(value: CoreSkillInterface) -> Self {
-        Self {
-            display_name: value.display_name,
-            short_description: value.short_description,
-            brand_color: value.brand_color,
-            default_prompt: value.default_prompt,
-            icon_small: value.icon_small,
-            icon_large: value.icon_large,
         }
     }
 }
@@ -1589,6 +1553,23 @@ pub struct ByteRange {
     pub end: usize,
 }
 
+impl From<CoreByteRange> for ByteRange {
+    fn from(value: CoreByteRange) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
+
+impl From<ByteRange> for CoreByteRange {
+    fn from(value: ByteRange) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1597,6 +1578,24 @@ pub struct TextElement {
     pub byte_range: ByteRange,
     /// Optional human-readable placeholder for the element, displayed in the UI.
     pub placeholder: Option<String>,
+}
+
+impl From<CoreTextElement> for TextElement {
+    fn from(value: CoreTextElement) -> Self {
+        Self {
+            byte_range: value.byte_range.into(),
+            placeholder: value.placeholder,
+        }
+    }
+}
+
+impl From<TextElement> for CoreTextElement {
+    fn from(value: TextElement) -> Self {
+        Self {
+            byte_range: value.byte_range.into(),
+            placeholder: value.placeholder,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1625,10 +1624,12 @@ pub enum UserInput {
 impl UserInput {
     pub fn into_core(self) -> CoreUserInput {
         match self {
-            UserInput::Text { text, .. } => CoreUserInput::Text {
+            UserInput::Text {
                 text,
-                // TODO: Thread text element ranges into v2 inputs. Empty keeps old behavior.
-                text_elements: Vec::new(),
+                text_elements,
+            } => CoreUserInput::Text {
+                text,
+                text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
             UserInput::Image { url } => CoreUserInput::Image { image_url: url },
             UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
@@ -1640,10 +1641,12 @@ impl UserInput {
 impl From<CoreUserInput> for UserInput {
     fn from(value: CoreUserInput) -> Self {
         match value {
-            CoreUserInput::Text { text, .. } => UserInput::Text {
+            CoreUserInput::Text {
                 text,
-                // TODO: Thread text element ranges from core into v2 inputs.
-                text_elements: Vec::new(),
+                text_elements,
+            } => UserInput::Text {
+                text,
+                text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
             CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
@@ -1719,25 +1722,6 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    CollabAgentToolCall {
-        /// Unique identifier for this collab tool call.
-        id: String,
-        /// Name of the collab tool that was invoked.
-        tool: CollabAgentTool,
-        /// Current status of the collab tool call.
-        status: CollabAgentToolCallStatus,
-        /// Thread ID of the agent issuing the collab request.
-        sender_thread_id: String,
-        /// Thread ID of the receiving agent, when applicable. In case of spawn operation,
-        /// this correspond to the newly spawned agent.
-        receiver_thread_id: Option<String>,
-        /// Prompt text sent as part of the collab tool call, when available.
-        prompt: Option<String>,
-        /// Last known status of the target agent, when available.
-        agent_state: Option<CollabAgentState>,
-    },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
     WebSearch { id: String, query: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1793,16 +1777,6 @@ pub enum CommandExecutionStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum CollabAgentTool {
-    SpawnAgent,
-    SendInput,
-    Wait,
-    CloseAgent,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct FileUpdateChange {
     pub path: String,
     pub kind: PatchChangeKind,
@@ -1836,66 +1810,6 @@ pub enum McpToolCallStatus {
     InProgress,
     Completed,
     Failed,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum CollabAgentToolCallStatus {
-    InProgress,
-    Completed,
-    Failed,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum CollabAgentStatus {
-    PendingInit,
-    Running,
-    Completed,
-    Errored,
-    Shutdown,
-    NotFound,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CollabAgentState {
-    pub status: CollabAgentStatus,
-    pub message: Option<String>,
-}
-
-impl From<CoreAgentStatus> for CollabAgentState {
-    fn from(value: CoreAgentStatus) -> Self {
-        match value {
-            CoreAgentStatus::PendingInit => Self {
-                status: CollabAgentStatus::PendingInit,
-                message: None,
-            },
-            CoreAgentStatus::Running => Self {
-                status: CollabAgentStatus::Running,
-                message: None,
-            },
-            CoreAgentStatus::Completed(message) => Self {
-                status: CollabAgentStatus::Completed,
-                message,
-            },
-            CoreAgentStatus::Errored(message) => Self {
-                status: CollabAgentStatus::Errored,
-                message: Some(message),
-            },
-            CoreAgentStatus::Shutdown => Self {
-                status: CollabAgentStatus::Shutdown,
-                message: None,
-            },
-            CoreAgentStatus::NotFound => Self {
-                status: CollabAgentStatus::NotFound,
-                message: None,
-            },
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
