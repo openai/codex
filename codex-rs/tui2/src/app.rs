@@ -1550,6 +1550,7 @@ impl App {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.conversation_id(),
+                            self.chat_widget.thread_name(),
                         );
                         match self
                             .server
@@ -2685,6 +2686,7 @@ mod tests {
             id: String::new(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: base_id,
+                thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
