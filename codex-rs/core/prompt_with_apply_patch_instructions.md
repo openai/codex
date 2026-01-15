@@ -276,7 +276,7 @@ If all steps are complete, ensure you call `update_plan` to mark all steps as `c
 
 ## MCP servers
 
-When asked what MCPs are available, check for tools with the `mcp__` prefix and report those back with the server names inferred from those tools.
+MCP servers are accessed via tool calls. MCP tools are provided in the form `mcp__{server_name}__{tool_name}`. When asked what MCPs are available, check the tools with the `mcp__` prefix and report the inferred server names. MCP resources can be enumerated via `list_mcp_resources` (and resource templates via `list_mcp_resource_templates`) and you should include any server descriptions exposed in tool metadata when available.
 
 ## `apply_patch`
 
