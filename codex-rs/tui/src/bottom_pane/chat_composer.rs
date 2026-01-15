@@ -353,7 +353,7 @@ impl ChatComposer {
             self.pending_pastes.push((placeholder, pasted));
         } else if char_count > 1
             // Keep shell commands like `!open /path/to.png` intact (not replacing with [Image]) so they can be run in shell
-            && !self.is_user_shell_command_input()
+            && !self.textarea.text().starts_with('!')
             && self.handle_paste_image_path(pasted.clone())
         {
             self.textarea.insert_str(" ");
@@ -387,10 +387,6 @@ impl ChatComposer {
                 false
             }
         }
-    }
-
-    fn is_user_shell_command_input(&self) -> bool {
-        self.textarea.text().starts_with('!')
     }
 
     /// Enable or disable paste-burst handling.
