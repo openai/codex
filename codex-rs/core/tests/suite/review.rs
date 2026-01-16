@@ -707,6 +707,7 @@ async fn review_history_surfaces_in_parent_session() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: followup.clone(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })

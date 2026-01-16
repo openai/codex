@@ -550,7 +550,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
             content: items
                 .into_iter()
                 .flat_map(|c| match c {
-                    UserInput::Text { text } => vec![ContentItem::InputText { text }],
+                    UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
                     UserInput::Image { image_url } => vec![
                         ContentItem::InputText {
                             text: image_open_tag_text(),

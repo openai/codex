@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -252,4 +254,86 @@ fn bind_mount_read_only(path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn collect_read_only_mount_targets_errors_on_missing_path() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let missing = AbsolutePathBuf::try_from(tempdir.path().join("missing").as_path())
+            .expect("missing path");
+        let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
+        let writable_root = WritableRoot {
+            root,
+            read_only_subpaths: vec![missing],
+        };
+
+        let err = collect_read_only_mount_targets(&[writable_root])
+            .expect_err("expected missing path error");
+        let message = match err {
+            CodexErr::UnsupportedOperation(message) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert_eq!(
+            message,
+            format!(
+                "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running Codex.",
+                path = tempdir.path().join("missing").display()
+            )
+        );
+    }
+
+    #[test]
+    fn collect_read_only_mount_targets_adds_gitdir_for_pointer_file() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let gitdir = tempdir.path().join("actual-gitdir");
+        std::fs::create_dir_all(&gitdir).expect("create gitdir");
+        let dot_git = tempdir.path().join(".git");
+        std::fs::write(&dot_git, format!("gitdir: {}\n", gitdir.display()))
+            .expect("write gitdir pointer");
+        let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
+        let writable_root = WritableRoot {
+            root,
+            read_only_subpaths: vec![
+                AbsolutePathBuf::try_from(dot_git.as_path()).expect("dot git"),
+            ],
+        };
+
+        let targets = collect_read_only_mount_targets(&[writable_root]).expect("collect targets");
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].as_path(), dot_git.as_path());
+        assert_eq!(targets[1].as_path(), gitdir.as_path());
+    }
+
+    #[test]
+    fn collect_read_only_mount_targets_errors_on_invalid_gitdir_pointer() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let dot_git = tempdir.path().join(".git");
+        std::fs::write(&dot_git, "not-a-pointer\n").expect("write invalid pointer");
+        let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
+        let writable_root = WritableRoot {
+            root,
+            read_only_subpaths: vec![
+                AbsolutePathBuf::try_from(dot_git.as_path()).expect("dot git"),
+            ],
+        };
+
+        let err = collect_read_only_mount_targets(&[writable_root])
+            .expect_err("expected invalid pointer error");
+        let message = match err {
+            CodexErr::UnsupportedOperation(message) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert_eq!(
+            message,
+            format!(
+                "Expected {path} to contain a gitdir pointer, but it did not match `gitdir: <path>`.",
+                path = dot_git.display()
+            )
+        );
+    }
 }

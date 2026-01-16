@@ -162,6 +162,13 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
                 ],
                 "structuredContent": {
                     "threadId": params.thread_id,
+                    "text": "File created!",
+                    "content": [
+                        {
+                            "text": "File created!",
+                            "type": "text"
+                        }
+                    ]
                 }
             }),
         },
@@ -323,6 +330,13 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
                 ],
                 "structuredContent": {
                     "threadId": params.thread_id,
+                    "text": "Patch has been applied successfully!",
+                    "content": [
+                        {
+                            "text": "Patch has been applied successfully!",
+                            "type": "text"
+                        }
+                    ]
                 }
             }),
         },
@@ -394,6 +408,13 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
                     .and_then(|v| v.get("threadId"))
                     .and_then(serde_json::Value::as_str)
                     .expect("codex tool response should include structuredContent.threadId"),
+                "text": "Enjoy!",
+                "content": [
+                    {
+                        "text": "Enjoy!",
+                        "type": "text"
+                    }
+                ]
             }
         })
     );
