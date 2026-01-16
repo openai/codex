@@ -1531,72 +1531,62 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::OpenForkPicker => {
-                match crate::resume_picker::run_fork_picker(
-                    tui,
-                    &self.config.codex_home,
-                    &self.config.model_provider_id,
-                    false,
-                )
-                .await?
-                {
-                    SessionSelection::Fork(path) => {
-                        let summary = session_summary(
-                            self.chat_widget.token_usage(),
-                            self.chat_widget.conversation_id(),
-                        );
-                        match self
-                            .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
-                            .await
-                        {
-                            Ok(forked) => {
-                                self.shutdown_current_conversation().await;
-                                let init = crate::chatwidget::ChatWidgetInit {
-                                    config: self.config.clone(),
-                                    frame_requester: tui.frame_requester(),
-                                    app_event_tx: self.app_event_tx.clone(),
-                                    initial_prompt: None,
-                                    initial_images: Vec::new(),
-                                    enhanced_keys_supported: self.enhanced_keys_supported,
-                                    auth_manager: self.auth_manager.clone(),
-                                    models_manager: self.server.get_models_manager(),
-                                    feedback: self.feedback.clone(),
-                                    is_first_run: false,
-                                    model: Some(self.current_model.clone()),
-                                };
-                                self.chat_widget = ChatWidget::new_from_existing(
-                                    init,
-                                    forked.thread,
-                                    forked.session_configured,
-                                );
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
+            AppEvent::ForkCurrentSession => {
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.conversation_id(),
+                );
+                if let Some(path) = self.chat_widget.rollout_path() {
+                    match self
+                        .server
+                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                        .await
+                    {
+                        Ok(forked) => {
+                            self.shutdown_current_conversation().await;
+                            let init = crate::chatwidget::ChatWidgetInit {
+                                config: self.config.clone(),
+                                frame_requester: tui.frame_requester(),
+                                app_event_tx: self.app_event_tx.clone(),
+                                initial_prompt: None,
+                                initial_images: Vec::new(),
+                                enhanced_keys_supported: self.enhanced_keys_supported,
+                                auth_manager: self.auth_manager.clone(),
+                                models_manager: self.server.get_models_manager(),
+                                feedback: self.feedback.clone(),
+                                is_first_run: false,
+                                model: Some(self.current_model.clone()),
+                            };
+                            self.chat_widget = ChatWidget::new_from_existing(
+                                init,
+                                forked.thread,
+                                forked.session_configured,
+                            );
+                            if let Some(summary) = summary {
+                                let mut lines: Vec<Line<'static>> =
+                                    vec![summary.usage_line.clone().into()];
+                                if let Some(command) = summary.resume_command {
+                                    let spans = vec![
+                                        "To continue this session, run ".into(),
+                                        command.cyan(),
+                                    ];
+                                    lines.push(spans.into());
                                 }
-                            }
-                            Err(err) => {
-                                let path_display = path.display();
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to fork session from {path_display}: {err}"
-                                ));
+                                self.chat_widget.add_plain_history_lines(lines);
                             }
                         }
+                        Err(err) => {
+                            let path_display = path.display();
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to fork current session from {path_display}: {err}"
+                            ));
+                        }
                     }
-                    SessionSelection::Exit
-                    | SessionSelection::StartFresh
-                    | SessionSelection::Resume(_) => {}
+                } else {
+                    self.chat_widget
+                        .add_error_message("Current session is not ready to fork yet.".to_string());
                 }
 
-                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
