@@ -87,12 +87,8 @@ impl SkillPopup {
             .into_iter()
             .map(|(idx, indices, _score)| {
                 let skill = &self.skills[idx];
-                let name = truncate_text(&skill.name, 21);
-                let description = skill
-                    .short_description
-                    .as_ref()
-                    .unwrap_or(&skill.description)
-                    .clone();
+                let name = truncate_text(skill_display_name(skill), 21);
+                let description = skill_description(skill).to_string();
                 GenericDisplayRow {
                     name,
                     match_indices: indices,
@@ -117,15 +113,20 @@ impl SkillPopup {
         }
 
         for (idx, skill) in self.skills.iter().enumerate() {
-            if let Some((indices, score)) = fuzzy_match(&skill.name, filter) {
+            let display_name = skill_display_name(skill);
+            if let Some((indices, score)) = fuzzy_match(display_name, filter) {
                 out.push((idx, Some(indices), score));
+            } else if display_name != skill.name
+                && let Some((_indices, score)) = fuzzy_match(&skill.name, filter)
+            {
+                out.push((idx, None, score));
             }
         }
 
         out.sort_by(|a, b| {
             a.2.cmp(&b.2).then_with(|| {
-                let an = &self.skills[a.0].name;
-                let bn = &self.skills[b.0].name;
+                let an = skill_display_name(&self.skills[a.0]);
+                let bn = skill_display_name(&self.skills[b.0]);
                 an.cmp(bn)
             })
         });
@@ -176,4 +177,21 @@ fn skill_popup_hint_line() -> Line<'static> {
         key_hint::plain(KeyCode::Esc).into(),
         " to close".into(),
     ])
+}
+
+fn skill_display_name(skill: &SkillMetadata) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.display_name.as_deref())
+        .unwrap_or(&skill.name)
+}
+
+fn skill_description(skill: &SkillMetadata) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.short_description.as_deref())
+        .or(skill.short_description.as_deref())
+        .unwrap_or(&skill.description)
 }
