@@ -130,8 +130,11 @@ fn disabled_paths_from_stack(
 ) -> HashSet<PathBuf> {
     let mut disabled = HashSet::new();
     let mut configs = HashMap::new();
-    let effective = config_layer_stack.effective_config();
-    let Some(skills_value) = effective.get("skills") else {
+    // Skills config is user-layer only for now; higher-precedence layers are ignored.
+    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+        return disabled;
+    };
+    let Some(skills_value) = user_layer.config.get("skills") else {
         return disabled;
     };
     let skills: SkillsConfig = match skills_value.clone().try_into() {
