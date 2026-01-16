@@ -96,6 +96,10 @@ const VALIDATION_MAX_FINDINGS: usize = 8;
 const VALIDATION_PLAN_CONCURRENCY: usize = 8;
 const VALIDATION_REFINE_CONCURRENCY: usize = 8;
 const VALIDATION_EXEC_CONCURRENCY: usize = 8;
+const VALIDATION_EXEC_TIMEOUT_SECS: u64 = 30 * 60;
+const VALIDATION_PREFLIGHT_TIMEOUT_SECS: u64 = 30 * 60;
+const VALIDATION_CURL_TIMEOUT_SECS: u64 = 60;
+const VALIDATION_PLAYWRIGHT_TIMEOUT_SECS: u64 = 5 * 60;
 const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
 
 const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
@@ -2418,12 +2422,13 @@ fn render_bug_sections(
         if !artifacts.is_empty() {
             composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
         }
-        if let Some(output) = build_validation_output_block(
+        let validation_output = build_validation_output_block(
             &snapshot.bug.validation,
             repo_root,
             output_root,
             expects_asan,
-        ) {
+        );
+        if let Some(output) = validation_output.as_deref() {
             composed.push_str("- **Validation Output:**\n```\n");
             composed.push_str(output.trim());
             composed.push_str("\n```\n");
@@ -2438,6 +2443,17 @@ fn render_bug_sections(
             composed.push_str("- **Control output:**\n```\n");
             composed.push_str(control_snippet.trim());
             composed.push_str("\n```\n");
+        }
+        let poc_artifact = first_validation_poc_artifact(&snapshot.bug.validation);
+        if let Some(exploit) = build_exploit_scenario_block(
+            &snapshot.bug,
+            base_raw,
+            validation_output.as_deref(),
+            poc_artifact.as_deref(),
+        ) {
+            composed.push_str("\n");
+            composed.push_str(exploit.trim());
+            composed.push('\n');
         }
         sections.push(composed);
     }
@@ -8853,6 +8869,160 @@ mod validation_classification_tests {
             "",
         );
         assert_eq!(status, BugValidationStatus::Passed);
+    }
+}
+
+#[cfg(test)]
+mod validation_target_selection_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_bug_snapshot(
+        summary_id: usize,
+        risk_rank: usize,
+        title: &str,
+        severity: &str,
+        verification_types: Vec<String>,
+    ) -> BugSnapshot {
+        BugSnapshot {
+            bug: SecurityReviewBug {
+                summary_id,
+                risk_rank: Some(risk_rank),
+                risk_score: Some(0.0),
+                title: title.to_string(),
+                severity: severity.to_string(),
+                impact: "x".to_string(),
+                likelihood: "x".to_string(),
+                recommendation: "x".to_string(),
+                file: "x.rs#L1-L2".to_string(),
+                blame: None,
+                risk_reason: None,
+                verification_types,
+                vulnerability_tag: Some("idor".to_string()),
+                validation: BugValidationState::default(),
+                assignee_github: None,
+            },
+            original_markdown: format!("# {title}\n\nDetails.\n"),
+        }
+    }
+
+    #[test]
+    fn excludes_web_browser_findings_from_validation_targets() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                make_bug_snapshot(
+                    1,
+                    1,
+                    "Browser-only finding",
+                    "High",
+                    vec!["web_browser".to_string()],
+                ),
+                make_bug_snapshot(2, 2, "API finding", "High", vec!["network_api".to_string()]),
+            ],
+        };
+
+        let targets = build_validation_findings_context(&snapshot);
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
+    }
+
+    #[test]
+    fn empty_when_only_web_browser_findings_present() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![make_bug_snapshot(
+                1,
+                1,
+                "Browser-only finding",
+                "High",
+                vec!["web_browser".to_string()],
+            )],
+        };
+
+        let targets = build_validation_findings_context(&snapshot);
+        assert_eq!(targets.ids, Vec::<BugIdentifier>::new());
+    }
+}
+
+#[cfg(test)]
+mod exploit_scenario_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn extracts_trigger_excerpt_from_validation_output() {
+        let output = r#"
+=== CONTROL ===
+$ ./control_cmd --foo bar
+
+=== TRIGGER ===
+$ ./target_cmd --evil input.bin
+INPUT:
+line1
+line2
+
+done
+"#;
+
+        let excerpt = extract_exploit_trigger_excerpt(output).expect("excerpt");
+        assert!(excerpt.contains("$ ./target_cmd --evil input.bin"));
+        assert!(excerpt.contains("INPUT:"));
+    }
+
+    #[test]
+    fn exploit_scenario_prefers_idor_input_kind() {
+        let bug = SecurityReviewBug {
+            summary_id: 1,
+            risk_rank: Some(1),
+            risk_score: Some(0.0),
+            title: "IDOR in get_user".to_string(),
+            severity: "High".to_string(),
+            impact: "High - Data exposure.".to_string(),
+            likelihood: "High - Remote.".to_string(),
+            recommendation: "x".to_string(),
+            file: "x.rs#L1-L2".to_string(),
+            blame: None,
+            risk_reason: None,
+            verification_types: vec!["network_api".to_string()],
+            vulnerability_tag: Some("idor".to_string()),
+            validation: BugValidationState::default(),
+            assignee_github: None,
+        };
+
+        let kind = infer_exploit_input_kind(&bug, "", Some("$ curl http://example"));
+        assert_eq!(kind, "another user's identifier in an API request");
+    }
+
+    #[test]
+    fn exploit_scenario_includes_poc_or_trigger_excerpt() {
+        let mut validation = BugValidationState::default();
+        validation.status = BugValidationStatus::Passed;
+        let bug = SecurityReviewBug {
+            summary_id: 1,
+            risk_rank: Some(1),
+            risk_score: Some(0.0),
+            title: "Heap overflow".to_string(),
+            severity: "High".to_string(),
+            impact: "High - Crash.".to_string(),
+            likelihood: "High - Remote.".to_string(),
+            recommendation: "x".to_string(),
+            file: "x.rs#L1-L2".to_string(),
+            blame: None,
+            risk_reason: None,
+            verification_types: vec!["crash_poc_release_bin".to_string()],
+            vulnerability_tag: None,
+            validation,
+            assignee_github: None,
+        };
+
+        let scenario =
+            build_exploit_scenario_block(&bug, "", None, Some("/tmp/poc.py")).expect("scenario");
+        assert!(scenario.contains("#### Exploit scenario"));
+        assert!(scenario.contains("PoC artifact"));
     }
 }
 
@@ -15515,6 +15685,231 @@ fn build_validation_output_block(
     }
 }
 
+fn first_validation_poc_artifact(validation: &BugValidationState) -> Option<String> {
+    validation.artifacts.iter().find_map(|artifact| {
+        let trimmed = artifact.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.ends_with(".py") || lower.ends_with(".sh") {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn extract_exploit_trigger_excerpt(output: &str) -> Option<String> {
+    let lines: Vec<&str> = output.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut start_idx = None;
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.to_ascii_lowercase().contains("trigger") {
+            start_idx = Some(idx);
+            break;
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+
+    let mut in_input_block = false;
+    let mut input_lines = 0usize;
+    let mut remaining_lines = 12usize;
+    let max_chars = 1_200usize;
+
+    let push_line = |line: &str, out: &mut Vec<String>, remaining_lines: &mut usize| {
+        if *remaining_lines == 0 {
+            return;
+        }
+        let trimmed = line.trim_end();
+        if trimmed.trim().is_empty() {
+            return;
+        }
+        if out.iter().any(|existing| existing == trimmed) {
+            return;
+        }
+        let current_chars: usize = out.iter().map(|s| s.len() + 1).sum();
+        if current_chars >= max_chars {
+            return;
+        }
+        out.push(trimmed.to_string());
+        *remaining_lines = remaining_lines.saturating_sub(1);
+    };
+
+    let scan_from = start_idx.unwrap_or(0);
+    for line in lines.iter().skip(scan_from) {
+        let trimmed = line.trim_end();
+        let lowered = trimmed.trim_start().to_ascii_lowercase();
+
+        if (lowered.contains("=== control") || lowered.contains("=== setup")) && !out.is_empty() {
+            break;
+        }
+
+        if lowered.starts_with("input:") {
+            in_input_block = true;
+            input_lines = 0;
+            push_line("INPUT:", &mut out, &mut remaining_lines);
+            continue;
+        }
+
+        if in_input_block {
+            if trimmed.trim().is_empty() {
+                in_input_block = false;
+                continue;
+            }
+            if lowered.contains("=== ") && lowered.contains(" ===") {
+                in_input_block = false;
+                continue;
+            }
+            if input_lines < 8 {
+                push_line(trimmed, &mut out, &mut remaining_lines);
+                input_lines += 1;
+            } else {
+                in_input_block = false;
+            }
+            continue;
+        }
+
+        let leading = trimmed.trim_start();
+        if leading.starts_with("$ ") || leading.starts_with("Run:") {
+            push_line(trimmed, &mut out, &mut remaining_lines);
+        }
+
+        if remaining_lines == 0 {
+            break;
+        }
+    }
+
+    if out.is_empty() && start_idx.is_some() {
+        let mut remaining_lines = 3usize;
+        for line in lines.iter() {
+            let trimmed = line.trim_end();
+            if trimmed.trim_start().starts_with("$ ") {
+                push_line(trimmed, &mut out, &mut remaining_lines);
+            }
+            if remaining_lines == 0 {
+                break;
+            }
+        }
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.join("\n"))
+    }
+}
+
+fn infer_exploit_input_kind(
+    bug: &SecurityReviewBug,
+    base_markdown: &str,
+    validation_output: Option<&str>,
+) -> &'static str {
+    let tag = bug
+        .vulnerability_tag
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if tag.contains("idor") {
+        return "another user's identifier in an API request";
+    }
+    if tag.contains("sql-injection") {
+        return "a crafted request parameter containing SQL injection payloads";
+    }
+    if tag.starts_with("path-traversal") {
+        return "a crafted path containing traversal sequences (e.g. `../`)";
+    }
+
+    let title = bug.title.trim().to_ascii_lowercase();
+    let validation = validation_output.unwrap_or("");
+    let haystack = format!("{title}\n{tag}\n{base_markdown}\n{validation}").to_ascii_lowercase();
+
+    if haystack.contains("ldap") {
+        return "attacker-controlled LDAP/CRL distribution-point metadata";
+    }
+    if haystack.contains("hkps://")
+        || haystack.contains("hkp://")
+        || haystack.contains("keyserver")
+        || haystack.contains("dirmngr")
+    {
+        return "a malicious keyserver/network response that the target fetches";
+    }
+    if haystack.contains(".tar") || haystack.contains("tar") {
+        return "a crafted archive (e.g. a `.tar` file)";
+    }
+    if haystack.contains(".png")
+        || haystack.contains(".jpg")
+        || haystack.contains(".jpeg")
+        || haystack.contains(".gif")
+    {
+        return "a crafted media file";
+    }
+    if crash_poc_category(bug).is_some() {
+        return "a crafted input that reaches a memory-unsafe parsing/execution path";
+    }
+    if bug
+        .verification_types
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("network_api"))
+    {
+        return "a crafted network request";
+    }
+
+    "attacker-controlled input to a shipped entrypoint"
+}
+
+fn build_exploit_scenario_block(
+    bug: &SecurityReviewBug,
+    base_markdown: &str,
+    validation_output: Option<&str>,
+    poc_artifact: Option<&str>,
+) -> Option<String> {
+    let trigger_excerpt = validation_output.and_then(extract_exploit_trigger_excerpt);
+    if trigger_excerpt.is_none() && poc_artifact.is_none() {
+        return None;
+    }
+
+    let input_kind = infer_exploit_input_kind(bug, base_markdown, validation_output);
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("#### Exploit scenario".to_string());
+    lines.push(String::new());
+    lines.push(format!(
+        "An external attacker can realistically trigger this by supplying {input_kind}."
+    ));
+    lines.push(String::new());
+
+    let status = validation_status_label(&bug.validation);
+    lines.push(format!("- **Validation status:** {status}"));
+
+    let impact = bug.impact.lines().next().unwrap_or("").trim();
+    if !impact.is_empty() {
+        lines.push(format!("- **Impact:** {impact}"));
+    }
+
+    if let Some(poc) = poc_artifact {
+        lines.push(format!("- **PoC artifact:** `{poc}`"));
+    }
+
+    if let Some(excerpt) = trigger_excerpt.as_deref() {
+        lines.push("- **Trigger example (from validation output):**".to_string());
+        lines.push("```".to_string());
+        lines.push(excerpt.trim().to_string());
+        lines.push("```".to_string());
+    }
+
+    Some(lines.join("\n"))
+}
+
 fn looks_like_build_failure(stdout: &str, stderr: &str) -> bool {
     let stdout_lower = stdout.to_ascii_lowercase();
     let stderr_lower = stderr.to_ascii_lowercase();
@@ -15594,6 +15989,21 @@ fn classify_python_validation_status(
 async fn command_output(mut command: Command) -> Result<std::process::Output, std::io::Error> {
     command.kill_on_drop(true);
     command.output().await
+}
+
+enum CommandOutputOutcome {
+    Completed(std::process::Output),
+    TimedOut,
+}
+
+async fn command_output_with_timeout(
+    command: Command,
+    timeout: Duration,
+) -> Result<CommandOutputOutcome, std::io::Error> {
+    match tokio::time::timeout(timeout, command_output(command)).await {
+        Ok(output) => Ok(CommandOutputOutcome::Completed(output?)),
+        Err(_elapsed) => Ok(CommandOutputOutcome::TimedOut),
+    }
 }
 
 async fn write_validation_output_files(
@@ -15693,6 +16103,7 @@ async fn execute_bug_command(
 
     match plan.request.tool {
         BugVerificationTool::Curl => {
+            let timeout = Duration::from_secs(VALIDATION_CURL_TIMEOUT_SECS);
             let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
@@ -15736,8 +16147,8 @@ async fn execute_bug_command(
                     .arg(control_target)
                     .current_dir(&repo_path);
 
-                match control_cmd.output().await {
-                    Ok(output) => {
+                match command_output_with_timeout(control_cmd, timeout).await {
+                    Ok(CommandOutputOutcome::Completed(output)) => {
                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                         let success = output.status.success();
@@ -15756,6 +16167,24 @@ async fn execute_bug_command(
                             "control",
                             &stdout,
                             &stderr,
+                        )
+                        .await;
+                        validation.control_stdout_path = Some(stdout_path);
+                        validation.control_stderr_path = Some(stderr_path);
+                    }
+                    Ok(CommandOutputOutcome::TimedOut) => {
+                        let summary = format!(
+                            "curl control timed out after {}",
+                            fmt_elapsed_compact(timeout.as_secs())
+                        );
+                        validation.control_summary = Some(summary.clone());
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            &bug_work_dir,
+                            &repo_path,
+                            &file_stem,
+                            "control",
+                            "",
+                            summary.as_str(),
                         )
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
@@ -15782,8 +16211,8 @@ async fn execute_bug_command(
                 .arg(&target)
                 .current_dir(&repo_path);
 
-            match command.output().await {
-                Ok(output) => {
+            match command_output_with_timeout(command, timeout).await {
+                Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -15819,6 +16248,28 @@ async fn execute_bug_command(
                         "{}: curl exited with status {}",
                         label, output.status
                     ));
+                }
+                Ok(CommandOutputOutcome::TimedOut) => {
+                    let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    let summary = format!(
+                        "Timed out after {duration_label} while running curl; unable to validate."
+                    );
+                    validation.summary = Some(summary.clone());
+                    validation.output_snippet =
+                        Some(truncate_text(summary.as_str(), VALIDATION_OUTPUT_GRAPHEMES));
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        "",
+                        summary.as_str(),
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
+                    logs.push(format!("{label}: curl timed out after {duration_label}"));
                 }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
@@ -15908,8 +16359,9 @@ async fn execute_bug_command(
             }
             validation.repro_steps.push(format!("Run: `{cmd}`"));
 
-            match command_output(command).await {
-                Ok(output) => {
+            let timeout = Duration::from_secs(VALIDATION_EXEC_TIMEOUT_SECS);
+            match command_output_with_timeout(command, timeout).await {
+                Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -15978,6 +16430,28 @@ async fn execute_bug_command(
                         label, output.status
                     ));
                 }
+                Ok(CommandOutputOutcome::TimedOut) => {
+                    let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    let summary = format!(
+                        "Timed out after {duration_label} while running python validation; unable to validate."
+                    );
+                    validation.summary = Some(summary.clone());
+                    validation.output_snippet =
+                        Some(truncate_text(summary.as_str(), VALIDATION_OUTPUT_GRAPHEMES));
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        "",
+                        summary.as_str(),
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
+                    logs.push(format!("{label}: python timed out after {duration_label}"));
+                }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run python: {err}"));
@@ -15986,6 +16460,7 @@ async fn execute_bug_command(
             }
         }
         BugVerificationTool::Playwright => {
+            let timeout = Duration::from_secs(VALIDATION_PLAYWRIGHT_TIMEOUT_SECS);
             let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
@@ -16033,8 +16508,8 @@ async fn execute_bug_command(
                     .arg(&control_screenshot_path)
                     .current_dir(&repo_path);
 
-                match control_cmd.output().await {
-                    Ok(output) => {
+                match command_output_with_timeout(control_cmd, timeout).await {
+                    Ok(CommandOutputOutcome::Completed(output)) => {
                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                         let success = output.status.success();
@@ -16068,6 +16543,24 @@ async fn execute_bug_command(
                         validation.control_stdout_path = Some(stdout_path);
                         validation.control_stderr_path = Some(stderr_path);
                     }
+                    Ok(CommandOutputOutcome::TimedOut) => {
+                        let summary = format!(
+                            "playwright control timed out after {}",
+                            fmt_elapsed_compact(timeout.as_secs())
+                        );
+                        validation.control_summary = Some(summary.clone());
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            &bug_work_dir,
+                            &repo_path,
+                            &file_stem,
+                            "control",
+                            "",
+                            summary.as_str(),
+                        )
+                        .await;
+                        validation.control_stdout_path = Some(stdout_path);
+                        validation.control_stderr_path = Some(stderr_path);
+                    }
                     Err(err) => {
                         validation.control_summary =
                             Some(format!("Failed to run playwright control: {err}"));
@@ -16089,8 +16582,8 @@ async fn execute_bug_command(
                 .arg(&screenshot_path)
                 .current_dir(&repo_path);
 
-            match command.output().await {
-                Ok(output) => {
+            match command_output_with_timeout(command, timeout).await {
+                Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -16133,6 +16626,30 @@ async fn execute_bug_command(
                     logs.push(format!(
                         "{}: playwright exited with status {}",
                         label, output.status
+                    ));
+                }
+                Ok(CommandOutputOutcome::TimedOut) => {
+                    let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                    validation.status = BugValidationStatus::UnableToValidate;
+                    let summary = format!(
+                        "Timed out after {duration_label} while running playwright; unable to validate."
+                    );
+                    validation.summary = Some(summary.clone());
+                    validation.output_snippet =
+                        Some(truncate_text(summary.as_str(), VALIDATION_OUTPUT_GRAPHEMES));
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &bug_work_dir,
+                        &repo_path,
+                        &file_stem,
+                        "repro",
+                        "",
+                        summary.as_str(),
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
+                    logs.push(format!(
+                        "{label}: playwright timed out after {duration_label}"
                     ));
                 }
                 Err(err) => {
@@ -16434,6 +16951,9 @@ fn build_validation_findings_context(
         .bugs
         .iter()
         .filter(|b| {
+            if has_verification_type(&b.bug, "web_browser") {
+                return false;
+            }
             let sev = b.bug.severity.to_ascii_lowercase();
             let is_high = sev.contains("critical") || sev.contains("high");
             if !is_high {
@@ -16466,7 +16986,11 @@ fn build_validation_findings_context(
     let mut high_risk: Vec<&BugSnapshot> = snapshot
         .bugs
         .iter()
-        .filter(|b| is_high_risk(&b.bug) && crash_poc_category(&b.bug) != Some("crash_poc_func"))
+        .filter(|b| {
+            is_high_risk(&b.bug)
+                && crash_poc_category(&b.bug) != Some("crash_poc_func")
+                && !has_verification_type(&b.bug, "web_browser")
+        })
         .collect();
     high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
     for item in high_risk {
@@ -17410,8 +17934,9 @@ async fn run_asan_validation(
                     );
 
                     let start = Instant::now();
-                    match command_output(command).await {
-                        Ok(output) => {
+                    let timeout = Duration::from_secs(VALIDATION_PREFLIGHT_TIMEOUT_SECS);
+                    match command_output_with_timeout(command, timeout).await {
+                        Ok(CommandOutputOutcome::Completed(output)) => {
                             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                             let success = output.status.success();
@@ -17444,6 +17969,30 @@ async fn run_asan_validation(
                                 });
                                 break;
                             }
+                        }
+                        Ok(CommandOutputOutcome::TimedOut) => {
+                            let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                            let message = format!(
+                                "Timed out after {duration_label} while running `{command_label}`."
+                            );
+                            let file_stem = file_stem_for_command(program, args);
+                            let (stdout_path, stderr_path) = write_validation_output_files(
+                                work_dir,
+                                repo_root,
+                                &file_stem,
+                                "build",
+                                "",
+                                message.as_str(),
+                            )
+                            .await;
+                            attempt_failure = Some(ValidationBuildFailure {
+                                command: command_label,
+                                summary: message,
+                                stdout_path,
+                                stderr_path,
+                                output_snippet: None,
+                            });
+                            break;
                         }
                         Err(err) => {
                             let message = format!("Failed to run `{command_label}`: {err}");
