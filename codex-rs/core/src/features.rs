@@ -407,10 +407,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Beta {
             name: "Powershell UTF-8 support",
             menu_description: "Enable UTF-8 output in Powershell.",
-            announcement: "Try UTF-8 output in Powershell for better Unicode support. Enable in /experimental!",
         },
         #[cfg(windows)]
-        default_enabled: false,
+        default_enabled: true,
         #[cfg(not(windows))]
         stage: Stage::Experimental,
         #[cfg(not(windows))]
