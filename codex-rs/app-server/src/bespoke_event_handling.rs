@@ -64,8 +64,6 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::UndoCompletedNotification;
-use codex_app_server_protocol::UndoStartedNotification;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
@@ -114,33 +112,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
-        EventMsg::UndoStarted(ev) => {
-            if matches!(api_version, ApiVersion::V2) {
-                outgoing
-                    .send_server_notification(ServerNotification::UndoStarted(
-                        UndoStartedNotification {
-                            thread_id: conversation_id.to_string(),
-                            turn_id: event_turn_id.clone(),
-                            message: ev.message,
-                        },
-                    ))
-                    .await;
-            }
-        }
-        EventMsg::UndoCompleted(ev) => {
-            if matches!(api_version, ApiVersion::V2) {
-                outgoing
-                    .send_server_notification(ServerNotification::UndoCompleted(
-                        UndoCompletedNotification {
-                            thread_id: conversation_id.to_string(),
-                            turn_id: event_turn_id.clone(),
-                            success: ev.success,
-                            message: ev.message,
-                        },
-                    ))
-                    .await;
-            }
-        }
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(
                 conversation_id,

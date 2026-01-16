@@ -121,17 +121,9 @@ client_request_definitions! {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
     },
-    ThreadUndo => "thread/undo" {
-        params: v2::ThreadUndoParams,
-        response: v2::ThreadUndoResponse,
-    },
     ThreadCompact => "thread/compact" {
         params: v2::ThreadCompactParams,
         response: v2::ThreadCompactResponse,
-    },
-    ThreadRewind => "thread/rewind" {
-        params: v2::ThreadRewindParams,
-        response: v2::ThreadRewindResponse,
     },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
@@ -571,8 +563,6 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
-    UndoStarted => "thread/undo/started" (v2::UndoStartedNotification),
-    UndoCompleted => "thread/undo/completed" (v2::UndoCompletedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),

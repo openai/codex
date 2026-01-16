@@ -102,15 +102,10 @@ use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
-use codex_app_server_protocol::ThreadRewindParams;
-use codex_app_server_protocol::ThreadRewindResponse;
-use codex_app_server_protocol::ThreadRewindScope;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
-use codex_app_server_protocol::ThreadUndoParams;
-use codex_app_server_protocol::ThreadUndoResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -308,13 +303,27 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        Config::load_with_cli_overrides(self.cli_overrides.clone())
-            .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+        self.load_latest_config_for_cwd(None).await
+    }
+
+    async fn load_latest_config_for_cwd(
+        &self,
+        cwd: Option<PathBuf>,
+    ) -> Result<Config, JSONRPCErrorError> {
+        let harness_overrides = ConfigOverrides {
+            cwd,
+            ..Default::default()
+        };
+        Config::load_with_cli_overrides_and_harness_overrides(
+            self.cli_overrides.clone(),
+            harness_overrides,
+        )
+        .await
+        .map_err(|err| JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("failed to reload config: {err}"),
+            data: None,
+        })
     }
 
     fn review_request_from_target(
@@ -397,14 +406,8 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
             }
-            ClientRequest::ThreadUndo { request_id, params } => {
-                self.thread_undo(request_id, params).await;
-            }
             ClientRequest::ThreadCompact { request_id, params } => {
                 self.thread_compact(request_id, params).await;
-            }
-            ClientRequest::ThreadRewind { request_id, params } => {
-                self.thread_rewind(request_id, params).await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(request_id, params).await;
@@ -2010,18 +2013,6 @@ impl CodexMessageProcessor {
                 }
             };
 
-        let thread_history = match RolloutRecorder::get_rollout_history(&rollout_path).await {
-            Ok(initial_history) => initial_history,
-            Err(err) => {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!("failed to load rollout `{}`: {err}", rollout_path.display()),
-                )
-                .await;
-                return;
-            }
-        };
-
         let overrides_requested = model.is_some()
             || model_provider.is_some()
             || cwd.is_some()
@@ -2065,13 +2056,65 @@ impl CodexMessageProcessor {
 
         self.cancel_listeners_for_thread(thread_id);
         if let Some(old) = self.thread_manager.remove_thread(&thread_id).await {
-            let _ = old.submit(Op::Shutdown).await;
+            info!("thread {thread_id} was active; shutting down before reload");
+            let old_clone = old.clone();
+            let notify = Arc::new(tokio::sync::Notify::new());
+            let notify_clone = notify.clone();
+
+            // Establish the listener for ShutdownComplete before submitting Shutdown so it is not missed.
+            let is_shutdown = tokio::spawn(async move {
+                // Create the notified future outside the loop to avoid losing notifications.
+                let notified = notify_clone.notified();
+                tokio::pin!(notified);
+                loop {
+                    select! {
+                        _ = &mut notified => { break; }
+                        event = old_clone.next_event() => {
+                            match event {
+                                Ok(event) => {
+                                    if matches!(event.msg, EventMsg::ShutdownComplete) { break; }
+                                }
+                                // Break on errors to avoid tight loops when the agent loop has exited.
+                                Err(_) => { break; }
+                            }
+                        }
+                    }
+                }
+            });
+            match old.submit(Op::Shutdown).await {
+                Ok(_) => {
+                    select! {
+                        _ = is_shutdown => {}
+                        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                            warn!("thread {thread_id} shutdown timed out; reloading from disk anyway");
+                            // Wake any waiter; use notify_waiters to avoid missing the signal.
+                            notify.notify_waiters();
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!("failed to submit Shutdown to thread {thread_id}: {err}");
+                    notify.notify_waiters();
+                }
+            }
         }
         {
             self.pending_interrupts.lock().await.remove(&thread_id);
             self.pending_rollbacks.lock().await.remove(&thread_id);
             self.turn_summary_store.lock().await.remove(&thread_id);
         }
+
+        let thread_history = match RolloutRecorder::get_rollout_history(&rollout_path).await {
+            Ok(initial_history) => initial_history,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                )
+                .await;
+                return;
+            }
+        };
 
         let fallback_model_provider = config.model_provider_id.clone();
         match self
@@ -2156,26 +2199,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_undo(&mut self, request_id: RequestId, params: ThreadUndoParams) {
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        if let Err(err) = thread.submit(Op::Undo).await {
-            self.send_internal_error(request_id, format!("failed to submit undo: {err}"))
-                .await;
-            return;
-        }
-
-        self.outgoing
-            .send_response(request_id, ThreadUndoResponse {})
-            .await;
-    }
-
     async fn thread_compact(&mut self, request_id: RequestId, params: ThreadCompactParams) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
@@ -2193,150 +2216,6 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_response(request_id, ThreadCompactResponse {})
-            .await;
-    }
-
-    async fn thread_rewind(&mut self, request_id: RequestId, params: ThreadRewindParams) {
-        let ThreadRewindParams {
-            thread_id,
-            turn_index,
-            scope,
-        } = params;
-
-        if turn_index == 0 {
-            self.send_invalid_request_error(request_id, "turn_index must be >= 1".to_string())
-                .await;
-            return;
-        }
-
-        let thread_id = match ThreadId::from_string(&thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("invalid thread id: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("no rollout found for thread id {thread_id}"),
-                    )
-                    .await;
-                    return;
-                }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
-
-        self.cancel_listeners_for_thread(thread_id);
-        if let Some(old) = self.thread_manager.remove_thread(&thread_id).await {
-            let _ = old.submit(Op::Shutdown).await;
-        }
-        {
-            self.pending_interrupts.lock().await.remove(&thread_id);
-            self.pending_rollbacks.lock().await.remove(&thread_id);
-            self.turn_summary_store.lock().await.remove(&thread_id);
-        }
-
-        let latest_config = match self.load_latest_config().await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
-
-        let (truncated, restore_target) =
-            match build_rewind_plan(&rollout_path, turn_index as usize).await {
-                Ok(v) => v,
-                Err(err) => {
-                    self.send_invalid_request_error(request_id, err).await;
-                    return;
-                }
-            };
-
-        let mut restored_snapshot: Option<String> = None;
-        if matches!(scope, ThreadRewindScope::Code | ThreadRewindScope::Both) {
-            let Some((cwd, ghost_commit)) = restore_target else {
-                self.send_invalid_request_error(
-                    request_id,
-                    "no ghost snapshot available for requested turn; ensure undo is enabled and a snapshot was captured".to_string(),
-                )
-                .await;
-                return;
-            };
-
-            let ghost_snapshot_config = latest_config.ghost_snapshot.clone();
-            let restored_commit_id = ghost_commit.id().to_string();
-            let ghost_commit_for_restore = ghost_commit.clone();
-            let restore_result = tokio::task::spawn_blocking(move || {
-                let options = codex_git::RestoreGhostCommitOptions::new(&cwd)
-                    .ghost_snapshot(ghost_snapshot_config);
-                codex_git::restore_ghost_commit_with_options(&options, &ghost_commit_for_restore)
-            })
-            .await;
-
-            match restore_result {
-                Ok(Ok(())) => {
-                    restored_snapshot = Some(restored_commit_id);
-                }
-                Ok(Err(err)) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to restore ghost snapshot: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("ghost snapshot restore task panicked: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            }
-        }
-
-        if matches!(
-            scope,
-            ThreadRewindScope::Conversation | ThreadRewindScope::Both
-        ) && let Err(err) = tokio::fs::write(&rollout_path, truncated).await
-        {
-            self.send_internal_error(
-                request_id,
-                format!(
-                    "failed to rewrite rollout `{}`: {err}",
-                    rollout_path.display()
-                ),
-            )
-            .await;
-            return;
-        }
-
-        self.outgoing
-            .send_response(request_id, ThreadRewindResponse { restored_snapshot })
             .await;
     }
 
@@ -2925,7 +2804,34 @@ impl CodexMessageProcessor {
         params: ListMcpServerStatusParams,
     ) {
         let outgoing = Arc::clone(&self.outgoing);
-        let config = match self.load_latest_config().await {
+        let cwd_override = match params.cwd.as_deref() {
+            Some(cwd) => {
+                let raw = PathBuf::from(cwd);
+                if raw.is_relative() {
+                    match std::env::current_dir() {
+                        Ok(current) => Some(current.join(raw)),
+                        Err(err) => {
+                            self.outgoing
+                                .send_error(
+                                    request_id,
+                                    JSONRPCErrorError {
+                                        code: INTERNAL_ERROR_CODE,
+                                        message: format!("failed to resolve cwd: {err}"),
+                                        data: None,
+                                    },
+                                )
+                                .await;
+                            return;
+                        }
+                    }
+                } else {
+                    Some(raw)
+                }
+            }
+            None => None,
+        };
+
+        let config = match self.load_latest_config_for_cwd(cwd_override).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4601,91 +4507,6 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         git_info,
         turns: Vec::new(),
     }
-}
-
-async fn build_rewind_plan(
-    rollout_path: &Path,
-    turn_index: usize,
-) -> Result<(String, Option<(PathBuf, codex_git::GhostCommit)>), String> {
-    use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::RolloutLine;
-
-    let text = tokio::fs::read_to_string(rollout_path)
-        .await
-        .map_err(|err| format!("failed to read rollout `{}`: {err}", rollout_path.display()))?;
-
-    let mut lines: Vec<RolloutLine> = Vec::new();
-    for (idx, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let parsed: RolloutLine = serde_json::from_str(line).map_err(|err| {
-            format!(
-                "failed to parse rollout `{}` at line {}: {err}",
-                rollout_path.display(),
-                idx + 1
-            )
-        })?;
-        lines.push(parsed);
-    }
-
-    let mut user_positions: Vec<usize> = Vec::new();
-    let mut snapshot_by_user_index: HashMap<usize, codex_git::GhostCommit> = HashMap::new();
-    let mut cwd_by_user_index: HashMap<usize, PathBuf> = HashMap::new();
-    let mut current_user_index: usize = 0;
-    let mut current_cwd: Option<PathBuf> = None;
-
-    for (idx, rollout_line) in lines.iter().enumerate() {
-        match &rollout_line.item {
-            RolloutItem::TurnContext(tc) => {
-                current_cwd = Some(tc.cwd.clone());
-            }
-            RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) if role == "user" => {
-                current_user_index += 1;
-                user_positions.push(idx);
-                if let Some(cwd) = current_cwd.clone() {
-                    cwd_by_user_index.insert(current_user_index, cwd);
-                }
-            }
-            RolloutItem::ResponseItem(ResponseItem::GhostSnapshot { ghost_commit }) => {
-                if current_user_index > 0 {
-                    snapshot_by_user_index.insert(current_user_index, ghost_commit.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if user_positions.len() < turn_index {
-        return Err(format!(
-            "turn_index out of range: requested {turn_index}, but only {} turns exist",
-            user_positions.len()
-        ));
-    }
-
-    let cut_idx = user_positions[turn_index - 1];
-    let mut truncated_lines = Vec::new();
-    for line in lines.into_iter().take(cut_idx) {
-        let serialized = serde_json::to_string(&line)
-            .map_err(|err| format!("failed to serialize rollout line: {err}"))?;
-        truncated_lines.push(serialized);
-    }
-
-    let truncated = if truncated_lines.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", truncated_lines.join("\n"))
-    };
-
-    let restore_target = match (
-        cwd_by_user_index.get(&turn_index),
-        snapshot_by_user_index.get(&turn_index),
-    ) {
-        (Some(cwd), Some(commit)) => Some((cwd.clone(), commit.clone())),
-        _ => None,
-    };
-
-    Ok((truncated, restore_target))
 }
 
 #[cfg(test)]
