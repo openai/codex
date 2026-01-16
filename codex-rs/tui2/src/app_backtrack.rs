@@ -10,6 +10,10 @@
 //! asking `ChatWidget` for an active-cell cache key and transcript lines and by passing them into
 //! `TranscriptOverlay::sync_live_tail`. This preserves the invariant that the overlay reflects
 //! both committed history and in-flight activity without changing flush or coalescing behavior.
+//!
+//! Keybindings in backtrack preview mode:
+//! - `Enter`: Rollback conversation only (does not revert file changes)
+//! - `Ctrl+Enter`: Rollback conversation AND revert file changes (requires `undo` feature enabled)
 
 use std::any::TypeId;
 use std::sync::Arc;
@@ -26,6 +30,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
@@ -48,7 +53,7 @@ pub(crate) struct BacktrackSelection {
 
 impl App {
     /// Route overlay events when transcript overlay is active.
-    /// - If backtrack preview is active: Esc steps selection; Enter confirms.
+    /// - If backtrack preview is active: Esc steps selection; Enter confirms; Ctrl+Enter confirms with file undo.
     /// - Otherwise: Esc begins preview; all other events forward to overlay.
     ///   interactions (Esc to step target, Enter to confirm) and overlay lifecycle.
     pub(crate) async fn handle_backtrack_overlay_event(
@@ -66,6 +71,17 @@ impl App {
                     self.overlay_step_backtrack(tui, event)?;
                     Ok(true)
                 }
+                // Ctrl+Enter: rollback conversation AND revert file changes
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    kind: KeyEventKind::Press,
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlay_confirm_backtrack_with_undo(tui);
+                    Ok(true)
+                }
+                // Enter: rollback conversation only
                 TuiEvent::Key(KeyEvent {
                     code: KeyCode::Enter,
                     kind: KeyEventKind::Press,
@@ -112,6 +128,20 @@ impl App {
     }
 
     pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
+        self.apply_backtrack_rollback_inner(selection, false);
+    }
+
+    /// Stage a backtrack with file undo - rollback conversation AND revert file changes.
+    pub(crate) fn apply_backtrack_rollback_with_undo(&mut self, selection: BacktrackSelection) {
+        self.apply_backtrack_rollback_inner(selection, true);
+    }
+
+    /// Internal implementation for backtrack rollback with optional file undo.
+    ///
+    /// Note: Currently only undoes the most recent ghost snapshot. For multi-turn
+    /// backtrack, earlier file changes may remain on disk. A bulk undo operation
+    /// would require changes to the core protocol (e.g., Op::UndoMultiple).
+    fn apply_backtrack_rollback_inner(&mut self, selection: BacktrackSelection, with_undo: bool) {
         let user_total = user_count(&self.transcript_cells);
         if user_total == 0 {
             return;
@@ -121,6 +151,14 @@ impl App {
         let num_turns = u32::try_from(num_turns).unwrap_or(u32::MAX);
         if num_turns == 0 {
             return;
+        }
+
+        // Trigger file undo before rolling back conversation.
+        // Note: Op::Undo only restores the most recent ghost snapshot. For multi-turn
+        // backtrack, this is a partial solution - earlier turns' file changes remain.
+        // A proper fix would require Op::UndoMultiple or sequential async undo.
+        if with_undo {
+            self.chat_widget.submit_op(Op::Undo);
         }
 
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
@@ -311,6 +349,18 @@ impl App {
         self.close_transcript_overlay(tui);
         if let Some(selection) = selection {
             self.apply_backtrack_rollback(selection);
+            self.render_transcript_once(tui);
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
+    /// Handle Ctrl+Enter in overlay backtrack preview: confirm selection with file undo.
+    fn overlay_confirm_backtrack_with_undo(&mut self, tui: &mut tui::Tui) {
+        let nth_user_message = self.backtrack.nth_user_message;
+        let selection = self.backtrack_selection(nth_user_message);
+        self.close_transcript_overlay(tui);
+        if let Some(selection) = selection {
+            self.apply_backtrack_rollback_with_undo(selection);
             self.render_transcript_once(tui);
             tui.frame_requester().schedule_frame();
         }
