@@ -20,6 +20,10 @@ If web validation is enabled:
 - You may choose `tool:"curl"` or `tool:"playwright"` with a `target` URL/path to validate against the deployed app.
 - Only make requests to the provided target origin; do not contact other hosts.
 - Any provided credential headers will be applied automatically; do NOT print credential values.
+- If authentication is required and no creds were provided, prefer `tool:"python"`:
+  - Create a fresh test account (or login) against the deployed target.
+  - Write reusable auth headers to `CODEX_WEB_CREDS_OUT_PATH` as JSON: `{"headers":{...}}` (so the run is reproducible).
+  - Record how to re-run (target URL and creds file path) in `TESTING.md` under the “Validation target” section if feasible.
 
 For each finding listed in Context, emit exactly one JSON line keyed by its `id_kind`/`id_value`:
 - If you can provide a safe reproduction, emit `tool:"python"` with an inline script in `script`, or `tool:"curl"`/`tool:"playwright"` with a `target` when validating against a deployed URL.

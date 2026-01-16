@@ -104,6 +104,10 @@ const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
 
 const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
 const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles.";
+const VALIDATION_TARGET_SECTION_HEADER: &str = "## Validation target";
+const VALIDATION_TARGET_SECTION_INTRO: &str =
+    "This section records the deployed target URL and any credentials used for web validation.";
+const WEB_VALIDATION_CREDS_FILE_NAME: &str = "web_validation_creds.json";
 
 //
 
@@ -10501,6 +10505,59 @@ fn merge_validation_testing_md(existing: &str, additions: &[String]) -> Option<S
     Some(out)
 }
 
+fn merge_validation_target_md(existing: &str, lines: &[String]) -> Option<String> {
+    let mut section_lines: Vec<String> = lines
+        .iter()
+        .map(|line| line.trim_end())
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    if section_lines.is_empty() {
+        return None;
+    }
+
+    section_lines.insert(0, String::new());
+    section_lines.insert(0, VALIDATION_TARGET_SECTION_INTRO.to_string());
+    section_lines.insert(0, VALIDATION_TARGET_SECTION_HEADER.to_string());
+
+    let mut file_lines: Vec<String> = existing.lines().map(str::to_string).collect();
+    let header_index = file_lines
+        .iter()
+        .position(|line| line.trim() == VALIDATION_TARGET_SECTION_HEADER);
+
+    match header_index {
+        None => {
+            if !file_lines.is_empty() && !file_lines.last().is_some_and(|l| l.trim().is_empty()) {
+                file_lines.push(String::new());
+            }
+            file_lines.extend(section_lines);
+        }
+        Some(header_index) => {
+            let section_end = file_lines
+                .iter()
+                .enumerate()
+                .skip(header_index + 1)
+                .find(|(_, line)| line.trim_start().starts_with("## "))
+                .map(|(index, _)| index)
+                .unwrap_or(file_lines.len());
+            file_lines.splice(header_index..section_end, section_lines);
+        }
+    }
+
+    let mut out = file_lines.join("\n");
+    out.push('\n');
+
+    let mut existing_normalized = existing.to_string();
+    if !existing_normalized.ends_with('\n') {
+        existing_normalized.push('\n');
+    }
+    if out == existing_normalized {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 async fn apply_validation_testing_md_additions(
     testing_path: &Path,
     repo_root: &Path,
@@ -10545,6 +10602,98 @@ async fn apply_validation_testing_md_additions(
             );
         }
     }
+}
+
+async fn apply_validation_target_md_section(
+    testing_path: &Path,
+    repo_root: &Path,
+    lines: &[String],
+    progress_sender: &Option<AppEventSender>,
+    logs: &mut Vec<String>,
+) {
+    let merged = tokio_fs::read_to_string(testing_path)
+        .await
+        .ok()
+        .and_then(|existing| merge_validation_target_md(&existing, lines));
+
+    let Some(contents) = merged else {
+        return;
+    };
+
+    if let Some(parent) = testing_path.parent() {
+        let _ = tokio_fs::create_dir_all(parent).await;
+    }
+
+    match tokio_fs::write(testing_path, contents.as_bytes()).await {
+        Ok(_) => {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!(
+                    "Updated validation target notes at {}.",
+                    display_path_for(testing_path, repo_root)
+                ),
+            );
+        }
+        Err(err) => {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!(
+                    "Failed to update validation target notes at {}: {err}",
+                    display_path_for(testing_path, repo_root)
+                ),
+            );
+        }
+    }
+}
+
+fn build_web_validation_target_section_lines(
+    repo_root: &Path,
+    base_url: &Url,
+    provided_creds_path: Option<&Path>,
+    provided_headers: &[(String, String)],
+    generated_creds_path: &Path,
+    generated_headers: &[(String, String)],
+) -> Vec<String> {
+    let provided_header_names = if provided_headers.is_empty() {
+        "(none)".to_string()
+    } else {
+        provided_headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let generated_header_names = if generated_headers.is_empty() {
+        "(none)".to_string()
+    } else {
+        generated_headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("- target_url: {}", base_url.as_str()));
+    match provided_creds_path {
+        Some(path) => lines.push(format!(
+            "- provided_creds_file: {}",
+            display_path_for(path, repo_root)
+        )),
+        None => lines.push("- provided_creds_file: (none provided)".to_string()),
+    }
+    lines.push(format!("- provided_headers: {provided_header_names}"));
+    lines.push(format!(
+        "- generated_creds_file: {}",
+        display_path_for(generated_creds_path, repo_root)
+    ));
+    lines.push(format!("- generated_headers: {generated_header_names}"));
+    lines.push("- notes: do not commit credential files or tokens to source control".to_string());
+    lines
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -16719,6 +16868,18 @@ async fn execute_bug_command(
                 if let Ok(headers_json) = serde_json::to_string(&headers) {
                     command.env("CODEX_WEB_HEADERS_JSON", headers_json);
                 }
+                if let Some(output_root) = work_dir.parent() {
+                    command.env(
+                        "CODEX_WEB_CREDS_OUT_PATH",
+                        output_root
+                            .join("specs")
+                            .join(WEB_VALIDATION_CREDS_FILE_NAME),
+                    );
+                    command.env(
+                        "CODEX_WEB_TESTING_MD_PATH",
+                        output_root.join("specs").join("TESTING.md"),
+                    );
+                }
             }
             command.current_dir(&repo_path);
 
@@ -18074,9 +18235,8 @@ async fn run_asan_validation(
             .await
             .unwrap_or_default();
     }
-    let mut testing_md_context =
-        trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
+    let generated_creds_path = specs_root.join(WEB_VALIDATION_CREDS_FILE_NAME);
     let web_validation = {
         let target_raw = web_target_url
             .as_deref()
@@ -18123,6 +18283,37 @@ async fn run_asan_validation(
             None => None,
         }
     };
+
+    if let Some(web_validation) = web_validation.as_ref() {
+        let generated_headers = match tokio_fs::read_to_string(&generated_creds_path).await {
+            Ok(contents) => parse_web_validation_creds(&contents),
+            Err(_) => Vec::new(),
+        };
+        let target_section_lines = build_web_validation_target_section_lines(
+            &repo_path,
+            &web_validation.base_url,
+            web_creds_path.as_deref(),
+            &web_validation.headers,
+            &generated_creds_path,
+            &generated_headers,
+        );
+
+        apply_validation_target_md_section(
+            &testing_path,
+            &repo_path,
+            &target_section_lines,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+
+        testing_md = tokio_fs::read_to_string(&testing_path)
+            .await
+            .unwrap_or_default();
+    }
+
+    let mut testing_md_context =
+        trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
     let web_validation_context = if let Some(web_validation) = web_validation.as_ref() {
         let header_names = if web_validation.headers.is_empty() {
@@ -18435,7 +18626,7 @@ async fn run_asan_validation(
         bugs_path,
         report_path,
         report_html_path,
-        repo_path,
+        repo_path: repo_path.clone(),
         work_dir,
         requests,
         web_validation: web_validation.clone(),
@@ -18779,6 +18970,35 @@ async fn run_asan_validation(
             )));
         }
         return Ok(());
+    }
+
+    if let Some(web_validation) = web_validation.as_ref() {
+        let generated_headers = match tokio_fs::read_to_string(&generated_creds_path).await {
+            Ok(contents) => parse_web_validation_creds(&contents),
+            Err(_) => Vec::new(),
+        };
+        let target_section_lines = build_web_validation_target_section_lines(
+            &repo_path,
+            &web_validation.base_url,
+            web_creds_path.as_deref(),
+            &web_validation.headers,
+            &generated_creds_path,
+            &generated_headers,
+        );
+        apply_validation_target_md_section(
+            &testing_path,
+            &repo_path,
+            &target_section_lines,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+
+        let updated_testing_md = tokio_fs::read_to_string(&testing_path)
+            .await
+            .unwrap_or_default();
+        testing_md_context =
+            trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
     }
 
     let build_validation_state_prompt = |state: &BugValidationState| -> String {
