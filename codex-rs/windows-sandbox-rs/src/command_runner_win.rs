@@ -277,6 +277,7 @@ pub fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::read_request_file;
+    use pretty_assertions::assert_eq;
     use std::fs;
 
     #[test]
