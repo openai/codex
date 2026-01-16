@@ -460,7 +460,7 @@ impl UnifiedExecProcessManager {
             )
             .await
         } else {
-            codex_utils_pty::pipe::spawn_process(
+            codex_utils_pty::pipe::spawn_process_no_stdin(
                 program,
                 args,
                 env.cwd.as_path(),
