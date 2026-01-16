@@ -1293,6 +1293,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .autoUrlLink { color: inherit; text-decoration: none; cursor: text; }
       .autoUrlLink.modHover { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; cursor: pointer; }
       .autoUrlLink.modHover:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
+      .fileLink, .autoFileLink, .autoUrlLink { overflow-wrap: anywhere; word-break: break-word; }
 	      .fileDiff { margin-top: 8px; }
       .askUserQuestion { padding: 10px 12px; border-top: 1px solid rgba(127,127,127,0.25); border-bottom: 1px solid rgba(127,127,127,0.25); display: none; }
       .askCard { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 10px 12px; background: rgba(0,0,0,0.03); }
