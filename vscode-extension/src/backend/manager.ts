@@ -12,6 +12,7 @@ import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
 import type { AskUserQuestionResponse } from "../generated/v2/AskUserQuestionResponse";
 import type { ServerRequest } from "../generated/ServerRequest";
 import type { ThreadResumeResponse } from "../generated/v2/ThreadResumeResponse";
+import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackResponse";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { Model } from "../generated/v2/Model";
 import type { ReasoningEffort } from "../generated/ReasoningEffort";
@@ -557,7 +558,7 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("Backend is not running for this workspace folder");
 
     const input: UserInput[] = [];
-    if (text.trim()) input.push({ type: "text", text });
+    if (text.trim()) input.push({ type: "text", text, text_elements: [] });
     for (const img of images) {
       if (!img) continue;
       if (img.kind === "imageUrl") {
@@ -588,6 +589,7 @@ export class BackendManager implements vscode.Disposable {
       model: modelSettings?.model ?? null,
       effort,
       summary: null,
+      outputSchema: null,
     };
 
     const imageSuffix = images.length > 0 ? ` [images=${images.length}]` : "";
@@ -617,10 +619,10 @@ export class BackendManager implements vscode.Disposable {
     await proc.turnInterrupt({ threadId: session.threadId, turnId });
   }
 
-  public async threadRewind(
+  public async threadRollback(
     session: Session,
-    args: { turnIndex: number },
-  ): Promise<void> {
+    args: { numTurns: number },
+  ): Promise<ThreadRollbackResponse> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
       throw new Error(
@@ -633,10 +635,9 @@ export class BackendManager implements vscode.Disposable {
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
 
-    await proc.threadRewind({
+    return await proc.threadRollback({
       threadId: session.threadId,
-      turnIndex: args.turnIndex,
-      scope: "conversation",
+      numTurns: args.numTurns,
     });
   }
 

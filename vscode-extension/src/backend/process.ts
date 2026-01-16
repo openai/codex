@@ -22,8 +22,8 @@ import type { ModelListParams } from "../generated/v2/ModelListParams";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse";
-import type { ThreadRewindParams } from "../generated/v2/ThreadRewindParams";
-import type { ThreadRewindResponse } from "../generated/v2/ThreadRewindResponse";
+import type { ThreadRollbackParams } from "../generated/v2/ThreadRollbackParams";
+import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackResponse";
 import type { ThreadListParams } from "../generated/v2/ThreadListParams";
 import type { ThreadListResponse } from "../generated/v2/ThreadListResponse";
 import type { ListMcpServerStatusParams } from "../generated/v2/ListMcpServerStatusParams";
@@ -193,11 +193,11 @@ export class BackendProcess implements vscode.Disposable {
     });
   }
 
-  public async threadRewind(
-    params: ThreadRewindParams,
-  ): Promise<ThreadRewindResponse> {
-    return this.rpc.request<ThreadRewindResponse>({
-      method: "thread/rewind",
+  public async threadRollback(
+    params: ThreadRollbackParams,
+  ): Promise<ThreadRollbackResponse> {
+    return this.rpc.request<ThreadRollbackResponse>({
+      method: "thread/rollback",
       params,
     });
   }

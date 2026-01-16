@@ -698,9 +698,24 @@ export function activate(context: vscode.ExtensionContext): void {
           });
           chatView?.refresh();
 
+          const resumed = await withTimeout(
+            "thread/resume",
+            bm.resumeSession(session),
+            REWIND_STEP_TIMEOUT_MS,
+          );
+          const totalTurns = Array.isArray(resumed.thread.turns)
+            ? resumed.thread.turns.length
+            : 0;
+          const numTurns = totalTurns - (turnIndex - 1);
+          if (!Number.isFinite(numTurns) || numTurns < 1) {
+            throw new Error(
+              `Invalid rewind request: turnIndex=${turnIndex} totalTurns=${totalTurns}`,
+            );
+          }
+
           await withTimeout(
-            "thread/rewind",
-            bm.threadRewind(session, { turnIndex }),
+            "thread/rollback",
+            bm.threadRollback(session, { numTurns }),
             REWIND_STEP_TIMEOUT_MS,
           );
 
