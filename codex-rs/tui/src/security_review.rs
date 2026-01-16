@@ -9134,8 +9134,10 @@ done
 
     #[test]
     fn exploit_scenario_includes_poc_or_trigger_excerpt() {
-        let mut validation = BugValidationState::default();
-        validation.status = BugValidationStatus::Passed;
+        let validation = BugValidationState {
+            status: BugValidationStatus::Passed,
+            ..BugValidationState::default()
+        };
         let bug = SecurityReviewBug {
             summary_id: 1,
             risk_rank: Some(1),
@@ -18305,13 +18307,10 @@ async fn run_asan_validation(
                             continue;
                         };
 
-                        let python_target = web_validation
-                            .as_ref()
-                            .map(|web_validation| web_validation.base_url.as_str().to_string());
                         requests.push(BugVerificationRequest {
                             id,
                             tool: BugVerificationTool::Python,
-                            target: python_target,
+                            target: None,
                             script_path: None,
                             script_inline: Some(script.to_string()),
                         });
