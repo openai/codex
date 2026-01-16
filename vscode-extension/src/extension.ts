@@ -713,28 +713,12 @@ export function activate(context: vscode.ExtensionContext): void {
             );
           }
 
-          await withTimeout(
+          const rolledBack = await withTimeout(
             "thread/rollback",
             bm.threadRollback(session, { numTurns }),
             REWIND_STEP_TIMEOUT_MS,
           );
-
-          upsertBlock(session.id, {
-            id: rewindBlockId,
-            type: "info",
-            title: "Reloading session",
-            text: "Rewind completed. Reloading thread state…",
-          });
-          chatView?.refresh();
-
-          const reloaded = await withTimeout(
-            "thread/reload",
-            bm.reloadSession(session, getSessionModelState()),
-            REWIND_STEP_TIMEOUT_MS,
-          );
-          hydrateRuntimeFromThread(session.id, reloaded.thread, {
-            force: true,
-          });
+          hydrateRuntimeFromThread(session.id, rolledBack.thread, { force: true });
 
           upsertBlock(session.id, {
             id: rewindBlockId,
@@ -1223,13 +1207,6 @@ export function activate(context: vscode.ExtensionContext): void {
         ? sessions.getById(activeSessionId)
         : null;
       if (!session) return;
-
-      if (!isMineSelectedForBackendKey(session.backendKey)) {
-        void vscode.window.showErrorMessage(
-          "Reload is only supported when using codex-mine backend.",
-        );
-        return;
-      }
 
       const folder = resolveWorkspaceFolderForSession(session);
       if (!folder) {

@@ -466,7 +466,7 @@ export class BackendManager implements vscode.Disposable {
       baseInstructions: null,
       developerInstructions: null,
     };
-    return await proc.threadReload(params);
+    return await proc.threadResume(params);
   }
 
   public async archiveSession(session: Session): Promise<void> {
@@ -634,6 +634,11 @@ export class BackendManager implements vscode.Disposable {
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
+
+    // Clear per-thread caches so the UI can rehydrate from the updated thread state.
+    this.itemsByThreadId.delete(session.threadId);
+    this.latestDiffByThreadId.delete(session.threadId);
+    this.streamState.set(session.threadId, { activeTurnId: null });
 
     return await proc.threadRollback({
       threadId: session.threadId,

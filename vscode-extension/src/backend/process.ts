@@ -166,15 +166,6 @@ export class BackendProcess implements vscode.Disposable {
     });
   }
 
-  public async threadReload(
-    params: ThreadResumeParams,
-  ): Promise<ThreadResumeResponse> {
-    return this.rpc.request<ThreadResumeResponse>({
-      method: "thread/reload",
-      params,
-    });
-  }
-
   public async threadArchive(
     params: ThreadArchiveParams,
   ): Promise<ThreadArchiveResponse> {
