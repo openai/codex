@@ -200,6 +200,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "start interrupt marker".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -217,6 +218,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "follow up".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
