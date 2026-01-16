@@ -1495,7 +1495,8 @@ impl ChatComposer {
                         original_text_elements,
                         original_local_image_paths,
                     );
-                    self.textarea.set_cursor(original_input.len());
+                    let cursor = original_input.len().min(self.textarea.text().len());
+                    self.textarea.set_cursor(cursor);
                     return None;
                 }
             }
@@ -1512,7 +1513,8 @@ impl ChatComposer {
                     original_text_elements,
                     original_local_image_paths,
                 );
-                self.textarea.set_cursor(original_input.len());
+                let cursor = original_input.len().min(self.textarea.text().len());
+                self.textarea.set_cursor(cursor);
                 return None;
             }
         };
@@ -1612,7 +1614,8 @@ impl ChatComposer {
                 original_text_elements,
                 original_local_image_paths,
             );
-            self.textarea.set_cursor(original_input.len());
+            let cursor = original_input.len().min(self.textarea.text().len());
+            self.textarea.set_cursor(cursor);
             (InputResult::None, true)
         }
     }
@@ -1860,15 +1863,6 @@ impl ChatComposer {
         {
             self.handle_paste(pasted);
         }
-        // Backspace at the start of an image placeholder should delete that placeholder (rather
-        // than deleting content before it). Do this without scanning the full text by consulting
-        // the textarea's element list.
-        if matches!(input.code, KeyCode::Backspace)
-            && self.try_remove_image_element_at_cursor_start()
-        {
-            return (InputResult::None, true);
-        }
-
         // For non-char inputs (or after flushing), handle normally.
         // Track element removals so we can drop any corresponding placeholders without scanning
         // the full text. (Placeholders are atomic elements; when deleted, the element disappears.)
@@ -1905,29 +1899,6 @@ impl ChatComposer {
         }
 
         (InputResult::None, true)
-    }
-
-    fn try_remove_image_element_at_cursor_start(&mut self) -> bool {
-        if self.attached_images.is_empty() {
-            return false;
-        }
-
-        let p = self.textarea.cursor();
-        let Some(payload) = self.textarea.element_payload_starting_at(p) else {
-            return false;
-        };
-        let Some(idx) = self
-            .attached_images
-            .iter()
-            .position(|img| img.placeholder == payload)
-        else {
-            return false;
-        };
-
-        self.textarea.replace_range(p..p + payload.len(), "");
-        self.attached_images.remove(idx);
-        self.relabel_attached_images_and_update_placeholders();
-        true
     }
 
     fn reconcile_deleted_elements(&mut self, elements_before: Vec<String>) {
@@ -4141,6 +4112,24 @@ mod tests {
             false,
         );
         let path = PathBuf::from("/tmp/image3.png");
+        composer.attach_image(path.clone());
+        let placeholder = composer.attached_images[0].placeholder.clone();
+
+        // Case 0: backspace at start should remove the preceding character, not the placeholder.
+        composer.set_text_content("A".to_string(), Vec::new(), Vec::new());
+        composer.attach_image(path.clone());
+        let placeholder0 = composer.attached_images[0].placeholder.clone();
+        let start0 = composer
+            .textarea
+            .text()
+            .find(&placeholder0)
+            .expect("placeholder present");
+        composer.textarea.set_cursor(start0);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), placeholder0);
+        assert_eq!(composer.attached_images.len(), 1);
+
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
         composer.attach_image(path.clone());
         let placeholder = composer.attached_images[0].placeholder.clone();
 
