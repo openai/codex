@@ -77,7 +77,16 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     };
 
     let python_code = r#"import multiprocessing
+import sys
 from multiprocessing import Lock, Process
+
+# Python 3.14 defaults to forkserver on some Linux distros, which can
+# be blocked by the sandbox. Force fork to keep the test stable.
+if sys.platform.startswith("linux"):
+    try:
+        multiprocessing.set_start_method("fork")
+    except RuntimeError:
+        pass
 
 def f(lock):
     with lock:
