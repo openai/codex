@@ -3,14 +3,14 @@
 :root {
   color-scheme: only light;
   font-family: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
-  color: #1f2a2e;
-  background-color: #f6f1ea;
-  --panel-bg: rgba(255, 255, 255, 0.88);
-  --panel-border: #e6d9cb;
-  --accent: #f36b3f;
-  --accent-2: #2f7d8b;
-  --text-muted: #5b6a72;
-  --shadow: 0 18px 45px rgba(72, 54, 42, 0.16);
+  color: #1d2327;
+  background-color: #f5f4f2;
+  --panel-bg: #ffffff;
+  --panel-border: #d9d4cd;
+  --accent: #ff6a3d;
+  --accent-2: #227c88;
+  --text-muted: #4f5b62;
+  --shadow: 0 10px 22px rgba(28, 36, 40, 0.12);
 }
 
 * {
@@ -20,65 +20,37 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(1200px 600px at 10% 0%, rgba(243, 107, 63, 0.12), transparent 70%),
-    radial-gradient(900px 520px at 100% 10%, rgba(47, 125, 139, 0.14), transparent 65%),
-    #f6f1ea;
-}
-
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background-image: linear-gradient(120deg, rgba(31, 42, 46, 0.06) 0%, rgba(31, 42, 46, 0.02) 100%);
-  pointer-events: none;
+  background-color: #f5f4f2;
+  background-image:
+    linear-gradient(180deg, #f8f7f5 0%, #f0ede9 100%),
+    repeating-linear-gradient(90deg, rgba(29, 35, 39, 0.05) 0 1px, transparent 1px 120px),
+    repeating-linear-gradient(0deg, rgba(29, 35, 39, 0.04) 0 1px, transparent 1px 120px);
 }
 
 .app {
   min-height: 100vh;
-  padding: 32px 40px 48px;
+  padding: 28px 36px 40px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 22px;
 }
 
 .hero {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
-  gap: 24px;
-}
-
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin: 0 0 8px;
-}
-
-h1 {
-  font-size: clamp(28px, 4vw, 40px);
-  margin: 0 0 8px;
-}
-
-.subtitle {
-  margin: 0;
-  max-width: 560px;
-  color: var(--text-muted);
-  font-size: 16px;
 }
 
 .status {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 18px;
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  border-radius: 18px;
+  padding: 10px 14px;
+  background: #ffffff;
+  border: 1px solid #cfc8c0;
+  border-radius: 10px;
   box-shadow: var(--shadow);
-  min-width: 240px;
+  min-width: 220px;
 }
 
 .status-dot {
@@ -108,37 +80,36 @@ h1 {
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-  gap: 24px;
+  gap: 18px;
 }
 
 .panel {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 24px;
-  padding: 24px;
+  border-radius: 14px;
+  padding: 20px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(6px);
 }
 
 .panel-title {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .control {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
 }
 
 .control-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 12px;
 }
 
 .label {
@@ -151,33 +122,33 @@ h1 {
 .value {
   font-size: 14px;
   font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .button-row {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 .btn {
   border: 1px solid var(--panel-border);
-  background: white;
+  background: #ffffff;
   color: #1f2a2e;
-  padding: 10px 16px;
-  border-radius: 999px;
+  padding: 9px 14px;
+  border-radius: 8px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .btn:hover:enabled {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(31, 42, 46, 0.16);
+  box-shadow: 0 6px 14px rgba(31, 42, 46, 0.12);
+  border-color: #c3bbb2;
 }
 
 .btn.primary {
-  background: linear-gradient(120deg, var(--accent), #f89e6c);
+  background: linear-gradient(120deg, var(--accent), #ff946b);
   border-color: transparent;
   color: #1b1a19;
 }
@@ -188,9 +159,9 @@ h1 {
 }
 
 .notice {
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: rgba(243, 107, 63, 0.12);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 106, 61, 0.12);
   color: #9a3f1e;
   font-size: 13px;
 }
@@ -198,14 +169,14 @@ h1 {
 .composer textarea {
   width: 100%;
   margin-top: 8px;
-  margin-bottom: 12px;
-  border-radius: 16px;
+  margin-bottom: 10px;
+  border-radius: 10px;
   border: 1px solid var(--panel-border);
-  padding: 12px 14px;
+  padding: 10px 12px;
   font-family: inherit;
   resize: vertical;
-  min-height: 110px;
-  background: rgba(255, 255, 255, 0.7);
+  min-height: 96px;
+  background: #ffffff;
 }
 
 .thread-list {
@@ -216,35 +187,35 @@ h1 {
 
 .thread-item {
   text-align: left;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.7);
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid #e4ded7;
+  background: #ffffff;
   font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
   font-size: 12px;
   cursor: pointer;
 }
 
 .thread-item:hover {
-  border-color: rgba(47, 125, 139, 0.4);
+  border-color: rgba(34, 124, 136, 0.6);
 }
 
 .thread-item.active {
-  border-color: rgba(243, 107, 63, 0.6);
-  background: rgba(243, 107, 63, 0.08);
+  border-color: rgba(255, 106, 61, 0.7);
+  background: rgba(255, 106, 61, 0.08);
 }
 
 .approvals {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .approval-card {
-  background: rgba(255, 255, 255, 0.95);
+  background: #ffffff;
   border: 1px dashed rgba(31, 42, 46, 0.2);
-  border-radius: 18px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -263,9 +234,9 @@ h1 {
 
 .approval-card pre {
   margin: 0;
-  padding: 12px;
-  border-radius: 12px;
-  background: #f7f1ea;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f6f4f1;
   font-size: 12px;
   font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
   overflow-x: auto;
@@ -286,20 +257,22 @@ h1 {
 }
 
 .bubble {
-  border-radius: 18px;
-  padding: 14px 16px;
+  border-radius: 14px;
+  padding: 12px 14px;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.92);
+  background: #ffffff;
 }
 
 .bubble.user {
   align-self: flex-start;
-  border-color: rgba(47, 125, 139, 0.25);
+  border-color: rgba(34, 124, 136, 0.35);
+  background: rgba(34, 124, 136, 0.06);
 }
 
 .bubble.assistant {
   align-self: flex-end;
-  border-color: rgba(243, 107, 63, 0.3);
+  border-color: rgba(255, 106, 61, 0.35);
+  background: rgba(255, 106, 61, 0.07);
 }
 
 .bubble-role {
@@ -307,7 +280,7 @@ h1 {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--text-muted);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .bubble-text {
@@ -323,7 +296,7 @@ h1 {
 .log-scroll {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   max-height: 520px;
   overflow-y: auto;
   font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
@@ -331,14 +304,14 @@ h1 {
 }
 
 .log-entry {
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 9px 10px;
+  border-radius: 10px;
   border: 1px solid rgba(31, 42, 46, 0.12);
-  background: rgba(255, 255, 255, 0.7);
+  background: #ffffff;
 }
 
 .log-entry.out {
-  border-color: rgba(47, 125, 139, 0.2);
+  border-color: rgba(34, 124, 136, 0.28);
 }
 
 .log-meta {
@@ -361,7 +334,7 @@ h1 {
 @media (max-width: 980px) {
   .hero {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
   }
 
   .grid {
@@ -369,6 +342,6 @@ h1 {
   }
 
   .app {
-    padding: 24px;
+    padding: 20px;
   }
 }

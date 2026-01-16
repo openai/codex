@@ -75,6 +75,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "child_agents_md": {
+          "type": "boolean"
+        },
         "collab": {
           "type": "boolean"
         },
@@ -97,9 +100,6 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
-          "type": "boolean"
-        },
-        "child_agents_md": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -373,6 +373,15 @@
       "description": "When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output. Defaults to `false`.",
       "type": "boolean"
     },
+    "skills": {
+      "description": "Additional skill sources to load from local paths or URLs.",
+      "default": null,
+      "allOf": [
+        {
+          "$ref": "#/definitions/SkillsConfigToml"
+        }
+      ]
+    },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",
       "type": "integer",
@@ -543,6 +552,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "child_agents_md": {
+              "type": "boolean"
+            },
             "collab": {
               "type": "boolean"
             },
@@ -565,9 +577,6 @@
               "type": "boolean"
             },
             "experimental_windows_sandbox": {
-              "type": "boolean"
-            },
-            "child_agents_md": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -1283,6 +1292,55 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillSourcePathToml": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillSourceToml": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SkillSourcePathToml"
+        },
+        {
+          "$ref": "#/definitions/SkillSourceUrlToml"
+        }
+      ]
+    },
+    "SkillSourceUrlToml": {
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillsConfigToml": {
+      "description": "Configuration for additional skill sources.",
+      "type": "object",
+      "properties": {
+        "sources": {
+          "description": "Additional skill sources to load. Each entry can be a local path or a URL.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillSourceToml"
           }
         }
       },

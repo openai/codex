@@ -562,13 +562,6 @@ export default function App() {
   return (
     <div className="app">
       <header className="hero">
-        <div>
-          <p className="eyebrow">codex app-server v2</p>
-          <h1>Minimal Control Surface</h1>
-          <p className="subtitle">
-            A small React + Vite client wired to the JSON-RPC v2 protocol for threads and turns.
-          </p>
-        </div>
         <div className="status">
           <span className={`status-dot ${connected ? "on" : "off"}`} />
           <div>
