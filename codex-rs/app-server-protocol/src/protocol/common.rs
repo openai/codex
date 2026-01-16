@@ -109,10 +109,6 @@ client_request_definitions! {
         params: v2::ThreadResumeParams,
         response: v2::ThreadResumeResponse,
     },
-    ThreadReload => "thread/reload" {
-        params: v2::ThreadResumeParams,
-        response: v2::ThreadResumeResponse,
-    },
     ThreadFork => "thread/fork" {
         params: v2::ThreadForkParams,
         response: v2::ThreadForkResponse,
