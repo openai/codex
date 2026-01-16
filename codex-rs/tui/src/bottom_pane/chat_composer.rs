@@ -6767,6 +6767,61 @@ mod tests {
         assert!(composer.pending_pastes[0].1.chars().all(|c| c == 'x'));
     }
 
+    /// Regression test (Windows): some terminals can have a slower gap between the first and
+    /// second char of a pasted key-event stream, which used to leave a stray prefix char before
+    /// the large-paste placeholder (e.g. `在[Pasted Content ...]`).
+    #[cfg(windows)]
+    #[test]
+    fn burst_paste_slow_start_large_does_not_leave_prefix_char() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let first = '你';
+        let rest = '好';
+        let rest_count = LARGE_PASTE_CHAR_THRESHOLD + 10;
+        let total_count = rest_count + 1;
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(first), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), first.to_string());
+
+        // Force the first gap to exceed `PASTE_BURST_CHAR_INTERVAL` so the fast-streak counter
+        // would reset, while still being within the Windows paste window.
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+
+        for _ in 0..rest_count {
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char(rest), KeyModifiers::NONE));
+        }
+
+        let flushed = flush_after_paste_burst(&mut composer);
+        assert!(flushed, "expected flush after stopping fast input");
+
+        let expected_placeholder = format!("[Pasted Content {total_count} chars]");
+        assert_eq!(composer.textarea.text(), expected_placeholder);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
+        assert_eq!(composer.pending_pastes[0].1.chars().count(), total_count);
+        assert_eq!(composer.pending_pastes[0].1.chars().next(), Some(first));
+        assert!(
+            composer.pending_pastes[0]
+                .1
+                .chars()
+                .skip(1)
+                .all(|c| c == rest)
+        );
+    }
+
     /// Behavior: human-like typing (with delays between chars) should not be classified as a paste
     /// burst. Characters should appear immediately and should not trigger a paste placeholder.
     #[test]
