@@ -1182,9 +1182,19 @@ pub struct ThreadListParams {
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
     pub limit: Option<u32>,
+    /// Optional sort key; defaults to created_at.
+    pub sort_key: Option<ThreadSortKey>,
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
     pub model_providers: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum ThreadSortKey {
+    CreatedAt,
+    UpdatedAt,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1359,6 +1369,9 @@ pub struct Thread {
     /// Unix timestamp (in seconds) when the thread was created.
     #[ts(type = "number")]
     pub created_at: i64,
+    /// Unix timestamp (in seconds) when the thread was last updated.
+    #[ts(type = "number")]
+    pub updated_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: PathBuf,
     /// Working directory captured for the thread.

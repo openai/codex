@@ -30,6 +30,7 @@ pub use responses::create_final_assistant_message_sse_response;
 pub use responses::create_shell_command_sse_response;
 pub use rollout::create_fake_rollout;
 pub use rollout::create_fake_rollout_with_text_elements;
+pub use rollout::rollout_path;
 use serde::de::DeserializeOwned;
 
 pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {

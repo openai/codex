@@ -588,6 +588,8 @@ impl Session {
             ));
         }
 
+        let forked_from_id = initial_history.forked_from_id();
+
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
@@ -595,6 +597,7 @@ impl Session {
                     conversation_id,
                     RolloutRecorderParams::new(
                         conversation_id,
+                        forked_from_id,
                         session_configuration.user_instructions.clone(),
                         session_source,
                     ),
@@ -733,6 +736,7 @@ impl Session {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
+                forked_from_id,
                 model: session_configuration.model.clone(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
