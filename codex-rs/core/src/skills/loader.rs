@@ -282,6 +282,10 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                     continue;
                 }
 
+                if metadata.is_file() && file_name == SKILLS_FILENAME {
+                    record_skill_from_path(&path, scope, outcome);
+                }
+
                 continue;
             }
 
@@ -300,19 +304,7 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
             }
 
             if file_type.is_file() && file_name == SKILLS_FILENAME {
-                match parse_skill_file(&path, scope) {
-                    Ok(skill) => {
-                        outcome.skills.push(skill);
-                    }
-                    Err(err) => {
-                        if scope != SkillScope::System {
-                            outcome.errors.push(SkillError {
-                                path,
-                                message: err.to_string(),
-                            });
-                        }
-                    }
-                }
+                record_skill_from_path(&path, scope, outcome);
             }
         }
     }
@@ -323,6 +315,22 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
             MAX_SKILLS_DIRS_PER_ROOT,
             root.display()
         );
+    }
+}
+
+fn record_skill_from_path(path: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
+    match parse_skill_file(path, scope) {
+        Ok(skill) => {
+            outcome.skills.push(skill);
+        }
+        Err(err) => {
+            if scope != SkillScope::System {
+                outcome.errors.push(SkillError {
+                    path: path.to_path_buf(),
+                    message: err.to_string(),
+                });
+            }
+        }
     }
 }
 

@@ -15,6 +15,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::path::PathBuf {
@@ -149,6 +150,57 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
     assert!(
         error_path.ends_with("skills/broken/SKILL.md"),
         "unexpected error path: {error_path}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_skills_includes_symlinked_skill_md() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        let external_dir = home.join("external-skills").join("demo-symlink");
+        fs::create_dir_all(&external_dir).unwrap();
+        let contents = "---\nname: demo-symlink\ndescription: demo skill\n---\n\nbody\n";
+        let external_skill_path = external_dir.join("SKILL.md");
+        fs::write(&external_skill_path, contents).unwrap();
+
+        let skill_dir = home.join("skills").join("demo-symlink");
+        fs::create_dir_all(&skill_dir).unwrap();
+        symlink(&external_skill_path, skill_dir.join("SKILL.md")).unwrap();
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::ListSkills {
+            cwds: Vec::new(),
+            force_reload: true,
+        })
+        .await?;
+    let response =
+        core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
+            codex_core::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            _ => None,
+        })
+        .await;
+
+    let cwd = test.cwd_path();
+    let (skills, errors) = response
+        .skills
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| (entry.skills.clone(), entry.errors.clone()))
+        .unwrap_or_default();
+
+    assert!(
+        errors.is_empty(),
+        "expected no load errors for symlinked skill, got {errors:?}"
+    );
+    assert!(
+        skills.iter().any(|skill| skill.name == "demo-symlink"),
+        "expected symlinked skill to be listed, got {skills:?}"
     );
 
     Ok(())
