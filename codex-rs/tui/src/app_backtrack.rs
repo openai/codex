@@ -250,7 +250,7 @@ impl App {
                 .min(last_index)
         };
 
-        self.apply_backtrack_selection(next_selection);
+        self.apply_backtrack_selection_internal(next_selection);
         tui.frame_requester().schedule_frame();
     }
 
