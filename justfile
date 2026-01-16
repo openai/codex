@@ -5,6 +5,35 @@ set positional-arguments
 help:
     just -l
 
+# Build with automatic stale cache recovery
+build *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BUILD_OUTPUT=$(cargo build "$@" 2>&1) || BUILD_EXIT=$?
+    
+    if [[ -z "${BUILD_EXIT:-}" ]]; then
+        exit 0
+    fi
+    
+    # Detect stale cache
+    if echo "$BUILD_OUTPUT" | grep -q "no field.*on type"; then
+        AFFECTED_CRATE=$(echo "$BUILD_OUTPUT" | grep "no field.*on type" | head -1 | sed -n 's/.*on type `\([^:]*\)::.*/\1/p')
+        AFFECTED_CRATE_KEBAB=$(echo "$AFFECTED_CRATE" | tr '_' '-')
+        
+        if [[ -n "$AFFECTED_CRATE_KEBAB" ]]; then
+            echo "Detected stale cache, cleaning $AFFECTED_CRATE_KEBAB..." >&2
+            cargo clean -p "$AFFECTED_CRATE_KEBAB"
+        else
+            echo "Detected stale cache, full clean..." >&2
+            cargo clean
+        fi
+        
+        cargo build "$@"
+    else
+        echo "$BUILD_OUTPUT" >&2
+        exit "${BUILD_EXIT}"
+    fi
+
 # `codex`
 alias c := codex
 codex *args:
