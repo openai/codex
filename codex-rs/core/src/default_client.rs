@@ -153,13 +153,7 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
     }
 }
 
-/// Create an HTTP client with default `originator` and `User-Agent` headers set.
-pub fn create_client() -> CodexHttpClient {
-    let inner = build_reqwest_client();
-    CodexHttpClient::new(inner)
-}
-
-pub fn build_reqwest_client() -> reqwest::Client {
+static REQWEST_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
@@ -175,6 +169,16 @@ pub fn build_reqwest_client() -> reqwest::Client {
     }
 
     builder.build().unwrap_or_else(|_| reqwest::Client::new())
+});
+
+/// Create an HTTP client with default `originator` and `User-Agent` headers set.
+pub fn create_client() -> CodexHttpClient {
+    let inner = build_reqwest_client();
+    CodexHttpClient::new(inner)
+}
+
+pub fn build_reqwest_client() -> reqwest::Client {
+    REQWEST_CLIENT.clone()
 }
 
 fn is_sandboxed() -> bool {

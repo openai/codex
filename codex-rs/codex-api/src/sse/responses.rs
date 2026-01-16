@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::io::BufRead;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -49,6 +50,7 @@ pub fn spawn_response_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
     let rate_limits = parse_rate_limit(&stream_response.headers);
     let models_etag = stream_response
@@ -56,6 +58,14 @@ pub fn spawn_response_stream(
         .get("X-Models-Etag")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
+    if let Some(turn_state) = turn_state.as_ref()
+        && let Some(header_value) = stream_response
+            .headers
+            .get("x-codex-turn-state")
+            .and_then(|v| v.to_str().ok())
+    {
+        let _ = turn_state.set(header_value.to_string());
+    }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
         if let Some(snapshot) = rate_limits {
