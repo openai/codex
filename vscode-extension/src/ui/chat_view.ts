@@ -1266,6 +1266,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .md pre { background: rgba(127,127,127,0.10); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
       .md a { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; }
       .md a:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
+      .md a, .md code { overflow-wrap: anywhere; }
       .composer { border-top: 1px solid rgba(127,127,127,0.3); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; position: relative; }
       .returnToBottomBtn { position: absolute; left: 50%; transform: translateX(-50%); border: 1px solid rgba(127,127,127,0.35); border-radius: 999px; padding: 4px 10px; background: rgba(127,127,127,0.08); color: inherit; opacity: 0.45; cursor: pointer; font-size: 12px; display: none; align-items: center; justify-content: center; z-index: 30; }
       .returnToBottomBtn:hover { opacity: 0.9; background: rgba(127,127,127,0.14); }
@@ -1293,6 +1294,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .autoUrlLink { color: inherit; text-decoration: none; cursor: text; }
       .autoUrlLink.modHover { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; cursor: pointer; }
       .autoUrlLink.modHover:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
+      .fileLink, .autoFileLink, .autoUrlLink { overflow-wrap: anywhere; }
 	      .fileDiff { margin-top: 8px; }
       .askUserQuestion { padding: 10px 12px; border-top: 1px solid rgba(127,127,127,0.25); border-bottom: 1px solid rgba(127,127,127,0.25); display: none; }
       .askCard { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 10px 12px; background: rgba(0,0,0,0.03); }

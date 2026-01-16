@@ -233,6 +233,7 @@ fn merge_project_docs_with_skills(
 mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
+    use crate::config::ConfigOverrides;
     use crate::skills::load_skills;
     use std::fs;
     use std::path::PathBuf;
@@ -247,6 +248,10 @@ mod tests {
         let codex_home = TempDir::new().unwrap();
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(root.path().to_path_buf()),
+                ..ConfigOverrides::default()
+            })
             .build()
             .await
             .expect("defaults for test should always succeed");
