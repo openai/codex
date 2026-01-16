@@ -557,25 +557,25 @@ export function extractTextFromDocument(document: unknown): string {
   let text = "";
   for (const contentElement of body.content) {
     const paragraph = contentElement.paragraph;
-      if (!paragraph || !Array.isArray(paragraph.elements)) {
-        continue;
+    if (!paragraph || !Array.isArray(paragraph.elements)) {
+      continue;
+    }
+    for (const element of paragraph.elements) {
+      const richLink = element.richLink?.richLinkProperties;
+      if (richLink) {
+        const title = richLink.title?.trim() ?? "";
+        const uri = richLink.uri;
+        const display = title.length > 0 ? title : (uri ?? "");
+        if (display) {
+          text += appendLinkUrl(display, uri);
+        }
       }
-      for (const element of paragraph.elements) {
-        const richLink = element.richLink?.richLinkProperties;
-        if (richLink) {
-          const title = richLink.title?.trim() ?? "";
-          const uri = richLink.uri;
-          const display = title.length > 0 ? title : uri ?? "";
-          if (display) {
-            text += appendLinkUrl(display, uri);
-          }
-        }
 
-        const runContent = element.textRun?.content;
-        if (typeof runContent === "string") {
-          const linkUrl = element.textRun?.textStyle?.link?.url;
-          text += appendLinkUrl(runContent, linkUrl);
-        }
+      const runContent = element.textRun?.content;
+      if (typeof runContent === "string") {
+        const linkUrl = element.textRun?.textStyle?.link?.url;
+        text += appendLinkUrl(runContent, linkUrl);
+      }
     }
   }
 
