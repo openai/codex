@@ -114,6 +114,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
             conversation_id,
             items: vec![codex_app_server_protocol::InputItem::Text {
                 text: "text".to_string(),
+                text_elements: Vec::new(),
             }],
         })
         .await?;
@@ -241,6 +242,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             conversation_id,
             items: vec![codex_app_server_protocol::InputItem::Text {
                 text: "run python".to_string(),
+                text_elements: Vec::new(),
             }],
         })
         .await?;
@@ -296,6 +298,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             conversation_id,
             items: vec![codex_app_server_protocol::InputItem::Text {
                 text: "run python again".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: working_directory.clone(),
             approval_policy: AskForApproval::Never,
@@ -405,6 +408,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             conversation_id,
             items: vec![InputItem::Text {
                 text: "first turn".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: first_cwd.clone(),
             approval_policy: AskForApproval::Never,
@@ -437,6 +441,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             conversation_id,
             items: vec![InputItem::Text {
                 text: "second turn".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: second_cwd.clone(),
             approval_policy: AskForApproval::Never,

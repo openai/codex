@@ -7,8 +7,6 @@ use codex_core::error::SandboxErr;
 use codex_core::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-use crate::mounts::apply_read_only_mounts;
-
 use landlock::ABI;
 use landlock::Access;
 use landlock::AccessFs;
@@ -33,8 +31,8 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
 ) -> Result<()> {
-    if !sandbox_policy.has_full_disk_write_access() {
-        apply_read_only_mounts(sandbox_policy, cwd)?;
+    if !sandbox_policy.has_full_disk_write_access() || !sandbox_policy.has_full_network_access() {
+        set_no_new_privs()?;
     }
 
     if !sandbox_policy.has_full_network_access() {
@@ -53,6 +51,14 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     // TODO(ragona): Add appropriate restrictions if
     // `sandbox_policy.has_full_disk_read_access()` is `false`.
 
+    Ok(())
+}
+
+fn set_no_new_privs() -> Result<()> {
+    let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
     Ok(())
 }
 
