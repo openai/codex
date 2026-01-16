@@ -35,7 +35,7 @@ async fn web_search_mode_cached_sets_external_web_access_false_in_request_body()
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.web_search_mode = WebSearchMode::Cached;
+            config.web_search_mode = Some(WebSearchMode::Cached);
         });
     let test = builder
         .build(&server)
@@ -67,7 +67,7 @@ async fn web_search_mode_takes_precedence_over_legacy_flags_in_request_body() {
         .with_model("gpt-5-codex")
         .with_config(|config| {
             config.features.enable(Feature::WebSearchRequest);
-            config.web_search_mode = WebSearchMode::Cached;
+            config.web_search_mode = Some(WebSearchMode::Cached);
         });
     let test = builder
         .build(&server)

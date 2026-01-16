@@ -522,22 +522,22 @@ async fn run_ratatui_app(
         }
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
-        match RolloutRecorder::list_threads(
+        let filter_cwd = if cli.resume_show_all {
+            None
+        } else {
+            Some(config.cwd.as_path())
+        };
+        match RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
-            1,
-            None,
             INTERACTIVE_SESSION_SOURCES,
             Some(provider_filter.as_slice()),
             &config.model_provider_id,
+            filter_cwd,
         )
         .await
         {
-            Ok(page) => page
-                .items
-                .first()
-                .map(|it| resume_picker::SessionSelection::Resume(it.path.clone()))
-                .unwrap_or(resume_picker::SessionSelection::StartFresh),
-            Err(_) => resume_picker::SessionSelection::StartFresh,
+            Ok(Some(path)) => resume_picker::SessionSelection::Resume(path),
+            _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
         match resume_picker::run_resume_picker(

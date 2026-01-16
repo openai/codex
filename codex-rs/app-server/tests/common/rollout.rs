@@ -87,3 +87,75 @@ pub fn create_fake_rollout(
     fs::write(file_path, lines.join("\n") + "\n")?;
     Ok(uuid_str)
 }
+
+pub fn create_fake_rollout_with_text_elements(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    text_elements: Vec<serde_json::Value>,
+    model_provider: Option<&str>,
+    git_info: Option<GitInfo>,
+) -> Result<String> {
+    let uuid = Uuid::new_v4();
+    let uuid_str = uuid.to_string();
+    let conversation_id = ThreadId::from_string(&uuid_str)?;
+
+    // sessions/YYYY/MM/DD derived from filename_ts (YYYY-MM-DDThh-mm-ss)
+    let year = &filename_ts[0..4];
+    let month = &filename_ts[5..7];
+    let day = &filename_ts[8..10];
+    let dir = codex_home.join("sessions").join(year).join(month).join(day);
+    fs::create_dir_all(&dir)?;
+
+    let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
+
+    // Build JSONL lines
+    let meta = SessionMeta {
+        id: conversation_id,
+        timestamp: meta_rfc3339.to_string(),
+        cwd: PathBuf::from("/"),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        instructions: None,
+        source: SessionSource::Cli,
+        model_provider: model_provider.map(str::to_string),
+    };
+    let payload = serde_json::to_value(SessionMetaLine {
+        meta,
+        git: git_info,
+    })?;
+
+    let lines = [
+        json!( {
+            "timestamp": meta_rfc3339,
+            "type": "session_meta",
+            "payload": payload
+        })
+        .to_string(),
+        json!( {
+            "timestamp": meta_rfc3339,
+            "type":"response_item",
+            "payload": {
+                "type":"message",
+                "role":"user",
+                "content":[{"type":"input_text","text": preview}]
+            }
+        })
+        .to_string(),
+        json!( {
+            "timestamp": meta_rfc3339,
+            "type":"event_msg",
+            "payload": {
+                "type":"user_message",
+                "message": preview,
+                "text_elements": text_elements,
+                "local_images": []
+            }
+        })
+        .to_string(),
+    ];
+
+    fs::write(file_path, lines.join("\n") + "\n")?;
+    Ok(uuid_str)
+}
