@@ -6,6 +6,8 @@ use codex_core::protocol::ItemCompletedEvent;
 use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::Op;
 use codex_protocol::items::TurnItem;
+use codex_protocol::user_input::ByteRange;
+use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -38,12 +40,18 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     let first_response = sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]);
     mount_sse_once(&server, first_response).await;
 
+    let text_elements = vec![TextElement {
+        byte_range: ByteRange { start: 0, end: 6 },
+        placeholder: Some("<file>".into()),
+    }];
+    let expected_input = UserInput::Text {
+        text: "please inspect sample.txt".into(),
+        text_elements: text_elements.clone(),
+    };
+
     codex
         .submit(Op::UserInput {
-            items: (vec![UserInput::Text {
-                text: "please inspect sample.txt".into(),
-                text_elements: Vec::new(),
-            }]),
+            items: vec![expected_input.clone()],
             final_output_json_schema: None,
         })
         .await?;
@@ -66,20 +74,16 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     .await;
 
     assert_eq!(started_item.id, completed_item.id);
-    assert_eq!(
-        started_item.content,
-        vec![UserInput::Text {
-            text: "please inspect sample.txt".into(),
-            text_elements: Vec::new(),
-        }]
-    );
-    assert_eq!(
-        completed_item.content,
-        vec![UserInput::Text {
-            text: "please inspect sample.txt".into(),
-            text_elements: Vec::new(),
-        }]
-    );
+    assert_eq!(started_item.content, vec![expected_input.clone()]);
+    assert_eq!(completed_item.content, vec![expected_input]);
+
+    let legacy_message = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::UserMessage(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(legacy_message.message, "please inspect sample.txt");
+    assert_eq!(legacy_message.text_elements, text_elements);
     Ok(())
 }
 

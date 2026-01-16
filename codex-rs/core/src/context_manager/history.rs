@@ -97,7 +97,11 @@ impl ContextManager {
                 }
                 | ResponseItem::Compaction {
                     encrypted_content: content,
-                } => estimate_reasoning_length(content.len()) as i64,
+                } => {
+                    let reasoning_bytes = estimate_reasoning_length(content.len());
+                    i64::try_from(approx_tokens_from_byte_count(reasoning_bytes))
+                        .unwrap_or(i64::MAX)
+                }
                 item => {
                     let serialized = serde_json::to_string(item).unwrap_or_default();
                     i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
