@@ -87,6 +87,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -137,6 +138,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
+use crate::collab;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -845,6 +847,7 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        self.clear_unified_exec_processes();
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -981,6 +984,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.clear_unified_exec_processes();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -1073,8 +1077,6 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
-        self.unified_exec_processes.clear();
-        self.sync_unified_exec_footer();
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1338,6 +1340,14 @@ impl ChatWidget {
         self.bottom_pane.set_unified_exec_processes(processes);
     }
 
+    fn clear_unified_exec_processes(&mut self) {
+        if self.unified_exec_processes.is_empty() {
+            return;
+        }
+        self.unified_exec_processes.clear();
+        self.sync_unified_exec_footer();
+    }
+
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_begin(ev), |s| s.handle_mcp_begin_now(ev2));
@@ -1355,6 +1365,12 @@ impl ChatWidget {
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(history_cell::new_web_search_call(ev.query));
+    }
+
+    fn on_collab_event(&mut self, cell: PlainHistoryCell) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(cell);
+        self.request_redraw();
     }
 
     fn on_get_history_entry_response(
@@ -1973,10 +1989,26 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if c.eq_ignore_ascii_case(&'v')
-                && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
             {
-                self.paste_image_from_clipboard();
+                match paste_image_to_temp_png() {
+                    Ok((path, info)) => {
+                        tracing::debug!(
+                            "pasted image size={}x{} format={}",
+                            info.width,
+                            info.height,
+                            info.encoded_format.label()
+                        );
+                        self.attach_image(path);
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to paste image: {err}");
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to paste image: {err}",
+                        )));
+                    }
+                }
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -2015,6 +2047,11 @@ impl ChatWidget {
                     text,
                     text_elements,
                 } => {
+                    // Enter always sends messages immediately (bypasses queue check)
+                    // Clear any reasoning status header when submitting a new message
+                    self.reasoning_buffer.clear();
+                    self.full_reasoning_buffer.clear();
+                    self.set_status_header(String::from("Working"));
                     let user_message = UserMessage {
                         text,
                         local_images: self
@@ -2022,15 +2059,10 @@ impl ChatWidget {
                             .take_recent_submission_images_with_placeholders(),
                         text_elements,
                     };
-                    if self.is_session_configured() {
-                        // Submitted is only emitted when steer is enabled (Enter sends immediately).
-                        // Reset any reasoning header only when we are actually submitting a turn.
-                        self.reasoning_buffer.clear();
-                        self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
-                        self.submit_user_message(user_message);
-                    } else {
+                    if !self.is_session_configured() {
                         self.queue_user_message(user_message);
+                    } else {
+                        self.submit_user_message(user_message);
                     }
                 }
                 InputResult::Queued {
@@ -2061,32 +2093,6 @@ impl ChatWidget {
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
-    }
-
-    /// Attempt to attach an image from the system clipboard.
-    ///
-    /// This is a best-effort path used when we receive an empty paste event,
-    /// which some terminals emit when the clipboard contains non-text data
-    /// (like images). When the clipboard can't be read or no image exists,
-    /// surface a helpful follow-up so the user can retry with a file path.
-    fn paste_image_from_clipboard(&mut self) {
-        match paste_image_to_temp_png() {
-            Ok((path, info)) => {
-                tracing::debug!(
-                    "pasted image size={}x{} format={}",
-                    info.width,
-                    info.height,
-                    info.encoded_format.label()
-                );
-                self.attach_image(path);
-            }
-            Err(err) => {
-                tracing::warn!("failed to paste image: {err}");
-                self.add_to_history(history_cell::new_error_event(format!(
-                    "Failed to paste image: {err}. Try saving the image to a file and pasting the file path instead.",
-                )));
-            }
-        }
     }
 
     pub(crate) fn composer_text_with_pending(&self) -> String {
@@ -2341,20 +2347,6 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
-    }
-
-    /// Route paste events through image detection.
-    ///
-    /// Terminals vary in how they represent paste: some emit an empty paste
-    /// payload when the clipboard isn't text (common for image-only clipboard
-    /// contents). Treat the empty payload as a hint to attempt a clipboard
-    /// image read; otherwise, fall back to text handling.
-    pub(crate) fn handle_paste_event(&mut self, text: String) {
-        if text.is_empty() {
-            self.paste_image_from_clipboard();
-        } else {
-            self.handle_paste(text);
-        }
     }
 
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
@@ -2634,16 +2626,16 @@ impl ChatWidget {
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
-            EventMsg::CollabAgentSpawnBegin(_)
-            | EventMsg::CollabAgentSpawnEnd(_)
-            | EventMsg::CollabAgentInteractionBegin(_)
-            | EventMsg::CollabAgentInteractionEnd(_)
-            | EventMsg::CollabWaitingBegin(_)
-            | EventMsg::CollabWaitingEnd(_)
-            | EventMsg::CollabCloseBegin(_)
-            | EventMsg::CollabCloseEnd(_) => {
-                // TODO(jif) handle collab tools.
+            EventMsg::CollabAgentSpawnBegin(_) => {}
+            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
+            EventMsg::CollabAgentInteractionBegin(_) => {}
+            EventMsg::CollabAgentInteractionEnd(ev) => {
+                self.on_collab_event(collab::interaction_end(ev))
             }
+            EventMsg::CollabWaitingBegin(ev) => self.on_collab_event(collab::waiting_begin(ev)),
+            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
+            EventMsg::CollabCloseBegin(_) => {}
+            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
             EventMsg::ThreadRolledBack(_) => {}
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
@@ -2715,9 +2707,6 @@ impl ChatWidget {
                 event.local_images,
             ));
         }
-
-        // User messages reset separator state so the next agent response doesn't add a stray break.
-        self.needs_final_message_separator = false;
     }
 
     /// Exit the UI immediately without waiting for shutdown.
@@ -4781,7 +4770,14 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                     name: skill.name.clone(),
                     description: skill.description.clone(),
                     short_description: skill.short_description.clone(),
-                    interface: skill.interface.clone(),
+                    interface: skill.interface.clone().map(|interface| SkillInterface {
+                        display_name: interface.display_name,
+                        short_description: interface.short_description,
+                        icon_small: interface.icon_small,
+                        icon_large: interface.icon_large,
+                        brand_color: interface.brand_color,
+                        default_prompt: interface.default_prompt,
+                    }),
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })
