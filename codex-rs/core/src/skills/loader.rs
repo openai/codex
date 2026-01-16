@@ -282,6 +282,22 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                     continue;
                 }
 
+                if metadata.is_file() && file_name == SKILLS_FILENAME {
+                    match parse_skill_file(&path, scope) {
+                        Ok(skill) => {
+                            outcome.skills.push(skill);
+                        }
+                        Err(err) => {
+                            if scope != SkillScope::System {
+                                outcome.errors.push(SkillError {
+                                    path,
+                                    message: err.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+
                 continue;
             }
 
@@ -926,12 +942,13 @@ icon_large = "./assets/../logo.svg"
 
     #[tokio::test]
     #[cfg(unix)]
-    async fn ignores_symlinked_skill_file_for_user_scope() {
+    async fn loads_symlinked_skill_file_for_user_scope() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let shared = tempfile::tempdir().expect("tempdir");
 
         let shared_skill_path =
             write_skill_at(shared.path(), "demo", "linked-file-skill", "from link");
+        let normalized_shared_skill_path = normalized(&shared_skill_path);
 
         let skill_dir = codex_home.path().join("skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
@@ -945,7 +962,17 @@ icon_large = "./assets/../logo.svg"
             "unexpected errors: {:?}",
             outcome.errors
         );
-        assert_eq!(outcome.skills, Vec::new());
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "linked-file-skill".to_string(),
+                description: "from link".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized_shared_skill_path,
+                scope: SkillScope::User,
+            }]
+        );
     }
 
     #[tokio::test]
