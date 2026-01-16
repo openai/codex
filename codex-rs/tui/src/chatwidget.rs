@@ -1827,10 +1827,26 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if c.eq_ignore_ascii_case(&'v')
-                && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
             {
-                self.paste_image_from_clipboard();
+                match paste_image_to_temp_png() {
+                    Ok((path, info)) => {
+                        tracing::debug!(
+                            "pasted image size={}x{} format={}",
+                            info.width,
+                            info.height,
+                            info.encoded_format.label()
+                        );
+                        self.attach_image(path);
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to paste image: {err}");
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to paste image: {err}",
+                        )));
+                    }
+                }
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -1897,32 +1913,6 @@ impl ChatWidget {
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
-    }
-
-    /// Attempt to attach an image from the system clipboard.
-    ///
-    /// This is a best-effort path used when we receive an empty paste event,
-    /// which some terminals emit when the clipboard contains non-text data
-    /// (like images). When the clipboard can't be read or no image exists,
-    /// surface a helpful follow-up so the user can retry with a file path.
-    fn paste_image_from_clipboard(&mut self) {
-        match paste_image_to_temp_png() {
-            Ok((path, info)) => {
-                tracing::debug!(
-                    "pasted image size={}x{} format={}",
-                    info.width,
-                    info.height,
-                    info.encoded_format.label()
-                );
-                self.attach_image(path);
-            }
-            Err(err) => {
-                tracing::warn!("failed to paste image: {err}");
-                self.add_to_history(history_cell::new_error_event(format!(
-                    "Failed to paste image: {err}. Try saving the image to a file and pasting the file path instead.",
-                )));
-            }
-        }
     }
 
     pub(crate) fn composer_text_with_pending(&self) -> String {
@@ -2177,20 +2167,6 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
-    }
-
-    /// Route paste events through image detection.
-    ///
-    /// Terminals vary in how they represent paste: some emit an empty paste
-    /// payload when the clipboard isn't text (common for image-only clipboard
-    /// contents). Treat the empty payload as a hint to attempt a clipboard
-    /// image read; otherwise, fall back to text handling.
-    pub(crate) fn handle_paste_event(&mut self, text: String) {
-        if text.is_empty() {
-            self.paste_image_from_clipboard();
-        } else {
-            self.handle_paste(text);
-        }
     }
 
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
