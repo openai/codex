@@ -693,9 +693,9 @@ async fn thread_list_created_at_tie_breaks_by_uuid() -> Result<()> {
     .await?;
 
     let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
-    let mut expected = vec![id_a, id_b];
+    let mut expected = [id_a, id_b];
     expected.sort_by_key(|id| Reverse(Uuid::parse_str(id).expect("uuid should parse")));
-    let expected: Vec<_> = expected.iter().map(|id| id.as_str()).collect();
+    let expected: Vec<_> = expected.iter().map(String::as_str).collect();
     assert_eq!(ids, expected);
 
     Ok(())
@@ -745,9 +745,9 @@ async fn thread_list_updated_at_tie_breaks_by_uuid() -> Result<()> {
     .await?;
 
     let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
-    let mut expected = vec![id_a, id_b];
+    let mut expected = [id_a, id_b];
     expected.sort_by_key(|id| Reverse(Uuid::parse_str(id).expect("uuid should parse")));
-    let expected: Vec<_> = expected.iter().map(|id| id.as_str()).collect();
+    let expected: Vec<_> = expected.iter().map(String::as_str).collect();
     assert_eq!(ids, expected);
 
     Ok(())
