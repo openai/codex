@@ -36,7 +36,7 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let mut builder = test_codex()
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
-        .with_config(|config| config.web_search_mode = WebSearchMode::Cached);
+        .with_config(|config| config.web_search_mode = Some(WebSearchMode::Cached));
     let test = builder
         .build(&server)
         .await
