@@ -14,6 +14,7 @@ use codex_core::ThreadManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
+use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
@@ -406,7 +407,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     let request_originator = request.header("originator").expect("originator header");
 
     assert_eq!(request_session_id, session_id.to_string());
-    assert_eq!(request_originator, "codex_cli_rs");
+    assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
 }
 
@@ -522,7 +523,7 @@ async fn chatgpt_auth_sends_correct_request() {
     let session_id = request.header("session_id").expect("session_id header");
     assert_eq!(session_id, thread_id.to_string());
 
-    assert_eq!(request_originator, "codex_cli_rs");
+    assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
     assert_eq!(request_chatgpt_account_id, "account_id");
     assert!(request_body["stream"].as_bool().unwrap());
