@@ -5,18 +5,22 @@ use app_test_support::to_response;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
+use pretty_assertions::assert_eq;
+use std::cmp::Reverse;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -652,6 +656,169 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     let ids_page2: Vec<_> = page2.iter().map(|thread| thread.id.as_str()).collect();
     assert_eq!(ids_page2, vec![id_c.as_str()]);
     assert_eq!(cursor2, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_created_at_tie_breaks_by_uuid() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let id_a = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        None,
+    )?;
+    let id_b = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+    )
+    .await?;
+
+    let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
+    let mut expected = vec![id_a, id_b];
+    expected.sort_by_key(|id| Reverse(Uuid::parse_str(id).expect("uuid should parse")));
+    let expected: Vec<_> = expected.iter().map(|id| id.as_str()).collect();
+    assert_eq!(ids, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_updated_at_tie_breaks_by_uuid() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let id_a = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        None,
+    )?;
+    let id_b = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let updated_at = "2025-02-03T00:00:00Z";
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T10-00-00", &id_a).as_path(),
+        updated_at,
+    )?;
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T11-00-00", &id_b).as_path(),
+        updated_at,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let ThreadListResponse { data, .. } = list_threads_with_sort(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        Some(ThreadSortKey::UpdatedAt),
+    )
+    .await?;
+
+    let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
+    let mut expected = vec![id_a, id_b];
+    expected.sort_by_key(|id| Reverse(Uuid::parse_str(id).expect("uuid should parse")));
+    let expected: Vec<_> = expected.iter().map(|id| id.as_str()).collect();
+    assert_eq!(ids, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_updated_at_uses_mtime_fallback() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T10-00-00", &thread_id).as_path(),
+        "2025-02-05T00:00:00Z",
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let ThreadListResponse { data, .. } = list_threads_with_sort(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        Some(ThreadSortKey::UpdatedAt),
+    )
+    .await?;
+
+    let thread = data
+        .iter()
+        .find(|item| item.id == thread_id)
+        .expect("expected thread for created rollout");
+    let expected_created =
+        chrono::DateTime::parse_from_rfc3339("2025-02-01T10:00:00Z")?.timestamp();
+    let expected_updated =
+        chrono::DateTime::parse_from_rfc3339("2025-02-05T00:00:00Z")?.timestamp();
+    assert_eq!(thread.created_at, expected_created);
+    assert_eq!(thread.updated_at, expected_updated);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: Some("not-a-cursor".to_string()),
+            limit: Some(2),
+            sort_key: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(error.error.message, "invalid cursor: not-a-cursor");
 
     Ok(())
 }
