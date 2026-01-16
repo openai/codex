@@ -763,7 +763,6 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
 
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
-        .rev()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
         .find_map(|item| match codex_core::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
@@ -1172,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_uses_latest_message_input_text() {
+    fn preview_uses_first_message_input_text() {
         let head = vec![
             json!({ "timestamp": "2025-01-01T00:00:00Z" }),
             json!({
@@ -1204,7 +1203,7 @@ mod tests {
             }),
         ];
         let preview = preview_from_head(&head);
-        assert_eq!(preview.as_deref(), Some("later text"));
+        assert_eq!(preview.as_deref(), Some("real question"));
     }
 
     #[test]
