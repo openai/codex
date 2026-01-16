@@ -4781,6 +4781,7 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                     name: skill.name.clone(),
                     description: skill.description.clone(),
                     short_description: skill.short_description.clone(),
+                    interface: skill.interface.clone(),
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })
