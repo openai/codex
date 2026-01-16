@@ -1,4 +1,4 @@
-pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- If a deployed target URL is provided, you may validate web/API findings against it using curl/playwright.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
+pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- If a deployed target URL is provided, you may validate web/API findings against it using curl/playwright.\n- If you need to run the app to obtain a local target URL, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need an ASan build or no image exists.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
 pub(crate) const VALIDATION_PLAN_PROMPT_TEMPLATE: &str = r#"
 Validate that this bug exists.
 
@@ -9,6 +9,7 @@ Shared TESTING.md (read this first):
 - The worker will follow these shared build/install/run instructions before running any per-bug PoC scripts.
 - Do NOT repeat shared setup steps inside the python script.
 - If you discover missing prerequisites or better shared setup, include them in `testing_md_additions` (markdown bullets/commands, no heading).
+- For web validation, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need ASan builds or no image exists; record the exact commands in `testing_md_additions`.
 
 Shared TESTING.md (may be truncated):
 {testing_md}
@@ -20,6 +21,7 @@ If web validation is enabled:
 - You may choose `tool:"curl"` or `tool:"playwright"` with a `target` URL/path to validate against the deployed app.
 - Only make requests to the provided target origin; do not contact other hosts.
 - Any provided credential headers will be applied automatically; do NOT print credential values.
+- If you need to spin up a local target, prefer pulling a released image first (avoid `docker build` unless necessary).
 - If authentication is required and no creds were provided, prefer `tool:"python"`:
   - Create a fresh test account (or login) against the deployed target.
   - Write reusable auth headers to `CODEX_WEB_CREDS_OUT_PATH` as JSON: `{"headers":{...}}` (so the run is reproducible).

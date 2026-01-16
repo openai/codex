@@ -693,9 +693,10 @@ enum SecurityReviewPlanStep {
     ThreatModel,
     AnalyzeBugs,
     PolishFindings,
-    AssembleReport,
+    PrepareValidationTargets,
     ValidateFindings,
     PostValidationRefine,
+    AssembleReport,
 }
 
 #[derive(Clone)]
@@ -885,6 +886,10 @@ fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> 
         "Polish, dedupe, and rerank findings",
     ));
     steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::PrepareValidationTargets,
+        "Prepare runnable validation targets",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
         SecurityReviewPlanStep::ValidateFindings,
         "Validate findings",
     ));
@@ -905,6 +910,7 @@ fn plan_step_slug(step: SecurityReviewPlanStep) -> &'static str {
         SecurityReviewPlanStep::ThreatModel => "threat_model",
         SecurityReviewPlanStep::AnalyzeBugs => "analyze_bugs",
         SecurityReviewPlanStep::PolishFindings => "polish_findings",
+        SecurityReviewPlanStep::PrepareValidationTargets => "prepare_validation_targets",
         SecurityReviewPlanStep::AssembleReport => "assemble_report",
         SecurityReviewPlanStep::ValidateFindings => "validate_findings",
         SecurityReviewPlanStep::PostValidationRefine => "post_validation_refine",
@@ -917,6 +923,7 @@ fn plan_step_from_slug(slug: &str) -> Option<SecurityReviewPlanStep> {
         "threat_model" => Some(SecurityReviewPlanStep::ThreatModel),
         "analyze_bugs" => Some(SecurityReviewPlanStep::AnalyzeBugs),
         "polish_findings" => Some(SecurityReviewPlanStep::PolishFindings),
+        "prepare_validation_targets" => Some(SecurityReviewPlanStep::PrepareValidationTargets),
         "assemble_report" => Some(SecurityReviewPlanStep::AssembleReport),
         "validate_findings" => Some(SecurityReviewPlanStep::ValidateFindings),
         "post_validation_refine" => Some(SecurityReviewPlanStep::PostValidationRefine),
@@ -4077,8 +4084,22 @@ pub async fn run_security_review(
         log_sink.clone(),
     );
     plan_tracker.restore_statuses(&checkpoint.plan_statuses);
+    if !checkpoint
+        .plan_statuses
+        .contains_key("prepare_validation_targets")
+        && matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
+            Some(StepStatus::Completed | StepStatus::InProgress)
+        )
+    {
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+    }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
+
+    let mut validation_target_prep_task: Option<
+        tokio::task::JoinHandle<ValidationTargetPrepOutcome>,
+    > = None;
 
     let mut selected_snippets = checkpoint.selected_snippets.clone();
     if selected_snippets.is_none() {
@@ -4333,6 +4354,61 @@ pub async fn run_security_review(
                 .await;
             });
         }
+    }
+    if !matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::Completed | StepStatus::InProgress)
+    ) {
+        plan_tracker.start_step(SecurityReviewPlanStep::PrepareValidationTargets);
+        if let Some(linear_issue) = linear_issue.as_ref() {
+            let prompt = build_linear_progress_prompt(
+                linear_issue,
+                &checkpoint.model,
+                "Prepare runnable validation targets",
+                &plan_tracker.snapshot_statuses(),
+                &checkpoint,
+                &request.output_root,
+            );
+            let config = request.config.clone();
+            let provider = request.provider.clone();
+            let auth_manager = request.auth_manager.clone();
+            let repo_for_task = repo_path.clone();
+            let progress_for_task = progress_sender.clone();
+            let log_sink_for_task = log_sink.clone();
+            let metrics_for_task = metrics.clone();
+            tokio::spawn(async move {
+                let _ = run_linear_status_agent(
+                    &config,
+                    &provider,
+                    auth_manager,
+                    &repo_for_task,
+                    progress_for_task,
+                    log_sink_for_task,
+                    prompt,
+                    metrics_for_task,
+                )
+                .await;
+            });
+        }
+    }
+    if !matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::Completed)
+    ) && validation_target_prep_task.is_none()
+    {
+        let repo_for_task = repo_path.clone();
+        let output_root_for_task = request.output_root.clone();
+        let progress_for_task = progress_sender.clone();
+        let log_sink_for_task = log_sink.clone();
+        validation_target_prep_task = Some(tokio::spawn(async move {
+            prepare_validation_targets(
+                &repo_for_task,
+                &output_root_for_task,
+                progress_for_task,
+                log_sink_for_task,
+            )
+            .await
+        }));
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -4656,6 +4732,7 @@ pub async fn run_security_review(
                     plan_tracker.mark_complete(SecurityReviewPlanStep::AnalyzeBugs);
                     plan_tracker.mark_complete(SecurityReviewPlanStep::PolishFindings);
                     for step in [
+                        SecurityReviewPlanStep::PrepareValidationTargets,
                         SecurityReviewPlanStep::ValidateFindings,
                         SecurityReviewPlanStep::PostValidationRefine,
                         SecurityReviewPlanStep::AssembleReport,
@@ -5224,17 +5301,30 @@ pub async fn run_security_review(
             format!("Bug analysis summary: {}", findings_summary.as_str()),
         );
         record(&mut logs, "Bug analysis complete.".to_string());
-        plan_tracker.complete_and_start_next(
-            SecurityReviewPlanStep::PolishFindings,
-            Some(SecurityReviewPlanStep::ValidateFindings),
-        );
+        let next_step = if matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+            Some(StepStatus::Completed)
+        ) {
+            SecurityReviewPlanStep::ValidateFindings
+        } else {
+            SecurityReviewPlanStep::PrepareValidationTargets
+        };
+        plan_tracker
+            .complete_and_start_next(SecurityReviewPlanStep::PolishFindings, Some(next_step));
         checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
         persist_checkpoint(&mut checkpoint, &mut logs);
         if let Some(linear_issue) = linear_issue.as_ref() {
+            let step_title = match next_step {
+                SecurityReviewPlanStep::PrepareValidationTargets => {
+                    "Prepare runnable validation targets"
+                }
+                SecurityReviewPlanStep::ValidateFindings => "Validate findings",
+                _ => "Security review update",
+            };
             let prompt = build_linear_progress_prompt(
                 linear_issue,
                 &checkpoint.model,
-                "Validate findings",
+                step_title,
                 &checkpoint.plan_statuses,
                 &checkpoint,
                 &request.output_root,
@@ -5386,6 +5476,89 @@ pub async fn run_security_review(
             });
         }
     };
+
+    let mut validation_target_additions: Vec<String> = Vec::new();
+    if let Some(task) = validation_target_prep_task.take() {
+        match task.await {
+            Ok(outcome) => {
+                logs.extend(outcome.logs);
+                validation_target_additions = outcome.testing_md_additions;
+            }
+            Err(join_err) => {
+                record(
+                    &mut logs,
+                    format!("Validation target preparation task failed: {join_err}"),
+                );
+            }
+        }
+    }
+
+    let specs_root = request.output_root.join("specs");
+    let testing_path = specs_root.join("TESTING.md");
+    if tokio_fs::read_to_string(&testing_path)
+        .await
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
+        write_testing_instructions(&repo_path, &specs_root, progress_sender.clone(), None).await;
+    }
+    if !validation_target_additions.is_empty() {
+        apply_validation_testing_md_additions(
+            &testing_path,
+            &repo_path,
+            &validation_target_additions,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+    }
+
+    let validate_was_started = matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
+        Some(StepStatus::Completed | StepStatus::InProgress)
+    );
+    if validate_was_started {
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+    } else {
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::PrepareValidationTargets,
+            Some(SecurityReviewPlanStep::ValidateFindings),
+        );
+    }
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
+
+    if !validate_was_started && let Some(linear_issue) = linear_issue.as_ref() {
+        let prompt = build_linear_progress_prompt(
+            linear_issue,
+            &checkpoint.model,
+            "Validate findings",
+            &checkpoint.plan_statuses,
+            &checkpoint,
+            &request.output_root,
+        );
+        let config = request.config.clone();
+        let provider = request.provider.clone();
+        let auth_manager = request.auth_manager.clone();
+        let repo_for_task = repo_path.clone();
+        let progress_for_task = progress_sender.clone();
+        let log_sink_for_task = log_sink.clone();
+        let metrics_for_task = metrics.clone();
+        tokio::spawn(async move {
+            let _ = run_linear_status_agent(
+                &config,
+                &provider,
+                auth_manager,
+                &repo_for_task,
+                progress_for_task,
+                log_sink_for_task,
+                prompt,
+                metrics_for_task,
+            )
+            .await;
+        });
+    }
 
     let include_web_browser = request
         .validation_target_url
@@ -5610,6 +5783,11 @@ pub async fn run_security_review(
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     checkpoint.status = SecurityReviewCheckpointStatus::Complete;
     persist_checkpoint(&mut checkpoint, &mut logs);
+    let resume_state_display = display_path_for(
+        resume_state_path(&request.output_root).as_path(),
+        &repo_path,
+    );
+    record(&mut logs, format!("Resume state: {resume_state_display}"));
 
     let elapsed = overall_start.elapsed();
     let elapsed_display = fmt_elapsed_compact(elapsed.as_secs());
@@ -5793,6 +5971,10 @@ fn render_checklist_markdown(statuses: &HashMap<String, StepStatus>) -> String {
         ("threat_model", "Draft threat model"),
         ("analyze_bugs", "Analyze code for bugs"),
         ("polish_findings", "Polish, dedupe, and rerank findings"),
+        (
+            "prepare_validation_targets",
+            "Prepare runnable validation targets",
+        ),
         ("validate_findings", "Validate findings"),
         ("post_validation_refine", "Post-validation PoC refinement"),
         ("assemble_report", "Assemble report and artifacts"),
@@ -10313,14 +10495,30 @@ fn build_testing_instructions(repo_root: &Path) -> String {
 
     if has_dockerfile || has_compose {
         let tag = format!("{repo_label}-local");
-        let compose_cmd = if has_compose {
-            "docker compose up --build".to_string()
+        let mut docker_lines: Vec<String> = Vec::new();
+        if has_compose {
+            docker_lines.push(
+                "- Prefer released images when possible: `docker compose pull` then `docker compose up`."
+                    .to_string(),
+            );
+            docker_lines.push(
+                "- If the compose file requires local builds (uses `build:`), use: `docker compose up --build`."
+                    .to_string(),
+            );
         } else {
-            "docker run -p <host_port>:<container_port> <image>".to_string()
-        };
-        sections.push(format!(
-            "## Docker\n- docker build -t {tag} .\n- {compose_cmd}\n- Verify: `curl -i http://localhost:{default_port}` (update to the container's exposed port).\n"
+            docker_lines.push(
+                "- If a released image exists (e.g., GHCR/Docker Hub), prefer pulling it (example: `docker pull <image>:latest`) and running it locally."
+                    .to_string(),
+            );
+            docker_lines.push(format!("- docker build -t {tag} ."));
+            docker_lines.push(format!(
+                "- docker run -p <host_port>:<container_port> {tag}"
+            ));
+        }
+        docker_lines.push(format!(
+            "- Verify: `curl -i http://localhost:{default_port}` (update to the container's exposed port)."
         ));
+        sections.push(format!("## Docker\n{}\n", docker_lines.join("\n")));
     }
 
     if has_playwright {
@@ -10370,6 +10568,137 @@ async fn write_testing_instructions(
             display_path_for(&testing_path, repo_root)
         );
         push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), message);
+    }
+}
+
+struct ValidationTargetPrepOutcome {
+    logs: Vec<String>,
+    testing_md_additions: Vec<String>,
+}
+
+fn extract_compose_image_refs(contents: &str) -> Vec<String> {
+    let mut images: Vec<String> = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("image:") else {
+            continue;
+        };
+        let image = rest
+            .trim()
+            .trim_matches(|ch| matches!(ch, '"' | '\''))
+            .trim();
+        if !image.is_empty() {
+            images.push(image.to_string());
+        }
+    }
+    images
+}
+
+async fn prepare_validation_targets(
+    repo_root: &Path,
+    output_root: &Path,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+) -> ValidationTargetPrepOutcome {
+    let mut logs: Vec<String> = Vec::new();
+    let mut additions: Vec<String> = Vec::new();
+
+    let compose_candidates = [
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+    ];
+    let compose_paths: Vec<PathBuf> = compose_candidates
+        .iter()
+        .map(|name| repo_root.join(name))
+        .filter(|path| path.exists())
+        .collect();
+    let has_dockerfile = repo_root.join("Dockerfile").exists();
+
+    if compose_paths.is_empty() && !has_dockerfile {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            "Validation target prep: no Dockerfile/compose config detected; skipping.".to_string(),
+        );
+        return ValidationTargetPrepOutcome {
+            logs,
+            testing_md_additions: additions,
+        };
+    }
+
+    let testing_path = output_root.join("specs").join("TESTING.md");
+    push_progress_log(
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+        format!(
+            "Validation target prep: collecting Docker guidance to append to {}.",
+            display_path_for(&testing_path, repo_root)
+        ),
+    );
+
+    if compose_paths.is_empty() {
+        additions.push(
+            "- Docker (prefer released images): if the project publishes an image for the latest release, prefer `docker pull <image>:latest` + `docker run ...`; fall back to `docker build` only when no published image exists or you need ASan builds."
+                .to_string(),
+        );
+    } else {
+        additions.push(
+            "- Docker (prefer released images): try `docker compose pull` then `docker compose up` (avoids local builds); fall back to `docker compose up --build` if needed."
+                .to_string(),
+        );
+    }
+
+    if has_dockerfile {
+        additions.push(
+            "- Note: crash PoCs that require ASan generally need a from-source build; released images are usually not ASan-instrumented."
+                .to_string(),
+        );
+    }
+
+    let mut images: Vec<String> = Vec::new();
+    for path in &compose_paths {
+        match tokio_fs::read_to_string(path).await {
+            Ok(contents) => images.extend(extract_compose_image_refs(&contents)),
+            Err(err) => {
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!(
+                        "Validation target prep: failed to read {}: {err}.",
+                        display_path_for(path, repo_root)
+                    ),
+                );
+            }
+        }
+    }
+
+    images.sort();
+    images.dedup();
+    if !images.is_empty() {
+        let rendered = images
+            .iter()
+            .take(8)
+            .map(|image| format!("`{image}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let suffix = if images.len() > 8 {
+            format!(", … (+{} more)", images.len().saturating_sub(8))
+        } else {
+            String::new()
+        };
+        additions.push(format!(
+            "- Candidate images referenced by compose config: {rendered}{suffix}"
+        ));
+    }
+
+    ValidationTargetPrepOutcome {
+        logs,
+        testing_md_additions: additions,
     }
 }
 
