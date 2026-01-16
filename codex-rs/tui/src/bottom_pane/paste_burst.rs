@@ -46,8 +46,12 @@
 //! - `pending_first_char`: a single held ASCII char used for flicker suppression. The caller must
 //!   not render this char until it either becomes part of a burst (`BeginBufferFromPending`) or
 //!   flushes as a normal typed char (`FlushResult::Typed`).
+//!   If an Enter arrives immediately after a held first char (within `PASTE_BURST_CHAR_INTERVAL`),
+//!   the state machine may promote the held char into the burst buffer before appending `\n` so
+//!   key-event paste streams preserve ordering (e.g. `h\ni`).
 //! - `last_plain_char_time`/`consecutive_plain_char_burst`: the timing/count heuristic for
-//!   "paste-like" streams.
+//!   "paste-like" streams. The timestamp is also used for a short "recent char → Enter becomes
+//!   newline" heuristic to avoid submitting mid-paste on very short key-event streams.
 //! - `burst_window_until`: the Enter suppression window ("Enter inserts newline") that outlives the
 //!   buffer itself.
 //!
@@ -99,6 +103,9 @@
 //! - **Pending first char**: `pending_first_char` holds one ASCII char for up to
 //!   `PASTE_BURST_CHAR_INTERVAL` while we wait to see if a burst follows.
 //! - **Active buffer**: `active`/`buffer` holds paste-like content until it times out and flushes.
+//! - **Recent plain char**: a very fast `Char` → `Enter` sequence (within `PASTE_BURST_CHAR_INTERVAL`)
+//!   is treated as "Enter inserts newline" even before we have committed to buffering, to avoid
+//!   submitting mid-paste on terminals that emit multiline pastes as key events.
 //! - **Enter suppress window**: `burst_window_until` keeps Enter treated as newline briefly after
 //!   burst activity so multiline pastes stay grouped.
 //!
