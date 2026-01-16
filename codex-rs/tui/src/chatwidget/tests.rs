@@ -438,6 +438,7 @@ async fn make_chatwidget_manual(
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
+        had_work_activity: false,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
@@ -2787,6 +2788,26 @@ async fn interrupt_clears_unified_exec_processes() {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(chat.unified_exec_processes.is_empty());
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn turn_complete_clears_unified_exec_processes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
         }),
     });
 

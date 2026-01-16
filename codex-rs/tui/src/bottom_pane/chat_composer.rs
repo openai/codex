@@ -2230,7 +2230,7 @@ impl Renderable for ChatComposer {
                     .unwrap_or("Input disabled.")
                     .to_string()
             };
-            let placeholder = Span::from(text).dim().italic();
+            let placeholder = Span::from(text).dim();
             Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
     }

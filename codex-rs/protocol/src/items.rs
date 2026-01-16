@@ -4,6 +4,8 @@ use crate::protocol::AgentReasoningRawContentEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::UserMessageEvent;
 use crate::protocol::WebSearchEndEvent;
+use crate::user_input::ByteRange;
+use crate::user_input::TextElement;
 use crate::user_input::UserInput;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -62,13 +64,13 @@ impl UserMessageItem {
     }
 
     pub fn as_legacy_event(&self) -> EventMsg {
+        // Legacy user-message events flatten only text inputs into `message` and
+        // rebase text element ranges onto that concatenated text.
         EventMsg::UserMessage(UserMessageEvent {
             message: self.message(),
             images: Some(self.image_urls()),
-            // TODO: Thread text element ranges into legacy user message events.
-            text_elements: Vec::new(),
-            // TODO: Thread local image paths into legacy user message events.
-            local_images: Vec::new(),
+            local_images: self.local_image_paths(),
+            text_elements: self.text_elements(),
         })
     }
 
@@ -83,11 +85,47 @@ impl UserMessageItem {
             .join("")
     }
 
+    pub fn text_elements(&self) -> Vec<TextElement> {
+        let mut out = Vec::new();
+        let mut offset = 0usize;
+        for input in &self.content {
+            if let UserInput::Text {
+                text,
+                text_elements,
+            } = input
+            {
+                // Text element ranges are relative to each text chunk; offset them so they align
+                // with the concatenated message returned by `message()`.
+                for elem in text_elements {
+                    out.push(TextElement {
+                        byte_range: ByteRange {
+                            start: offset + elem.byte_range.start,
+                            end: offset + elem.byte_range.end,
+                        },
+                        placeholder: elem.placeholder.clone(),
+                    });
+                }
+                offset += text.len();
+            }
+        }
+        out
+    }
+
     pub fn image_urls(&self) -> Vec<String> {
         self.content
             .iter()
             .filter_map(|c| match c {
                 UserInput::Image { image_url } => Some(image_url.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn local_image_paths(&self) -> Vec<std::path::PathBuf> {
+        self.content
+            .iter()
+            .filter_map(|c| match c {
+                UserInput::LocalImage { path } => Some(path.clone()),
                 _ => None,
             })
             .collect()

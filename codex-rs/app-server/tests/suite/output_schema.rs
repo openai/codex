@@ -80,6 +80,7 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
             conversation_id,
             items: vec![InputItem::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: codex_home.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
@@ -181,6 +182,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
             conversation_id,
             items: vec![InputItem::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: codex_home.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
@@ -228,6 +230,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
             conversation_id,
             items: vec![InputItem::Text {
                 text: "Hello again".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: codex_home.path().to_path_buf(),
             approval_policy: AskForApproval::Never,

@@ -1358,7 +1358,6 @@ pub(crate) fn new_mcp_tools_output(
     if tools.is_empty() {
         lines.push("  • No MCP tools available.".italic().into());
         lines.push("".into());
-        return PlainHistoryCell { lines };
     }
 
     let mut servers: Vec<_> = config.mcp_servers.iter().collect();
@@ -1382,6 +1381,9 @@ pub(crate) fn new_mcp_tools_output(
             header.push(" ".into());
             header.push("(disabled)".red());
             lines.push(header.into());
+            if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
+                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
+            }
             lines.push(Line::from(""));
             continue;
         }
@@ -1664,10 +1666,16 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 }
 
 #[derive(Debug)]
+/// A visual divider between turns, optionally showing how long the assistant "worked for".
+///
+/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
+/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
+/// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
 }
 impl FinalMessageSeparator {
+    /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
     pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
         Self { elapsed_seconds }
     }
@@ -1836,6 +1844,7 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
@@ -1856,6 +1865,7 @@ mod tests {
                 env_http_headers: Some(env_headers),
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
