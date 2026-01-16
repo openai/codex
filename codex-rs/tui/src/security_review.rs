@@ -114,7 +114,7 @@ const WEB_VALIDATION_CREDS_FILE_NAME: &str = "web_validation_creds.json";
 // Heuristic limits inspired by the AppSec review agent to keep prompts manageable.
 const DEFAULT_MAX_FILES: usize = usize::MAX;
 const DEFAULT_MAX_BYTES_PER_FILE: usize = 500_000; // ~488 KiB
-const DEFAULT_MAX_TOTAL_BYTES: usize = 7 * 1024 * 1024; // ~7 MiB
+const DEFAULT_MAX_TOTAL_BYTES: usize = 500 * 1024 * 1024; // ~500 MiB
 const MAX_PROMPT_BYTES: usize = 9_000_000; // ~8.6 MiB safety margin under API cap
 const MAX_CONCURRENT_FILE_ANALYSIS: usize = 32;
 const FILE_TRIAGE_CHUNK_SIZE: usize = 50;
