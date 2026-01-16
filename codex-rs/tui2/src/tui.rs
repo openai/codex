@@ -66,14 +66,16 @@ pub fn set_modes() -> Result<()> {
     // Some terminals (notably legacy Windows consoles) do not support
     // keyboard enhancement flags. Attempt to enable them, but continue
     // gracefully if unsupported.
-    let _ = execute!(
-        stdout(),
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
-    );
+    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
+
+    // REPORT_ALTERNATE_KEYS causes issues on Windows Terminal/conpty where certain
+    // escape sequences can be misinterpreted as system keyboard shortcuts that
+    // trigger control panel applets (e.g., Mouse Properties dialog).
+    #[cfg(not(windows))]
+    let flags = flags | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS;
+
+    let _ = execute!(stdout(), PushKeyboardEnhancementFlags(flags));
 
     let _ = execute!(stdout(), EnableFocusChange);
     // Enable application mouse mode so scroll events are delivered as

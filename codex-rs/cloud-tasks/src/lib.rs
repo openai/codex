@@ -690,14 +690,16 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     stdout.execute(EnableBracketedPaste)?;
     // Enable enhanced key reporting so Shift+Enter is distinguishable from Enter.
     // Some terminals may not support these flags; ignore errors if enabling fails.
-    let _ = crossterm::execute!(
-        std::io::stdout(),
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
-    );
+    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
+
+    // REPORT_ALTERNATE_KEYS causes issues on Windows Terminal/conpty where certain
+    // escape sequences can be misinterpreted as system keyboard shortcuts that
+    // trigger control panel applets (e.g., Mouse Properties dialog).
+    #[cfg(not(windows))]
+    let flags = flags | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS;
+
+    let _ = crossterm::execute!(std::io::stdout(), PushKeyboardEnhancementFlags(flags));
     let backend_ui = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend_ui)?;
     terminal.clear()?;
