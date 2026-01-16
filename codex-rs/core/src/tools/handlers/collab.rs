@@ -906,13 +906,13 @@ mod tests {
         };
         let result: WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
-        let mut expected_status = HashMap::new();
-        expected_status.insert(id_a, AgentStatus::NotFound);
-        expected_status.insert(id_b, AgentStatus::NotFound);
         assert_eq!(
             result,
             WaitResult {
-                status: expected_status,
+                status: HashMap::from([
+                    (id_a, AgentStatus::NotFound),
+                    (id_b, AgentStatus::NotFound),
+                ]),
                 timed_out: false
             }
         );
@@ -1008,12 +1008,10 @@ mod tests {
         };
         let result: WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
-        let mut expected_status = HashMap::new();
-        expected_status.insert(agent_id, AgentStatus::Shutdown);
         assert_eq!(
             result,
             WaitResult {
-                status: expected_status,
+                status: HashMap::from([(agent_id, AgentStatus::Shutdown)]),
                 timed_out: false
             }
         );
