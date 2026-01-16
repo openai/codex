@@ -51,11 +51,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
-    let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
-        &[("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)],
-    )
-    .await?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
