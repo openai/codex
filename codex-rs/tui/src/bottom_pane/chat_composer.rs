@@ -348,7 +348,7 @@ impl ChatComposer {
         let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        // History lookup returns plain text only; no UI element ranges or attachments to restore.
+        // Composer history (↑/↓) stores plain text only; no UI element ranges/attachments to restore here.
         self.set_text_content(text, Vec::new(), Vec::new());
         true
     }
@@ -893,7 +893,7 @@ impl ChatComposer {
                                         return (
                                             InputResult::Submitted {
                                                 text,
-                                                // Prompt submission has no UI element ranges.
+                                                // Submitting a slash/custom prompt generates plain text, so there are no UI element ranges.
                                                 text_elements: Vec::new(),
                                             },
                                             true,
