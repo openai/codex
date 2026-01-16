@@ -4912,6 +4912,7 @@ mod tests {
             name: "lint".to_string(),
             description: "lint".to_string(),
             short_description: None,
+            interface: None,
             path: PathBuf::from("skills/lint"),
             scope: codex_protocol::protocol::SkillScope::User,
         }]));
