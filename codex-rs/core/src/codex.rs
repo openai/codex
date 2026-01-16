@@ -166,7 +166,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -271,10 +270,9 @@ impl Codex {
                 crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
-        let reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
         let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
             model: model.clone(),
-            reasoning_effort,
+            reasoning_effort: config.model_reasoning_effort,
         });
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -501,7 +499,7 @@ impl Session {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
-        per_turn_config.model_reasoning_effort = Some(session_configuration.collaboration_mode.reasoning_effort());
+        per_turn_config.model_reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.features = config.features.clone();
         per_turn_config
@@ -530,7 +528,7 @@ impl Session {
             model_info.clone(),
             otel_manager,
             provider,
-            Some(session_configuration.collaboration_mode.reasoning_effort()),
+            session_configuration.collaboration_mode.reasoning_effort(),
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
@@ -676,7 +674,7 @@ impl Session {
 
         otel_manager.conversation_starts(
             config.model_provider.name.as_str(),
-            Some(session_configuration.collaboration_mode.reasoning_effort()),
+            session_configuration.collaboration_mode.reasoning_effort(),
             config.model_reasoning_summary,
             config.model_context_window,
             config.model_auto_compact_token_limit,
@@ -737,7 +735,7 @@ impl Session {
                 approval_policy: session_configuration.approval_policy.value(),
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
                 cwd: session_configuration.cwd.clone(),
-                reasoning_effort: Some(session_configuration.collaboration_mode.reasoning_effort()),
+                reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                 history_log_id,
                 history_entry_count,
                 initial_messages,
@@ -1816,22 +1814,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 effort,
                 summary,
             } => {
-                let collaboration_mode = if let Some(m) = model {
-                    let reasoning_effort = match effort {
-                        Some(Some(e)) => e,
-                        Some(None) => ReasoningEffortConfig::default(),
-                        None => {
-                            // Get current reasoning_effort from session
-                            let state = sess.state.lock().await;
-                            state.session_configuration.collaboration_mode.reasoning_effort()
-                        }
-                    };
-                    Some(CollaborationMode::Collaborate(CollaborationModeSettings {
-                        model: m,
-                        reasoning_effort,
-                    }))
-                } else {
-                    None
+                let collaboration_mode = {
+                    let state = sess.state.lock().await;
+                    state.session_configuration.collaboration_mode.with_updates(model, effort)
                 };
                 handlers::override_turn_context(
                     &sess,
@@ -1999,7 +1984,7 @@ mod handlers {
             } => {
                 let collaboration_mode = Some(CollaborationMode::Collaborate(CollaborationModeSettings {
                     model,
-                    reasoning_effort: effort.unwrap_or_default(),
+                    reasoning_effort: effort,
                 }));
                 (
                     items,
@@ -3402,7 +3387,7 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
+        let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
             model,
             reasoning_effort,
@@ -3472,7 +3457,7 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
+        let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
             model,
             reasoning_effort,
@@ -3726,7 +3711,7 @@ mod tests {
         let exec_policy = ExecPolicyManager::default();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
+        let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
             model,
             reasoning_effort,
@@ -3825,7 +3810,7 @@ mod tests {
         let exec_policy = ExecPolicyManager::default();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
+        let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
             model,
             reasoning_effort,
