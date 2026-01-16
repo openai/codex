@@ -11,6 +11,18 @@ use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+pub fn rollout_path(codex_home: &Path, filename_ts: &str, thread_id: &str) -> PathBuf {
+    let year = &filename_ts[0..4];
+    let month = &filename_ts[5..7];
+    let day = &filename_ts[8..10];
+    codex_home
+        .join("sessions")
+        .join(year)
+        .join(month)
+        .join(day)
+        .join(format!("rollout-{filename_ts}-{thread_id}.jsonl"))
+}
+
 /// Create a minimal rollout file under `CODEX_HOME/sessions/YYYY/MM/DD/`.
 ///
 /// - `filename_ts` is the filename timestamp component in `YYYY-MM-DDThh-mm-ss` format.
@@ -31,14 +43,11 @@ pub fn create_fake_rollout(
     let uuid_str = uuid.to_string();
     let conversation_id = ThreadId::from_string(&uuid_str)?;
 
-    // sessions/YYYY/MM/DD derived from filename_ts (YYYY-MM-DDThh-mm-ss)
-    let year = &filename_ts[0..4];
-    let month = &filename_ts[5..7];
-    let day = &filename_ts[8..10];
-    let dir = codex_home.join("sessions").join(year).join(month).join(day);
-    fs::create_dir_all(&dir)?;
-
-    let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
+    let file_path = rollout_path(codex_home, filename_ts, &uuid_str);
+    let dir = file_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("missing rollout parent directory"))?;
+    fs::create_dir_all(dir)?;
 
     // Build JSONL lines
     let meta = SessionMeta {

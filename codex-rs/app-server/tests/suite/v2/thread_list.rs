@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
+use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::DateTime;
 use chrono::Utc;
@@ -100,18 +101,6 @@ fn timestamp_at(
         format!("{year:04}-{month:02}-{day:02}T{hour:02}-{minute:02}-{second:02}"),
         format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"),
     )
-}
-
-fn rollout_path(codex_home: &Path, filename_ts: &str, thread_id: &str) -> PathBuf {
-    let year = &filename_ts[0..4];
-    let month = &filename_ts[5..7];
-    let day = &filename_ts[8..10];
-    codex_home
-        .join("sessions")
-        .join(year)
-        .join(month)
-        .join(day)
-        .join(format!("rollout-{filename_ts}-{thread_id}.jsonl"))
 }
 
 fn set_rollout_mtime(path: &Path, updated_at_rfc3339: &str) -> Result<()> {
