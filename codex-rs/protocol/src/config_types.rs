@@ -137,7 +137,7 @@ pub enum CollaborationMode {
     Plan(Settings),
     Collaborate(Settings),
     Execute(Settings),
-    Custom(CustomSettings),
+    Custom(Settings),
 }
 
 impl CollaborationMode {
@@ -146,8 +146,8 @@ impl CollaborationMode {
         match self {
             CollaborationMode::Plan(settings)
             | CollaborationMode::Collaborate(settings)
-            | CollaborationMode::Execute(settings) => settings,
-            CollaborationMode::Custom(custom) => &custom.settings,
+            | CollaborationMode::Execute(settings)
+            | CollaborationMode::Custom(settings) => settings,
         }
     }
 
@@ -163,7 +163,7 @@ impl CollaborationMode {
     ///
     /// - `model`: `Some(s)` to update the model, `None` to keep the current model
     /// - `effort`: `Some(Some(e))` to set effort to `e`, `Some(None)` to clear effort, `None` to keep current effort
-    /// - `developer_instructions`: `Some(s)` to update developer instructions (Custom mode only), `None` to keep current
+    /// - `developer_instructions`: `Some(s)` to update developer instructions, `None` to keep current
     ///
     /// Returns a new `CollaborationMode` with updated values, preserving the variant.
     pub fn with_updates(
@@ -176,17 +176,15 @@ impl CollaborationMode {
         let updated_settings = Settings {
             model: model.unwrap_or_else(|| settings.model.clone()),
             reasoning_effort: effort.unwrap_or(settings.reasoning_effort),
+            developer_instructions: developer_instructions
+                .or_else(|| settings.developer_instructions.clone()),
         };
 
         match self {
             CollaborationMode::Plan(_) => CollaborationMode::Plan(updated_settings),
             CollaborationMode::Collaborate(_) => CollaborationMode::Collaborate(updated_settings),
             CollaborationMode::Execute(_) => CollaborationMode::Execute(updated_settings),
-            CollaborationMode::Custom(custom) => CollaborationMode::Custom(CustomSettings {
-                settings: updated_settings,
-                developer_instructions: developer_instructions
-                    .or_else(|| custom.developer_instructions.clone()),
-            }),
+            CollaborationMode::Custom(_) => CollaborationMode::Custom(updated_settings),
         }
     }
 }
@@ -196,11 +194,5 @@ impl CollaborationMode {
 pub struct Settings {
     pub model: String,
     pub reasoning_effort: Option<ReasoningEffort>,
-}
-
-/// Custom settings that extend base settings with developer instructions.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
-pub struct CustomSettings {
-    pub settings: Settings,
     pub developer_instructions: Option<String>,
 }

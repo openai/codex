@@ -34,7 +34,6 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
-use codex_protocol::config_types::CustomSettings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -273,11 +272,9 @@ impl Codex {
             .await;
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
-        let collaboration_mode = CollaborationMode::Custom(CustomSettings {
-            settings: Settings {
-                model: model.clone(),
-                reasoning_effort: config.model_reasoning_effort,
-            },
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model: model.clone(),
+            reasoning_effort: config.model_reasoning_effort,
             developer_instructions: None,
         });
         let session_configuration = SessionConfiguration {
@@ -1929,7 +1926,6 @@ mod handlers {
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
-    use codex_protocol::config_types::CustomSettings;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
@@ -1997,11 +1993,9 @@ mod handlers {
                 items,
             } => {
                 let collaboration_mode =
-                    Some(CollaborationMode::Custom(CustomSettings {
-                        settings: Settings {
-                            model,
-                            reasoning_effort: effort,
-                        },
+                    Some(CollaborationMode::Custom(Settings {
+                        model,
+                        reasoning_effort: effort,
                         developer_instructions: None,
                     }));
                 (
@@ -3406,11 +3400,9 @@ mod tests {
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode::Custom(CustomSettings {
-            settings: Settings {
-                model,
-                reasoning_effort,
-            },
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort,
             developer_instructions: None,
         });
         let session_configuration = SessionConfiguration {
@@ -3479,11 +3471,9 @@ mod tests {
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode::Custom(CustomSettings {
-            settings: Settings {
-                model,
-                reasoning_effort,
-            },
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort,
             developer_instructions: None,
         });
         let session_configuration = SessionConfiguration {
@@ -3736,11 +3726,9 @@ mod tests {
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode::Custom(CustomSettings {
-            settings: Settings {
-                model,
-                reasoning_effort,
-            },
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort,
             developer_instructions: None,
         });
         let session_configuration = SessionConfiguration {
@@ -3838,11 +3826,9 @@ mod tests {
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode::Custom(CustomSettings {
-            settings: Settings {
-                model,
-                reasoning_effort,
-            },
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort,
             developer_instructions: None,
         });
         let session_configuration = SessionConfiguration {
