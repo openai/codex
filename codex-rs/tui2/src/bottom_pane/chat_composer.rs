@@ -1567,11 +1567,10 @@ impl ChatComposer {
         } else {
             // Restore text if submission was suppressed.
             self.set_text_content(
-                original_input.clone(),
+                original_input,
                 original_text_elements,
                 original_local_image_paths,
             );
-            self.textarea.set_cursor(original_input.len());
             (InputResult::None, true)
         }
     }
