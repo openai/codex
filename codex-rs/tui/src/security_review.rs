@@ -19525,7 +19525,7 @@ fn normalize_reasoning_effort_for_model(
     model: &str,
     requested: Option<ReasoningEffort>,
 ) -> Option<ReasoningEffort> {
-    if !model.starts_with("gpt-5-codex") {
+    if !model.starts_with("gpt-5") || !model.contains("codex") {
         return requested;
     }
 
@@ -19912,39 +19912,50 @@ fn parse_responses_stream_output(
     let mut fallback: Option<serde_json::Value> = None;
     let mut failed_error: Option<String> = None;
     let mut last_parse_error: Option<String> = None;
+    let mut saw_output_delta = false;
 
     let mut data_buffer = String::new();
+    let mut event_name: Option<String> = None;
 
     for raw_line in body.lines() {
         let line = raw_line.trim_end_matches('\r');
 
-        if let Some(rest) = line.strip_prefix("data:") {
+        if let Some(rest) = line.strip_prefix("event:") {
+            event_name = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("data:") {
             if !data_buffer.is_empty() {
                 data_buffer.push('\n');
             }
             data_buffer.push_str(rest.trim_start());
-        } else if line.trim().is_empty() && !data_buffer.is_empty() {
-            handle_responses_event(
-                &data_buffer,
-                &mut combined,
-                &mut reasoning,
-                &mut fallback,
-                &mut failed_error,
-                &mut last_parse_error,
-                metrics,
-            );
-            data_buffer.clear();
+        } else if line.trim().is_empty() {
+            if !data_buffer.is_empty() {
+                handle_responses_event(
+                    &data_buffer,
+                    event_name.as_deref(),
+                    &mut combined,
+                    &mut reasoning,
+                    &mut fallback,
+                    &mut failed_error,
+                    &mut last_parse_error,
+                    &mut saw_output_delta,
+                    metrics,
+                );
+                data_buffer.clear();
+            }
+            event_name = None;
         }
     }
 
     if !data_buffer.is_empty() {
         handle_responses_event(
             &data_buffer,
+            event_name.as_deref(),
             &mut combined,
             &mut reasoning,
             &mut fallback,
             &mut failed_error,
             &mut last_parse_error,
+            &mut saw_output_delta,
             metrics,
         );
     }
@@ -19973,13 +19984,96 @@ fn parse_responses_stream_output(
 
 fn handle_responses_event(
     data: &str,
+    event_name: Option<&str>,
     combined: &mut String,
     reasoning: &mut String,
     fallback: &mut Option<serde_json::Value>,
     failed_error: &mut Option<String>,
     last_parse_error: &mut Option<String>,
+    saw_output_delta: &mut bool,
     metrics: &ReviewMetrics,
 ) {
+    fn append_text(target: &mut String, text: &str) {
+        if !text.is_empty() {
+            target.push_str(text);
+        }
+    }
+
+    fn extract_text_from_output_item(item: &serde_json::Value) -> Option<String> {
+        match item.get("type").and_then(|t| t.as_str()) {
+            Some("output_text") | Some("text") => item
+                .get("text")
+                .and_then(|t| t.as_str())
+                .filter(|t| !t.is_empty())
+                .map(ToString::to_string),
+            Some("message") => {
+                let Some(content) = item.get("content").and_then(|c| c.as_array()) else {
+                    return None;
+                };
+                let mut combined = String::new();
+                for block in content {
+                    match block.get("type").and_then(|t| t.as_str()) {
+                        Some("text") | Some("output_text") => {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                combined.push_str(text);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if combined.is_empty() {
+                    None
+                } else {
+                    Some(combined)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn append_chat_completions_delta(event: &serde_json::Value, combined: &mut String) -> bool {
+        let Some(choices) = event.get("choices").and_then(|v| v.as_array()) else {
+            return false;
+        };
+        let mut appended = false;
+        for choice in choices {
+            if let Some(delta) = choice.get("delta") {
+                if let Some(content) = delta
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .filter(|c| !c.is_empty())
+                {
+                    combined.push_str(content);
+                    appended = true;
+                } else if let Some(text) = delta
+                    .get("text")
+                    .and_then(|c| c.as_str())
+                    .filter(|c| !c.is_empty())
+                {
+                    combined.push_str(text);
+                    appended = true;
+                }
+            }
+            if let Some(content) = choice
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .filter(|c| !c.is_empty())
+            {
+                combined.push_str(content);
+                appended = true;
+            } else if let Some(text) = choice
+                .get("text")
+                .and_then(|t| t.as_str())
+                .filter(|t| !t.is_empty())
+            {
+                combined.push_str(text);
+                appended = true;
+            }
+        }
+        appended
+    }
+
     let trimmed = data.trim();
     if trimmed.is_empty() || trimmed == "[DONE]" {
         return;
@@ -19987,14 +20081,61 @@ fn handle_responses_event(
 
     match serde_json::from_str::<serde_json::Value>(trimmed) {
         Ok(event) => {
-            let Some(kind) = event.get("type").and_then(|v| v.as_str()) else {
+            let Some(kind) = event.get("type").and_then(|v| v.as_str()).or(event_name) else {
+                if append_chat_completions_delta(&event, combined) {
+                    *saw_output_delta = true;
+                    return;
+                }
+                if failed_error.is_none()
+                    && let Some(message) = event
+                        .get("error")
+                        .and_then(|err| err.get("message"))
+                        .and_then(|m| m.as_str())
+                {
+                    *failed_error = Some(message.to_string());
+                }
                 return;
             };
 
             match kind {
                 "response.output_text.delta" => {
                     if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
-                        combined.push_str(delta);
+                        append_text(combined, delta);
+                        *saw_output_delta = true;
+                    } else if let Some(delta_obj) = event.get("delta").and_then(|v| v.as_object()) {
+                        if let Some(text) = delta_obj.get("text").and_then(|v| v.as_str()) {
+                            append_text(combined, text);
+                            *saw_output_delta = true;
+                        } else if let Some(content) =
+                            delta_obj.get("content").and_then(|v| v.as_array())
+                        {
+                            for block in content {
+                                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                    append_text(combined, text);
+                                    *saw_output_delta = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                "response.output_text.done" => {
+                    if !*saw_output_delta
+                        && let Some(text) = event
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| event.get("delta").and_then(|v| v.as_str()))
+                        && text.trim().len() >= combined.trim().len()
+                    {
+                        combined.clear();
+                        combined.push_str(text);
+                    }
+                }
+                "response.output_item.added" | "response.output_item.done" => {
+                    if !*saw_output_delta
+                        && let Some(item) = event.get("item")
+                        && let Some(text) = extract_text_from_output_item(item)
+                    {
+                        combined.push_str(&text);
                     }
                 }
                 "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
@@ -20103,10 +20244,57 @@ fn handle_responses_event(
             }
         }
         Err(err) => {
+            if let Some(kind) = event_name {
+                match kind {
+                    "response.output_text.delta" => {
+                        append_text(combined, trimmed);
+                        *saw_output_delta = true;
+                        return;
+                    }
+                    "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
+                        append_text(reasoning, trimmed);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             if last_parse_error.is_none() {
                 *last_parse_error = Some(format!("failed to parse SSE event: {err}"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod responses_stream_parse_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parses_chat_completions_style_sse() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let metrics = ReviewMetrics::default();
+        let output = parse_responses_stream_output(body, &metrics).expect("parsed output");
+        assert_eq!(output.text, "Hello world");
+    }
+
+    #[test]
+    fn parses_sse_event_name_without_type_field() {
+        let body = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"delta\":\"1\"}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"delta\":\"2\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"response\":{\"output\":[{\"type\":\"output_text\",\"text\":\"12\"}]}}\n\n",
+        );
+        let metrics = ReviewMetrics::default();
+        let output = parse_responses_stream_output(body, &metrics).expect("parsed output");
+        assert_eq!(output.text, "12");
     }
 }
 
