@@ -1365,6 +1365,7 @@ async fn unified_exec_interaction_after_task_complete_is_suppressed() {
 #[tokio::test]
 async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
     chat.unified_exec_processes.push(UnifiedExecProcessSummary {
         key: "proc-1".to_string(),
         command_display: "sleep 5".to_string(),
@@ -1386,6 +1387,7 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 #[tokio::test]
 async fn unified_exec_waiting_multiple_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
     begin_unified_exec_startup(&mut chat, "call-wait-1", "proc-1", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
@@ -1413,6 +1415,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 #[tokio::test]
 async fn unified_exec_empty_then_non_empty_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
     begin_unified_exec_startup(&mut chat, "call-wait-2", "proc-2", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-2a", "proc-2", "");
@@ -1429,6 +1432,7 @@ async fn unified_exec_empty_then_non_empty_snapshot() {
 #[tokio::test]
 async fn unified_exec_non_empty_then_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
     begin_unified_exec_startup(&mut chat, "call-wait-3", "proc-3", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
