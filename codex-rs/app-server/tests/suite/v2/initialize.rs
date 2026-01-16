@@ -18,7 +18,11 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)],
+    )
+    .await?;
 
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
