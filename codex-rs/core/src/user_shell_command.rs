@@ -95,7 +95,7 @@ mod tests {
         let ResponseItem::Message { content, .. } = item else {
             panic!("expected message");
         };
-        let [ContentItem::InputText { text }] = content.as_slice() else {
+        let [ContentItem::InputText { text, .. }] = content.as_slice() else {
             panic!("expected input text");
         };
         assert_eq!(
