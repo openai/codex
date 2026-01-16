@@ -1567,7 +1567,7 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::OpenForkPicker => {
+            AppEvent::ForkCurrentSession => {
                 match crate::resume_picker::run_fork_picker(
                     tui,
                     &self.config.codex_home,
