@@ -1464,7 +1464,7 @@ impl App {
     }
 
     fn finish_external_approval(&mut self) {
-        if !self.external_approval_routes.is_empty() {
+        if self.external_approval_routes.is_empty() {
             while let Some(event) = self.paused_codex_events.pop_front() {
                 self.handle_codex_event_now(event);
             }
