@@ -48,7 +48,7 @@ pub(crate) struct BacktrackSelection {
 
 impl App {
     /// Route overlay events when transcript overlay is active.
-    /// - If backtrack preview is active: Esc steps selection; Enter confirms.
+    /// - If backtrack preview is active: Esc/Left steps selection; Right steps forward; Enter confirms.
     /// - Otherwise: Esc begins preview; all other events forward to overlay.
     ///   interactions (Esc to step target, Enter to confirm) and overlay lifecycle.
     pub(crate) async fn handle_backtrack_overlay_event(
@@ -64,6 +64,22 @@ impl App {
                     ..
                 }) => {
                     self.overlay_step_backtrack(tui, event)?;
+                    Ok(true)
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Left,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    self.overlay_step_backtrack(tui, event)?;
+                    Ok(true)
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Right,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    self.overlay_step_backtrack_forward(tui, event)?;
                     Ok(true)
                 }
                 TuiEvent::Key(KeyEvent {
@@ -217,6 +233,27 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    /// Step selection to the next newer user message and update overlay.
+    fn step_forward_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
+        let count = user_count(&self.transcript_cells);
+        if count == 0 {
+            return;
+        }
+
+        let last_index = count.saturating_sub(1);
+        let next_selection = if self.backtrack.nth_user_message == usize::MAX {
+            last_index
+        } else {
+            self.backtrack
+                .nth_user_message
+                .saturating_add(1)
+                .min(last_index)
+        };
+
+        self.apply_backtrack_selection(next_selection);
+        tui.frame_requester().schedule_frame();
+    }
+
     /// Apply a computed backtrack selection to the overlay and internal counter.
     fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
         if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
@@ -299,6 +336,20 @@ impl App {
     fn overlay_step_backtrack(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         if self.backtrack.base_id.is_some() {
             self.step_backtrack_and_highlight(tui);
+        } else {
+            self.overlay_forward_event(tui, event)?;
+        }
+        Ok(())
+    }
+
+    /// Handle Right in overlay backtrack preview: step selection forward if armed, else forward.
+    fn overlay_step_backtrack_forward(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: TuiEvent,
+    ) -> Result<()> {
+        if self.backtrack.base_id.is_some() {
+            self.step_forward_backtrack_and_highlight(tui);
         } else {
             self.overlay_forward_event(tui, event)?;
         }
