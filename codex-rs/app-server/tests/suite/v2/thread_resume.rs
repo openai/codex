@@ -1,6 +1,5 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
-use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
