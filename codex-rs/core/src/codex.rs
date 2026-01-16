@@ -2485,6 +2485,7 @@ mod handlers {
             Arc::clone(&turn_context),
             vec![UserInput::Text {
                 text: turn_context.compact_prompt().to_string(),
+                // Compaction prompt is synthesized; no UI element ranges to preserve.
                 text_elements: Vec::new(),
             }],
             CompactTask,
@@ -2694,6 +2695,7 @@ async fn spawn_review_thread(
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<UserInput> = vec![UserInput::Text {
         text: review_prompt,
+        // Review prompt is synthesized; no UI element ranges to preserve.
         text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);

@@ -137,7 +137,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item {
             if role == "user" {
                 for c in content {
-                    if let ContentItem::InputText { text } = c {
+                    if let ContentItem::InputText { text, .. } = c {
                         if text.contains("full review output from reviewer model") {
                             saw_header = true;
                         }
@@ -638,7 +638,7 @@ async fn review_input_isolated_from_parent_history() {
             && role == "user"
         {
             for c in content {
-                if let ContentItem::InputText { text } = c
+                if let ContentItem::InputText { text, .. } = c
                     && text.contains("User initiated a review task, but was interrupted.")
                 {
                     saw_interruption_message = true;

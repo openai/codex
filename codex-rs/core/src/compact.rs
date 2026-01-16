@@ -46,7 +46,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
         text: prompt,
-        // Plain text conversion has no UI element ranges.
+        // Compaction prompt is synthesized; no UI element ranges to preserve.
         text_elements: Vec::new(),
     }];
 
@@ -197,7 +197,7 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     let mut pieces = Vec::new();
     for item in content {
         match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            ContentItem::InputText { text, .. } | ContentItem::OutputText { text } => {
                 if !text.is_empty() {
                     pieces.push(text.as_str());
                 }
