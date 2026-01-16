@@ -1,7 +1,16 @@
+//! Application-level events used to coordinate UI actions.
+//!
+//! `AppEvent` is the internal message bus between UI components and the top-level `App` loop.
+//! Widgets emit events to request actions that must be handled at the app layer (like opening
+//! pickers, persisting configuration, or shutting down the agent), without needing direct access to
+//! `App` internals.
+//!
+//! Exit is modelled explicitly via `AppEvent::Exit(ExitMode)` so callers can request shutdown-first
+//! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
+
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
-use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
@@ -14,6 +23,19 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::openai_models::ReasoningEffort;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) enum WindowsSandboxEnableMode {
+    Elevated,
+    Legacy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) enum WindowsSandboxFallbackReason {
+    ElevationFailed,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -25,8 +47,19 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
-    /// Request to exit the application gracefully.
-    ExitRequest,
+    /// Open the fork picker inside the running TUI session.
+    OpenForkPicker,
+
+    /// Request to exit the application.
+    ///
+    /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the
+    /// UI exits only after `ShutdownComplete`. `Immediate` is a last-resort
+    /// escape hatch that skips shutdown and may drop in-flight work (e.g.,
+    /// background tasks, rollout flush, or child process cleanup).
+    Exit(ExitMode),
+
+    /// Request to exit the application due to a fatal error.
+    FatalExitRequest(String),
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
@@ -105,10 +138,24 @@ pub(crate) enum AppEvent {
         preset: ApprovalPreset,
     },
 
+    /// Open the Windows sandbox fallback prompt after declining or failing elevation.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    OpenWindowsSandboxFallbackPrompt {
+        preset: ApprovalPreset,
+        reason: WindowsSandboxFallbackReason,
+    },
+
+    /// Begin the elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    BeginWindowsSandboxElevatedSetup {
+        preset: ApprovalPreset,
+    },
+
     /// Enable the Windows sandbox feature and switch to Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     EnableWindowsSandboxForAgentMode {
         preset: ApprovalPreset,
+        mode: WindowsSandboxEnableMode,
     },
 
     /// Update the current approval policy in the running app and widget.
@@ -150,9 +197,6 @@ pub(crate) enum AppEvent {
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
 
-    /// Forwarded conversation history snapshot from the current conversation.
-    ConversationHistory(ConversationPathResponseEvent),
-
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
 
@@ -175,6 +219,22 @@ pub(crate) enum AppEvent {
     OpenFeedbackConsent {
         category: FeedbackCategory,
     },
+}
+
+/// The exit strategy requested by the UI layer.
+///
+/// Most user-initiated exits should use `ShutdownFirst` so core cleanup runs and the UI exits only
+/// after core acknowledges completion. `Immediate` is an escape hatch for cases where shutdown has
+/// already completed (or is being bypassed) and the UI loop should terminate right away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitMode {
+    /// Shutdown core and exit after completion.
+    ShutdownFirst,
+    /// Exit the UI loop immediately without waiting for shutdown.
+    ///
+    /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
+    /// cleanup that normally runs before `ShutdownComplete` can be missed.
+    Immediate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

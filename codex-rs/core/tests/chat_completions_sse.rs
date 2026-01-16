@@ -12,7 +12,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_otel::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::protocol::SessionSource;
@@ -89,7 +89,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         SessionSource::Exec,
     );
 
-    let client = ModelClient::new(
+    let mut client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_info,
@@ -99,7 +99,8 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         summary,
         conversation_id,
         SessionSource::Exec,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {

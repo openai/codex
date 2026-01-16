@@ -109,6 +109,10 @@ client_request_definitions! {
         params: v2::ThreadResumeParams,
         response: v2::ThreadResumeResponse,
     },
+    ThreadFork => "thread/fork" {
+        params: v2::ThreadForkParams,
+        response: v2::ThreadForkResponse,
+    },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
@@ -120,6 +124,10 @@ client_request_definitions! {
     ThreadList => "thread/list" {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
+    },
+    ThreadLoadedList => "thread/loaded/list" {
+        params: v2::ThreadLoadedListParams,
+        response: v2::ThreadLoadedListResponse,
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
@@ -146,6 +154,11 @@ client_request_definitions! {
     McpServerOauthLogin => "mcpServer/oauth/login" {
         params: v2::McpServerOauthLoginParams,
         response: v2::McpServerOauthLoginResponse,
+    },
+
+    McpServerRefresh => "config/mcpServer/reload" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::McpServerRefreshResponse,
     },
 
     McpServerStatusList => "mcpServerStatus/list" {
@@ -197,6 +210,11 @@ client_request_definitions! {
         response: v2::ConfigWriteResponse,
     },
 
+    ConfigRequirementsRead => "configRequirements/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::ConfigRequirementsReadResponse,
+    },
+
     GetAccount => "account/read" {
         params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
@@ -220,6 +238,11 @@ client_request_definitions! {
     ResumeConversation {
         params: v1::ResumeConversationParams,
         response: v1::ResumeConversationResponse,
+    },
+    /// Fork a recorded Codex conversation into a new session.
+    ForkConversation {
+        params: v1::ForkConversationParams,
+        response: v1::ForkConversationResponse,
     },
     ArchiveConversation {
         params: v1::ArchiveConversationParams,
@@ -544,6 +567,7 @@ server_notification_definitions! {
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
+    ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
@@ -704,6 +728,22 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
+                "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_config_requirements_read() -> Result<()> {
+        let request = ClientRequest::ConfigRequirementsRead {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        assert_eq!(
+            json!({
+                "method": "configRequirements/read",
                 "id": 1,
             }),
             serde_json::to_value(&request)?,

@@ -9,6 +9,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -32,6 +33,8 @@ struct ExecCommandArgs {
     shell: Option<String>,
     #[serde(default = "default_login")]
     login: bool,
+    #[serde(default = "default_tty")]
+    tty: bool,
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -64,6 +67,10 @@ fn default_write_stdin_yield_time_ms() -> u64 {
 
 fn default_login() -> bool {
     true
+}
+
+fn default_tty() -> bool {
+    false
 }
 
 #[async_trait]
@@ -117,16 +124,13 @@ impl ToolHandler for UnifiedExecHandler {
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let args: ExecCommandArgs = serde_json::from_str(&arguments).map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse exec_command arguments: {err:?}"
-                    ))
-                })?;
+                let args: ExecCommandArgs = parse_arguments(&arguments)?;
                 let process_id = manager.allocate_process_id().await;
                 let command = get_command(&args, session.user_shell());
 
                 let ExecCommandArgs {
                     workdir,
+                    tty,
                     yield_time_ms,
                     max_output_tokens,
                     sandbox_permissions,
@@ -176,6 +180,7 @@ impl ToolHandler for UnifiedExecHandler {
                             yield_time_ms,
                             max_output_tokens,
                             workdir,
+                            tty,
                             sandbox_permissions,
                             justification,
                         },
@@ -187,11 +192,7 @@ impl ToolHandler for UnifiedExecHandler {
                     })?
             }
             "write_stdin" => {
-                let args: WriteStdinArgs = serde_json::from_str(&arguments).map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse write_stdin arguments: {err:?}"
-                    ))
-                })?;
+                let args: WriteStdinArgs = parse_arguments(&arguments)?;
                 let response = manager
                     .write_stdin(WriteStdinRequest {
                         process_id: &args.session_id.to_string(),
@@ -280,11 +281,10 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_get_command_uses_default_shell_when_unspecified() {
+    fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
         let json = r#"{"cmd": "echo hello"}"#;
 
-        let args: ExecCommandArgs =
-            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+        let args: ExecCommandArgs = parse_arguments(json)?;
 
         assert!(args.shell.is_none());
 
@@ -292,14 +292,14 @@ mod tests {
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
+        Ok(())
     }
 
     #[test]
-    fn test_get_command_respects_explicit_bash_shell() {
+    fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
 
-        let args: ExecCommandArgs =
-            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+        let args: ExecCommandArgs = parse_arguments(json)?;
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
@@ -312,33 +312,34 @@ mod tests {
         {
             assert!(command.contains(&"-NoProfile".to_string()));
         }
+        Ok(())
     }
 
     #[test]
-    fn test_get_command_respects_explicit_powershell_shell() {
+    fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
         let json = r#"{"cmd": "echo hello", "shell": "powershell"}"#;
 
-        let args: ExecCommandArgs =
-            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+        let args: ExecCommandArgs = parse_arguments(json)?;
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
         let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command[2], "echo hello");
+        Ok(())
     }
 
     #[test]
-    fn test_get_command_respects_explicit_cmd_shell() {
+    fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
         let json = r#"{"cmd": "echo hello", "shell": "cmd"}"#;
 
-        let args: ExecCommandArgs =
-            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+        let args: ExecCommandArgs = parse_arguments(json)?;
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
         let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command[2], "echo hello");
+        Ok(())
     }
 }

@@ -100,6 +100,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please run a tool".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -111,7 +112,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         })
         .await?;
 
-    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Assert /models was refreshed exactly once after the X-Models-Etag mismatch.
     assert_eq!(refresh_models_mock.requests().len(), 1);

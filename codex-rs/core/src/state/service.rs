@@ -10,14 +10,14 @@ use crate::skills::SkillsManager;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotifier;
-use codex_otel::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
-    pub(crate) mcp_startup_cancellation_token: CancellationToken,
+    pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     pub(crate) notifier: UserNotifier,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,

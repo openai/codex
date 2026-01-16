@@ -12,8 +12,8 @@ use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
-use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
@@ -44,7 +44,11 @@ pub(crate) async fn run_inline_auto_compact_task(
     turn_context: Arc<TurnContext>,
 ) {
     let prompt = turn_context.compact_prompt().to_string();
-    let input = vec![UserInput::Text { text: prompt }];
+    let input = vec![UserInput::Text {
+        text: prompt,
+        // Plain text conversion has no UI element ranges.
+        text_elements: Vec::new(),
+    }];
 
     run_compact_task_inner(sess, turn_context, input).await;
 }
@@ -54,7 +58,7 @@ pub(crate) async fn run_compact_task(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) {
-    let start_event = EventMsg::TaskStarted(TaskStartedEvent {
+    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;
@@ -95,9 +99,11 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let turn_input = history.get_history_for_prompt();
+        // Clone is required because of the loop
+        let turn_input = history.clone().for_prompt();
+        let turn_input_len = turn_input.len();
         let prompt = Prompt {
-            input: turn_input.clone(),
+            input: turn_input,
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
@@ -119,7 +125,7 @@ async fn run_compact_task_inner(
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input.len() > 1 {
+                if turn_input_len > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
                     error!(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
@@ -155,15 +161,15 @@ async fn run_compact_task_inner(
         }
     }
 
-    let history_snapshot = sess.clone_history().await.get_history();
-    let summary_suffix =
-        get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
+    let history_snapshot = sess.clone_history().await;
+    let history_items = history_snapshot.raw_items();
+    let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let user_messages = collect_user_messages(&history_snapshot);
+    let user_messages = collect_user_messages(history_items);
 
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
-    let ghost_snapshots: Vec<ResponseItem> = history_snapshot
+    let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
         .cloned()
@@ -295,7 +301,8 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    let mut client_session = turn_context.client.new_session();
+    let mut stream = client_session.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {

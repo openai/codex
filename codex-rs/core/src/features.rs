@@ -7,6 +7,8 @@
 
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use codex_otel::OtelManager;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -14,6 +16,7 @@ use std::collections::BTreeSet;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
+pub(crate) use legacy::legacy_feature_keys;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,12 +88,18 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Append additional AGENTS.md guidance to user instructions.
+    ChildAgentsMd,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
+    /// Enable collab tools.
+    Collab,
+    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
+    Steer,
 }
 
 impl Feature {
@@ -193,6 +202,21 @@ impl Features {
             .map(|usage| (usage.alias.as_str(), usage.feature))
     }
 
+    pub fn emit_metrics(&self, otel: &OtelManager) {
+        for feature in FEATURES {
+            if self.enabled(feature.id) != feature.default_enabled {
+                otel.counter(
+                    "codex.feature.state",
+                    1,
+                    &[
+                        ("feature", feature.key),
+                        ("value", &self.enabled(feature.id).to_string()),
+                    ],
+                );
+            }
+        }
+    }
+
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
@@ -272,7 +296,7 @@ pub fn is_known_feature_key(key: &str) -> bool {
 }
 
 /// Deserializable features table for TOML.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct FeaturesToml {
     #[serde(flatten)]
     pub entries: BTreeMap<String, bool>,
@@ -335,6 +359,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ChildAgentsMd,
+        key: "child_agents_md",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
         stage: Stage::Experimental,
@@ -383,9 +413,25 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::Collab,
+        key: "collab",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Tui2,
         key: "tui2",
         stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Steer,
+        key: "steer",
+        stage: Stage::Beta {
+            name: "Steer conversation",
+            menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
+            announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
+        },
         default_enabled: false,
     },
 ];

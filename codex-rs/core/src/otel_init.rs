@@ -15,9 +15,12 @@ use std::error::Error;
 pub fn build_provider(
     config: &Config,
     service_version: &str,
+    service_name_override: Option<&str>,
+    default_analytics_enabled: bool,
 ) -> Result<Option<OtelProvider>, Box<dyn Error>> {
     let to_otel_exporter = |kind: &Kind| match kind {
         Kind::None => OtelExporter::None,
+        Kind::Statsig => OtelExporter::Statsig,
         Kind::OtlpHttp {
             endpoint,
             headers,
@@ -63,14 +66,26 @@ pub fn build_provider(
 
     let exporter = to_otel_exporter(&config.otel.exporter);
     let trace_exporter = to_otel_exporter(&config.otel.trace_exporter);
+    let metrics_exporter = if config
+        .analytics_enabled
+        .unwrap_or(default_analytics_enabled)
+    {
+        to_otel_exporter(&config.otel.metrics_exporter)
+    } else {
+        OtelExporter::None
+    };
+
+    let originator = originator();
+    let service_name = service_name_override.unwrap_or(originator.value.as_str());
 
     OtelProvider::from(&OtelSettings {
-        service_name: originator().value.to_owned(),
+        service_name: service_name.to_string(),
         service_version: service_version.to_string(),
         codex_home: config.codex_home.clone(),
         environment: config.otel.environment.to_string(),
         exporter,
         trace_exporter,
+        metrics_exporter,
     })
 }
 

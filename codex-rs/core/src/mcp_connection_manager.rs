@@ -312,7 +312,7 @@ pub(crate) struct McpConnectionManager {
 impl McpConnectionManager {
     pub async fn initialize(
         &mut self,
-        mcp_servers: HashMap<String, McpServerConfig>,
+        mcp_servers: &HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         tx_event: Sender<Event>,
@@ -325,6 +325,7 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::default();
+        let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
@@ -1170,6 +1171,7 @@ mod tests {
                     env_http_headers: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -1214,6 +1216,7 @@ mod tests {
                     env_http_headers: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,

@@ -51,11 +51,13 @@ pub mod token_data;
 mod truncate;
 mod unified_exec;
 mod user_instructions;
+pub mod windows_sandbox;
 pub use model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
+pub use model_provider_info::OLLAMA_CHAT_PROVIDER_ID;
 pub use model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
@@ -112,8 +114,11 @@ pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_dangerous_command;
 pub use command_safety::is_safe_command;
 pub use exec_policy::ExecPolicyError;
+pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
 pub use safety::get_platform_sandbox;
+pub use safety::is_windows_elevated_sandbox_enabled;
+pub use safety::set_windows_elevated_sandbox_enabled;
 pub use safety::set_windows_sandbox_enabled;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
@@ -123,6 +128,7 @@ pub use codex_protocol::protocol;
 pub use codex_protocol::config_types as protocol_config_types;
 
 pub use client::ModelClient;
+pub use client::ModelClientSession;
 pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;

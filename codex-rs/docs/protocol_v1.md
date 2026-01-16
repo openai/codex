@@ -65,20 +65,22 @@ Since only 1 `Task` can be run at a time, for parallel tasks it is recommended t
 For complete documentation of the `Op` and `EventMsg` variants, refer to [protocol.rs](../core/src/protocol.rs). Some example payload types:
 
 - `Op`
-  - `Op::UserInput` – Any input from the user to kick off a `Task`
-  - `Op::Interrupt` – Interrupts a running task
+  - `Op::UserInput` – Any input from the user to kick off a `Turn`
+  - `Op::Interrupt` – Interrupts a running turn
   - `Op::ExecApproval` – Approve or deny code execution
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
 - `EventMsg`
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command
-  - `EventMsg::TaskComplete` – A task completed successfully
-  - `EventMsg::Error` – A task stopped with an error
+  - `EventMsg::TurnComplete` – A turn completed successfully
+  - `EventMsg::Error` – A turn stopped with an error
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user
-  - `EventMsg::TurnComplete` – Contains a `response_id` bookmark for last `response_id` executed by the task. This can be used to continue the task at a later point in time, perhaps with additional user input.
+  - `EventMsg::TurnComplete` – Contains a `response_id` bookmark for last `response_id` executed by the turn. This can be used to continue the turn at a later point in time, perhaps with additional user input.
   - `EventMsg::ListSkillsResponse` – Response payload with per-cwd skill entries (`cwd`, `skills`, `errors`)
 
-The `response_id` returned from each task matches the OpenAI `response_id` stored in the API's `/responses` endpoint. It can be stored and used in future `Sessions` to resume threads of work.
+Note: For v1 wire compatibility, `EventMsg::TurnStarted` and `EventMsg::TurnComplete` serialize as `task_started` / `task_complete`. The deserializer accepts both `task_*` and `turn_*` tags.
+
+The `response_id` returned from each turn matches the OpenAI `response_id` stored in the API's `/responses` endpoint. It can be stored and used in future `Sessions` to resume threads of work.
 
 ## Transport
 
@@ -112,7 +114,7 @@ sequenceDiagram
     codex->>user: Event::SessionConfigured
     user->>session: Op::UserInput
     session-->>+task: start task
-    task->>user: Event::TaskStarted
+    task->>user: Event::TurnStarted
     task->>agent: prompt
     agent->>task: response (exec)
     task->>-user: Event::ExecApprovalRequest
@@ -128,7 +130,7 @@ sequenceDiagram
     agent->>task: response<br/>(msg + completed)
     task->>user: Event::AgentMessage
     task->>user: Event::TurnComplete
-    task->>-user: Event::TaskComplete
+    task->>-user: Event::TurnComplete
 ```
 
 ### Task Interrupt
@@ -150,7 +152,7 @@ sequenceDiagram
     end
     user->>session: Op::UserInput
     session-->>+task1: start task
-    task1->>user: Event::TaskStarted
+    task1->>user: Event::TurnStarted
     task1->>agent: prompt
     agent->>task1: response (exec)
     task1->>task1: exec (auto-approved)
@@ -162,14 +164,14 @@ sequenceDiagram
     task1->>-user: Event::Error("interrupted")
     user->>session: Op::UserInput w/ last_response_id
     session-->>+task2: start task
-    task2->>user: Event::TaskStarted
+    task2->>user: Event::TurnStarted
     task2->>agent: prompt + Task1 last_response_id
     agent->>task2: response (exec)
     task2->>task2: exec (auto-approve)
-    task2->>user: Event::TurnCompleted
+    task2->>user: Event::TurnComplete
     task2->>agent: stdout
     agent->>task2: msg + completed
     task2->>user: Event::AgentMessage
-    task2->>user: Event::TurnCompleted
-    task2->>-user: Event::TaskCompleted
+    task2->>user: Event::TurnComplete
+    task2->>-user: Event::TurnComplete
 ```

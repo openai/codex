@@ -1007,6 +1007,7 @@ hide_rate_limit_model_nudge = true
 "#;
         assert_eq!(contents, expected);
     }
+
     #[test]
     fn blocking_set_hide_gpt5_1_migration_prompt_preserves_table() {
         let tmp = tempdir().expect("tmpdir");
@@ -1123,6 +1124,7 @@ gpt-5 = "gpt-5.1"
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["one".to_string(), "two".to_string()]),
@@ -1144,6 +1146,7 @@ gpt-5 = "gpt-5.1"
                     env_http_headers: None,
                 },
                 enabled: false,
+                disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(5)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -1208,6 +1211,7 @@ foo = { command = "cmd" }
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -1251,6 +1255,7 @@ foo = { command = "cmd" } # keep me
                     cwd: None,
                 },
                 enabled: false,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -1293,6 +1298,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -1336,6 +1342,7 @@ foo = { command = "cmd" }
                     cwd: None,
                 },
                 enabled: false,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,

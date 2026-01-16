@@ -28,6 +28,8 @@ use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
+use codex_app_server_protocol::ForkConversationParams;
+use codex_app_server_protocol::ForkConversationResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
 use codex_app_server_protocol::GetAccountParams;
@@ -58,6 +60,7 @@ use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
+use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
@@ -86,9 +89,13 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -124,6 +131,7 @@ use codex_core::config::ConfigService;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::default_client::get_codex_user_agent;
+use codex_core::error::CodexErr;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
@@ -150,6 +158,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
+use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -169,6 +178,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -220,6 +230,7 @@ pub(crate) struct CodexMessageProcessor {
     config: Arc<Config>,
     cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    listener_thread_ids_by_subscription: HashMap<Uuid, ThreadId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
@@ -277,6 +288,7 @@ impl CodexMessageProcessor {
             config,
             cli_overrides,
             conversation_listeners: HashMap::new(),
+            listener_thread_ids_by_subscription: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
@@ -367,6 +379,9 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadResume { request_id, params } => {
                 self.thread_resume(request_id, params).await;
             }
+            ClientRequest::ThreadFork { request_id, params } => {
+                self.thread_fork(request_id, params).await;
+            }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
             }
@@ -375,6 +390,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
+            }
+            ClientRequest::ThreadLoadedList { request_id, params } => {
+                self.thread_loaded_list(request_id, params).await;
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
@@ -412,6 +430,9 @@ impl CodexMessageProcessor {
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
             }
+            ClientRequest::McpServerRefresh { request_id, params } => {
+                self.mcp_server_refresh(request_id, params).await;
+            }
             ClientRequest::McpServerStatusList { request_id, params } => {
                 self.list_mcp_server_status(request_id, params).await;
             }
@@ -432,6 +453,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
+            }
+            ClientRequest::ForkConversation { request_id, params } => {
+                self.handle_fork_conversation(request_id, params).await;
             }
             ClientRequest::ArchiveConversation { request_id, params } => {
                 self.archive_conversation(request_id, params).await;
@@ -510,6 +534,9 @@ impl CodexMessageProcessor {
             | ClientRequest::ConfigBatchWrite { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
             }
+            ClientRequest::ConfigRequirementsRead { .. } => {
+                warn!("ConfigRequirementsRead request reached CodexMessageProcessor unexpectedly");
+            }
             ClientRequest::GetAccountRateLimits {
                 request_id,
                 params: _,
@@ -582,7 +609,7 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload = AuthStatusChangeNotification {
-                    auth_method: self.auth_manager.auth().map(|auth| auth.mode),
+                    auth_method: self.auth_manager.auth_cached().map(|auth| auth.mode),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
@@ -612,7 +639,7 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload_v2 = AccountUpdatedNotification {
-                    auth_mode: self.auth_manager.auth().map(|auth| auth.mode),
+                    auth_mode: self.auth_manager.auth_cached().map(|auth| auth.mode),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -704,7 +731,7 @@ impl CodexMessageProcessor {
                             auth_manager.reload();
 
                             // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager.auth().map(|a| a.mode);
+                            let current_auth_method = auth_manager.auth_cached().map(|a| a.mode);
                             let payload = AuthStatusChangeNotification {
                                 auth_method: current_auth_method,
                             };
@@ -794,7 +821,7 @@ impl CodexMessageProcessor {
                             auth_manager.reload();
 
                             // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager.auth().map(|a| a.mode);
+                            let current_auth_method = auth_manager.auth_cached().map(|a| a.mode);
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: current_auth_method,
                             };
@@ -906,7 +933,7 @@ impl CodexMessageProcessor {
         }
 
         // Reflect the current auth method after logout (likely None).
-        Ok(self.auth_manager.auth().map(|auth| auth.mode))
+        Ok(self.auth_manager.auth_cached().map(|auth| auth.mode))
     }
 
     async fn logout_v1(&mut self, request_id: RequestId) {
@@ -973,10 +1000,10 @@ impl CodexMessageProcessor {
                 requires_openai_auth: Some(false),
             }
         } else {
-            match self.auth_manager.auth() {
+            match self.auth_manager.auth().await {
                 Some(auth) => {
                     let auth_mode = auth.mode;
-                    let (reported_auth_method, token_opt) = match auth.get_token().await {
+                    let (reported_auth_method, token_opt) = match auth.get_token() {
                         Ok(token) if !token.is_empty() => {
                             let tok = if include_token { Some(token) } else { None };
                             (Some(auth_mode), tok)
@@ -1021,7 +1048,7 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let account = match self.auth_manager.auth() {
+        let account = match self.auth_manager.auth_cached() {
             Some(auth) => Some(match auth.mode {
                 AuthMode::ApiKey => Account::ApiKey {},
                 AuthMode::ChatGPT => {
@@ -1075,7 +1102,7 @@ impl CodexMessageProcessor {
     }
 
     async fn fetch_account_rate_limits(&self) -> Result<CoreRateLimitSnapshot, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth() else {
+        let Some(auth) = self.auth_manager.auth().await else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "codex account authentication required to read rate limits".to_string(),
@@ -1092,7 +1119,6 @@ impl CodexMessageProcessor {
         }
 
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to construct backend client: {err}"),
@@ -1132,7 +1158,10 @@ impl CodexMessageProcessor {
 
     async fn get_user_info(&self, request_id: RequestId) {
         // Read alleged user email from cached auth (best-effort; not verified).
-        let alleged_user_email = self.auth_manager.auth().and_then(|a| a.get_account_email());
+        let alleged_user_email = self
+            .auth_manager
+            .auth_cached()
+            .and_then(|a| a.get_account_email());
 
         let response = UserInfoResponse { alleged_user_email };
         self.outgoing.send_response(request_id, response).await;
@@ -1245,7 +1274,11 @@ impl CodexMessageProcessor {
         });
     }
 
-    async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {
+    async fn process_new_conversation(
+        &mut self,
+        request_id: RequestId,
+        params: NewConversationParams,
+    ) {
         let NewConversationParams {
             model,
             model_provider,
@@ -1588,6 +1621,86 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn thread_loaded_list(&self, request_id: RequestId, params: ThreadLoadedListParams) {
+        let ThreadLoadedListParams { cursor, limit } = params;
+        let mut data = self
+            .thread_manager
+            .list_thread_ids()
+            .await
+            .into_iter()
+            .map(|thread_id| thread_id.to_string())
+            .collect::<Vec<_>>();
+
+        if data.is_empty() {
+            let response = ThreadLoadedListResponse {
+                data,
+                next_cursor: None,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
+        data.sort();
+        let total = data.len();
+        let start = match cursor {
+            Some(cursor) => {
+                let cursor = match ThreadId::from_string(&cursor) {
+                    Ok(id) => id.to_string(),
+                    Err(_) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("invalid cursor: {cursor}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                };
+                match data.binary_search(&cursor) {
+                    Ok(idx) => idx + 1,
+                    Err(idx) => idx,
+                }
+            }
+            None => 0,
+        };
+
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let end = start.saturating_add(effective_limit).min(total);
+        let page = data[start..end].to_vec();
+        let next_cursor = page.last().filter(|_| end < total).cloned();
+
+        let response = ThreadLoadedListResponse {
+            data: page,
+            next_cursor,
+        };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
+        self.thread_manager.subscribe_thread_created()
+    }
+
+    /// Best-effort: attach a listener for thread_id if missing.
+    pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
+        if self
+            .listener_thread_ids_by_subscription
+            .values()
+            .any(|entry| *entry == thread_id)
+        {
+            return;
+        }
+
+        if let Err(err) = self
+            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
+            .await
+        {
+            warn!(
+                "failed to attach listener for thread {thread_id}: {message}",
+                message = err.message
+            );
+        }
+    }
+
     async fn thread_resume(&mut self, request_id: RequestId, params: ThreadResumeParams) {
         let ThreadResumeParams {
             thread_id,
@@ -1791,6 +1904,198 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn thread_fork(&mut self, request_id: RequestId, params: ThreadForkParams) {
+        let ThreadForkParams {
+            thread_id,
+            path,
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            config: cli_overrides,
+            base_instructions,
+            developer_instructions,
+        } = params;
+
+        let overrides_requested = model.is_some()
+            || model_provider.is_some()
+            || cwd.is_some()
+            || approval_policy.is_some()
+            || sandbox.is_some()
+            || cli_overrides.is_some()
+            || base_instructions.is_some()
+            || developer_instructions.is_some();
+
+        let config = if overrides_requested {
+            let overrides = self.build_thread_config_overrides(
+                model,
+                model_provider,
+                cwd,
+                approval_policy,
+                sandbox,
+                base_instructions,
+                developer_instructions,
+            );
+
+            // Persist windows sandbox feature.
+            let mut cli_overrides = cli_overrides.unwrap_or_default();
+            if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+                cli_overrides.insert(
+                    "features.experimental_windows_sandbox".to_string(),
+                    serde_json::json!(true),
+                );
+            }
+
+            match derive_config_from_params(&self.cli_overrides, Some(cli_overrides), overrides)
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("error deriving config: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            }
+        } else {
+            self.config.as_ref().clone()
+        };
+
+        let rollout_path = if let Some(path) = path {
+            path
+        } else {
+            let existing_thread_id = match ThreadId::from_string(&thread_id) {
+                Ok(id) => id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            match find_thread_path_by_id_str(
+                &self.config.codex_home,
+                &existing_thread_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for thread id {existing_thread_id}"),
+                    )
+                    .await;
+                    return;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {existing_thread_id}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        };
+
+        let fallback_model_provider = config.model_provider_id.clone();
+
+        let NewThread {
+            thread_id,
+            session_configured,
+            ..
+        } = match self
+            .thread_manager
+            .fork_thread(usize::MAX, config, rollout_path.clone())
+            .await
+        {
+            Ok(thread) => thread,
+            Err(err) => {
+                let (code, message) = match err {
+                    CodexErr::Io(_) | CodexErr::Json(_) => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                    ),
+                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
+                    _ => (INTERNAL_ERROR_CODE, format!("error forking thread: {err}")),
+                };
+                let error = JSONRPCErrorError {
+                    code,
+                    message,
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let SessionConfiguredEvent {
+            rollout_path,
+            initial_messages,
+            ..
+        } = session_configured;
+        // Auto-attach a conversation listener when forking a thread.
+        if let Err(err) = self
+            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
+            .await
+        {
+            tracing::warn!(
+                "failed to attach listener for thread {}: {}",
+                thread_id,
+                err.message
+            );
+        }
+
+        let mut thread = match read_summary_from_rollout(
+            rollout_path.as_path(),
+            fallback_model_provider.as_str(),
+        )
+        .await
+        {
+            Ok(summary) => summary_to_thread(summary),
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return;
+            }
+        };
+        thread.turns = initial_messages
+            .as_deref()
+            .map_or_else(Vec::new, build_turns_from_event_msgs);
+
+        let response = ThreadForkResponse {
+            thread: thread.clone(),
+            model: session_configured.model,
+            model_provider: session_configured.model_provider_id,
+            cwd: session_configured.cwd,
+            approval_policy: session_configured.approval_policy.into(),
+            sandbox: session_configured.sandbox_policy.into(),
+            reasoning_effort: session_configured.reasoning_effort,
+        };
+
+        self.outgoing.send_response(request_id, response).await;
+
+        let notif = ThreadStartedNotification { thread };
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadStarted(notif))
+            .await;
     }
 
     async fn get_thread_summary(
@@ -2034,6 +2339,57 @@ impl CodexMessageProcessor {
         outgoing.send_response(request_id, response).await;
     }
 
+    async fn mcp_server_refresh(&self, request_id: RequestId, _params: Option<()>) {
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let mcp_servers = match serde_json::to_value(config.mcp_servers.get()) {
+            Ok(value) => value,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to serialize MCP servers: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let mcp_oauth_credentials_store_mode =
+            match serde_json::to_value(config.mcp_oauth_credentials_store_mode) {
+                Ok(value) => value,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!(
+                            "failed to serialize MCP OAuth credentials store mode: {err}"
+                        ),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let refresh_config = McpServerRefreshConfig {
+            mcp_servers,
+            mcp_oauth_credentials_store_mode,
+        };
+
+        // Refresh requests are queued per thread; each thread rebuilds MCP connections on its next
+        // active turn to avoid work for threads that never resume.
+        let thread_manager = Arc::clone(&self.thread_manager);
+        thread_manager.refresh_mcp_servers(refresh_config).await;
+        let response = McpServerRefreshResponse {};
+        self.outgoing.send_response(request_id, response).await;
+    }
+
     async fn mcp_server_oauth_login(
         &self,
         request_id: RequestId,
@@ -2053,7 +2409,7 @@ impl CodexMessageProcessor {
             timeout_secs,
         } = params;
 
-        let Some(server) = config.mcp_servers.get(&name) else {
+        let Some(server) = config.mcp_servers.get().get(&name) else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!("No MCP server named '{name}' found."),
@@ -2090,6 +2446,7 @@ impl CodexMessageProcessor {
             env_http_headers,
             scopes.as_deref().unwrap_or_default(),
             timeout_secs,
+            config.mcp_oauth_callback_port,
         )
         .await
         {
@@ -2416,6 +2773,166 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn handle_fork_conversation(
+        &self,
+        request_id: RequestId,
+        params: ForkConversationParams,
+    ) {
+        let ForkConversationParams {
+            path,
+            conversation_id,
+            overrides,
+        } = params;
+
+        // Derive a Config using the same logic as new conversation, honoring overrides if provided.
+        let config = match overrides {
+            Some(overrides) => {
+                let NewConversationParams {
+                    model,
+                    model_provider,
+                    profile,
+                    cwd,
+                    approval_policy,
+                    sandbox: sandbox_mode,
+                    config: cli_overrides,
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                } = overrides;
+
+                // Persist windows sandbox feature.
+                let mut cli_overrides = cli_overrides.unwrap_or_default();
+                if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+                    cli_overrides.insert(
+                        "features.experimental_windows_sandbox".to_string(),
+                        serde_json::json!(true),
+                    );
+                }
+
+                let overrides = ConfigOverrides {
+                    model,
+                    config_profile: profile,
+                    cwd: cwd.map(PathBuf::from),
+                    approval_policy,
+                    sandbox_mode,
+                    model_provider,
+                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                    ..Default::default()
+                };
+
+                derive_config_from_params(&self.cli_overrides, Some(cli_overrides), overrides).await
+            }
+            None => Ok(self.config.as_ref().clone()),
+        };
+        let config = match config {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("error deriving config: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let rollout_path = if let Some(path) = path {
+            path
+        } else if let Some(conversation_id) = conversation_id {
+            match find_thread_path_by_id_str(&self.config.codex_home, &conversation_id.to_string())
+                .await
+            {
+                Ok(Some(found_path)) => found_path,
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for conversation id {conversation_id}"),
+                    )
+                    .await;
+                    return;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate conversation id {conversation_id}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else {
+            self.send_invalid_request_error(
+                request_id,
+                "either path or conversation id must be provided".to_string(),
+            )
+            .await;
+            return;
+        };
+
+        let NewThread {
+            thread_id,
+            session_configured,
+            ..
+        } = match self
+            .thread_manager
+            .fork_thread(usize::MAX, config, rollout_path.clone())
+            .await
+        {
+            Ok(thread) => thread,
+            Err(err) => {
+                let (code, message) = match err {
+                    CodexErr::Io(_) | CodexErr::Json(_) => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                    ),
+                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
+                    _ => (
+                        INTERNAL_ERROR_CODE,
+                        format!("error forking conversation: {err}"),
+                    ),
+                };
+                let error = JSONRPCErrorError {
+                    code,
+                    message,
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        self.outgoing
+            .send_server_notification(ServerNotification::SessionConfigured(
+                SessionConfiguredNotification {
+                    session_id: session_configured.session_id,
+                    model: session_configured.model.clone(),
+                    reasoning_effort: session_configured.reasoning_effort,
+                    history_log_id: session_configured.history_log_id,
+                    history_entry_count: session_configured.history_entry_count,
+                    initial_messages: session_configured.initial_messages.clone(),
+                    rollout_path: session_configured.rollout_path.clone(),
+                },
+            ))
+            .await;
+        let initial_messages = session_configured
+            .initial_messages
+            .map(|msgs| msgs.into_iter().collect());
+
+        // Reply with conversation id + model and initial messages (when present)
+        let response = ForkConversationResponse {
+            conversation_id: thread_id,
+            model: session_configured.model.clone(),
+            initial_messages,
+            rollout_path: session_configured.rollout_path.clone(),
+        };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
     async fn send_invalid_request_error(&self, request_id: RequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
@@ -2608,7 +3125,11 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
-                WireInputItem::Text { text } => CoreInputItem::Text { text },
+                WireInputItem::Text { text } => CoreInputItem::Text {
+                    text,
+                    // TODO: Thread text element ranges into v1 input handling.
+                    text_elements: Vec::new(),
+                },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
@@ -2654,7 +3175,11 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
-                WireInputItem::Text { text } => CoreInputItem::Text { text },
+                WireInputItem::Text { text } => CoreInputItem::Text {
+                    text,
+                    // TODO: Thread text element ranges into v1 input handling.
+                    text_elements: Vec::new(),
+                },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
@@ -2816,6 +3341,7 @@ impl CodexMessageProcessor {
                 id: turn_id.clone(),
                 content: vec![V2UserInput::Text {
                     text: display_text.to_string(),
+                    text_elements: Vec::new(),
                 }],
             }]
         };
@@ -2904,7 +3430,9 @@ impl CodexMessageProcessor {
                 })?;
 
         let mut config = self.config.as_ref().clone();
-        config.model = Some(self.config.review_model.clone());
+        if let Some(review_model) = &config.review_model {
+            config.model = Some(review_model.clone());
+        }
 
         let NewThread {
             thread_id,
@@ -3078,6 +3606,12 @@ impl CodexMessageProcessor {
             Some(sender) => {
                 // Signal the spawned task to exit and acknowledge.
                 let _ = sender.send(());
+                if let Some(thread_id) = self
+                    .listener_thread_ids_by_subscription
+                    .remove(&subscription_id)
+                {
+                    info!("removed listener for thread {thread_id}");
+                }
                 let response = RemoveConversationSubscriptionResponse {};
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -3113,6 +3647,8 @@ impl CodexMessageProcessor {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         self.conversation_listeners
             .insert(subscription_id, cancel_tx);
+        self.listener_thread_ids_by_subscription
+            .insert(subscription_id, conversation_id);
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
@@ -3145,7 +3681,11 @@ impl CodexMessageProcessor {
                         // JSON-serializing the `Event` as-is, but these should
                         // be migrated to be variants of `ServerNotification`
                         // instead.
-                        let method = format!("codex/event/{}", event.msg);
+                        let event_formatted = match &event.msg {
+                            EventMsg::TurnStarted(_) => "task_started",
+                            EventMsg::TurnComplete(_) => "task_complete",
+                            _ => &event.msg.to_string(),
+                        };
                         let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
                             Ok(_) => {
@@ -3164,7 +3704,7 @@ impl CodexMessageProcessor {
 
                         outgoing_for_task
                             .send_notification(OutgoingNotification {
-                                method,
+                                method: format!("codex/event/{event_formatted}"),
                                 params: Some(params.into()),
                             })
                             .await;
@@ -3250,6 +3790,16 @@ impl CodexMessageProcessor {
     }
 
     async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
+        if !self.config.feedback_enabled {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "sending feedback is disabled by configuration".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         let FeedbackUploadParams {
             classification,
             reason,

@@ -1,0 +1,7 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "backend-client",
+    crate_name = "codex_backend_client",
+    compile_data = glob(["tests/fixtures/**"]),
+)

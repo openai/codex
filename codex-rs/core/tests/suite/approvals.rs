@@ -492,6 +492,7 @@ async fn submit_turn(
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: prompt.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
@@ -553,7 +554,7 @@ async fn expect_exec_approval(
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TaskComplete(_)
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
         )
     })
     .await;
@@ -568,7 +569,7 @@ async fn expect_exec_approval(
             assert_eq!(last_arg, expected_command);
             approval
         }
-        EventMsg::TaskComplete(_) => panic!("expected approval request before completion"),
+        EventMsg::TurnComplete(_) => panic!("expected approval request before completion"),
         other => panic!("unexpected event: {other:?}"),
     }
 }
@@ -580,7 +581,7 @@ async fn expect_patch_approval(
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
-            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TaskComplete(_)
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
         )
     })
     .await;
@@ -590,7 +591,7 @@ async fn expect_patch_approval(
             assert_eq!(approval.call_id, expected_call_id);
             approval
         }
-        EventMsg::TaskComplete(_) => panic!("expected patch approval request before completion"),
+        EventMsg::TurnComplete(_) => panic!("expected patch approval request before completion"),
         other => panic!("unexpected event: {other:?}"),
     }
 }
@@ -599,13 +600,13 @@ async fn wait_for_completion_without_approval(test: &TestCodex) {
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TaskComplete(_)
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
         )
     })
     .await;
 
     match event {
-        EventMsg::TaskComplete(_) => {}
+        EventMsg::TurnComplete(_) => {}
         EventMsg::ExecApprovalRequest(event) => {
             panic!("unexpected approval request: {:?}", event.command)
         }
@@ -615,7 +616,7 @@ async fn wait_for_completion_without_approval(test: &TestCodex) {
 
 async fn wait_for_completion(test: &TestCodex) {
     wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TaskComplete(_))
+        matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 }
@@ -1660,12 +1661,12 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
-            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TaskComplete(_)
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
         )
     })
     .await;
     match event {
-        EventMsg::TaskComplete(_) => {}
+        EventMsg::TurnComplete(_) => {}
         EventMsg::ApplyPatchApprovalRequest(event) => {
             panic!("unexpected patch approval request: {:?}", event.call_id)
         }

@@ -72,6 +72,12 @@ pub(crate) async fn handle_mcp_tool_call(
 
     notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event.clone()).await;
 
+    let status = if result.is_ok() { "ok" } else { "error" };
+    turn_context
+        .client
+        .get_otel_manager()
+        .counter("codex.mcp.call", 1, &[("status", status)]);
+
     ResponseInputItem::McpToolCallOutput { call_id, result }
 }
 
