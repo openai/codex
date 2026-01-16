@@ -805,6 +805,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
     let open_args = json!({
         "cmd": "/bin/bash -i",
         "yield_time_ms": 200,
+        "tty": true,
     });
 
     let stdin_call_id = "uexec-stdin-delta";
@@ -905,6 +906,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
     let open_args = json!({
         "cmd": "sleep 3 && echo MARKER1 && sleep 3 && echo MARKER2",
         "yield_time_ms": 10,
+        "tty": true,
     });
 
     // Poll stdin three times: first for no output, second after the first marker,
@@ -1966,6 +1968,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let first_args = serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 200,
+        "tty": true,
     });
 
     let second_call_id = "uexec-stdin";
@@ -2678,6 +2681,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let keep_args = serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 250,
+        "tty": true,
     });
 
     let prune_call_id = "uexec-prune-target";
@@ -2685,6 +2689,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let prune_args = serde_json::json!({
         "cmd": "sleep 1",
         "yield_time_ms": 1_250,
+        "tty": true,
     });
 
     let mut events = vec![ev_response_created("resp-prune-1")];

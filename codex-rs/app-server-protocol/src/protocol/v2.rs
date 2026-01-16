@@ -1771,12 +1771,12 @@ pub enum ThreadItem {
         /// Thread ID of the agent issuing the collab request.
         sender_thread_id: String,
         /// Thread ID of the receiving agent, when applicable. In case of spawn operation,
-        /// this correspond to the newly spawned agent.
-        receiver_thread_id: Option<String>,
+        /// this corresponds to the newly spawned agent.
+        receiver_thread_ids: Vec<String>,
         /// Prompt text sent as part of the collab tool call, when available.
         prompt: Option<String>,
-        /// Last known status of the target agent, when available.
-        agent_state: Option<CollabAgentState>,
+        /// Last known status of the target agents, when available.
+        agents_states: HashMap<String, CollabAgentState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
