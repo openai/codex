@@ -513,6 +513,10 @@ fn create_initial_user_message(
     }
 }
 
+// When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
+// its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
+// the combined local_image_paths order matches the labels, even if placeholders were moved
+// in the text (e.g., [Image #2] appearing before [Image #1]).
 fn remap_placeholders_for_message(
     text: &str,
     text_elements: Vec<TextElement>,
@@ -523,10 +527,6 @@ fn remap_placeholders_for_message(
         return (text.to_string(), text_elements, Vec::new());
     }
 
-    // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
-    // its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
-    // the combined local_image_paths order matches the labels, even if placeholders were moved
-    // in the text (e.g., [Image #2] appearing before [Image #1]).
     let mut mapping: HashMap<String, String> = HashMap::new();
     let mut remapped_images = Vec::new();
     for attachment in local_images {
@@ -829,16 +829,17 @@ impl ChatWidget {
 
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(mut snapshot) = snapshot {
-            snapshot.credits = snapshot.credits.or_else(|| {
-                self.rate_limit_snapshot
+            if snapshot.credits.is_none() {
+                snapshot.credits = self
+                    .rate_limit_snapshot
                     .as_ref()
                     .and_then(|display| display.credits.as_ref())
                     .map(|credits| CreditsSnapshot {
                         has_credits: credits.has_credits,
                         unlimited: credits.unlimited,
                         balance: credits.balance.clone(),
-                    })
-            });
+                    });
+            }
 
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
