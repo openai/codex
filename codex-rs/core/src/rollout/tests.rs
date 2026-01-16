@@ -600,7 +600,7 @@ async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
         .join("06")
         .join("01")
         .join(format!("rollout-{ts}-{uuid}.jsonl"));
-    let file = File::open(&file_path)?;
+    let file = std::fs::OpenOptions::new().write(true).open(&file_path)?;
     let times = FileTimes::new().set_modified(updated.into());
     file.set_times(times)?;
 
