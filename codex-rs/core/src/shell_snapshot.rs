@@ -172,6 +172,7 @@ else
   rc="$HOME/.zshrc"
 fi
 [[ -r "$rc" ]] && . "$rc"
+unset CODEX_SHELL_SNAPSHOT
 print '# Snapshot file'
 print '# Unset all aliases to avoid conflicts with functions'
 print 'unalias -a 2>/dev/null || true'
@@ -196,6 +197,7 @@ fn bash_snapshot_script() -> &'static str {
     r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
   . "$HOME/.bashrc"
 fi
+unset CODEX_SHELL_SNAPSHOT
 echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
 unalias -a 2>/dev/null || true
@@ -223,6 +225,7 @@ fn sh_snapshot_script() -> &'static str {
     r##"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
   . "$ENV"
 fi
+unset CODEX_SHELL_SNAPSHOT
 echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
 unalias -a 2>/dev/null || true
