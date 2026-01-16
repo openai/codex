@@ -232,18 +232,21 @@ async fn test_list_conversations_latest_first() {
             ThreadItem {
                 path: p1,
                 head: head_3,
+                preview: Some("Hello from user".into()),
                 created_at: Some("2025-01-03T12-00-00".into()),
                 updated_at: updated_times.first().cloned().flatten(),
             },
             ThreadItem {
                 path: p2,
                 head: head_2,
+                preview: Some("Hello from user".into()),
                 created_at: Some("2025-01-02T12-00-00".into()),
                 updated_at: updated_times.get(1).cloned().flatten(),
             },
             ThreadItem {
                 path: p3,
                 head: head_1,
+                preview: Some("Hello from user".into()),
                 created_at: Some("2025-01-01T12-00-00".into()),
                 updated_at: updated_times.get(2).cloned().flatten(),
             },
@@ -362,12 +365,14 @@ async fn test_pagination_cursor() {
             ThreadItem {
                 path: p5,
                 head: head_5,
+                preview: Some("Hello from user".into()),
                 created_at: Some("2025-03-05T09-00-00".into()),
                 updated_at: updated_page1.first().cloned().flatten(),
             },
             ThreadItem {
                 path: p4,
                 head: head_4,
+                preview: Some("Hello from user".into()),
                 created_at: Some("2025-03-04T09-00-00".into()),
                 updated_at: updated_page1.get(1).cloned().flatten(),
             },
@@ -429,12 +434,14 @@ async fn test_pagination_cursor() {
             ThreadItem {
                 path: p3,
                 head: head_3,
+                preview: Some("Hello from user".into()),
                 created_at: Some("2025-03-03T09-00-00".into()),
                 updated_at: updated_page2.first().cloned().flatten(),
             },
             ThreadItem {
                 path: p2,
                 head: head_2,
+                preview: Some("Hello from user".into()),
                 created_at: Some("2025-03-02T09-00-00".into()),
                 updated_at: updated_page2.get(1).cloned().flatten(),
             },
@@ -477,6 +484,7 @@ async fn test_pagination_cursor() {
         items: vec![ThreadItem {
             path: p1,
             head: head_1,
+            preview: Some("Hello from user".into()),
             created_at: Some("2025-03-01T09-00-00".into()),
             updated_at: updated_page3.first().cloned().flatten(),
         }],
@@ -532,6 +540,7 @@ async fn test_get_thread_contents() {
         items: vec![ThreadItem {
             path: expected_path,
             head: expected_head,
+            preview: Some("Hello from user".into()),
             created_at: Some(ts.into()),
             updated_at: page.items[0].updated_at.clone(),
         }],
@@ -708,12 +717,14 @@ async fn test_stable_ordering_same_second_pagination() {
             ThreadItem {
                 path: p3,
                 head: head(u3),
+                preview: Some("Hello from user".into()),
                 created_at: Some(ts.to_string()),
                 updated_at: updated_page1.first().cloned().flatten(),
             },
             ThreadItem {
                 path: p2,
                 head: head(u2),
+                preview: Some("Hello from user".into()),
                 created_at: Some(ts.to_string()),
                 updated_at: updated_page1.get(1).cloned().flatten(),
             },
@@ -746,6 +757,7 @@ async fn test_stable_ordering_same_second_pagination() {
         items: vec![ThreadItem {
             path: p1,
             head: head(u1),
+            preview: Some("Hello from user".into()),
             created_at: Some(ts.to_string()),
             updated_at: updated_page2.first().cloned().flatten(),
         }],

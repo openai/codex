@@ -14,8 +14,10 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
+use crate::event_mapping::parse_turn_item;
 use crate::protocol::EventMsg;
 use codex_file_search as file_search;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
@@ -40,6 +42,8 @@ pub struct ThreadItem {
     pub path: PathBuf,
     /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
     pub head: Vec<serde_json::Value>,
+    /// Most recent user message text, if available.
+    pub preview: Option<String>,
     /// RFC3339 timestamp string for when the session was created, if available.
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent update (from file mtime).
@@ -62,11 +66,14 @@ struct HeadTailSummary {
     model_provider: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
+    preview: Option<String>,
 }
 
 /// Hard cap to bound worst‑case work per request.
 const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
+const TAIL_SCAN_BYTES: u64 = 256 * 1024;
+const TAIL_SCAN_CHUNK_BYTES: usize = 8 * 1024;
 
 /// Pagination cursor identifying a file by timestamp and UUID.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,6 +238,7 @@ async fn traverse_directories_for_paths(
                             head,
                             created_at,
                             mut updated_at,
+                            preview,
                             ..
                         } = summary;
                         if updated_at.is_none() {
@@ -242,6 +250,7 @@ async fn traverse_directories_for_paths(
                         items.push(ThreadItem {
                             path,
                             head,
+                            preview,
                             created_at,
                             updated_at,
                         });
@@ -411,7 +420,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
                 if let Ok(val) = serde_json::to_value(session_meta_line) {
-                    summary.head.push(val);
+                    if summary.head.len() < head_limit {
+                        summary.head.push(val);
+                    }
                     summary.saw_session_meta = true;
                 }
             }
@@ -420,8 +431,15 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
-                if let Ok(val) = serde_json::to_value(item) {
+                if let Ok(val) = serde_json::to_value(&item)
+                    && summary.head.len() < head_limit
+                {
                     summary.head.push(val);
+                }
+                if !summary.saw_user_event
+                    && matches!(parse_turn_item(&item), Some(TurnItem::UserMessage(_)))
+                {
+                    summary.saw_user_event = true;
                 }
             }
             RolloutItem::TurnContext(_) => {
@@ -442,7 +460,78 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         }
     }
 
+    summary.preview = read_tail_preview(path, TAIL_SCAN_BYTES)
+        .await
+        .unwrap_or(None);
     Ok(summary)
+}
+
+async fn read_tail_preview(path: &Path, max_bytes: u64) -> io::Result<Option<String>> {
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncSeekExt;
+    use tokio::io::SeekFrom;
+
+    let mut file = tokio::fs::File::open(path).await?;
+    let file_len = file.metadata().await?.len();
+    if file_len == 0 {
+        return Ok(None);
+    }
+
+    let mut offset = file_len;
+    let mut scanned = 0u64;
+    let mut carry: Vec<u8> = Vec::new();
+
+    while offset > 0 && scanned < max_bytes {
+        let read_size = std::cmp::min(TAIL_SCAN_CHUNK_BYTES as u64, offset);
+        let seek_pos = offset - read_size;
+        file.seek(SeekFrom::Start(seek_pos)).await?;
+        let mut buf = vec![0u8; read_size as usize];
+        file.read_exact(&mut buf).await?;
+        scanned += read_size;
+        offset = seek_pos;
+
+        if !carry.is_empty() {
+            buf.extend_from_slice(&carry);
+            carry.clear();
+        }
+
+        let mut parts: Vec<&[u8]> = buf.split(|b| *b == b'\n').collect();
+        if offset > 0 {
+            if let Some(first) = parts.first() {
+                carry = first.to_vec();
+            }
+            parts = parts.into_iter().skip(1).collect();
+        }
+
+        for part in parts.iter().rev() {
+            let Ok(line) = std::str::from_utf8(part) else {
+                continue;
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+                continue;
+            };
+            if let Some(message) = extract_user_message(rollout_line.item) {
+                return Ok(Some(message));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn extract_user_message(item: RolloutItem) -> Option<String> {
+    match item {
+        RolloutItem::ResponseItem(item) => match parse_turn_item(&item) {
+            Some(TurnItem::UserMessage(user)) => Some(user.message()),
+            _ => None,
+        },
+        RolloutItem::EventMsg(EventMsg::UserMessage(user)) => Some(user.message),
+        _ => None,
+    }
 }
 
 /// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.

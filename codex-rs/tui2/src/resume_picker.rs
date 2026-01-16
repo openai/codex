@@ -96,7 +96,7 @@ enum BackgroundEvent {
 }
 
 /// Interactive session picker that lists recorded rollout files with simple
-/// search and pagination. Shows the first user input as the preview, relative
+/// search and pagination. Shows the latest user input as the preview, relative
 /// time (e.g., "5 seconds ago"), and the absolute path.
 pub async fn run_resume_picker(
     tui: &mut Tui,
@@ -711,8 +711,10 @@ fn head_to_row(item: &ThreadItem) -> Row {
         .or(created_at);
 
     let (cwd, git_branch) = extract_session_meta_from_head(&item.head);
-    let preview = preview_from_head(&item.head)
-        .map(|s| s.trim().to_string())
+    let preview = item
+        .preview
+        .clone()
+        .or_else(|| preview_from_head(&item.head).map(|s| s.trim().to_string()))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| String::from("(no message yet)"));
 
@@ -763,6 +765,7 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
 
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
+        .rev()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
         .find_map(|item| match codex_core::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
@@ -1146,6 +1149,7 @@ mod tests {
         ThreadItem {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
+            preview: Some(preview.to_string()),
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
@@ -1171,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_uses_first_message_input_text() {
+    fn preview_uses_latest_message_input_text() {
         let head = vec![
             json!({ "timestamp": "2025-01-01T00:00:00Z" }),
             json!({
@@ -1203,7 +1207,7 @@ mod tests {
             }),
         ];
         let preview = preview_from_head(&head);
-        assert_eq!(preview.as_deref(), Some("real question"));
+        assert_eq!(preview.as_deref(), Some("later text"));
     }
 
     #[test]
@@ -1212,12 +1216,14 @@ mod tests {
         let a = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
+            preview: Some("A".to_string()),
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
         let b = ThreadItem {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
+            preview: Some("B".to_string()),
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
@@ -1234,6 +1240,7 @@ mod tests {
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head,
+            preview: Some("Hello".to_string()),
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
