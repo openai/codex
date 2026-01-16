@@ -157,10 +157,10 @@ impl CollaborationMode {
     }
 
     /// Updates the collaboration mode with new model and/or effort values.
-    /// 
+    ///
     /// - `model`: `Some(s)` to update the model, `None` to keep the current model
     /// - `effort`: `Some(Some(e))` to set effort to `e`, `Some(None)` to clear effort, `None` to keep current effort
-    /// 
+    ///
     /// Returns `None` if neither model nor effort is provided, or if the provided values
     /// are the same as the current values (no change needed).
     /// Otherwise returns a new `CollaborationMode` with updated values, preserving the variant.
@@ -180,7 +180,8 @@ impl CollaborationMode {
 
         // Check if there's actually a change
         let model_changed = model.is_some() && updated_model != &current_settings.model;
-        let effort_changed = effort.is_some() && updated_effort != current_settings.reasoning_effort;
+        let effort_changed =
+            effort.is_some() && updated_effort != current_settings.reasoning_effort;
 
         if !model_changed && !effort_changed {
             return None;

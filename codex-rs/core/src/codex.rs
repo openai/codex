@@ -422,7 +422,6 @@ impl TurnContext {
     }
 }
 
-
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -501,7 +500,8 @@ impl Session {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
-        per_turn_config.model_reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
+        per_turn_config.model_reasoning_effort =
+            session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.features = config.features.clone();
         per_turn_config
@@ -578,7 +578,8 @@ impl Session {
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
-            session_configuration.collaboration_mode.model(), session_configuration.provider
+            session_configuration.collaboration_mode.model(),
+            session_configuration.provider
         );
         if !session_configuration.cwd.is_absolute() {
             return Err(anyhow::anyhow!(
@@ -973,7 +974,10 @@ impl Session {
         let model_info = self
             .services
             .models_manager
-            .get_model_info(session_configuration.collaboration_mode.model(), &per_turn_config)
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config,
+            )
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -1818,7 +1822,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             } => {
                 let collaboration_mode = {
                     let state = sess.state.lock().await;
-                    state.session_configuration.collaboration_mode.with_updates(model, effort)
+                    state
+                        .session_configuration
+                        .collaboration_mode
+                        .with_updates(model, effort)
                 };
                 handlers::override_turn_context(
                     &sess,
@@ -1984,10 +1991,11 @@ mod handlers {
                 final_output_json_schema,
                 items,
             } => {
-                let collaboration_mode = Some(CollaborationMode::Collaborate(CollaborationModeSettings {
-                    model,
-                    reasoning_effort: effort,
-                }));
+                let collaboration_mode =
+                    Some(CollaborationMode::Collaborate(CollaborationModeSettings {
+                        model,
+                        reasoning_effort: effort,
+                    }));
                 (
                     items,
                     SessionSettingsUpdate {
@@ -1999,7 +2007,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                     },
                 )
-            },
+            }
             Op::UserInput {
                 items,
                 final_output_json_schema,
