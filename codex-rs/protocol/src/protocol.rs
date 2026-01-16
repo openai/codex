@@ -1255,8 +1255,19 @@ pub struct AgentMessageEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UserMessageEvent {
     pub message: String,
+    /// Image URLs sourced from `UserInput::Image`. These are safe
+    /// to replay in legacy UI history events and correspond to images sent to
+    /// the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
+    /// Local file paths sourced from `UserInput::LocalImage`. These are kept so
+    /// the UI can reattach images when editing history, and should not be sent
+    /// to the model or treated as API-ready URLs.
+    #[serde(default)]
+    pub local_images: Vec<std::path::PathBuf>,
+    /// UI-defined spans within `message` used to render or persist special elements.
+    #[serde(default)]
+    pub text_elements: Vec<crate::user_input::TextElement>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1948,11 +1959,31 @@ pub enum SkillScope {
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
-    #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    /// Legacy short_description from SKILL.md. Prefer SKILL.toml interface.short_description.
     pub short_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interface: Option<SkillInterface>,
     pub path: PathBuf,
     pub scope: SkillScope,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct SkillInterface {
+    #[ts(optional)]
+    pub display_name: Option<String>,
+    #[ts(optional)]
+    pub short_description: Option<String>,
+    #[ts(optional)]
+    pub icon_small: Option<PathBuf>,
+    #[ts(optional)]
+    pub icon_large: Option<PathBuf>,
+    #[ts(optional)]
+    pub brand_color: Option<String>,
+    #[ts(optional)]
+    pub default_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2143,8 +2174,8 @@ pub struct CollabAgentInteractionEndEvent {
 pub struct CollabWaitingBeginEvent {
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
+    /// Thread ID of the receivers.
+    pub receiver_thread_ids: Vec<ThreadId>,
     /// ID of the waiting call.
     pub call_id: String,
 }
@@ -2153,12 +2184,10 @@ pub struct CollabWaitingBeginEvent {
 pub struct CollabWaitingEndEvent {
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
     /// ID of the waiting call.
     pub call_id: String,
-    /// Last known status of the receiver agent reported to the sender agent.
-    pub status: AgentStatus,
+    /// Last known status of the receiver agents reported to the sender agent.
+    pub statuses: HashMap<ThreadId, AgentStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -2289,6 +2318,48 @@ mod tests {
                 "type": "user_input",
                 "items": [],
                 "final_output_json_schema": schema,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_text_serializes_empty_text_elements() -> Result<()> {
+        let input = UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        };
+
+        let json_input = serde_json::to_value(input)?;
+        assert_eq!(
+            json_input,
+            json!({
+                "type": "text",
+                "text": "hello",
+                "text_elements": [],
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_message_event_serializes_empty_metadata_vectors() -> Result<()> {
+        let event = UserMessageEvent {
+            message: "hello".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        };
+
+        let json_event = serde_json::to_value(event)?;
+        assert_eq!(
+            json_event,
+            json!({
+                "message": "hello",
+                "local_images": [],
+                "text_elements": [],
             })
         );
 

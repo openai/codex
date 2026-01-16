@@ -1710,6 +1710,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "landlock",
  "libc",
+ "pretty_assertions",
  "seccompiler",
  "tempfile",
  "tokio",

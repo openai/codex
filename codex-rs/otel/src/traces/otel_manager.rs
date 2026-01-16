@@ -324,7 +324,7 @@ impl OtelManager {
         let prompt = items
             .iter()
             .flat_map(|item| match item {
-                UserInput::Text { text } => Some(text.as_str()),
+                UserInput::Text { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<String>();
@@ -444,6 +444,11 @@ impl OtelManager {
         self.counter(
             "codex.tool.call",
             1,
+            &[("tool", tool_name), ("success", success_str)],
+        );
+        self.record_duration(
+            "codex.tool.call.duration_ms",
+            duration,
             &[("tool", tool_name), ("success", success_str)],
         );
         tracing::event!(

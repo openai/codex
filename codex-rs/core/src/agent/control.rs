@@ -56,7 +56,11 @@ impl AgentControl {
             .send_op(
                 agent_id,
                 Op::UserInput {
-                    items: vec![UserInput::Text { text: prompt }],
+                    items: vec![UserInput::Text {
+                        text: prompt,
+                        // Plain text conversion has no UI element ranges.
+                        text_elements: Vec::new(),
+                    }],
                     final_output_json_schema: None,
                 },
             )
@@ -65,6 +69,12 @@ impl AgentControl {
             let _ = state.remove_thread(&agent_id).await;
         }
         result
+    }
+
+    /// Interrupt the current task for an existing agent thread.
+    pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        state.send_op(agent_id, Op::Interrupt).await
     }
 
     /// Submit a shutdown request to an existing agent thread.
@@ -321,6 +331,7 @@ mod tests {
             Op::UserInput {
                 items: vec![UserInput::Text {
                     text: "hello from tests".to_string(),
+                    text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
             },
@@ -351,6 +362,7 @@ mod tests {
             Op::UserInput {
                 items: vec![UserInput::Text {
                     text: "spawned".to_string(),
+                    text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
             },

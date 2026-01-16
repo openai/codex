@@ -34,21 +34,27 @@ pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 /// To adhere to MCP `tools/call` response format, include the Codex
 /// `threadId` in the `structured_content` field of the response.
-fn create_call_tool_result_with_thread_id(
+/// Some MCP clients ignore `content` when `structuredContent` is present, so
+/// mirror the text there as well.
+pub(crate) fn create_call_tool_result_with_thread_id(
     thread_id: ThreadId,
     text: String,
     is_error: Option<bool>,
 ) -> CallToolResult {
+    let content_text = text;
+    let content = vec![ContentBlock::TextContent(TextContent {
+        r#type: "text".to_string(),
+        text: content_text.clone(),
+        annotations: None,
+    })];
+    let structured_content = json!({
+        "threadId": thread_id,
+        "content": content_text,
+    });
     CallToolResult {
-        content: vec![ContentBlock::TextContent(TextContent {
-            r#type: "text".to_string(),
-            text,
-            annotations: None,
-        })],
+        content,
         is_error,
-        structured_content: Some(json!({
-            "threadId": thread_id,
-        })),
+        structured_content: Some(structured_content),
     }
 }
 
@@ -116,6 +122,7 @@ pub async fn run_codex_tool_session(
         op: Op::UserInput {
             items: vec![UserInput::Text {
                 text: initial_prompt.clone(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         },
@@ -158,7 +165,11 @@ pub async fn run_codex_tool_session_reply(
         .insert(request_id.clone(), thread_id);
     if let Err(e) = thread
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: prompt }],
+            items: vec![UserInput::Text {
+                text: prompt,
+                // Plain text conversion has no UI element ranges.
+                text_elements: Vec::new(),
+            }],
             final_output_json_schema: None,
         })
         .await
@@ -393,6 +404,7 @@ mod tests {
             result.structured_content,
             Some(json!({
                 "threadId": thread_id,
+                "content": "done",
             }))
         );
     }
