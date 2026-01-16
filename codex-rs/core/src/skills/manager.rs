@@ -44,7 +44,7 @@ impl SkillsManager {
         }
 
         let roots = skill_roots_from_layer_stack(&config.config_layer_stack);
-        let outcome = load_skills_from_roots(roots);
+        let outcome = load_skills_from_roots(roots, false);
         match self.cache_by_cwd.write() {
             Ok(mut cache) => {
                 cache.insert(cwd.to_path_buf(), outcome.clone());
@@ -100,7 +100,7 @@ impl SkillsManager {
         };
 
         let roots = skill_roots_from_layer_stack(&config_layer_stack);
-        let outcome = load_skills_from_roots(roots);
+        let outcome = load_skills_from_roots(roots, force_reload);
         match self.cache_by_cwd.write() {
             Ok(mut cache) => {
                 cache.insert(cwd.to_path_buf(), outcome.clone());

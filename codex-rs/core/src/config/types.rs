@@ -283,6 +283,34 @@ impl UriBasedFileOpener {
     }
 }
 
+/// Configuration for additional skill sources.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillsConfigToml {
+    /// Additional skill sources to load. Each entry can be a local path or a URL.
+    #[serde(default)]
+    pub sources: Vec<SkillSourceToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum SkillSourceToml {
+    Path(SkillSourcePathToml),
+    Url(SkillSourceUrlToml),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillSourcePathToml {
+    pub path: AbsolutePathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillSourceUrlToml {
+    pub url: String,
+}
+
 /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

@@ -1,9 +1,16 @@
 use crate::config::Config;
+use crate::config::ConfigToml;
+use crate::config::types::SkillSourcePathToml;
+use crate::config::types::SkillSourceToml;
+use crate::config::types::SkillSourceUrlToml;
+use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillInterface;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
+use crate::skills::remote::ensure_remote_skill;
+use crate::skills::remote::remote_cache_root_dir;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
@@ -88,21 +95,57 @@ impl fmt::Display for SkillParseError {
 impl Error for SkillParseError {}
 
 pub fn load_skills(config: &Config) -> SkillLoadOutcome {
-    load_skills_from_roots(skill_roots(config))
+    load_skills_from_roots(skill_roots(config), false)
 }
 
 pub(crate) struct SkillRoot {
-    pub(crate) path: PathBuf,
     pub(crate) scope: SkillScope,
+    pub(crate) source: SkillRootSource,
 }
 
-pub(crate) fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
+pub(crate) enum SkillRootSource {
+    Local { path: PathBuf },
+    Remote { url: String, cache_root: PathBuf },
+}
+
+impl SkillRoot {
+    fn local(path: PathBuf, scope: SkillScope) -> Self {
+        Self {
+            scope,
+            source: SkillRootSource::Local { path },
+        }
+    }
+
+    fn remote(url: String, cache_root: PathBuf, scope: SkillScope) -> Self {
+        Self {
+            scope,
+            source: SkillRootSource::Remote { url, cache_root },
+        }
+    }
+}
+
+pub(crate) fn load_skills_from_roots<I>(roots: I, force_reload: bool) -> SkillLoadOutcome
 where
     I: IntoIterator<Item = SkillRoot>,
 {
     let mut outcome = SkillLoadOutcome::default();
     for root in roots {
-        discover_skills_under_root(&root.path, root.scope, &mut outcome);
+        let root_path = match root.source {
+            SkillRootSource::Local { path } => path,
+            SkillRootSource::Remote { url, cache_root } => {
+                match ensure_remote_skill(&cache_root, &url, force_reload) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        outcome.errors.push(SkillError {
+                            path: PathBuf::from(url.as_str()),
+                            message: format!("failed to fetch remote skill: {err}"),
+                        });
+                        continue;
+                    }
+                }
+            }
+        };
+        discover_skills_under_root(&root_path, root.scope, &mut outcome);
     }
 
     let mut seen: HashSet<String> = HashSet::new();
@@ -132,40 +175,48 @@ where
 
 fn skill_roots_from_layer_stack_inner(config_layer_stack: &ConfigLayerStack) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
+    let remote_cache_root = config_layer_stack
+        .get_user_layer()
+        .and_then(|layer| layer.config_folder())
+        .map(|folder| remote_cache_root_dir(folder.as_path()));
 
     for layer in config_layer_stack.layers_high_to_low() {
         let Some(config_folder) = layer.config_folder() else {
             continue;
         };
+        let extra_sources = skill_roots_from_layer(layer, remote_cache_root.as_ref());
 
         match &layer.name {
             ConfigLayerSource::Project { .. } => {
-                roots.push(SkillRoot {
-                    path: config_folder.as_path().join(SKILLS_DIR_NAME),
-                    scope: SkillScope::Repo,
-                });
+                roots.extend(extra_sources);
+                roots.push(SkillRoot::local(
+                    config_folder.as_path().join(SKILLS_DIR_NAME),
+                    SkillScope::Repo,
+                ));
             }
             ConfigLayerSource::User { .. } => {
                 // `$CODEX_HOME/skills` (user-installed skills).
-                roots.push(SkillRoot {
-                    path: config_folder.as_path().join(SKILLS_DIR_NAME),
-                    scope: SkillScope::User,
-                });
+                roots.extend(extra_sources);
+                roots.push(SkillRoot::local(
+                    config_folder.as_path().join(SKILLS_DIR_NAME),
+                    SkillScope::User,
+                ));
 
                 // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
                 // special case (not a config layer).
-                roots.push(SkillRoot {
-                    path: system_cache_root_dir(config_folder.as_path()),
-                    scope: SkillScope::System,
-                });
+                roots.push(SkillRoot::local(
+                    system_cache_root_dir(config_folder.as_path()),
+                    SkillScope::System,
+                ));
             }
             ConfigLayerSource::System { .. } => {
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
                 // `/etc/codex/skills` as admin-scoped skills.
-                roots.push(SkillRoot {
-                    path: config_folder.as_path().join(SKILLS_DIR_NAME),
-                    scope: SkillScope::Admin,
-                });
+                roots.extend(extra_sources);
+                roots.push(SkillRoot::local(
+                    config_folder.as_path().join(SKILLS_DIR_NAME),
+                    SkillScope::Admin,
+                ));
             }
             ConfigLayerSource::Mdm { .. }
             | ConfigLayerSource::SessionFlags
@@ -174,6 +225,46 @@ fn skill_roots_from_layer_stack_inner(config_layer_stack: &ConfigLayerStack) -> 
         }
     }
 
+    roots
+}
+
+fn skill_roots_from_layer(
+    layer: &ConfigLayerEntry,
+    remote_cache_root: Option<&PathBuf>,
+) -> Vec<SkillRoot> {
+    let scope = match layer.name {
+        ConfigLayerSource::Project { .. } => SkillScope::Repo,
+        ConfigLayerSource::User { .. } => SkillScope::User,
+        ConfigLayerSource::System { .. } => SkillScope::Admin,
+        ConfigLayerSource::Mdm { .. }
+        | ConfigLayerSource::SessionFlags
+        | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+        | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
+            return Vec::new();
+        }
+    };
+
+    let Ok(config) = layer.config.clone().try_into::<ConfigToml>() else {
+        return Vec::new();
+    };
+    let Some(skills) = config.skills else {
+        return Vec::new();
+    };
+
+    let mut roots = Vec::new();
+    for source in skills.sources {
+        match source {
+            SkillSourceToml::Path(SkillSourcePathToml { path }) => {
+                roots.push(SkillRoot::local(path.as_path().to_path_buf(), scope));
+            }
+            SkillSourceToml::Url(SkillSourceUrlToml { url }) => {
+                let Some(cache_root) = remote_cache_root else {
+                    continue;
+                };
+                roots.push(SkillRoot::remote(url, cache_root.clone(), scope));
+            }
+        }
+    }
     roots
 }
 
@@ -550,9 +641,17 @@ mod tests {
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::io::Write;
     use std::path::Path;
     use tempfile::TempDir;
     use toml::Value as TomlValue;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use zip::ZipWriter;
+    use zip::write::FileOptions;
 
     const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 
@@ -616,7 +715,15 @@ mod tests {
 
         let got = skill_roots_from_layer_stack(&stack)
             .into_iter()
-            .map(|root| (root.scope, root.path))
+            .map(|root| {
+                let path = match root.source {
+                    SkillRootSource::Local { path } => path,
+                    SkillRootSource::Remote { .. } => {
+                        panic!("unexpected remote skill root in test")
+                    }
+                };
+                (root.scope, path)
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -662,6 +769,18 @@ mod tests {
         let path = skill_dir.join(SKILLS_FILENAME);
         fs::write(&path, content).unwrap();
         path
+    }
+
+    fn make_skill_archive(name: &str, description: &str) -> Vec<u8> {
+        let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut archive = ZipWriter::new(&mut cursor);
+        archive
+            .start_file(SKILLS_FILENAME, FileOptions::<()>::default())
+            .unwrap();
+        archive.write_all(content.as_bytes()).unwrap();
+        archive.finish().unwrap();
+        cursor.into_inner()
     }
 
     fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
@@ -993,10 +1112,13 @@ icon_large = "./assets/../logo.svg"
         fs::create_dir_all(admin_root.path()).unwrap();
         symlink_dir(shared.path(), &admin_root.path().join("shared"));
 
-        let outcome = load_skills_from_roots([SkillRoot {
-            path: admin_root.path().to_path_buf(),
-            scope: SkillScope::Admin,
-        }]);
+        let outcome = load_skills_from_roots(
+            [SkillRoot::local(
+                admin_root.path().to_path_buf(),
+                SkillScope::Admin,
+            )],
+            false,
+        );
 
         assert!(
             outcome.errors.is_empty(),
@@ -1539,6 +1661,98 @@ icon_large = "./assets/../logo.svg"
     }
 
     #[tokio::test]
+    async fn loads_skills_from_configured_path_source() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let work_dir = tempfile::tempdir().expect("tempdir");
+        let custom_root = tempfile::tempdir().expect("tempdir");
+
+        let skill_path = write_skill_at(custom_root.path(), "custom", "path-skill", "from path");
+        let config_path = codex_home.path().join("config.toml");
+        let custom_root_path = custom_root.path().display();
+        fs::write(
+            &config_path,
+            format!("[skills]\nsources = [{{ path = \"{custom_root_path}\" }}]\n"),
+        )
+        .unwrap();
+
+        let cfg = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(work_dir.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await
+            .expect("config should load");
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "path-skill".to_string(),
+                description: "from path".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_skills_from_remote_source() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let work_dir = tempfile::tempdir().expect("tempdir");
+
+        let server = MockServer::start().await;
+        let skill_bytes = make_skill_archive("remote-skill", "from remote");
+        Mock::given(method("GET"))
+            .and(path("/remote.skill"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(skill_bytes))
+            .mount(&server)
+            .await;
+
+        let server_uri = server.uri();
+        let url = format!("{server_uri}/remote.skill");
+        let config_path = codex_home.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!("[skills]\nsources = [{{ url = \"{url}\" }}]\n"),
+        )
+        .unwrap();
+
+        let cfg = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(work_dir.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await
+            .expect("config should load");
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "remote-skill");
+        assert!(
+            outcome.skills.first().is_some_and(|skill| skill
+                .path
+                .starts_with(codex_home.path().join("skills/.remote"))),
+            "expected remote skill path under .remote cache"
+        );
+    }
+
+    #[tokio::test]
     async fn loads_skills_from_system_cache_when_present() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let work_dir = tempfile::tempdir().expect("tempdir");
@@ -1592,16 +1806,13 @@ icon_large = "./assets/../logo.svg"
         let _admin_skill_path =
             write_skill_at(admin_dir.path(), "admin", "dupe-skill", "from admin");
 
-        let outcome = load_skills_from_roots([
-            SkillRoot {
-                path: system_dir.path().to_path_buf(),
-                scope: SkillScope::System,
-            },
-            SkillRoot {
-                path: admin_dir.path().to_path_buf(),
-                scope: SkillScope::Admin,
-            },
-        ]);
+        let outcome = load_skills_from_roots(
+            [
+                SkillRoot::local(system_dir.path().to_path_buf(), SkillScope::System),
+                SkillRoot::local(admin_dir.path().to_path_buf(), SkillScope::Admin),
+            ],
+            false,
+        );
 
         assert!(
             outcome.errors.is_empty(),

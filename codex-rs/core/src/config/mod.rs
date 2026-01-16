@@ -13,6 +13,7 @@ use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ScrollInputMode;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
+use crate::config::types::SkillsConfigToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::ConfigLayerStack;
@@ -880,6 +881,10 @@ pub struct ConfigToml {
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: Option<UriBasedFileOpener>,
+
+    /// Additional skill sources to load from local paths or URLs.
+    #[serde(default)]
+    pub skills: Option<SkillsConfigToml>,
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,

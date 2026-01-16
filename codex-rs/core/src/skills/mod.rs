@@ -2,6 +2,7 @@ pub mod injection;
 pub mod loader;
 pub mod manager;
 pub mod model;
+pub mod remote;
 pub mod render;
 pub mod system;
 
