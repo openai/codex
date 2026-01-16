@@ -137,6 +137,7 @@ pub enum CollaborationMode {
     Plan(CollaborationModeSettings),
     Collaborate(CollaborationModeSettings),
     Execute(CollaborationModeSettings),
+    None(CollaborationModeSettings),
 }
 
 impl CollaborationMode {
@@ -145,6 +146,7 @@ impl CollaborationMode {
             CollaborationMode::Plan(settings) => &settings.model,
             CollaborationMode::Collaborate(settings) => &settings.model,
             CollaborationMode::Execute(settings) => &settings.model,
+            CollaborationMode::None(settings) => &settings.model,
         }
     }
 
@@ -153,6 +155,7 @@ impl CollaborationMode {
             CollaborationMode::Plan(settings) => settings.reasoning_effort,
             CollaborationMode::Collaborate(settings) => settings.reasoning_effort,
             CollaborationMode::Execute(settings) => settings.reasoning_effort,
+            CollaborationMode::None(settings) => settings.reasoning_effort,
         }
     }
 
@@ -173,6 +176,7 @@ impl CollaborationMode {
             CollaborationMode::Plan(settings) => settings,
             CollaborationMode::Collaborate(settings) => settings,
             CollaborationMode::Execute(settings) => settings,
+            CollaborationMode::None(settings) => settings,
         };
 
         let updated_model = model.as_ref().unwrap_or(&current_settings.model);
@@ -196,6 +200,7 @@ impl CollaborationMode {
             CollaborationMode::Plan(_) => CollaborationMode::Plan(updated_settings),
             CollaborationMode::Collaborate(_) => CollaborationMode::Collaborate(updated_settings),
             CollaborationMode::Execute(_) => CollaborationMode::Execute(updated_settings),
+            CollaborationMode::None(_) => CollaborationMode::None(updated_settings),
         })
     }
 }

@@ -272,7 +272,7 @@ impl Codex {
             .await;
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
-        let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
+        let collaboration_mode = CollaborationMode::None(CollaborationModeSettings {
             model: model.clone(),
             reasoning_effort: config.model_reasoning_effort,
         });
@@ -1992,7 +1992,7 @@ mod handlers {
                 items,
             } => {
                 let collaboration_mode =
-                    Some(CollaborationMode::Collaborate(CollaborationModeSettings {
+                    Some(CollaborationMode::None(CollaborationModeSettings {
                         model,
                         reasoning_effort: effort,
                     }));
@@ -3398,7 +3398,7 @@ mod tests {
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
+        let collaboration_mode = CollaborationMode::None(CollaborationModeSettings {
             model,
             reasoning_effort,
         });
@@ -3468,7 +3468,7 @@ mod tests {
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
+        let collaboration_mode = CollaborationMode::None(CollaborationModeSettings {
             model,
             reasoning_effort,
         });
@@ -3722,7 +3722,7 @@ mod tests {
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
+        let collaboration_mode = CollaborationMode::None(CollaborationModeSettings {
             model,
             reasoning_effort,
         });
@@ -3821,7 +3821,7 @@ mod tests {
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
+        let collaboration_mode = CollaborationMode::None(CollaborationModeSettings {
             model,
             reasoning_effort,
         });
