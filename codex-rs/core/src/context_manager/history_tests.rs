@@ -3,6 +3,7 @@ use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
@@ -38,6 +39,16 @@ fn user_msg(text: &str) -> ResponseItem {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+    }
+}
+
+fn user_input_text_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
     }
@@ -91,7 +102,7 @@ fn filters_non_api_messages() {
     let a = assistant_msg("hello");
     h.record_items([&u, &a], policy);
 
-    let items = h.contents();
+    let items = h.raw_items();
     assert_eq!(
         items,
         vec![
@@ -150,8 +161,8 @@ fn get_history_for_prompt_drops_ghost_commits() {
     let items = vec![ResponseItem::GhostSnapshot {
         ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
     }];
-    let mut history = create_history_with_items(items);
-    let filtered = history.get_history_for_prompt();
+    let history = create_history_with_items(items);
+    let filtered = history.for_prompt();
     assert_eq!(filtered, vec![]);
 }
 
@@ -174,7 +185,7 @@ fn remove_first_item_removes_matching_output_for_function_call() {
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[test]
@@ -196,7 +207,59 @@ fn remove_first_item_removes_matching_call_for_output() {
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
+}
+
+#[test]
+fn replace_last_turn_images_replaces_tool_output_images() {
+    let items = vec![
+        user_input_text_msg("hi"),
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "ok".to_string(),
+                content_items: Some(vec![FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,AAA".to_string(),
+                }]),
+                success: Some(true),
+            },
+        },
+    ];
+    let mut history = create_history_with_items(items);
+
+    assert!(history.replace_last_turn_images("Invalid image"));
+
+    assert_eq!(
+        history.raw_items(),
+        vec![
+            user_input_text_msg("hi"),
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "ok".to_string(),
+                    content_items: Some(vec![FunctionCallOutputContentItem::InputText {
+                        text: "Invalid image".to_string(),
+                    }]),
+                    success: Some(true),
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn replace_last_turn_images_does_not_touch_user_images() {
+    let items = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputImage {
+            image_url: "data:image/png;base64,AAA".to_string(),
+        }],
+    }];
+    let mut history = create_history_with_items(items.clone());
+
+    assert!(!history.replace_last_turn_images("Invalid image"));
+    assert_eq!(history.raw_items(), items);
 }
 
 #[test]
@@ -224,7 +287,128 @@ fn remove_first_item_handles_local_shell_pair() {
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
+}
+
+#[test]
+fn drop_last_n_user_turns_preserves_prefix() {
+    let items = vec![
+        assistant_msg("session prefix item"),
+        user_msg("u1"),
+        assistant_msg("a1"),
+        user_msg("u2"),
+        assistant_msg("a2"),
+    ];
+
+    let mut history = create_history_with_items(items);
+    history.drop_last_n_user_turns(1);
+    assert_eq!(
+        history.for_prompt(),
+        vec![
+            assistant_msg("session prefix item"),
+            user_msg("u1"),
+            assistant_msg("a1"),
+        ]
+    );
+
+    let mut history = create_history_with_items(vec![
+        assistant_msg("session prefix item"),
+        user_msg("u1"),
+        assistant_msg("a1"),
+        user_msg("u2"),
+        assistant_msg("a2"),
+    ]);
+    history.drop_last_n_user_turns(99);
+    assert_eq!(
+        history.for_prompt(),
+        vec![assistant_msg("session prefix item")]
+    );
+}
+
+#[test]
+fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
+    let items = vec![
+        user_input_text_msg("<environment_context>ctx</environment_context>"),
+        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
+        user_input_text_msg(
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+        ),
+        user_input_text_msg(
+            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+        ),
+        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let mut history = create_history_with_items(items);
+    history.drop_last_n_user_turns(1);
+
+    let expected_prefix_and_first_turn = vec![
+        user_input_text_msg("<environment_context>ctx</environment_context>"),
+        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
+        user_input_text_msg(
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+        ),
+        user_input_text_msg(
+            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+        ),
+        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+    ];
+
+    assert_eq!(history.for_prompt(), expected_prefix_and_first_turn);
+
+    let expected_prefix_only = vec![
+        user_input_text_msg("<environment_context>ctx</environment_context>"),
+        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
+        user_input_text_msg(
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+        ),
+        user_input_text_msg(
+            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+        ),
+        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+    ];
+
+    let mut history = create_history_with_items(vec![
+        user_input_text_msg("<environment_context>ctx</environment_context>"),
+        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
+        user_input_text_msg(
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+        ),
+        user_input_text_msg(
+            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+        ),
+        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ]);
+    history.drop_last_n_user_turns(2);
+    assert_eq!(history.for_prompt(), expected_prefix_only);
+
+    let mut history = create_history_with_items(vec![
+        user_input_text_msg("<environment_context>ctx</environment_context>"),
+        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
+        user_input_text_msg(
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+        ),
+        user_input_text_msg(
+            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+        ),
+        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ]);
+    history.drop_last_n_user_turns(3);
+    assert_eq!(history.for_prompt(), expected_prefix_only);
 }
 
 #[test]
@@ -244,7 +428,7 @@ fn remove_first_item_handles_custom_tool_pair() {
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[test]
@@ -271,8 +455,8 @@ fn normalization_retains_local_shell_outputs() {
         },
     ];
 
-    let mut history = create_history_with_items(items.clone());
-    let normalized = history.get_history();
+    let history = create_history_with_items(items.clone());
+    let normalized = history.for_prompt();
     assert_eq!(normalized, items);
 }
 
@@ -462,7 +646,6 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
     assert_truncated_message_matches(&truncated, "line-0-", 17_423);
 }
 
-//TODO(aibrahim): run CI in release mode.
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_function_call() {
@@ -477,7 +660,7 @@ fn normalize_adds_missing_output_for_function_call() {
     h.normalize_history();
 
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::FunctionCall {
                 id: None,
@@ -511,7 +694,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
     h.normalize_history();
 
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::CustomToolCall {
                 id: None,
@@ -548,7 +731,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
     h.normalize_history();
 
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::LocalShellCall {
                 id: None,
@@ -587,7 +770,7 @@ fn normalize_removes_orphan_function_call_output() {
 
     h.normalize_history();
 
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[cfg(not(debug_assertions))]
@@ -601,7 +784,7 @@ fn normalize_removes_orphan_custom_tool_call_output() {
 
     h.normalize_history();
 
-    assert_eq!(h.contents(), vec![]);
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[cfg(not(debug_assertions))]
@@ -650,7 +833,7 @@ fn normalize_mixed_inserts_and_removals() {
     h.normalize_history();
 
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::FunctionCall {
                 id: None,
@@ -710,7 +893,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
     let mut h = create_history_with_items(items);
     h.normalize_history();
     assert_eq!(
-        h.contents(),
+        h.raw_items(),
         vec![
             ResponseItem::FunctionCall {
                 id: None,

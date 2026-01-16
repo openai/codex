@@ -72,6 +72,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run shell command".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
@@ -91,13 +92,13 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
         unreachable!()
     };
     wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TaskComplete(_))
+        matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 
     assert!(
         end.aggregated_output
-            .contains("execpolicy forbids this command"),
+            .contains("policy forbids commands starting with `echo`"),
         "unexpected output: {}",
         end.aggregated_output
     );

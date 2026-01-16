@@ -31,6 +31,10 @@ const ALIASES: &[Alias] = &[
     },
 ];
 
+pub(crate) fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {
+    ALIASES.iter().map(|alias| alias.legacy_key)
+}
+
 pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
     ALIASES
         .iter()

@@ -49,28 +49,55 @@ impl ApprovalStore {
     }
 }
 
+/// Takes a vector of approval keys and returns a ReviewDecision.
+/// There will be one key in most cases, but apply_patch can modify multiple files at once.
+///
+/// - If all keys are already approved for session, we skip prompting.
+/// - If the user approves for session, we store the decision for each key individually
+///   so future requests touching any subset can also skip prompting.
 pub(crate) async fn with_cached_approval<K, F, Fut>(
     services: &SessionServices,
-    key: K,
+    // Name of the tool, used for metrics collection.
+    tool_name: &str,
+    keys: Vec<K>,
     fetch: F,
 ) -> ReviewDecision
 where
-    K: Serialize + Clone,
+    K: Serialize,
     F: FnOnce() -> Fut,
     Fut: Future<Output = ReviewDecision>,
 {
-    {
+    // To be defensive here, don't bother with checking the cache if keys are empty.
+    if keys.is_empty() {
+        return fetch().await;
+    }
+
+    let already_approved = {
         let store = services.tool_approvals.lock().await;
-        if let Some(decision) = store.get(&key) {
-            return decision;
-        }
+        keys.iter()
+            .all(|key| matches!(store.get(key), Some(ReviewDecision::ApprovedForSession)))
+    };
+
+    if already_approved {
+        return ReviewDecision::ApprovedForSession;
     }
 
     let decision = fetch().await;
 
+    services.otel_manager.counter(
+        "codex.approval.requested",
+        1,
+        &[
+            ("tool", tool_name),
+            ("approved", decision.to_opaque_string()),
+        ],
+    );
+
     if matches!(decision, ReviewDecision::ApprovedForSession) {
         let mut store = services.tool_approvals.lock().await;
-        store.put(key, ReviewDecision::ApprovedForSession);
+        for key in keys {
+            store.put(key, ReviewDecision::ApprovedForSession);
+        }
     }
 
     decision
@@ -161,7 +188,14 @@ pub(crate) enum SandboxOverride {
 pub(crate) trait Approvable<Req> {
     type ApprovalKey: Hash + Eq + Clone + Debug + Serialize;
 
-    fn approval_key(&self, req: &Req) -> Self::ApprovalKey;
+    // In most cases (shell, unified_exec), a request will have a single approval key.
+    //
+    // However, apply_patch needs session "approve once, don't ask again" semantics that
+    // apply to multiple atomic targets (e.g., apply_patch approves per file path). Returning
+    // a list of keys lets the runtime treat the request as approved-for-session only if
+    // *all* keys are already approved, while still caching approvals per-key so future
+    // requests touching a subset can be auto-approved.
+    fn approval_keys(&self, req: &Req) -> Vec<Self::ApprovalKey>;
 
     /// Some tools may request to skip the sandbox on the first attempt
     /// (e.g., when the request explicitly asks for escalated permissions).

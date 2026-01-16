@@ -12,8 +12,8 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_otel::otel_manager::OtelManager;
-use codex_protocol::ConversationId;
+use codex_otel::OtelManager;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
@@ -72,15 +72,15 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
 
-    let conversation_id = ConversationId::new();
+    let conversation_id = ThreadId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let auth_mode = auth_manager.get_auth_mode();
     let model = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
-        model_family.slug.as_str(),
+        model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         auth_mode,
@@ -89,17 +89,18 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         SessionSource::Exec,
     );
 
-    let client = ModelClient::new(
+    let mut client = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_family,
+        model_info,
         otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
         SessionSource::Exec,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {

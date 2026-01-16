@@ -19,11 +19,13 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use image::GenericImageView;
 use image::ImageBuffer;
 use image::Rgba;
 use image::load_from_memory;
 use serde_json::Value;
+use tokio::time::Duration;
 
 fn find_image_message(body: &Value) -> Option<&Value> {
     body.get("input")
@@ -89,7 +91,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let body = mock.single_request().body_json();
     let image_message =
@@ -169,6 +171,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please add the screenshot".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -181,14 +184,20 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         .await?;
 
     let mut tool_event = None;
-    wait_for_event(&codex, |event| match event {
-        EventMsg::ViewImageToolCall(_) => {
-            tool_event = Some(event.clone());
-            false
-        }
-        EventMsg::TaskComplete(_) => true,
-        _ => false,
-    })
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::ViewImageToolCall(_) => {
+                tool_event = Some(event.clone());
+                false
+            }
+            EventMsg::TurnComplete(_) => true,
+            _ => false,
+        },
+        // Empirically, we have seen this run slow when run under
+        // Bazel on arm Linux.
+        Duration::from_secs(10),
+    )
     .await;
 
     let tool_event = match tool_event.expect("view image tool event emitted") {
@@ -208,6 +217,20 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let image_message =
         find_image_message(&body).expect("pending input image message not included in request");
+    let content_items = image_message
+        .get("content")
+        .and_then(Value::as_array)
+        .expect("image message has content array");
+    assert_eq!(
+        content_items.len(),
+        1,
+        "view_image should inject only the image content item (no tag/label text)"
+    );
+    assert_eq!(
+        content_items[0].get("type").and_then(Value::as_str),
+        Some("input_image"),
+        "view_image should inject only an input_image content item"
+    );
     let image_url = image_message
         .get("content")
         .and_then(Value::as_array)
@@ -279,6 +302,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please attach the folder".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -290,7 +314,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = mock.single_request();
     let body_with_tool_output = req.body_json();
@@ -351,6 +375,7 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please use the view_image tool to read the json file".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -362,7 +387,7 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let request = mock.single_request();
     assert!(
@@ -442,6 +467,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please attach the missing image".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -453,7 +479,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = mock.single_request();
     let body_with_tool_output = req.body_json();
@@ -534,7 +560,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let first_body = invalid_image_mock.single_request().body_json();
     assert!(

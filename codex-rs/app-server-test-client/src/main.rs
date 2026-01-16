@@ -13,16 +13,18 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -35,6 +37,8 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
+use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
@@ -49,7 +53,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use serde::Serialize;
@@ -64,6 +68,19 @@ struct Cli {
     /// Path to the `codex` CLI binary.
     #[arg(long, env = "CODEX_BIN", default_value = "codex")]
     codex_bin: String,
+
+    /// Forwarded to the `codex` CLI as `--config key=value`. Repeatable.
+    ///
+    /// Example:
+    ///   `--config 'model_providers.mock.base_url="http://localhost:4010/v2"'`
+    #[arg(
+        short = 'c',
+        long = "config",
+        value_name = "key=value",
+        action = ArgAction::Append,
+        global = true
+    )]
+    config_overrides: Vec<String>,
 
     #[command(subcommand)]
     command: CliCommand,
@@ -113,37 +130,54 @@ enum CliCommand {
     TestLogin,
     /// Fetch the current account rate limits from the Codex app-server.
     GetAccountRateLimits,
+    /// List the available models from the Codex app-server.
+    #[command(name = "model-list")]
+    ModelList,
 }
 
 fn main() -> Result<()> {
-    let Cli { codex_bin, command } = Cli::parse();
+    let Cli {
+        codex_bin,
+        config_overrides,
+        command,
+    } = Cli::parse();
 
     match command {
-        CliCommand::SendMessage { user_message } => send_message(codex_bin, user_message),
-        CliCommand::SendMessageV2 { user_message } => send_message_v2(codex_bin, user_message),
+        CliCommand::SendMessage { user_message } => {
+            send_message(&codex_bin, &config_overrides, user_message)
+        }
+        CliCommand::SendMessageV2 { user_message } => {
+            send_message_v2(&codex_bin, &config_overrides, user_message)
+        }
         CliCommand::TriggerCmdApproval { user_message } => {
-            trigger_cmd_approval(codex_bin, user_message)
+            trigger_cmd_approval(&codex_bin, &config_overrides, user_message)
         }
         CliCommand::TriggerPatchApproval { user_message } => {
-            trigger_patch_approval(codex_bin, user_message)
+            trigger_patch_approval(&codex_bin, &config_overrides, user_message)
         }
-        CliCommand::NoTriggerCmdApproval => no_trigger_cmd_approval(codex_bin),
+        CliCommand::NoTriggerCmdApproval => no_trigger_cmd_approval(&codex_bin, &config_overrides),
         CliCommand::SendFollowUpV2 {
             first_message,
             follow_up_message,
-        } => send_follow_up_v2(codex_bin, first_message, follow_up_message),
-        CliCommand::TestLogin => test_login(codex_bin),
-        CliCommand::GetAccountRateLimits => get_account_rate_limits(codex_bin),
+        } => send_follow_up_v2(
+            &codex_bin,
+            &config_overrides,
+            first_message,
+            follow_up_message,
+        ),
+        CliCommand::TestLogin => test_login(&codex_bin, &config_overrides),
+        CliCommand::GetAccountRateLimits => get_account_rate_limits(&codex_bin, &config_overrides),
+        CliCommand::ModelList => model_list(&codex_bin, &config_overrides),
     }
 }
 
-fn send_message(codex_bin: String, user_message: String) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+fn send_message(codex_bin: &str, config_overrides: &[String], user_message: String) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
 
-    let conversation = client.new_conversation()?;
+    let conversation = client.start_thread()?;
     println!("< newConversation response: {conversation:?}");
 
     let subscription = client.add_conversation_listener(&conversation.conversation_id)?;
@@ -154,51 +188,66 @@ fn send_message(codex_bin: String, user_message: String) -> Result<()> {
 
     client.stream_conversation(&conversation.conversation_id)?;
 
-    client.remove_conversation_listener(subscription.subscription_id)?;
+    client.remove_thread_listener(subscription.subscription_id)?;
 
     Ok(())
 }
 
-fn send_message_v2(codex_bin: String, user_message: String) -> Result<()> {
-    send_message_v2_with_policies(codex_bin, user_message, None, None)
+fn send_message_v2(
+    codex_bin: &str,
+    config_overrides: &[String],
+    user_message: String,
+) -> Result<()> {
+    send_message_v2_with_policies(codex_bin, config_overrides, user_message, None, None)
 }
 
-fn trigger_cmd_approval(codex_bin: String, user_message: Option<String>) -> Result<()> {
+fn trigger_cmd_approval(
+    codex_bin: &str,
+    config_overrides: &[String],
+    user_message: Option<String>,
+) -> Result<()> {
     let default_prompt =
         "Run `touch /tmp/should-trigger-approval` so I can confirm the file exists.";
     let message = user_message.unwrap_or_else(|| default_prompt.to_string());
     send_message_v2_with_policies(
         codex_bin,
+        config_overrides,
         message,
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly),
     )
 }
 
-fn trigger_patch_approval(codex_bin: String, user_message: Option<String>) -> Result<()> {
+fn trigger_patch_approval(
+    codex_bin: &str,
+    config_overrides: &[String],
+    user_message: Option<String>,
+) -> Result<()> {
     let default_prompt =
         "Create a file named APPROVAL_DEMO.txt containing a short hello message using apply_patch.";
     let message = user_message.unwrap_or_else(|| default_prompt.to_string());
     send_message_v2_with_policies(
         codex_bin,
+        config_overrides,
         message,
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly),
     )
 }
 
-fn no_trigger_cmd_approval(codex_bin: String) -> Result<()> {
+fn no_trigger_cmd_approval(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
     let prompt = "Run `touch should_not_trigger_approval.txt`";
-    send_message_v2_with_policies(codex_bin, prompt.to_string(), None, None)
+    send_message_v2_with_policies(codex_bin, config_overrides, prompt.to_string(), None, None)
 }
 
 fn send_message_v2_with_policies(
-    codex_bin: String,
+    codex_bin: &str,
+    config_overrides: &[String],
     user_message: String,
     approval_policy: Option<AskForApproval>,
     sandbox_policy: Option<SandboxPolicy>,
 ) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -207,7 +256,11 @@ fn send_message_v2_with_policies(
     println!("< thread/start response: {thread_response:?}");
     let mut turn_params = TurnStartParams {
         thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text { text: user_message }],
+        input: vec![V2UserInput::Text {
+            text: user_message,
+            // Plain text conversion has no UI element ranges.
+            text_elements: Vec::new(),
+        }],
         ..Default::default()
     };
     turn_params.approval_policy = approval_policy;
@@ -222,11 +275,12 @@ fn send_message_v2_with_policies(
 }
 
 fn send_follow_up_v2(
-    codex_bin: String,
+    codex_bin: &str,
+    config_overrides: &[String],
     first_message: String,
     follow_up_message: String,
 ) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -238,6 +292,7 @@ fn send_follow_up_v2(
         thread_id: thread_response.thread.id.clone(),
         input: vec![V2UserInput::Text {
             text: first_message,
+            text_elements: Vec::new(),
         }],
         ..Default::default()
     };
@@ -249,6 +304,7 @@ fn send_follow_up_v2(
         thread_id: thread_response.thread.id.clone(),
         input: vec![V2UserInput::Text {
             text: follow_up_message,
+            text_elements: Vec::new(),
         }],
         ..Default::default()
     };
@@ -259,8 +315,8 @@ fn send_follow_up_v2(
     Ok(())
 }
 
-fn test_login(codex_bin: String) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+fn test_login(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
@@ -289,14 +345,26 @@ fn test_login(codex_bin: String) -> Result<()> {
     }
 }
 
-fn get_account_rate_limits(codex_bin: String) -> Result<()> {
-    let mut client = CodexClient::spawn(codex_bin)?;
+fn get_account_rate_limits(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
 
     let response = client.get_account_rate_limits()?;
     println!("< account/rateLimits/read response: {response:?}");
+
+    Ok(())
+}
+
+fn model_list(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+
+    let response = client.model_list(ModelListParams::default())?;
+    println!("< model/list response: {response:?}");
 
     Ok(())
 }
@@ -309,8 +377,12 @@ struct CodexClient {
 }
 
 impl CodexClient {
-    fn spawn(codex_bin: String) -> Result<Self> {
-        let mut codex_app_server = Command::new(&codex_bin)
+    fn spawn(codex_bin: &str, config_overrides: &[String]) -> Result<Self> {
+        let mut cmd = Command::new(codex_bin);
+        for override_kv in config_overrides {
+            cmd.arg("--config").arg(override_kv);
+        }
+        let mut codex_app_server = cmd
             .arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -351,7 +423,7 @@ impl CodexClient {
         self.send_request(request, request_id, "initialize")
     }
 
-    fn new_conversation(&mut self) -> Result<NewConversationResponse> {
+    fn start_thread(&mut self) -> Result<NewConversationResponse> {
         let request_id = self.request_id();
         let request = ClientRequest::NewConversation {
             request_id: request_id.clone(),
@@ -363,7 +435,7 @@ impl CodexClient {
 
     fn add_conversation_listener(
         &mut self,
-        conversation_id: &ConversationId,
+        conversation_id: &ThreadId,
     ) -> Result<AddConversationSubscriptionResponse> {
         let request_id = self.request_id();
         let request = ClientRequest::AddConversationListener {
@@ -377,7 +449,7 @@ impl CodexClient {
         self.send_request(request, request_id, "addConversationListener")
     }
 
-    fn remove_conversation_listener(&mut self, subscription_id: Uuid) -> Result<()> {
+    fn remove_thread_listener(&mut self, subscription_id: Uuid) -> Result<()> {
         let request_id = self.request_id();
         let request = ClientRequest::RemoveConversationListener {
             request_id: request_id.clone(),
@@ -395,7 +467,7 @@ impl CodexClient {
 
     fn send_user_message(
         &mut self,
-        conversation_id: &ConversationId,
+        conversation_id: &ThreadId,
         message: &str,
     ) -> Result<SendUserMessageResponse> {
         let request_id = self.request_id();
@@ -452,7 +524,17 @@ impl CodexClient {
         self.send_request(request, request_id, "account/rateLimits/read")
     }
 
-    fn stream_conversation(&mut self, conversation_id: &ConversationId) -> Result<()> {
+    fn model_list(&mut self, params: ModelListParams) -> Result<ModelListResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ModelList {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "model/list")
+    }
+
+    fn stream_conversation(&mut self, conversation_id: &ThreadId) -> Result<()> {
         loop {
             let notification = self.next_notification()?;
 
@@ -469,7 +551,7 @@ impl CodexClient {
                         print!("{}", event.delta);
                         std::io::stdout().flush().ok();
                     }
-                    EventMsg::TaskComplete(event) => {
+                    EventMsg::TurnComplete(event) => {
                         println!("\n[task complete: {event:?}]");
                         break;
                     }
@@ -589,7 +671,7 @@ impl CodexClient {
     fn extract_event(
         &self,
         notification: JSONRPCNotification,
-        conversation_id: &ConversationId,
+        conversation_id: &ThreadId,
     ) -> Result<Option<Event>> {
         let params = notification
             .params
@@ -603,7 +685,7 @@ impl CodexClient {
         let conversation_value = map
             .remove("conversationId")
             .context("event missing conversationId")?;
-        let notification_conversation: ConversationId = serde_json::from_value(conversation_value)
+        let notification_conversation: ThreadId = serde_json::from_value(conversation_value)
             .context("conversationId was not a valid UUID")?;
 
         if &notification_conversation != conversation_id {
@@ -770,7 +852,7 @@ impl CodexClient {
         }
 
         let response = CommandExecutionRequestApprovalResponse {
-            decision: ApprovalDecision::Accept,
+            decision: CommandExecutionApprovalDecision::Accept,
         };
         self.send_server_request_response(request_id, &response)?;
         println!("< approved commandExecution request for item {item_id}");
@@ -801,7 +883,7 @@ impl CodexClient {
         }
 
         let response = FileChangeRequestApprovalResponse {
-            decision: ApprovalDecision::Accept,
+            decision: FileChangeApprovalDecision::Accept,
         };
         self.send_server_request_response(request_id, &response)?;
         println!("< approved fileChange request for item {item_id}");

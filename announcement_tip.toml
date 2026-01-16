@@ -1,0 +1,17 @@
+# Example announcement tips for Codex TUI.
+# Each [[announcements]] entry is evaluated in order; the last matching one is shown.
+# Dates are UTC, formatted as YYYY-MM-DD. The from_date is inclusive and the to_date is exclusive.
+# version_regex matches against the CLI version (env!("CARGO_PKG_VERSION")); omit to apply to all versions.
+# target_app specify which app should display the announcement (cli, vsce, ...).
+
+[[announcements]]
+content = "Welcome to Codex! Check out the new onboarding flow."
+from_date = "2024-10-01"
+to_date = "2024-10-15"
+target_app = "cli"
+
+# Test announcement only for local build version until 2026-01-10 excluded (past)
+[[announcements]]
+content = "This is a test announcement"
+version_regex = "^0\\.0\\.0$"
+to_date = "2026-01-10"

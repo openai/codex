@@ -3,6 +3,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use indoc::indoc;
 use once_cell::sync::Lazy;
 
 pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_prompt";
@@ -38,7 +39,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             is_default: true,
             upgrade: None,
             show_in_picker: true,
-            supported_in_api: false,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "gpt-5.1-codex-max".to_string(),
@@ -112,7 +113,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::XHigh,
-                    description: "Extra high reasoning for complex problems".to_string(),
+                    description: "Extra high reasoning depth for complex problems".to_string(),
                 },
             ],
             is_default: false,
@@ -170,7 +171,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::XHigh,
-                    description: "Extra high reasoning for complex problems".to_string(),
+                    description: "Extra high reasoning depth for complex problems".to_string(),
                 },
             ],
             is_default: false,
@@ -318,15 +319,21 @@ fn gpt_52_codex_upgrade() -> ModelUpgrade {
             "Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
                 .to_string(),
         ),
+        migration_markdown: Some(
+            indoc! {r#"
+                **Codex just got an upgrade. Introducing {model_to}.**
+
+                Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about {model_to} at https://openai.com/index/introducing-gpt-5-2-codex
+
+                You can continue using {model_from} if you prefer.
+            "#}
+            .to_string(),
+        ),
     }
 }
 
 pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    PRESETS
-        .iter()
-        .filter(|preset| preset.show_in_picker)
-        .cloned()
-        .collect()
+    PRESETS.iter().cloned().collect()
 }
 
 #[cfg(any(test, feature = "test-support"))]

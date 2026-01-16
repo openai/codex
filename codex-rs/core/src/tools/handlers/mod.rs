@@ -1,5 +1,6 @@
 pub mod apply_patch;
 mod ask_user_question;
+pub(crate) mod collab;
 mod grep_files;
 mod list_dir;
 mod mcp;
@@ -13,9 +14,12 @@ mod unified_exec;
 mod view_image;
 
 pub use plan::PLAN_TOOL;
+use serde::Deserialize;
 
+use crate::function_tool::FunctionCallError;
 pub use apply_patch::ApplyPatchHandler;
 pub use ask_user_question::AskUserQuestionHandler;
+pub use collab::CollabHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
@@ -28,3 +32,12 @@ pub use subagent::RunSubagentHandler;
 pub use test_sync::TestSyncHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
+
+fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_str(arguments).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
+    })
+}

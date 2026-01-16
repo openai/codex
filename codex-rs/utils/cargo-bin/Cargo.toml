@@ -9,4 +9,6 @@ workspace = true
 
 [dependencies]
 assert_cmd = { workspace = true }
+path-absolutize = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }

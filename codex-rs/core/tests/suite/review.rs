@@ -1,10 +1,10 @@
 use codex_core::CodexAuth;
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::ContentItem;
-use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::REVIEW_PROMPT;
 use codex_core::ResponseItem;
+use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
@@ -23,7 +23,8 @@ use codex_core::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
-use core_test_support::responses::get_responses_requests;
+use core_test_support::responses::ResponseMock;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -32,14 +33,10 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
-use wiremock::Mock;
 use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 /// Verify that submitting `Op::Review` spawns a child task and emits
-/// EnteredReviewMode -> ExitedReviewMode(None) -> TaskComplete
+/// EnteredReviewMode -> ExitedReviewMode(None) -> TurnComplete
 /// in that order when the model returns a structured review JSON payload.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_op_emits_lifecycle_and_review_output() {
@@ -75,7 +72,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         ]"#;
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
-    let server = start_responses_server_with_sse(&sse_raw, 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -92,7 +89,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         .await
         .unwrap();
 
-    // Verify lifecycle: Entered -> Exited(Some(review)) -> TaskComplete.
+    // Verify lifecycle: Entered -> Exited(Some(review)) -> TurnComplete.
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
     let review = match closed {
@@ -119,7 +116,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         overall_confidence_score: 0.8,
     };
     assert_eq!(expected, review);
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
@@ -196,7 +193,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -227,7 +224,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         ..Default::default()
     };
     assert_eq!(expected, review);
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     server.verify().await;
 }
@@ -256,7 +253,7 @@ async fn review_filters_agent_message_related_events() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -275,9 +272,9 @@ async fn review_filters_agent_message_related_events() {
     let mut saw_entered = false;
     let mut saw_exited = false;
 
-    // Drain until TaskComplete; assert streaming-related events never surface.
+    // Drain until TurnComplete; assert streaming-related events never surface.
     wait_for_event(&codex, |event| match event {
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         EventMsg::EnteredReviewMode(_) => {
             saw_entered = true;
             false
@@ -337,7 +334,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         ]"#;
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
-    let server = start_responses_server_with_sse(&sse_raw, 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -353,13 +350,13 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         .await
         .unwrap();
 
-    // Drain events until TaskComplete; ensure we only see a final
+    // Drain events until TurnComplete; ensure we only see a final
     // AgentMessage (no streaming assistant messages).
     let mut saw_entered = false;
     let mut saw_exited = false;
     let mut agent_messages = 0;
     wait_for_event(&codex, |event| match event {
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         EventMsg::AgentMessage(_) => {
             agent_messages += 1;
             false
@@ -391,12 +388,12 @@ async fn review_uses_custom_review_model_from_config() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
-        cfg.review_model = "gpt-5.1".to_string();
+        cfg.review_model = Some("gpt-5.1".to_string());
     })
     .await;
 
@@ -423,15 +420,63 @@ async fn review_uses_custom_review_model_from_config() {
         )
     })
     .await;
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Assert the request body model equals the configured review model
-    let requests = get_responses_requests(&server).await;
-    let request = requests
-        .first()
-        .expect("expected POST request to /responses");
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let request = request_log.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
+
+    server.verify().await;
+}
+
+/// Ensure that when `review_model` is not set in the config, the review request
+/// uses the session model.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_session_model_when_review_model_unset() {
+    skip_if_no_network!();
+
+    // Minimal stream: just a completed event
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = TempDir::new().unwrap();
+    let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
+        cfg.model = Some("gpt-4.1".to_string());
+        cfg.review_model = None;
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "use session model".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let body = request.body_json();
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-4.1");
 
     server.verify().await;
 }
@@ -449,7 +494,7 @@ async fn review_input_isolated_from_parent_history() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
 
     // Seed a parent session history via resume file with both user + assistant items.
     let codex_home = TempDir::new().unwrap();
@@ -544,14 +589,12 @@ async fn review_input_isolated_from_parent_history() {
         )
     })
     .await;
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Assert the request `input` contains the environment context followed by the user review prompt.
-    let requests = get_responses_requests(&server).await;
-    let request = requests
-        .first()
-        .expect("expected POST request to /responses");
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let request = request_log.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let body = request.body_json();
     let input = body["input"].as_array().expect("input array");
     assert!(
         input.len() >= 2,
@@ -630,7 +673,7 @@ async fn review_history_surfaces_in_parent_session() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let server = start_responses_server_with_sse(sse_raw, 2).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 2).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
 
@@ -656,7 +699,7 @@ async fn review_history_surfaces_in_parent_session() {
         )
     })
     .await;
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // 2) Continue in the parent session; request input must not include any review items.
     let followup = "back to parent".to_string();
@@ -664,18 +707,23 @@ async fn review_history_surfaces_in_parent_session() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: followup.clone(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Inspect the second request (parent turn) input contents.
     // Parent turns include session initial messages (user_instructions, environment_context).
     // Critically, no messages from the review thread should appear.
-    let requests = get_responses_requests(&server).await;
+    let requests = request_log.requests();
     assert_eq!(requests.len(), 2);
-    let body = requests[1].body_json::<serde_json::Value>().unwrap();
+    for request in &requests {
+        assert_eq!(request.path(), "/v1/responses");
+    }
+    let body = requests[1].body_json();
     let input = body["input"].as_array().expect("input array");
 
     // Must include the followup as the last item for this turn
@@ -709,21 +757,118 @@ async fn review_history_surfaces_in_parent_session() {
     server.verify().await;
 }
 
+/// `/review` should use the session's current cwd (including runtime overrides)
+/// when resolving base-branch review prompts (merge-base computation).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
+    skip_if_no_network!();
+
+    let sse_raw = r#"[{"type":"response.completed", "response": {"id": "__ID__"}}]"#;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+
+    let initial_cwd = TempDir::new().unwrap();
+
+    let repo_dir = TempDir::new().unwrap();
+    let repo_path = repo_dir.path();
+
+    fn run_git(repo_path: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args(args)
+            .output()
+            .expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: stdout={:?} stderr={:?}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    run_git(repo_path, &["init", "-b", "main"]);
+    run_git(repo_path, &["config", "user.email", "test@example.com"]);
+    run_git(repo_path, &["config", "user.name", "Test User"]);
+    std::fs::write(repo_path.join("file.txt"), "hello\n").unwrap();
+    run_git(repo_path, &["add", "."]);
+    run_git(repo_path, &["commit", "-m", "initial"]);
+
+    let head_sha = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse HEAD");
+    assert!(head_sha.status.success());
+    let head_sha = String::from_utf8(head_sha.stdout)
+        .expect("utf8 sha")
+        .trim()
+        .to_string();
+
+    let codex_home = TempDir::new().unwrap();
+    let codex = new_conversation_for_server(&server, &codex_home, |config| {
+        config.cwd = initial_cwd.path().to_path_buf();
+    })
+    .await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: Some(repo_path.to_path_buf()),
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::BaseBranch {
+                    branch: "main".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 1);
+    for request in &requests {
+        assert_eq!(request.path(), "/v1/responses");
+    }
+    let body = requests[0].body_json();
+    let input = body["input"].as_array().expect("input array");
+
+    let saw_merge_base_sha = input
+        .iter()
+        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .any(|text| text.contains(&head_sha));
+    assert!(
+        saw_merge_base_sha,
+        "expected review prompt to include merge-base sha {head_sha}"
+    );
+
+    server.verify().await;
+}
+
 /// Start a mock Responses API server and mount the given SSE stream body.
-async fn start_responses_server_with_sse(sse_raw: &str, expected_requests: usize) -> MockServer {
+async fn start_responses_server_with_sse(
+    sse_raw: &str,
+    expected_requests: usize,
+) -> (MockServer, ResponseMock) {
     let server = MockServer::start().await;
     let sse = load_sse_fixture_with_id_from_str(sse_raw, &Uuid::new_v4().to_string());
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(sse.clone(), "text/event-stream"),
-        )
-        .expect(expected_requests as u64)
-        .mount(&server)
-        .await;
-    server
+    let responses = vec![sse; expected_requests];
+    let request_log = mount_sse_sequence(&server, responses).await;
+    (server, request_log)
 }
 
 /// Create a conversation configured to talk to the provided mock server.
@@ -732,7 +877,7 @@ async fn new_conversation_for_server<F>(
     server: &MockServer,
     codex_home: &TempDir,
     mutator: F,
-) -> Arc<CodexConversation>
+) -> Arc<CodexThread>
 where
     F: FnOnce(&mut Config),
 {
@@ -743,15 +888,15 @@ where
     let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
     );
-    conversation_manager
-        .new_conversation(config)
+    thread_manager
+        .start_thread(config)
         .await
         .expect("create conversation")
-        .conversation
+        .thread
 }
 
 /// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
@@ -761,7 +906,7 @@ async fn resume_conversation_for_server<F>(
     codex_home: &TempDir,
     resume_path: std::path::PathBuf,
     mutator: F,
-) -> Arc<CodexConversation>
+) -> Arc<CodexThread>
 where
     F: FnOnce(&mut Config),
 {
@@ -772,15 +917,15 @@ where
     let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
-    let conversation_manager = ConversationManager::with_models_provider(
+    let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
     );
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    conversation_manager
-        .resume_conversation_from_rollout(config, resume_path, auth_manager)
+    thread_manager
+        .resume_thread_from_rollout(config, resume_path, auth_manager)
         .await
         .expect("resume conversation")
-        .conversation
+        .thread
 }

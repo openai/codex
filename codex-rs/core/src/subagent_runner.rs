@@ -29,9 +29,12 @@ pub(crate) async fn run_subagent_one_shot_with_definition(
     sub_config.features.disable(Feature::ApplyPatchFreeform);
     sub_config.developer_instructions = Some(definition_prompt);
 
-    let input = vec![UserInput::Text { text: prompt }];
+    let input = vec![UserInput::Text {
+        text: prompt,
+        text_elements: Vec::new(),
+    }];
 
-    let io = codex_delegate::run_codex_conversation_one_shot(
+    let io = codex_delegate::run_codex_thread_one_shot(
         sub_config,
         Arc::clone(&sess.services.auth_manager),
         Arc::clone(&sess.services.models_manager),
@@ -47,8 +50,8 @@ pub(crate) async fn run_subagent_one_shot_with_definition(
     let mut output_text: Option<String> = None;
     while let Ok(event) = io.rx_event.recv().await {
         match event.msg {
-            crate::protocol::EventMsg::TaskComplete(task_complete) => {
-                output_text = task_complete.last_agent_message;
+            crate::protocol::EventMsg::TurnComplete(turn_complete) => {
+                output_text = turn_complete.last_agent_message;
                 break;
             }
             crate::protocol::EventMsg::TurnAborted(_) => return Err(CodexErr::TurnAborted),

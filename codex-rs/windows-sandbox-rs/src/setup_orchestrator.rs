@@ -26,7 +26,7 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
-pub const SETUP_VERSION: u32 = 2;
+pub const SETUP_VERSION: u32 = 3;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
@@ -408,15 +408,12 @@ fn build_payload_roots(
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let sbx_dir = sandbox_dir(codex_home);
-    let mut write_roots = if let Some(roots) = write_roots_override {
+    let write_roots = if let Some(roots) = write_roots_override {
         canonical_existing(&roots)
     } else {
         gather_write_roots(policy, policy_cwd, command_cwd, env_map)
     };
-    if !write_roots.contains(&sbx_dir) {
-        write_roots.push(sbx_dir.clone());
-    }
+    let write_roots = filter_sensitive_write_roots(write_roots, codex_home);
     let mut read_roots = if let Some(roots) = read_roots_override {
         canonical_existing(&roots)
     } else {
@@ -425,4 +422,18 @@ fn build_payload_roots(
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
+}
+
+fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
+    // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox.
+    // These locations contain sandbox control/state and must remain tamper-resistant.
+    let codex_home_key = crate::audit::normalize_path_key(codex_home);
+    let sbx_dir_key = crate::audit::normalize_path_key(&sandbox_dir(codex_home));
+    let sbx_dir_prefix = format!("{}/", sbx_dir_key.trim_end_matches('/'));
+
+    roots.retain(|root| {
+        let key = crate::audit::normalize_path_key(root);
+        key != codex_home_key && key != sbx_dir_key && !key.starts_with(&sbx_dir_prefix)
+    });
+    roots
 }

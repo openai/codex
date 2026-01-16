@@ -204,24 +204,16 @@ impl<'a> ChatRequestBuilder<'a> {
                     call_id,
                     ..
                 } => {
-                    let mut msg = json!({
-                        "role": "assistant",
-                        "content": null,
-                        "tool_calls": [{
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "arguments": arguments,
-                            }
-                        }]
+                    let reasoning = reasoning_by_anchor_index.get(&idx).map(String::as_str);
+                    let tool_call = json!({
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments,
+                        }
                     });
-                    if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                        && let Some(obj) = msg.as_object_mut()
-                    {
-                        obj.insert("reasoning".to_string(), json!(reasoning));
-                    }
-                    messages.push(msg);
+                    push_tool_call_message(&mut messages, tool_call, reasoning);
                 }
                 ResponseItem::LocalShellCall {
                     id,
@@ -229,22 +221,14 @@ impl<'a> ChatRequestBuilder<'a> {
                     status,
                     action,
                 } => {
-                    let mut msg = json!({
-                        "role": "assistant",
-                        "content": null,
-                        "tool_calls": [{
-                            "id": id.clone().unwrap_or_default(),
-                            "type": "local_shell_call",
-                            "status": status,
-                            "action": action,
-                        }]
+                    let reasoning = reasoning_by_anchor_index.get(&idx).map(String::as_str);
+                    let tool_call = json!({
+                        "id": id.clone().unwrap_or_default(),
+                        "type": "local_shell_call",
+                        "status": status,
+                        "action": action,
                     });
-                    if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                        && let Some(obj) = msg.as_object_mut()
-                    {
-                        obj.insert("reasoning".to_string(), json!(reasoning));
-                    }
-                    messages.push(msg);
+                    push_tool_call_message(&mut messages, tool_call, reasoning);
                 }
                 ResponseItem::FunctionCallOutput { call_id, output } => {
                     let content_value = if let Some(items) = &output.content_items {
@@ -277,18 +261,16 @@ impl<'a> ChatRequestBuilder<'a> {
                     input,
                     status: _,
                 } => {
-                    messages.push(json!({
-                        "role": "assistant",
-                        "content": null,
-                        "tool_calls": [{
-                            "id": id,
-                            "type": "custom",
-                            "custom": {
-                                "name": name,
-                                "input": input,
-                            }
-                        }]
-                    }));
+                    let tool_call = json!({
+                        "id": id,
+                        "type": "custom",
+                        "custom": {
+                            "name": name,
+                            "input": input,
+                        }
+                    });
+                    let reasoning = reasoning_by_anchor_index.get(&idx).map(String::as_str);
+                    push_tool_call_message(&mut messages, tool_call, reasoning);
                 }
                 ResponseItem::CustomToolCallOutput { call_id, output } => {
                     messages.push(json!({
@@ -328,11 +310,50 @@ impl<'a> ChatRequestBuilder<'a> {
     }
 }
 
+fn push_tool_call_message(messages: &mut Vec<Value>, tool_call: Value, reasoning: Option<&str>) {
+    // Chat Completions requires that tool calls are grouped into a single assistant message
+    // (with `tool_calls: [...]`) followed by tool role responses.
+    if let Some(Value::Object(obj)) = messages.last_mut()
+        && obj.get("role").and_then(Value::as_str) == Some("assistant")
+        && obj.get("content").is_some_and(Value::is_null)
+        && let Some(tool_calls) = obj.get_mut("tool_calls").and_then(Value::as_array_mut)
+    {
+        tool_calls.push(tool_call);
+        if let Some(reasoning) = reasoning {
+            if let Some(Value::String(existing)) = obj.get_mut("reasoning") {
+                if !existing.is_empty() {
+                    existing.push('\n');
+                }
+                existing.push_str(reasoning);
+            } else {
+                obj.insert(
+                    "reasoning".to_string(),
+                    Value::String(reasoning.to_string()),
+                );
+            }
+        }
+        return;
+    }
+
+    let mut msg = json!({
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [tool_call],
+    });
+    if let Some(reasoning) = reasoning
+        && let Some(obj) = msg.as_object_mut()
+    {
+        obj.insert("reasoning".to_string(), json!(reasoning));
+    }
+    messages.push(msg);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
+    use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use http::HeaderValue;
@@ -373,10 +394,6 @@ mod tests {
             .expect("request");
 
         assert_eq!(
-            req.headers.get("conversation_id"),
-            Some(&HeaderValue::from_static("conv-1"))
-        );
-        assert_eq!(
             req.headers.get("session_id"),
             Some(&HeaderValue::from_static("conv-1"))
         );
@@ -384,5 +401,90 @@ mod tests {
             req.headers.get("x-openai-subagent"),
             Some(&HeaderValue::from_static("review"))
         );
+    }
+
+    #[test]
+    fn groups_consecutive_tool_calls_into_a_single_assistant_message() {
+        let prompt_input = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "read these".to_string(),
+                }],
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"a.txt"}"#.to_string(),
+                call_id: "call-a".to_string(),
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"b.txt"}"#.to_string(),
+                call_id: "call-b".to_string(),
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"c.txt"}"#.to_string(),
+                call_id: "call-c".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-a".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "A".to_string(),
+                    ..Default::default()
+                },
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-b".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "B".to_string(),
+                    ..Default::default()
+                },
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-c".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "C".to_string(),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let req = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .build(&provider())
+            .expect("request");
+
+        let messages = req
+            .body
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .expect("messages array");
+        // system + user + assistant(tool_calls=[...]) + 3 tool outputs
+        assert_eq!(messages.len(), 6);
+
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "user");
+
+        let tool_calls_msg = &messages[2];
+        assert_eq!(tool_calls_msg["role"], "assistant");
+        assert_eq!(tool_calls_msg["content"], serde_json::Value::Null);
+        let tool_calls = tool_calls_msg["tool_calls"]
+            .as_array()
+            .expect("tool_calls array");
+        assert_eq!(tool_calls.len(), 3);
+        assert_eq!(tool_calls[0]["id"], "call-a");
+        assert_eq!(tool_calls[1]["id"], "call-b");
+        assert_eq!(tool_calls[2]["id"], "call-c");
+
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call-a");
+        assert_eq!(messages[4]["role"], "tool");
+        assert_eq!(messages[4]["tool_call_id"], "call-b");
+        assert_eq!(messages[5]["role"], "tool");
+        assert_eq!(messages[5]["tool_call_id"], "call-c");
     }
 }

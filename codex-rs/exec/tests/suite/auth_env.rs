@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+use codex_utils_cargo_bin::find_resource;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
@@ -10,6 +11,7 @@ use wiremock::matchers::header;
 async fn exec_uses_codex_api_key_env_var() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let server = start_mock_server().await;
+    let repo_root = find_resource!(".")?;
 
     mount_sse_once_match(
         &server,
@@ -21,7 +23,7 @@ async fn exec_uses_codex_api_key_env_var() -> anyhow::Result<()> {
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("echo testing codex api key")
         .assert()
         .success();

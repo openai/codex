@@ -157,7 +157,7 @@ impl HookRunner {
                         } else {
                             output.stderr
                         };
-                        return Err(FunctionCallError::Denied(msg));
+                        return Err(FunctionCallError::RespondToModel(msg));
                     }
 
                     if output.exit_code.is_some_and(|code| code != 0) {
@@ -494,8 +494,8 @@ fn tool_call_success_and_error(response: &ResponseInputItem) -> (Option<bool>, O
 
 fn hook_event_kind(msg: &EventMsg) -> Option<&'static str> {
     match msg {
-        EventMsg::TaskStarted(_) => Some("turn.begin"),
-        EventMsg::TaskComplete(_) => Some("turn.end"),
+        EventMsg::TurnStarted(_) => Some("turn.begin"),
+        EventMsg::TurnComplete(_) => Some("turn.end"),
         EventMsg::ExecCommandBegin(_) => Some("tool.exec.begin"),
         EventMsg::ExecCommandEnd(_) => Some("tool.exec.end"),
         EventMsg::PatchApplyBegin(_) => Some("tool.apply_patch.begin"),
@@ -550,13 +550,13 @@ fn build_payload(
         .ok_or_else(|| anyhow::anyhow!("hook payload must be an object"))?;
 
     match msg {
-        EventMsg::TaskStarted(e) => {
+        EventMsg::TurnStarted(e) => {
             obj.insert(
                 "model_context_window".to_string(),
                 json!(e.model_context_window),
             );
         }
-        EventMsg::TaskComplete(e) => {
+        EventMsg::TurnComplete(e) => {
             obj.insert(
                 "last_agent_message".to_string(),
                 json!(&e.last_agent_message),

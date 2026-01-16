@@ -1,25 +1,26 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::config_loader::RequirementSource;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ConstraintError {
-    #[error("value `{candidate}` is not in the allowed set {allowed}")]
-    InvalidValue { candidate: String, allowed: String },
+    #[error(
+        "invalid value for `{field_name}`: `{candidate}` is not in the allowed set {allowed} (set by {requirement_source})"
+    )]
+    InvalidValue {
+        field_name: &'static str,
+        candidate: String,
+        allowed: String,
+        requirement_source: RequirementSource,
+    },
 
     #[error("field `{field_name}` cannot be empty")]
     EmptyField { field_name: String },
 }
 
 impl ConstraintError {
-    pub fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> Self {
-        Self::InvalidValue {
-            candidate: candidate.into(),
-            allowed: allowed.into(),
-        }
-    }
-
     pub fn empty_field(field_name: impl Into<String>) -> Self {
         Self::EmptyField {
             field_name: field_name.into(),
@@ -36,11 +37,15 @@ impl From<ConstraintError> for std::io::Error {
 }
 
 type ConstraintValidator<T> = dyn Fn(&T) -> ConstraintResult<()> + Send + Sync;
+/// A ConstraintNormalizer is a function which transforms a value into another of the same type.
+/// `Constrained` uses normalizers to transform values to satisfy constraints or enforce values.
+type ConstraintNormalizer<T> = dyn Fn(T) -> T + Send + Sync;
 
 #[derive(Clone)]
 pub struct Constrained<T> {
     value: T,
     validator: Arc<ConstraintValidator<T>>,
+    normalizer: Option<Arc<ConstraintNormalizer<T>>>,
 }
 
 impl<T: Send + Sync> Constrained<T> {
@@ -53,6 +58,23 @@ impl<T: Send + Sync> Constrained<T> {
         Ok(Self {
             value: initial_value,
             validator,
+            normalizer: None,
+        })
+    }
+
+    /// normalized creates a `Constrained` value with a normalizer function and a validator that allows any value.
+    pub fn normalized(
+        initial_value: T,
+        normalizer: impl Fn(T) -> T + Send + Sync + 'static,
+    ) -> ConstraintResult<Self> {
+        let validator: Arc<ConstraintValidator<T>> = Arc::new(|_| Ok(()));
+        let normalizer: Arc<ConstraintNormalizer<T>> = Arc::new(normalizer);
+        let normalized = normalizer(initial_value);
+        validator(&normalized)?;
+        Ok(Self {
+            value: normalized,
+            validator,
+            normalizer: Some(normalizer),
         })
     }
 
@@ -60,25 +82,8 @@ impl<T: Send + Sync> Constrained<T> {
         Self {
             value: initial_value,
             validator: Arc::new(|_| Ok(())),
+            normalizer: None,
         }
-    }
-
-    pub fn allow_only(value: T) -> Self
-    where
-        T: PartialEq + Send + Sync + fmt::Debug + Clone + 'static,
-    {
-        #[expect(clippy::expect_used)]
-        Self::new(value.clone(), move |candidate| {
-            if *candidate == value {
-                Ok(())
-            } else {
-                Err(ConstraintError::invalid_value(
-                    format!("{candidate:?}"),
-                    format!("{value:?}"),
-                ))
-            }
-        })
-        .expect("initial value should always be valid")
     }
 
     /// Allow any value of T, using T's Default as the initial value.
@@ -87,22 +92,6 @@ impl<T: Send + Sync> Constrained<T> {
         T: Default,
     {
         Self::allow_any(T::default())
-    }
-
-    pub fn allow_values(initial_value: T, allowed: Vec<T>) -> ConstraintResult<Self>
-    where
-        T: PartialEq + Send + Sync + fmt::Debug + 'static,
-    {
-        Self::new(initial_value, move |candidate| {
-            if allowed.contains(candidate) {
-                Ok(())
-            } else {
-                Err(ConstraintError::invalid_value(
-                    format!("{candidate:?}"),
-                    format!("{allowed:?}"),
-                ))
-            }
-        })
     }
 
     pub fn get(&self) -> &T {
@@ -121,6 +110,11 @@ impl<T: Send + Sync> Constrained<T> {
     }
 
     pub fn set(&mut self, value: T) -> ConstraintResult<()> {
+        let value = if let Some(normalizer) = &self.normalizer {
+            normalizer(value)
+        } else {
+            value
+        };
         (self.validator)(&value)?;
         self.value = value;
         Ok(())
@@ -154,6 +148,15 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
+        ConstraintError::InvalidValue {
+            field_name: "<unknown>",
+            candidate: candidate.into(),
+            allowed: allowed.into(),
+            requirement_source: RequirementSource::Unknown,
+        }
+    }
+
     #[test]
     fn constrained_allow_any_accepts_any_value() {
         let mut constrained = Constrained::allow_any(5);
@@ -168,22 +171,27 @@ mod tests {
     }
 
     #[test]
+    fn constrained_normalizer_applies_on_init_and_set() -> anyhow::Result<()> {
+        let mut constrained = Constrained::normalized(-1, |value| value.max(0))?;
+        assert_eq!(constrained.value(), 0);
+        constrained.set(-5)?;
+        assert_eq!(constrained.value(), 0);
+        constrained.set(10)?;
+        assert_eq!(constrained.value(), 10);
+        Ok(())
+    }
+
+    #[test]
     fn constrained_new_rejects_invalid_initial_value() {
         let result = Constrained::new(0, |value| {
             if *value > 0 {
                 Ok(())
             } else {
-                Err(ConstraintError::invalid_value(
-                    value.to_string(),
-                    "positive values",
-                ))
+                Err(invalid_value(value.to_string(), "positive values"))
             }
         });
 
-        assert_eq!(
-            result,
-            Err(ConstraintError::invalid_value("0", "positive values"))
-        );
+        assert_eq!(result, Err(invalid_value("0", "positive values")));
     }
 
     #[test]
@@ -192,10 +200,7 @@ mod tests {
             if *value > 0 {
                 Ok(())
             } else {
-                Err(ConstraintError::invalid_value(
-                    value.to_string(),
-                    "positive values",
-                ))
+                Err(invalid_value(value.to_string(), "positive values"))
             }
         })
         .expect("initial value should be accepted");
@@ -203,7 +208,7 @@ mod tests {
         let err = constrained
             .set(-5)
             .expect_err("negative values should be rejected");
-        assert_eq!(err, ConstraintError::invalid_value("-5", "positive values"));
+        assert_eq!(err, invalid_value("-5", "positive values"));
         assert_eq!(constrained.value(), 1);
     }
 
@@ -213,10 +218,7 @@ mod tests {
             if *value > 0 {
                 Ok(())
             } else {
-                Err(ConstraintError::invalid_value(
-                    value.to_string(),
-                    "positive values",
-                ))
+                Err(invalid_value(value.to_string(), "positive values"))
             }
         })
         .expect("initial value should be accepted");
@@ -227,7 +229,7 @@ mod tests {
         let err = constrained
             .can_set(&-1)
             .expect_err("can_set should reject negative value");
-        assert_eq!(err, ConstraintError::invalid_value("-1", "positive values"));
+        assert_eq!(err, invalid_value("-1", "positive values"));
         assert_eq!(constrained.value(), 1);
     }
 }

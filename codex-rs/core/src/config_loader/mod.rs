@@ -12,7 +12,7 @@ mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
-use crate::config_loader::config_requirements::ConfigRequirementsToml;
+use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::config_types::SandboxMode;
@@ -25,7 +25,14 @@ use std::path::Path;
 use toml::Value as TomlValue;
 
 pub use config_requirements::ConfigRequirements;
+pub use config_requirements::ConfigRequirementsToml;
+pub use config_requirements::McpServerIdentity;
+pub use config_requirements::McpServerRequirement;
+pub use config_requirements::RequirementSource;
+pub use config_requirements::SandboxModeRequirement;
+pub use config_requirements::Sourced;
 pub use merge::merge_toml_values;
+pub(crate) use overrides::build_cli_overrides_layer;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::ConfigLayerStackOrdering;
@@ -75,10 +82,16 @@ pub async fn load_config_layers_state(
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
 ) -> io::Result<ConfigLayerStack> {
-    let mut config_requirements_toml = ConfigRequirementsToml::default();
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
-    // TODO(gt): Support an entry in MDM for config requirements and use it
-    // with `config_requirements_toml.merge_unset_fields(...)`, if present.
+    #[cfg(target_os = "macos")]
+    macos::load_managed_admin_requirements_toml(
+        &mut config_requirements_toml,
+        overrides
+            .macos_managed_config_requirements_base64
+            .as_deref(),
+    )
+    .await?;
 
     // Honor /etc/codex/requirements.toml.
     if cfg!(unix) {
@@ -99,8 +112,6 @@ pub async fn load_config_layers_state(
     .await?;
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
-
-    // TODO(gt): Honor managed preferences (macOS only).
 
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
@@ -167,49 +178,27 @@ pub async fn load_config_layers_state(
         layers.push(user_layer);
     }
 
-    // Cwd-local project layer (cwd/.codex/config.toml only).
+    // Project layers (from project root to cwd, inclusive).
+    //
+    // Codex-Mine policy: config values from repo-local `.codex/config.toml` are *cwd-local only*.
+    // We still record empty project layers for ancestor `.codex/` folders so repo-scoped assets
+    // like `.codex/skills/` can be discovered consistently.
     if let Some(cwd) = cwd.as_ref() {
-        let dot_codex = cwd.as_path().join(".codex");
-        if tokio::fs::metadata(&dot_codex)
-            .await
-            .map(|meta| meta.is_dir())
-            .unwrap_or(false)
-        {
-            let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
-            let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
-            match tokio::fs::read_to_string(&config_file).await {
-                Ok(contents) => {
-                    let config: TomlValue = toml::from_str(&contents).map_err(|e| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!(
-                                "Error parsing project config file {}: {e}",
-                                config_file.as_path().display(),
-                            ),
-                        )
-                    })?;
-                    let config =
-                        resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                    layers.push(ConfigLayerEntry::new(
-                        ConfigLayerSource::Project {
-                            dot_codex_folder: dot_codex_abs,
-                        },
-                        config,
-                    ));
-                }
-                Err(err) => {
-                    if err.kind() != io::ErrorKind::NotFound {
-                        return Err(io::Error::new(
-                            err.kind(),
-                            format!(
-                                "Failed to read project config file {}: {err}",
-                                config_file.as_path().display(),
-                            ),
-                        ));
-                    }
-                }
+        let project_root_markers = default_project_root_markers();
+        let project_root = find_project_root(cwd, &project_root_markers).await?;
+
+        let cwd_dot_codex = cwd.as_path().join(".codex");
+        let cwd_dot_codex = AbsolutePathBuf::from_absolute_path(&cwd_dot_codex)?;
+
+        let mut project_layers = load_project_layers(cwd, &project_root).await?;
+        for layer in &mut project_layers {
+            if let ConfigLayerSource::Project { dot_codex_folder } = &layer.name
+                && *dot_codex_folder != cwd_dot_codex
+            {
+                layer.config = TomlValue::Table(toml::map::Map::new());
             }
         }
+        layers.extend(project_layers);
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
@@ -254,7 +243,11 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    ConfigLayerStack::new(layers, config_requirements_toml.try_into()?)
+    ConfigLayerStack::new(
+        layers,
+        config_requirements_toml.clone().try_into()?,
+        config_requirements_toml.into_toml(),
+    )
 }
 
 /// Attempts to load a config.toml file from `config_toml`.
@@ -306,9 +299,11 @@ async fn load_config_toml_for_required_layer(
 /// If available, apply requirements from `/etc/codex/requirements.toml` to
 /// `config_requirements_toml` by filling in any unset fields.
 async fn load_requirements_toml(
-    config_requirements_toml: &mut ConfigRequirementsToml,
+    config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: impl AsRef<Path>,
 ) -> io::Result<()> {
+    let requirements_toml_file =
+        AbsolutePathBuf::from_absolute_path(requirements_toml_file.as_ref())?;
     match tokio::fs::read_to_string(&requirements_toml_file).await {
         Ok(contents) => {
             let requirements_config: ConfigRequirementsToml =
@@ -321,7 +316,12 @@ async fn load_requirements_toml(
                         ),
                     )
                 })?;
-            config_requirements_toml.merge_unset_fields(requirements_config);
+            config_requirements_toml.merge_unset_fields(
+                RequirementSource::SystemRequirementsToml {
+                    file: requirements_toml_file.clone(),
+                },
+                requirements_config,
+            );
         }
         Err(e) => {
             if e.kind() != io::ErrorKind::NotFound {
@@ -340,7 +340,7 @@ async fn load_requirements_toml(
 }
 
 async fn load_requirements_from_legacy_scheme(
-    config_requirements_toml: &mut ConfigRequirementsToml,
+    config_requirements_toml: &mut ConfigRequirementsWithSources,
     loaded_config_layers: LoadedConfigLayers,
 ) -> io::Result<()> {
     // In this implementation, earlier layers cannot be overwritten by later
@@ -350,12 +350,16 @@ async fn load_requirements_from_legacy_scheme(
         managed_config,
         managed_config_from_mdm,
     } = loaded_config_layers;
-    for config in [
-        managed_config_from_mdm,
-        managed_config.map(|c| c.managed_config),
-    ]
-    .into_iter()
-    .flatten()
+
+    for (source, config) in managed_config_from_mdm
+        .map(|config| (RequirementSource::LegacyManagedConfigTomlFromMdm, config))
+        .into_iter()
+        .chain(managed_config.map(|c| {
+            (
+                RequirementSource::LegacyManagedConfigTomlFromFile { file: c.file },
+                c.managed_config,
+            )
+        }))
     {
         let legacy_config: LegacyManagedConfigToml =
             config.try_into().map_err(|err: toml::de::Error| {
@@ -366,7 +370,7 @@ async fn load_requirements_from_legacy_scheme(
             })?;
 
         let new_requirements_toml = ConfigRequirementsToml::from(legacy_config);
-        config_requirements_toml.merge_unset_fields(new_requirements_toml);
+        config_requirements_toml.merge_unset_fields(source, new_requirements_toml);
     }
 
     Ok(())
@@ -613,7 +617,14 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
         }
         if let Some(sandbox_mode) = sandbox_mode {
-            config_requirements_toml.allowed_sandbox_modes = Some(vec![sandbox_mode.into()]);
+            let required_mode: SandboxModeRequirement = sandbox_mode.into();
+            // Allowing read-only is a requirement for Codex to function correctly.
+            // So in this backfill path, we append read-only if it's not already specified.
+            let mut allowed_modes = vec![SandboxModeRequirement::ReadOnly];
+            if required_mode != SandboxModeRequirement::ReadOnly {
+                allowed_modes.push(required_mode);
+            }
+            config_requirements_toml.allowed_sandbox_modes = Some(allowed_modes);
         }
         config_requirements_toml
     }
@@ -660,5 +671,23 @@ foo = "xyzzy"
         expected_toml_value.insert("foo".to_string(), TomlValue::String("xyzzy".to_string()));
         assert_eq!(normalized_toml_value, TomlValue::Table(expected_toml_value));
         Ok(())
+    }
+
+    #[test]
+    fn legacy_managed_config_backfill_includes_read_only_sandbox_mode() {
+        let legacy = LegacyManagedConfigToml {
+            approval_policy: None,
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+        };
+
+        let requirements = ConfigRequirementsToml::from(legacy);
+
+        assert_eq!(
+            requirements.allowed_sandbox_modes,
+            Some(vec![
+                SandboxModeRequirement::ReadOnly,
+                SandboxModeRequirement::WorkspaceWrite
+            ])
+        );
     }
 }

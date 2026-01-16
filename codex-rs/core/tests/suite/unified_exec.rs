@@ -20,7 +20,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::get_responses_request_bodies;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -38,6 +37,7 @@ use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use tokio::time::Duration;
+use which::which;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -200,6 +200,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "apply patch via unified exec".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd,
@@ -239,7 +240,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             saw_exec_end = true;
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -326,6 +327,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "emit begin event".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -347,7 +349,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     assert_eq!(begin_event.cwd, cwd.path());
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     Ok(())
 }
@@ -401,6 +403,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run relative workdir test".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -424,7 +427,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
         "exec_command cwd should resolve relative workdir against turn cwd",
     );
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     Ok(())
 }
@@ -471,7 +474,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -479,6 +482,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run workdir test".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -501,9 +505,9 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
         "exec_command cwd should reflect the requested workdir override"
     );
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
 
     Ok(())
@@ -569,6 +573,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "emit end event".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -592,7 +597,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
         "expected aggregated output to contain marker"
     );
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 
@@ -641,6 +646,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "emit delta".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -664,7 +670,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
         "delta chunk missing expected text: {text:?}",
     );
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 
@@ -714,6 +720,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "exercise full unified exec lifecycle".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -743,7 +750,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
                     break;
                 }
             }
-            EventMsg::TaskComplete(_) => {
+            EventMsg::TurnComplete(_) => {
                 task_completed = true;
                 if task_completed && end_event.is_some() {
                     break;
@@ -840,6 +847,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "stdin delta".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -859,7 +867,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
             EventMsg::TerminalInteraction(ev) if ev.call_id == open_call_id => {
                 terminal_interaction = Some(ev);
             }
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }
@@ -903,21 +911,21 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
     // and a final long poll to capture the second marker.
     let first_poll_call_id = "uexec-delayed-poll-1";
     let first_poll_args = json!({
-        "chars": "",
+        "chars": "x",
         "session_id": 1000,
         "yield_time_ms": 10,
     });
 
     let second_poll_call_id = "uexec-delayed-poll-2";
     let second_poll_args = json!({
-        "chars": "",
+        "chars": "x",
         "session_id": 1000,
         "yield_time_ms": 4000,
     });
 
     let third_poll_call_id = "uexec-delayed-poll-3";
     let third_poll_args = json!({
-        "chars": "",
+        "chars": "x",
         "session_id": 1000,
         "yield_time_ms": 6000,
     });
@@ -973,6 +981,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "delayed terminal interaction output".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1006,7 +1015,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             EventMsg::ExecCommandEnd(ev) if ev.call_id == open_call_id => {
                 end_event = Some(ev);
             }
-            EventMsg::TaskComplete(_) => {
+            EventMsg::TurnComplete(_) => {
                 task_completed = true;
             }
             _ => {}
@@ -1038,7 +1047,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             .iter()
             .map(|ev| ev.stdin.as_str())
             .collect::<Vec<_>>(),
-        vec!["", "", ""],
+        vec!["x", "x", "x"],
         "terminal interactions should reflect the three stdin polls"
     );
 
@@ -1130,6 +1139,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "check poll event behavior".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1148,7 +1158,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
         match event_msg {
             EventMsg::ExecCommandBegin(event) => begin_events.push(event),
             EventMsg::ExecCommandEnd(event) => end_events.push(event),
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }
@@ -1217,7 +1227,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1225,6 +1235,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run metadata test".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1236,12 +1247,14 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let metadata = outputs
@@ -1287,6 +1300,182 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_defaults_to_pipe() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let python = match which("python").or_else(|_| which("python3")) {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python not found in PATH, skipping tty default test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-default-pipe";
+    let args = serde_json::json!({
+        "cmd": format!("{} -c \"import sys; print(sys.stdin.isatty())\"", python.display()),
+        "yield_time_ms": 1500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check default pipe mode".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing default pipe unified exec output");
+    let normalized = output.output.replace("\r\n", "\n");
+
+    assert!(
+        normalized.contains("False"),
+        "stdin should not be a tty by default: {normalized:?}"
+    );
+    assert_eq!(output.exit_code, Some(0));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_can_enable_tty() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let python = match which("python").or_else(|_| which("python3")) {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python not found in PATH, skipping tty enable test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-tty-enabled";
+    let args = serde_json::json!({
+        "cmd": format!("{} -c \"import sys; print(sys.stdin.isatty())\"", python.display()),
+        "yield_time_ms": 1500,
+        "tty": true,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check tty enabled".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing tty-enabled unified exec output");
+    let normalized = output.output.replace("\r\n", "\n");
+
+    assert!(
+        normalized.contains("True"),
+        "stdin should be a tty when tty=true: {normalized:?}"
+    );
+    assert_eq!(output.exit_code, Some(0));
+    assert!(output.process_id.is_none(), "process should have exited");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -1321,7 +1510,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1329,6 +1518,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "watch early exit timing".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1340,12 +1530,14 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
@@ -1401,6 +1593,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     let start_args = serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 500,
+        "tty": true,
     });
     let send_args = serde_json::json!({
         "chars": "hello unified exec\n",
@@ -1446,7 +1639,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
             ev_completed("resp-4"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1454,6 +1647,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "test write_stdin exit behavior".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1465,12 +1659,14 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -1558,6 +1754,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
     let start_args = serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 200,
+        "tty": true,
     });
 
     let echo_call_id = "uexec-end-on-exit-echo";
@@ -1616,6 +1813,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "end on exit".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1636,7 +1834,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
 
     assert_eq!(end_event.exit_code, 0);
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 
@@ -1689,7 +1887,8 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
-                text: "close unified exec sessions on turn end".into(),
+                text: "close unified exec processes on turn end".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1710,7 +1909,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
     let begin_process_id = begin_event
         .process_id
         .clone()
-        .expect("expected process_id for long-running unified exec session");
+        .expect("expected process_id for long-running unified exec process");
 
     let pid = wait_for_pid_file(&pid_path).await?;
     assert!(
@@ -1724,7 +1923,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
         let msg = wait_for_event(&codex, |_| true).await;
         match msg {
             EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => end_event = Some(ev),
-            EventMsg::TaskComplete(_) => task_complete = true,
+            EventMsg::TurnComplete(_) => task_complete = true,
             _ => {}
         }
         if task_complete && end_event.is_some() {
@@ -1800,7 +1999,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             ev_completed("resp-3"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1808,6 +2007,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run unified exec".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1819,12 +2019,14 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -1896,6 +2098,7 @@ PY
     let first_args = serde_json::json!({
         "cmd": script,
         "yield_time_ms": 25,
+        "tty": true,
     });
 
     let second_call_id = "uexec-lag-poll";
@@ -1929,7 +2132,7 @@ PY
             ev_completed("resp-3"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -1937,6 +2140,7 @@ PY
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "exercise lag handling".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1950,15 +2154,17 @@ PY
     // This is a worst case scenario for the truncate logic.
     wait_for_event_with_timeout(
         &codex,
-        |event| matches!(event, EventMsg::TaskComplete(_)),
+        |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(10),
     )
     .await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -2038,7 +2244,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             ev_completed("resp-3"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2046,6 +2252,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "check timeout".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -2059,15 +2266,17 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     loop {
         let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
+        if matches!(event.msg, EventMsg::TurnComplete(_)) {
             break;
         }
     }
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -2129,7 +2338,7 @@ PY
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2137,6 +2346,7 @@ PY
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "summarize large output".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -2148,12 +2358,14 @@ PY
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let large_output = outputs.get(call_id).expect("missing large output summary");
@@ -2205,7 +2417,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2213,6 +2425,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "summarize large output".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -2225,12 +2438,14 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs.get(call_id).expect("missing output");
@@ -2281,6 +2496,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     let startup_args = serde_json::json!({
         "cmd": format!("{} -i", python.display()),
         "yield_time_ms": 1_500,
+        "tty": true,
     });
 
     let exit_call_id = "uexec-python-exit";
@@ -2315,7 +2531,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             ev_completed("resp-3"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2323,6 +2539,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "start python under seatbelt".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -2334,12 +2551,14 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let startup_output = outputs
@@ -2405,7 +2624,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
 
@@ -2413,6 +2632,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "summarize large output".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -2424,12 +2644,14 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
+    let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = get_responses_request_bodies(&server).await;
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs.get(call_id).expect("missing output");
@@ -2541,6 +2763,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "fill session cache".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -2552,7 +2775,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let requests = response_mock.requests();
     assert!(
@@ -2571,7 +2794,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let prune_start = requests
         .iter()
         .find_map(|req| req.function_call_output_text(prune_call_id))
-        .expect("missing initial prune session output");
+        .expect("missing initial prune process output");
     let prune_start_output = parse_unified_exec_output(&prune_start)?;
     assert!(prune_start_output.process_id.is_some());
     assert!(prune_start_output.exit_code.is_none());
@@ -2584,7 +2807,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     assert!(keep_write_output.process_id.is_some());
     assert!(
         keep_write_output.output.contains("still alive"),
-        "expected cat session to echo input, got {:?}",
+        "expected cat process to echo input, got {:?}",
         keep_write_output.output
     );
 
@@ -2593,7 +2816,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         .find_map(|req| req.function_call_output_text(probe_call_id))
         .expect("missing probe output");
     assert!(
-        pruned_probe.contains("UnknownSessionId") || pruned_probe.contains("Unknown process id"),
+        pruned_probe.contains("UnknownProcessId") || pruned_probe.contains("Unknown process id"),
         "expected probe to fail after pruning, got {pruned_probe:?}"
     );
 

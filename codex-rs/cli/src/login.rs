@@ -14,6 +14,18 @@ use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
 
+const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
+    "ChatGPT login is disabled. Use API key login instead.";
+const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
+    "API key login is disabled. Use ChatGPT login instead.";
+const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+
+fn print_login_server_start(actual_port: u16, auth_url: &str) {
+    eprintln!(
+        "Starting local login server on http://localhost:{actual_port}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}"
+    );
+}
+
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<String>,
@@ -27,10 +39,7 @@ pub async fn login_with_chatgpt(
     );
     let server = run_login_server(opts)?;
 
-    eprintln!(
-        "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
-        server.actual_port, server.auth_url,
-    );
+    print_login_server_start(server.actual_port, &server.auth_url);
 
     server.block_until_done().await
 }
@@ -39,7 +48,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     let config = load_config_or_exit(cli_config_overrides).await;
 
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-        eprintln!("ChatGPT login is disabled. Use API key login instead.");
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
 
@@ -53,7 +62,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     .await
     {
         Ok(_) => {
-            eprintln!("Successfully logged in");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -70,7 +79,7 @@ pub async fn run_login_with_api_key(
     let config = load_config_or_exit(cli_config_overrides).await;
 
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
-        eprintln!("API key login is disabled. Use ChatGPT login instead.");
+        eprintln!("{API_KEY_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
 
@@ -80,7 +89,7 @@ pub async fn run_login_with_api_key(
         config.cli_auth_credentials_store_mode,
     ) {
         Ok(_) => {
-            eprintln!("Successfully logged in");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -125,7 +134,7 @@ pub async fn run_login_with_device_code(
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-        eprintln!("ChatGPT login is disabled. Use API key login instead.");
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
@@ -140,7 +149,7 @@ pub async fn run_login_with_device_code(
     }
     match run_device_code_login(opts).await {
         Ok(()) => {
-            eprintln!("Successfully logged in");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -150,12 +159,74 @@ pub async fn run_login_with_device_code(
     }
 }
 
+/// Prefers device-code login (with `open_browser = false`) when headless environment is detected, but keeps
+/// `codex login` working in environments where device-code may be disabled/feature-gated.
+/// If `run_device_code_login` returns `ErrorKind::NotFound` ("device-code unsupported"), this
+/// falls back to starting the local browser login server.
+pub async fn run_login_with_device_code_fallback_to_browser(
+    cli_config_overrides: CliConfigOverrides,
+    issuer_base_url: Option<String>,
+    client_id: Option<String>,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
+        std::process::exit(1);
+    }
+
+    let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
+    let mut opts = ServerOptions::new(
+        config.codex_home,
+        client_id.unwrap_or(CLIENT_ID.to_string()),
+        forced_chatgpt_workspace_id,
+        config.cli_auth_credentials_store_mode,
+    );
+    if let Some(iss) = issuer_base_url {
+        opts.issuer = iss;
+    }
+    opts.open_browser = false;
+
+    match run_device_code_login(opts.clone()).await {
+        Ok(()) => {
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                eprintln!("Device code login is not enabled; falling back to browser login.");
+                match run_login_server(opts) {
+                    Ok(server) => {
+                        print_login_server_start(server.actual_port, &server.auth_url);
+                        match server.block_until_done().await {
+                            Ok(()) => {
+                                eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+                                std::process::exit(0);
+                            }
+                            Err(e) => {
+                                eprintln!("Error logging in: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error logging in: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                eprintln!("Error logging in with device code: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
     match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(Some(auth)) => match auth.mode {
-            AuthMode::ApiKey => match auth.get_token().await {
+            AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
                     eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
                     std::process::exit(0);

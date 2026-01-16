@@ -2,7 +2,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
@@ -41,13 +40,9 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
 
     let server = start_mock_server().await;
     let skill_body = "skill body";
-    let mut builder = test_codex()
-        .with_config(|config| {
-            config.features.enable(Feature::Skills);
-        })
-        .with_pre_build_hook(|home| {
-            write_skill(home, "demo", "demo skill", skill_body);
-        });
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        write_skill(home, "demo", "demo skill", skill_body);
+    });
     let test = builder.build(&server).await?;
 
     let skill_path = test.codex_home_path().join("skills/demo/SKILL.md");
@@ -69,6 +64,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             items: vec![
                 UserInput::Text {
                     text: "please use $demo".to_string(),
+                    text_elements: Vec::new(),
                 },
                 UserInput::Skill {
                     name: "demo".to_string(),
@@ -86,7 +82,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
         .await?;
 
     core_test_support::wait_for_event(test.codex.as_ref(), |event| {
-        matches!(event, codex_core::protocol::EventMsg::TaskComplete(_))
+        matches!(event, codex_core::protocol::EventMsg::TurnComplete(_))
     })
     .await;
 
@@ -111,15 +107,11 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_config(|config| {
-            config.features.enable(Feature::Skills);
-        })
-        .with_pre_build_hook(|home| {
-            let skill_dir = home.join("skills").join("broken");
-            fs::create_dir_all(&skill_dir).unwrap();
-            fs::write(skill_dir.join("SKILL.md"), "not yaml").unwrap();
-        });
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        let skill_dir = home.join("skills").join("broken");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "not yaml").unwrap();
+    });
     let test = builder.build(&server).await?;
 
     test.codex
@@ -169,17 +161,13 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
     const SYSTEM_SKILL_NAME: &str = "skill-creator";
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_config(|config| {
-            config.features.enable(Feature::Skills);
-        })
-        .with_pre_build_hook(|home| {
-            let system_skill_path = system_skill_md_path(home, SYSTEM_SKILL_NAME);
-            assert!(
-                !system_skill_path.exists(),
-                "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
-            );
-        });
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        let system_skill_path = system_skill_md_path(home, SYSTEM_SKILL_NAME);
+        assert!(
+            !system_skill_path.exists(),
+            "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
+        );
+    });
     let test = builder.build(&server).await?;
 
     let system_skill_path = system_skill_md_path(test.codex_home_path(), SYSTEM_SKILL_NAME);

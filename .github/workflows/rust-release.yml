@@ -49,7 +49,7 @@ jobs:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
@@ -323,6 +323,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Generate release notes from tag commit message
+        id: release_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # On tag pushes, GITHUB_SHA may be a tag object for annotated tags;
+          # peel it to the underlying commit.
+          commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          notes_path="${RUNNER_TEMP}/release-notes.md"
+
+          # Use the commit message for the commit the tag points at (not the
+          # annotated tag message).
+          git log -1 --format=%B "${commit}" > "${notes_path}"
+          # Ensure trailing newline so GitHub's markdown renderer doesn't
+          # occasionally run the last line into subsequent content.
+          echo >> "${notes_path}"
+
+          echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
+
       - uses: actions/download-artifact@v7
         with:
           path: dist
@@ -395,6 +415,7 @@ jobs:
         with:
           name: ${{ steps.release_name.outputs.name }}
           tag_name: ${{ github.ref_name }}
+          body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.

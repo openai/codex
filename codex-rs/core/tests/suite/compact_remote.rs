@@ -73,22 +73,26 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello remote compact".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Compact).await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "after compact".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let compact_request = compact_mock.single_request();
     assert_eq!(compact_request.path(), "/v1/responses/compact");
@@ -190,7 +194,9 @@ async fn remote_compact_runs_automatically() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello remote compact".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
     let message = wait_for_event_match(&codex, |ev| match ev {
@@ -198,7 +204,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
         _ => None,
     })
     .await;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert!(message);
     assert_eq!(compact_mock.requests().len(), 1);
@@ -262,13 +268,15 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "needs compaction".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Compact).await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Shutdown).await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
