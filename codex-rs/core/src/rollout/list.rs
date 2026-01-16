@@ -1,11 +1,13 @@
 use std::cmp::Reverse;
 use std::io::{self};
 use std::num::NonZero;
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use async_trait::async_trait;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -41,8 +43,10 @@ pub struct ThreadItem {
     /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
     pub head: Vec<serde_json::Value>,
     /// RFC3339 timestamp string for when the session was created, if available.
+    /// created_at comes from the filename timestamp with second precision.
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent update (from file mtime).
+    /// updated_at is truncated to second precision to match created_at.
     pub updated_at: Option<String>,
 }
 
@@ -87,6 +91,10 @@ impl Cursor {
     }
 }
 
+/// Keeps track of where a paginated listing left off. As the file scan goes newest -> oldest,
+/// it ignores everything until it reaches the last seen item from the previous page, then
+/// starts returning results after that. This makes paging stable even if new files show up during
+/// pagination.
 struct AnchorState {
     ts: OffsetDateTime,
     id: Uuid,
@@ -119,6 +127,87 @@ impl AnchorState {
         } else {
             true
         }
+    }
+}
+
+/// Visitor interface to customize behavior when visiting each rollout file
+/// in `walk_rollout_files`.
+///
+/// We need to apply different logic if we're ultimately going to be returning
+/// threads ordered by created_at or updated_at.
+#[async_trait]
+trait RolloutFileVisitor {
+    async fn visit(
+        &mut self,
+        ts: OffsetDateTime,
+        id: Uuid,
+        path: PathBuf,
+        scanned: usize,
+    ) -> ControlFlow<()>;
+}
+
+/// Collects thread items during directory traversal in created_at order,
+/// applying pagination and filters inline.
+struct FilesByCreatedAtVisitor<'a> {
+    items: &'a mut Vec<ThreadItem>,
+    page_size: usize,
+    anchor_state: AnchorState,
+    more_matches_available: bool,
+    allowed_sources: &'a [SessionSource],
+    provider_matcher: Option<&'a ProviderMatcher<'a>>,
+}
+
+#[async_trait]
+impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
+    async fn visit(
+        &mut self,
+        ts: OffsetDateTime,
+        id: Uuid,
+        path: PathBuf,
+        scanned: usize,
+    ) -> ControlFlow<()> {
+        if scanned >= MAX_SCAN_FILES && self.items.len() >= self.page_size {
+            self.more_matches_available = true;
+            return ControlFlow::Break(());
+        }
+        if self.anchor_state.should_skip(ts, id) {
+            return ControlFlow::Continue(());
+        }
+        if self.items.len() == self.page_size {
+            self.more_matches_available = true;
+            return ControlFlow::Break(());
+        }
+        if let Some(item) =
+            build_thread_item(path, self.allowed_sources, self.provider_matcher, None).await
+        {
+            self.items.push(item);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// Collects lightweight file candidates (path + id + mtime).
+/// Sorting after mtime happens after all files are collected.
+struct FilesByUpdatedAtVisitor<'a> {
+    candidates: &'a mut Vec<ThreadCandidate>,
+}
+
+#[async_trait]
+impl<'a> RolloutFileVisitor for FilesByUpdatedAtVisitor<'a> {
+    async fn visit(
+        &mut self,
+        _ts: OffsetDateTime,
+        id: Uuid,
+        path: PathBuf,
+        _scanned: usize,
+    ) -> ControlFlow<()> {
+        let updated_at = file_modified_time(&path).await.unwrap_or(None);
+        self.candidates.push(ThreadCandidate {
+            path,
+            id,
+            updated_at,
+        });
+        ControlFlow::Continue(())
     }
 }
 
@@ -225,6 +314,12 @@ async fn traverse_directories_for_paths(
     }
 }
 
+/// Walk the rollout directory tree in reverse chronological order and
+/// collect items until the page fills or the scan cap is hit.
+///
+/// Ordering comes from directory/filename sorting, so created_at is derived
+/// from the filename timestamp. Pagination is handled by the anchor cursor
+/// so we resume strictly after the last returned `(ts, id)` pair.
 async fn traverse_directories_for_paths_created(
     root: PathBuf,
     page_size: usize,
@@ -234,48 +329,17 @@ async fn traverse_directories_for_paths_created(
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
-    let mut anchor_state = AnchorState::new(anchor);
     let mut more_matches_available = false;
-
-    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
-
-    'outer: for (_year, year_path) in year_dirs.iter() {
-        if scanned_files >= MAX_SCAN_FILES {
-            break;
-        }
-        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
-        for (_month, month_path) in month_dirs.iter() {
-            if scanned_files >= MAX_SCAN_FILES {
-                break 'outer;
-            }
-            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
-            for (_day, day_path) in day_dirs.iter() {
-                if scanned_files >= MAX_SCAN_FILES {
-                    break 'outer;
-                }
-                let day_files = collect_rollout_day_files(day_path).await?;
-                for (ts, sid, path) in day_files.into_iter() {
-                    scanned_files += 1;
-                    if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
-                        more_matches_available = true;
-                        break 'outer;
-                    }
-                    if anchor_state.should_skip(ts, sid) {
-                        continue;
-                    }
-                    if items.len() == page_size {
-                        more_matches_available = true;
-                        break 'outer;
-                    }
-                    if let Some(item) =
-                        build_thread_item(path, allowed_sources, provider_matcher, None).await
-                    {
-                        items.push(item);
-                    }
-                }
-            }
-        }
-    }
+    let mut visitor = FilesByCreatedAtVisitor {
+        items: &mut items,
+        page_size,
+        anchor_state: AnchorState::new(anchor),
+        more_matches_available,
+        allowed_sources,
+        provider_matcher,
+    };
+    walk_rollout_files(&root, &mut scanned_files, &mut visitor).await?;
+    more_matches_available = visitor.more_matches_available;
 
     let reached_scan_cap = scanned_files >= MAX_SCAN_FILES;
     if reached_scan_cap && !items.is_empty() {
@@ -295,6 +359,14 @@ async fn traverse_directories_for_paths_created(
     })
 }
 
+/// Walk the rollout directory tree to collect files by updated_at, then sort by
+/// file mtime (updated_at) and apply pagination/filtering in that order.
+///
+/// Because updated_at is not encoded in filenames, this path must scan all
+/// files up to the scan cap, then sort and filter by the anchor cursor.
+///
+/// NOTE: This can be optimized in the future if we store additional state on disk
+/// to cache updated_at timestamps.
 async fn traverse_directories_for_paths_updated(
     root: PathBuf,
     page_size: usize,
@@ -307,7 +379,7 @@ async fn traverse_directories_for_paths_updated(
     let mut anchor_state = AnchorState::new(anchor);
     let mut more_matches_available = false;
 
-    let candidates = collect_thread_candidates(&root, &mut scanned_files).await?;
+    let candidates = collect_files_by_updated_at(&root, &mut scanned_files).await?;
     let mut candidates = candidates;
     candidates.sort_by_key(|candidate| {
         let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -515,11 +587,24 @@ struct ThreadCandidate {
     updated_at: Option<OffsetDateTime>,
 }
 
-async fn collect_thread_candidates(
+async fn collect_files_by_updated_at(
     root: &Path,
     scanned_files: &mut usize,
 ) -> io::Result<Vec<ThreadCandidate>> {
     let mut candidates = Vec::new();
+    let mut visitor = FilesByUpdatedAtVisitor {
+        candidates: &mut candidates,
+    };
+    walk_rollout_files(root, scanned_files, &mut visitor).await?;
+
+    Ok(candidates)
+}
+
+async fn walk_rollout_files(
+    root: &Path,
+    scanned_files: &mut usize,
+    visitor: &mut impl RolloutFileVisitor,
+) -> io::Result<()> {
     let year_dirs = collect_dirs_desc(root, |s| s.parse::<u16>().ok()).await?;
 
     'outer: for (_year, year_path) in year_dirs.iter() {
@@ -537,23 +622,22 @@ async fn collect_thread_candidates(
                     break 'outer;
                 }
                 let day_files = collect_rollout_day_files(day_path).await?;
-                for (_ts, id, path) in day_files.into_iter() {
+                for (ts, id, path) in day_files.into_iter() {
                     *scanned_files += 1;
                     if *scanned_files > MAX_SCAN_FILES {
                         break 'outer;
                     }
-                    let updated_at = file_modified_time(&path).await.unwrap_or(None);
-                    candidates.push(ThreadCandidate {
-                        path,
-                        id,
-                        updated_at,
-                    });
+                    if let ControlFlow::Break(()) =
+                        visitor.visit(ts, id, path, *scanned_files).await
+                    {
+                        break 'outer;
+                    }
                 }
             }
         }
     }
 
-    Ok(candidates)
+    Ok(())
 }
 
 struct ProviderMatcher<'a> {
@@ -658,6 +742,8 @@ async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {
         return Ok(None);
     };
     let dt = OffsetDateTime::from(modified);
+    // Truncate to seconds so ordering and cursor comparisons align with the
+    // cursor timestamp format (which exposes seconds), keeping pagination stable.
     Ok(truncate_to_seconds(dt))
 }
 
