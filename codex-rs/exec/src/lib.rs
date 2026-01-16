@@ -507,17 +507,21 @@ async fn resolve_resume_path(
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
         let default_provider_filter = vec![config.model_provider_id.clone()];
-        match codex_core::RolloutRecorder::list_threads(
+        let filter_cwd = if args.all {
+            None
+        } else {
+            Some(config.cwd.as_path())
+        };
+        match codex_core::RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
-            1,
-            None,
             &[],
             Some(default_provider_filter.as_slice()),
             &config.model_provider_id,
+            filter_cwd,
         )
         .await
         {
-            Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
+            Ok(path) => Ok(path),
             Err(e) => {
                 error!("Error listing threads: {e}");
                 Ok(None)
