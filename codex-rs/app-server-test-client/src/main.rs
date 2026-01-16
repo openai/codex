@@ -16,6 +16,7 @@ use anyhow::bail;
 use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
+use clap::ValueEnum;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -47,6 +48,9 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -133,6 +137,41 @@ enum CliCommand {
     /// List the available models from the Codex app-server.
     #[command(name = "model-list")]
     ModelList,
+    /// List stored threads from the Codex app-server.
+    #[command(name = "thread-list")]
+    ThreadList {
+        /// Optional page size limit.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Optional sort key (created-at or updated-at).
+        #[arg(long, value_enum)]
+        sort_key: Option<ThreadSortKeyArg>,
+        /// Repeat the request N times (reuses one app-server process).
+        #[arg(long, default_value_t = 1)]
+        repeat: u32,
+        /// Print per-call timing and average.
+        #[arg(long, default_value_t = false)]
+        timing: bool,
+        /// Suppress response output (useful for benchmarks).
+        #[arg(long, default_value_t = false)]
+        quiet: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+enum ThreadSortKeyArg {
+    CreatedAt,
+    UpdatedAt,
+}
+
+impl From<ThreadSortKeyArg> for ThreadSortKey {
+    fn from(value: ThreadSortKeyArg) -> Self {
+        match value {
+            ThreadSortKeyArg::CreatedAt => ThreadSortKey::CreatedAt,
+            ThreadSortKeyArg::UpdatedAt => ThreadSortKey::UpdatedAt,
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -168,6 +207,21 @@ fn main() -> Result<()> {
         CliCommand::TestLogin => test_login(&codex_bin, &config_overrides),
         CliCommand::GetAccountRateLimits => get_account_rate_limits(&codex_bin, &config_overrides),
         CliCommand::ModelList => model_list(&codex_bin, &config_overrides),
+        CliCommand::ThreadList {
+            limit,
+            sort_key,
+            repeat,
+            timing,
+            quiet,
+        } => thread_list(
+            &codex_bin,
+            &config_overrides,
+            limit,
+            sort_key,
+            repeat,
+            timing,
+            quiet,
+        ),
     }
 }
 
@@ -363,6 +417,52 @@ fn model_list(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn thread_list(
+    codex_bin: &str,
+    config_overrides: &[String],
+    limit: Option<u32>,
+    sort_key: Option<ThreadSortKeyArg>,
+    repeat: u32,
+    timing: bool,
+    quiet: bool,
+) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
+
+    let initialize = client.initialize()?;
+    if !quiet {
+        println!("< initialize response: {initialize:?}");
+    }
+
+    let mut total_ms = 0u128;
+    let repeat = repeat.max(1);
+    for idx in 0..repeat {
+        let start = std::time::Instant::now();
+        let response = client.thread_list(ThreadListParams {
+            cursor: None,
+            limit,
+            sort_key: sort_key.map(ThreadSortKey::from),
+            model_providers: None,
+        })?;
+        let elapsed_ms = start.elapsed().as_millis();
+        total_ms += elapsed_ms;
+        if quiet {
+            if timing {
+                println!("thread/list #{idx}: {elapsed_ms} ms");
+            }
+        } else if timing {
+            println!("< thread/list response #{idx}: {response:?} ({elapsed_ms} ms)");
+        } else {
+            println!("< thread/list response: {response:?}");
+        }
+    }
+    if timing {
+        let avg_ms = total_ms as f64 / repeat as f64;
+        println!("average: {avg_ms:.2} ms ({repeat} runs)");
+    }
+
+    Ok(())
+}
+
 struct CodexClient {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -526,6 +626,16 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "model/list")
+    }
+
+    fn thread_list(&mut self, params: ThreadListParams) -> Result<ThreadListResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ThreadList {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "thread/list")
     }
 
     fn stream_conversation(&mut self, conversation_id: &ThreadId) -> Result<()> {
