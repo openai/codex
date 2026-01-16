@@ -1075,6 +1075,9 @@ impl ChatWidget {
     }
 
     fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
+        if !self.bottom_pane.is_task_running() {
+            return;
+        }
         self.flush_answer_stream_with_separator();
         let command_display = self
             .unified_exec_processes

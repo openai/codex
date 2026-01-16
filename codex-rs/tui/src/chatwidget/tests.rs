@@ -1341,6 +1341,28 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 }
 
 #[tokio::test]
+async fn unified_exec_interaction_after_task_complete_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_task_complete(None);
+
+    chat.handle_codex_event(Event {
+        id: "call-1".to_string(),
+        msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
+            call_id: "call-1".to_string(),
+            process_id: "proc-1".to_string(),
+            stdin: "ls\n".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected unified exec interaction after task complete to be suppressed"
+    );
+}
+
+#[tokio::test]
 async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.unified_exec_processes.push(UnifiedExecProcessSummary {
