@@ -2776,7 +2776,9 @@ async fn run_sampling_request(
                 }
                 _ => backoff(retries),
             };
-            warn!("stream disconnected - retrying sampling request ({retries}/{max_retries} in {delay:?})...",);
+            warn!(
+                "stream disconnected - retrying sampling request ({retries}/{max_retries} in {delay:?})...",
+            );
 
             // Surface retry information to any UI/front‑end so the
             // user understands what is happening instead of staring
