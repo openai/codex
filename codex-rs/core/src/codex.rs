@@ -270,6 +270,8 @@ impl Codex {
                 crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
+        // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
+        // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode::Collaborate(CollaborationModeSettings {
             model: model.clone(),
             reasoning_effort: config.model_reasoning_effort,
