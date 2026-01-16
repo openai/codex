@@ -2259,14 +2259,27 @@ impl ChatComposer {
     }
 
     fn footer_props(&self) -> FooterProps {
+        let mode = self.footer_mode();
+        let is_wsl = {
+            #[cfg(target_os = "linux")]
+            {
+                mode == FooterMode::ShortcutOverlay && crate::clipboard_paste::is_probably_wsl()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        };
+
         FooterProps {
-            mode: self.footer_mode(),
+            mode,
             esc_backtrack_hint: self.esc_backtrack_hint,
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             quit_shortcut_key: self.quit_shortcut_key,
             steer_enabled: self.steer_enabled,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
+            is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
         }
