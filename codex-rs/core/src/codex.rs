@@ -36,6 +36,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -1525,6 +1526,22 @@ impl Session {
         }
     }
 
+    pub(crate) async fn record_user_prompt_and_emit_turn_item(
+        &self,
+        turn_context: &TurnContext,
+        input: &[UserInput],
+        response_item: ResponseItem,
+    ) {
+        // Persist the user message to history, but emit the turn item from `UserInput` so
+        // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
+        // those spans, and `record_response_item_and_emit_turn_item` would drop them.
+        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+            .await;
+        let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
+        self.emit_turn_item_started(turn_context, &turn_item).await;
+        self.emit_turn_item_completed(turn_context, turn_item).await;
+    }
+
     pub(crate) async fn notify_background_event(
         &self,
         turn_context: &TurnContext,
@@ -2563,9 +2580,9 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
+    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
 
     if !skill_items.is_empty() {

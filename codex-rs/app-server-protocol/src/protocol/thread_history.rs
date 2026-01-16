@@ -197,14 +197,21 @@ impl ThreadHistoryBuilder {
         if !payload.message.trim().is_empty() {
             content.push(UserInput::Text {
                 text: payload.message.clone(),
-                // TODO: Thread text element ranges into thread history. Empty keeps old behavior.
-                text_elements: Vec::new(),
+                text_elements: payload
+                    .text_elements
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
             });
         }
         if let Some(images) = &payload.images {
             for image in images {
                 content.push(UserInput::Image { url: image.clone() });
             }
+        }
+        for path in &payload.local_images {
+            content.push(UserInput::LocalImage { path: path.clone() });
         }
         content
     }

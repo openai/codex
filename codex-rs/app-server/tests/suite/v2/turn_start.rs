@@ -8,6 +8,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -23,6 +24,7 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::TextElement;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -109,6 +111,87 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             .expect("originator header missing");
         assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let text_elements = vec![TextElement {
+        byte_range: ByteRange { start: 0, end: 5 },
+        placeholder: Some("<note>".to_string()),
+    }];
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: text_elements.clone(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    let user_message_item = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notification = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let params = notification.params.expect("item/started params");
+            let item_started: ItemStartedNotification =
+                serde_json::from_value(params).expect("deserialize item/started notification");
+            if let ThreadItem::UserMessage { .. } = item_started.item {
+                return Ok::<ThreadItem, anyhow::Error>(item_started.item);
+            }
+        }
+    })
+    .await??;
+
+    match user_message_item {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements,
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     Ok(())
 }
