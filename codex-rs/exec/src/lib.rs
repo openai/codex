@@ -514,6 +514,9 @@ async fn resolve_resume_path(
         };
         match codex_core::RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
+            1,
+            None,
+            codex_core::ThreadSortKey::UpdatedAt,
             &[],
             Some(default_provider_filter.as_slice()),
             &config.model_provider_id,

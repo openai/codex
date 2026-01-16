@@ -1376,6 +1376,22 @@ pub enum InitialHistory {
 }
 
 impl InitialHistory {
+    pub fn forked_from_id(&self) -> Option<ThreadId> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.forked_from_id,
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.id),
+                _ => None,
+            }),
+        }
+    }
+
     pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
         match self {
             InitialHistory::New => Vec::new(),
@@ -1459,6 +1475,8 @@ impl fmt::Display for SubAgentSource {
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_id: Option<ThreadId>,
     pub timestamp: String,
     pub cwd: PathBuf,
     pub originator: String,
@@ -1473,6 +1491,7 @@ impl Default for SessionMeta {
     fn default() -> Self {
         SessionMeta {
             id: ThreadId::default(),
+            forked_from_id: None,
             timestamp: String::new(),
             cwd: PathBuf::new(),
             originator: String::new(),
@@ -2003,6 +2022,8 @@ pub struct SkillsListEntry {
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_id: Option<ThreadId>,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -2376,6 +2397,7 @@ mod tests {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
+                forked_from_id: None,
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,
