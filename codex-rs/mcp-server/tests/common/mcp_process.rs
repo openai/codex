@@ -41,7 +41,7 @@ pub struct McpProcess {
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env(codex_home, &[("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)]).await
+        Self::new_with_env(codex_home, &[]).await
     }
 
     /// Creates a new MCP process, allowing tests to override or remove
