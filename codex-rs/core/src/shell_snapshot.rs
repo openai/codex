@@ -1,4 +1,5 @@
 use std::io::ErrorKind;
+use std::process::Stdio;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -136,6 +137,20 @@ async fn run_shell_script_with_timeout(
     let mut handler = Command::new(&args[0]);
     handler.args(&args[1..]);
     handler.kill_on_drop(true);
+    // Avoid inheriting the interactive TTY. This prevents snapshot shells or RCs from
+    // altering the terminal state while the TUI is in raw mode.
+    handler.stdin(Stdio::null());
+    handler.env("CODEX_SHELL_SNAPSHOT", "1");
+    #[cfg(unix)]
+    {
+        // Detach from the controlling terminal to avoid tty side effects.
+        unsafe {
+            handler.pre_exec(|| {
+                let _ = libc::setsid();
+                Ok(())
+            });
+        }
+    }
     let output = timeout(snapshot_timeout, handler.output())
         .await
         .map_err(|_| anyhow!("Snapshot command timed out for {shell_name}"))?
