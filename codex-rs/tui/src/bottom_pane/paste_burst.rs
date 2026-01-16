@@ -268,11 +268,24 @@ impl PasteBurst {
 
     fn note_plain_char(&mut self, now: Instant) {
         match self.last_plain_char_time {
-            Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
-                self.consecutive_plain_char_burst =
-                    self.consecutive_plain_char_burst.saturating_add(1)
+            Some(prev) => {
+                let gap = now.duration_since(prev);
+                if gap <= PASTE_BURST_CHAR_INTERVAL {
+                    self.consecutive_plain_char_burst =
+                        self.consecutive_plain_char_burst.saturating_add(1)
+                } else if self.consecutive_plain_char_burst == 1
+                    && gap <= PASTE_BURST_ACTIVE_IDLE_TIMEOUT
+                {
+                    // Some Windows terminals have a slower gap between the first and second
+                    // character of a pasted key-event stream. Treat that single slower gap as
+                    // still part of the burst so retro-grab includes the leading char and we
+                    // don't leave a stray prefix before a large-paste placeholder.
+                    self.consecutive_plain_char_burst = 2;
+                } else {
+                    self.consecutive_plain_char_burst = 1;
+                }
             }
-            _ => self.consecutive_plain_char_burst = 1,
+            None => self.consecutive_plain_char_burst = 1,
         }
         self.last_plain_char_time = Some(now);
         // If we're seeing a tight stream of plain chars, treat the period immediately after as
