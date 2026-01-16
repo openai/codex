@@ -40,6 +40,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::terminal::TerminalInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -880,6 +881,18 @@ impl HistoryCell for SessionInfoCell {
     }
 }
 
+fn windows_terminal_synchronized_update_tip(terminal: &TerminalInfo) -> Option<String> {
+    let (major, minor) = terminal.windows_terminal_major_minor()?;
+    if (major, minor) >= (1, 24) {
+        return None;
+    }
+
+    let version = terminal.version.as_deref().unwrap_or("unknown");
+    Some(format!(
+        "**Update Windows Terminal**\n\nOpen **Microsoft Store**, search for **Windows Terminal**, and select **Update**.\nIf you need version 1.24+ before it’s available on the stable Store listing, install **Windows Terminal Preview** (also in Microsoft Store) or run `winget install --id Microsoft.WindowsTerminal.Preview -e`.\nClose and reopen Windows Terminal after updating to make sure the new version is active.\n\n(Windows Terminal {version} detected. Versions earlier than 1.24 don’t support Synchronized Update (DEC Mode 2026), so Codex output may flicker.)"
+    ))
+}
+
 pub(crate) fn new_session_info(
     config: &Config,
     requested_model: &str,
@@ -936,6 +949,12 @@ pub(crate) fn new_session_info(
         ];
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
+
+        if let Some(tip) =
+            windows_terminal_synchronized_update_tip(&codex_core::terminal::terminal_info())
+        {
+            parts.push(Box::new(TooltipHistoryCell::new(tip)));
+        }
     } else {
         if config.show_tooltips
             && let Some(tooltips) = tooltips::random_tooltip().map(TooltipHistoryCell::new)
@@ -1803,6 +1822,7 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+    use codex_core::terminal::TerminalName;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -1838,6 +1858,31 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    #[test]
+    fn windows_terminal_synchronized_update_tip_shows_for_old_versions() {
+        let terminal = TerminalInfo {
+            name: TerminalName::WindowsTerminal,
+            term_program: Some("WindowsTerminal".to_string()),
+            version: Some("1.23.9999.0".to_string()),
+            term: None,
+            multiplexer: None,
+        };
+        assert!(
+            windows_terminal_synchronized_update_tip(&terminal).is_some(),
+            "should_warn_on_old_windows_terminal"
+        );
+
+        let terminal = TerminalInfo {
+            version: Some("1.24.2372.0".to_string()),
+            ..terminal
+        };
+        assert_eq!(
+            windows_terminal_synchronized_update_tip(&terminal),
+            None,
+            "should_not_warn_on_supported_windows_terminal"
+        );
     }
 
     /// Remove a single leading markdown blockquote marker (`> `) from `line`.

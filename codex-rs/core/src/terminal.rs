@@ -172,6 +172,18 @@ impl TerminalInfo {
 
         sanitize_header_value(raw)
     }
+
+    /// Returns the (major, minor) Windows Terminal version when available.
+    ///
+    /// This parses the first two numeric components from the detected version string
+    /// (e.g. `"1.24.2372.0"` -> `(1, 24)`).
+    pub fn windows_terminal_major_minor(&self) -> Option<(u64, u64)> {
+        if self.name != TerminalName::WindowsTerminal {
+            return None;
+        }
+
+        self.version.as_deref().and_then(parse_major_minor_version)
+    }
 }
 
 static TERMINAL_INFO: OnceLock<TerminalInfo> = OnceLock::new();
@@ -200,6 +212,14 @@ trait Environment {
 
     /// Returns tmux client details when available.
     fn tmux_client_info(&self) -> TmuxClientInfo;
+
+    /// Returns the Windows Terminal version when available.
+    ///
+    /// This exists because Windows Terminal doesn't reliably populate environment variables with
+    /// its version. Implementations may query the OS (for example via PowerShell).
+    fn windows_terminal_version(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Reads environment variables from the running process.
@@ -219,6 +239,10 @@ impl Environment for ProcessEnvironment {
 
     fn tmux_client_info(&self) -> TmuxClientInfo {
         tmux_client_info()
+    }
+
+    fn windows_terminal_version(&self) -> Option<String> {
+        windows_terminal_version_from_powershell()
     }
 }
 
@@ -259,8 +283,12 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
             return terminal;
         }
 
-        let version = env.var_non_empty("TERM_PROGRAM_VERSION");
         let name = terminal_name_from_term_program(&term_program).unwrap_or(TerminalName::Unknown);
+        let version = env.var_non_empty("TERM_PROGRAM_VERSION").or_else(|| {
+            (name == TerminalName::WindowsTerminal)
+                .then(|| env.windows_terminal_version())
+                .flatten()
+        });
         return TerminalInfo::from_term_program(name, term_program, version, multiplexer);
     }
 
@@ -310,7 +338,11 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
     }
 
     if env.has("WT_SESSION") {
-        return TerminalInfo::from_name(TerminalName::WindowsTerminal, None, multiplexer);
+        return TerminalInfo::from_name(
+            TerminalName::WindowsTerminal,
+            env.windows_terminal_version(),
+            multiplexer,
+        );
     }
 
     if let Some(term) = env.var_non_empty("TERM") {
@@ -446,6 +478,106 @@ fn format_terminal_version(name: &str, version: &Option<String>) -> String {
     }
 }
 
+fn parse_major_minor_version(version: &str) -> Option<(u64, u64)> {
+    let mut major: Option<u64> = None;
+    let mut minor: Option<u64> = None;
+
+    let mut current: u64 = 0;
+    let mut in_digits = false;
+
+    for ch in version.chars() {
+        if let Some(digit) = ch.to_digit(10) {
+            current = current.saturating_mul(10).saturating_add(u64::from(digit));
+            in_digits = true;
+            continue;
+        }
+
+        if in_digits {
+            if major.is_none() {
+                major = Some(current);
+            } else if minor.is_none() {
+                minor = Some(current);
+                break;
+            }
+            current = 0;
+            in_digits = false;
+        }
+    }
+
+    if in_digits {
+        if major.is_none() {
+            major = Some(current);
+        } else if minor.is_none() {
+            minor = Some(current);
+        }
+    }
+
+    Some((major?, minor?))
+}
+
+fn windows_terminal_version_from_powershell() -> Option<String> {
+    // Only attempt to run PowerShell when a Windows Terminal session is detected. This keeps
+    // terminal detection cheap on other platforms.
+    std::env::var_os("WT_SESSION")?;
+
+    if cfg!(target_os = "windows") {
+        return query_windows_terminal_version_with_powershell("powershell");
+    }
+
+    // Under WSL, Windows Terminal may set WT_SESSION in the Linux environment. In that case, try
+    // invoking Windows PowerShell via interop.
+    if is_wsl() {
+        return query_windows_terminal_version_with_powershell("powershell.exe")
+            .or_else(|| query_windows_terminal_version_with_powershell("powershell"));
+    }
+
+    None
+}
+
+fn query_windows_terminal_version_with_powershell(exe: &str) -> Option<String> {
+    // Prefer the newest installed version between stable and Preview.
+    //
+    // `Get-AppxPackage` is available in Windows PowerShell and returns the installed version for
+    // the Store/MSIX install (which is what `wt.exe` uses).
+    let script = r#"
+$stable = Get-AppxPackage -Name Microsoft.WindowsTerminal -ErrorAction SilentlyContinue | Select-Object -First 1
+$preview = Get-AppxPackage -Name Microsoft.WindowsTerminalPreview -ErrorAction SilentlyContinue | Select-Object -First 1
+
+$stableVersion = if ($stable) { $stable.Version } else { $null }
+$previewVersion = if ($preview) { $preview.Version } else { $null }
+
+if ($previewVersion -and (!$stableVersion -or ($previewVersion -gt $stableVersion))) {
+  $previewVersion.ToString()
+} elseif ($stableVersion) {
+  $stableVersion.ToString()
+}
+"#;
+
+    let output = std::process::Command::new(exe)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version = stdout.trim();
+    (!version.is_empty()).then(|| version.to_string())
+}
+
+fn is_wsl() -> bool {
+    std::env::var_os("WSL_INTEROP").is_some() || std::env::var_os("WSL_DISTRO_NAME").is_some()
+}
+
 fn none_if_whitespace(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
@@ -459,6 +591,7 @@ mod tests {
     struct FakeEnvironment {
         vars: HashMap<String, String>,
         tmux_client_info: TmuxClientInfo,
+        windows_terminal_version: Option<String>,
     }
 
     impl FakeEnvironment {
@@ -466,6 +599,7 @@ mod tests {
             Self {
                 vars: HashMap::new(),
                 tmux_client_info: TmuxClientInfo::default(),
+                windows_terminal_version: None,
             }
         }
 
@@ -481,6 +615,11 @@ mod tests {
             };
             self
         }
+
+        fn with_windows_terminal_version(mut self, version: &str) -> Self {
+            self.windows_terminal_version = Some(version.to_string());
+            self
+        }
     }
 
     impl Environment for FakeEnvironment {
@@ -490,6 +629,10 @@ mod tests {
 
         fn tmux_client_info(&self) -> TmuxClientInfo {
             self.tmux_client_info.clone()
+        }
+
+        fn windows_terminal_version(&self) -> Option<String> {
+            self.windows_terminal_version.clone()
         }
     }
 
@@ -1113,6 +1256,52 @@ mod tests {
             "WindowsTerminal/1.21",
             "windows_terminal_term_program_user_agent"
         );
+
+        assert_eq!(
+            terminal.windows_terminal_major_minor(),
+            Some((1, 21)),
+            "windows_terminal_parses_major_minor"
+        );
+    }
+
+    #[test]
+    fn windows_terminal_wt_session_uses_powershell_version_when_available() {
+        let env = FakeEnvironment::new()
+            .with_var("WT_SESSION", "1")
+            .with_windows_terminal_version("1.23.9999.0");
+        let terminal = detect_terminal_info_from_env(&env);
+        assert_eq!(
+            terminal,
+            terminal_info(
+                TerminalName::WindowsTerminal,
+                None,
+                Some("1.23.9999.0"),
+                None,
+                None,
+            ),
+            "wt_session_uses_windows_terminal_version_hook"
+        );
+        assert_eq!(
+            terminal.windows_terminal_major_minor(),
+            Some((1, 23)),
+            "wt_session_parses_major_minor_from_powershell_version"
+        );
+    }
+
+    #[test]
+    fn parses_major_minor_versions() {
+        assert_eq!(
+            parse_major_minor_version("1.24.2372.0"),
+            Some((1, 24)),
+            "windows_terminal_release_version"
+        );
+        assert_eq!(
+            parse_major_minor_version("v1.24-preview"),
+            Some((1, 24)),
+            "windows_terminal_prefixed_version"
+        );
+        assert_eq!(parse_major_minor_version("1"), None, "single_component");
+        assert_eq!(parse_major_minor_version(""), None, "empty_string");
     }
 
     #[test]
