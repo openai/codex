@@ -363,10 +363,16 @@ pub(crate) struct ChatWidget {
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
-    // Whether to add a final message separator after the last message
+    // Whether the next streamed assistant content should be preceded by a final message separator.
+    //
+    // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
+    // The separator itself is only rendered if the turn recorded "work" activity (see
+    // `had_work_activity`).
     needs_final_message_separator: bool,
-    // Whether actual work (exec commands, MCP tool calls, patches) was done in the current turn.
-    // Used to determine if "Worked for" separator should be shown.
+    // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
+    //
+    // This gates rendering of the "Worked for …" separator so purely conversational turns don't
+    // show an empty divider. It is reset when the separator is emitted.
     had_work_activity: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
@@ -1161,6 +1167,8 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
+            // If the previous turn inserted non-stream history (exec output, patch status, MCP
+            // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
                 let elapsed_seconds = self
                     .bottom_pane
