@@ -4578,6 +4578,8 @@ impl ChatWidget {
             auto_scope_prompt: annotated_scope_prompt,
             resume_checkpoint,
             linear_issue,
+            validation_target_url: None,
+            validation_creds_path: None,
         };
 
         let tx = self.app_event_tx.clone();

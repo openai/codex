@@ -502,6 +502,10 @@ pub struct SecurityReviewRequest {
     pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
     // Optional Linear issue reference to sync status and create child tickets.
     pub linear_issue: Option<String>,
+    // Optional deployed target for web/API validation (enables curl/playwright tools).
+    pub validation_target_url: Option<String>,
+    // Optional credentials file for web validation (headers only; values redacted in output).
+    pub validation_creds_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -2148,6 +2152,40 @@ impl BugVerificationTool {
     }
 }
 
+#[derive(Clone)]
+struct WebValidationConfig {
+    base_url: Url,
+    headers: Vec<(String, String)>,
+    redactions: Vec<String>,
+}
+
+impl std::fmt::Debug for WebValidationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let header_names: Vec<&str> = self.headers.iter().map(|(k, _)| k.as_str()).collect();
+        f.debug_struct("WebValidationConfig")
+            .field("base_url", &self.base_url.as_str())
+            .field("headers", &header_names)
+            .finish()
+    }
+}
+
+impl WebValidationConfig {
+    fn origin(&self) -> String {
+        self.base_url.origin().ascii_serialization()
+    }
+
+    fn redact(&self, text: &str) -> String {
+        let mut scrubbed = text.to_string();
+        for secret in &self.redactions {
+            if secret.is_empty() {
+                continue;
+            }
+            scrubbed = scrubbed.replace(secret, "[REDACTED]");
+        }
+        scrubbed
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct BugVerificationRequest {
     pub id: BugIdentifier,
@@ -2166,6 +2204,7 @@ pub(crate) struct BugVerificationBatchRequest {
     pub repo_path: PathBuf,
     pub work_dir: PathBuf,
     pub requests: Vec<BugVerificationRequest>,
+    web_validation: Option<WebValidationConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -2451,7 +2490,7 @@ fn render_bug_sections(
             validation_output.as_deref(),
             poc_artifact.as_deref(),
         ) {
-            composed.push_str("\n");
+            composed.push('\n');
             composed.push_str(exploit.trim());
             composed.push('\n');
         }
@@ -3404,6 +3443,12 @@ pub async fn run_security_review(
     mut request: SecurityReviewRequest,
 ) -> Result<SecurityReviewResult, SecurityReviewFailure> {
     request.provider = provider_with_beta_features(&request.provider, &request.config);
+
+    request.validation_target_url = request
+        .validation_target_url
+        .take()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     request.model = request.model.trim().to_string();
     if request.model.is_empty() {
@@ -5338,7 +5383,12 @@ pub async fn run_security_review(
         }
     };
 
-    let validation_targets = build_validation_findings_context(&snapshot);
+    let include_web_browser = request
+        .validation_target_url
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    let validation_targets = build_validation_findings_context(&snapshot, include_web_browser);
 
     if validation_targets.ids.is_empty() {
         record(
@@ -5371,6 +5421,8 @@ pub async fn run_security_review(
             request.auth_manager.clone(),
             progress_sender.clone(),
             metrics.clone(),
+            request.validation_target_url.clone(),
+            request.validation_creds_path.clone(),
         )
         .await
         {
@@ -8924,7 +8976,7 @@ mod validation_target_selection_tests {
             ],
         };
 
-        let targets = build_validation_findings_context(&snapshot);
+        let targets = build_validation_findings_context(&snapshot, false);
         assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
     }
 
@@ -8943,8 +8995,91 @@ mod validation_target_selection_tests {
             )],
         };
 
-        let targets = build_validation_findings_context(&snapshot);
+        let targets = build_validation_findings_context(&snapshot, false);
         assert_eq!(targets.ids, Vec::<BugIdentifier>::new());
+    }
+
+    #[test]
+    fn includes_web_browser_findings_when_enabled() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                make_bug_snapshot(
+                    1,
+                    1,
+                    "Browser-only finding",
+                    "High",
+                    vec!["web_browser".to_string()],
+                ),
+                make_bug_snapshot(2, 2, "API finding", "High", vec!["network_api".to_string()]),
+            ],
+        };
+
+        let targets = build_validation_findings_context(&snapshot, true);
+        assert_eq!(
+            targets.ids,
+            vec![BugIdentifier::RiskRank(1), BugIdentifier::RiskRank(2)]
+        );
+    }
+}
+
+#[cfg(test)]
+mod web_validation_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn normalizes_base_url_and_strips_path_query() {
+        let base =
+            normalize_web_validation_base_url("https://example.com/foo/bar?x=1#frag").expect("ok");
+        assert_eq!(base.as_str(), "https://example.com/");
+    }
+
+    #[test]
+    fn rejects_target_url_with_userinfo() {
+        let err = normalize_web_validation_base_url("https://user:pass@example.com/")
+            .expect_err("should reject");
+        assert!(err.contains("userinfo"));
+    }
+
+    #[test]
+    fn resolves_relative_targets_and_rejects_other_origins() {
+        let base = normalize_web_validation_base_url("https://example.com/app").expect("ok");
+        let joined = resolve_web_validation_target(&base, Some("/api/v1/users")).expect("ok join");
+        assert_eq!(joined.as_str(), "https://example.com/api/v1/users");
+
+        let err = resolve_web_validation_target(&base, Some("https://evil.com/")).expect_err("bad");
+        assert!(err.contains("non-target origin"));
+    }
+
+    #[test]
+    fn parses_creds_from_json_headers_object() {
+        let headers =
+            parse_web_validation_creds(r#"{"headers":{"Authorization":"Bearer abcdefgh"}} "#);
+        assert_eq!(
+            headers,
+            vec![("Authorization".to_string(), "Bearer abcdefgh".to_string())]
+        );
+    }
+
+    #[test]
+    fn parses_creds_from_header_lines() {
+        let headers = parse_web_validation_creds(
+            r#"
+# comment
+Authorization: Bearer abcdefgh
+X_FOO: bar
+"#,
+        );
+        assert_eq!(
+            headers,
+            vec![
+                ("Authorization".to_string(), "Bearer abcdefgh".to_string()),
+                ("X_FOO".to_string(), "bar".to_string())
+            ]
+        );
     }
 }
 
@@ -15498,6 +15633,144 @@ fn summarize_process_output(success: bool, stdout: &str, stderr: &str) -> String
     }
 }
 
+fn normalize_web_validation_base_url(raw: &str) -> Result<Url, String> {
+    let url = Url::parse(raw).map_err(|err| format!("Invalid target URL: {err}"))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("Unsupported target URL scheme `{other}`")),
+    }
+    if url.host_str().is_none() {
+        return Err("Target URL must include a host".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("Target URL must not include embedded credentials (userinfo)".to_string());
+    }
+
+    let mut base = url;
+    base.set_path("/");
+    base.set_query(None);
+    base.set_fragment(None);
+    Ok(base)
+}
+
+fn resolve_web_validation_target(base_url: &Url, raw_target: Option<&str>) -> Result<Url, String> {
+    let raw_target = raw_target.unwrap_or("").trim();
+    if raw_target.is_empty() {
+        return Ok(base_url.clone());
+    }
+
+    let candidate = if raw_target.starts_with("http://") || raw_target.starts_with("https://") {
+        Url::parse(raw_target).map_err(|err| format!("Invalid target URL: {err}"))?
+    } else {
+        base_url
+            .join(raw_target)
+            .map_err(|err| format!("Invalid target URL path: {err}"))?
+    };
+
+    if !candidate.username().is_empty() || candidate.password().is_some() {
+        return Err("Target URL must not include embedded credentials (userinfo)".to_string());
+    }
+
+    if candidate.origin().ascii_serialization() != base_url.origin().ascii_serialization() {
+        return Err(format!(
+            "Refusing to validate against non-target origin: {}",
+            candidate.origin().ascii_serialization()
+        ));
+    }
+
+    Ok(candidate)
+}
+
+fn parse_web_validation_creds(contents: &str) -> Vec<(String, String)> {
+    fn is_valid_header_name(name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() {
+            return false;
+        }
+        name.chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    }
+
+    fn sanitize_header_value(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed.contains('\n') || trimmed.contains('\r') {
+            return None;
+        }
+        Some(trimmed.to_string())
+    }
+
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        return headers;
+    }
+
+    let json = serde_json::from_str::<Value>(trimmed).ok();
+    if let Some(value) = json {
+        let header_object = match value {
+            Value::Object(map) => map
+                .get("headers")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or(map),
+            other => other.as_object().cloned().unwrap_or_default(),
+        };
+        if !header_object.is_empty() {
+            for (key, value) in header_object {
+                if !is_valid_header_name(&key) {
+                    continue;
+                }
+                let Some(raw) = value.as_str() else {
+                    continue;
+                };
+                if let Some(val) = sanitize_header_value(raw) {
+                    headers.push((key.trim().to_string(), val));
+                }
+            }
+            return headers;
+        }
+    }
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !is_valid_header_name(name) {
+            continue;
+        }
+        if let Some(val) = sanitize_header_value(value) {
+            headers.push((name.trim().to_string(), val));
+        }
+    }
+
+    headers
+}
+
+fn redactions_for_headers(headers: &[(String, String)]) -> Vec<String> {
+    let mut redactions: Vec<String> = Vec::new();
+    for (_name, value) in headers {
+        let value = value.trim();
+        if value.len() >= 8 {
+            redactions.push(value.to_string());
+        }
+        if let Some(token) = value.strip_prefix("Bearer ").map(str::trim)
+            && token.len() >= 8
+        {
+            redactions.push(token.to_string());
+        }
+    }
+    redactions.sort();
+    redactions.dedup();
+    redactions
+}
+
 fn base_url_for_control(target: &str) -> Option<String> {
     let url = Url::parse(target).ok()?;
     let mut control = url;
@@ -16062,6 +16335,7 @@ async fn execute_bug_command(
     plan: BugCommandPlan,
     repo_path: PathBuf,
     work_dir: PathBuf,
+    web_validation: Option<WebValidationConfig>,
 ) -> BugCommandResult {
     let mut logs: Vec<String> = Vec::new();
     let label = if let Some(rank) = plan.risk_rank {
@@ -16104,7 +16378,7 @@ async fn execute_bug_command(
     match plan.request.tool {
         BugVerificationTool::Curl => {
             let timeout = Duration::from_secs(VALIDATION_CURL_TIMEOUT_SECS);
-            let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
+            let Some(target_raw) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for curl"));
@@ -16115,27 +16389,65 @@ async fn execute_bug_command(
                     logs,
                 };
             };
-            if !is_local_target_url(&target) {
-                validation.status = BugValidationStatus::UnableToValidate;
-                validation.summary = Some(format!(
-                    "Refusing to validate against non-local target: {target}"
-                ));
-                logs.push(format!(
-                    "{label}: refusing to validate against non-local target {target}"
-                ));
-                validation.run_at = Some(OffsetDateTime::now_utc());
-                return BugCommandResult {
-                    index: plan.index,
-                    validation,
-                    logs,
-                };
-            }
+            let target = match web_validation.as_ref() {
+                Some(web_validation) => match resolve_web_validation_target(
+                    &web_validation.base_url,
+                    Some(target_raw.as_str()),
+                ) {
+                    Ok(url) => url.as_str().to_string(),
+                    Err(err) => {
+                        validation.status = BugValidationStatus::UnableToValidate;
+                        validation.summary = Some(format!(
+                            "Refusing to validate against non-target URL: {err}"
+                        ));
+                        logs.push(format!(
+                            "{label}: refusing to validate against non-target url {target_raw}: {err}"
+                        ));
+                        validation.run_at = Some(OffsetDateTime::now_utc());
+                        return BugCommandResult {
+                            index: plan.index,
+                            validation,
+                            logs,
+                        };
+                    }
+                },
+                None => {
+                    if !is_local_target_url(&target_raw) {
+                        validation.status = BugValidationStatus::UnableToValidate;
+                        validation.summary = Some(format!(
+                            "Refusing to validate against non-local target: {target_raw}"
+                        ));
+                        logs.push(format!(
+                            "{label}: refusing to validate against non-local target {target_raw}"
+                        ));
+                        validation.run_at = Some(OffsetDateTime::now_utc());
+                        return BugCommandResult {
+                            index: plan.index,
+                            validation,
+                            logs,
+                        };
+                    }
+                    target_raw
+                }
+            };
+            validation.target = Some(target.clone());
 
             let control_target = base_url_for_control(&target);
             validation.control_target = control_target.clone();
             if let Some(control_target) = control_target.as_ref() {
+                let header_steps = web_validation
+                    .as_ref()
+                    .filter(|web_validation| !web_validation.headers.is_empty())
+                    .map(|web_validation| {
+                        web_validation
+                            .headers
+                            .iter()
+                            .map(|(name, _)| format!(" --header '{name}: [REDACTED]'"))
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
                 validation.control_steps.push(format!(
-                    "Run: `curl --silent --show-error --location --max-time 15 {control_target}`"
+                    "Run: `curl --silent --show-error --location --max-time 15{header_steps} {control_target}`"
                 ));
                 let mut control_cmd = Command::new("curl");
                 control_cmd
@@ -16144,13 +16456,31 @@ async fn execute_bug_command(
                     .arg("--location")
                     .arg("--max-time")
                     .arg("15")
+                    .args(
+                        web_validation
+                            .as_ref()
+                            .map(|web_validation| {
+                                web_validation
+                                    .headers
+                                    .iter()
+                                    .flat_map(|(name, value)| {
+                                        ["--header".to_string(), format!("{name}: {value}")]
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default(),
+                    )
                     .arg(control_target)
                     .current_dir(&repo_path);
 
                 match command_output_with_timeout(control_cmd, timeout).await {
                     Ok(CommandOutputOutcome::Completed(output)) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        if let Some(web_validation) = web_validation.as_ref() {
+                            stdout = web_validation.redact(&stdout);
+                            stderr = web_validation.redact(&stderr);
+                        }
                         let success = output.status.success();
                         validation.control_summary =
                             Some(summarize_process_output(success, &stdout, &stderr));
@@ -16197,8 +16527,19 @@ async fn execute_bug_command(
                 }
             }
 
+            let header_steps = web_validation
+                .as_ref()
+                .filter(|web_validation| !web_validation.headers.is_empty())
+                .map(|web_validation| {
+                    web_validation
+                        .headers
+                        .iter()
+                        .map(|(name, _)| format!(" --header '{name}: [REDACTED]'"))
+                        .collect::<String>()
+                })
+                .unwrap_or_default();
             validation.repro_steps.push(format!(
-                "Run: `curl --silent --show-error --location --max-time 15 {target}`"
+                "Run: `curl --silent --show-error --location --max-time 15{header_steps} {target}`"
             ));
 
             let mut command = Command::new("curl");
@@ -16208,14 +16549,32 @@ async fn execute_bug_command(
                 .arg("--location")
                 .arg("--max-time")
                 .arg("15")
+                .args(
+                    web_validation
+                        .as_ref()
+                        .map(|web_validation| {
+                            web_validation
+                                .headers
+                                .iter()
+                                .flat_map(|(name, value)| {
+                                    ["--header".to_string(), format!("{name}: {value}")]
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                )
                 .arg(&target)
                 .current_dir(&repo_path);
 
             match command_output_with_timeout(command, timeout).await {
                 Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    if let Some(web_validation) = web_validation.as_ref() {
+                        stdout = web_validation.redact(&stdout);
+                        stderr = web_validation.redact(&stderr);
+                    }
                     let success = output.status.success();
                     validation.status = if success {
                         BugValidationStatus::Passed
@@ -16350,6 +16709,15 @@ async fn execute_bug_command(
             if let Some(target) = plan.request.target.as_ref().filter(|t| !t.is_empty()) {
                 command.arg(target);
             }
+            if let Some(web_validation) = web_validation.as_ref() {
+                command.env("CODEX_WEB_TARGET_URL", web_validation.base_url.as_str());
+                command.env("CODEX_WEB_TARGET_ORIGIN", web_validation.origin());
+                let headers: HashMap<String, String> =
+                    web_validation.headers.iter().cloned().collect();
+                if let Ok(headers_json) = serde_json::to_string(&headers) {
+                    command.env("CODEX_WEB_HEADERS_JSON", headers_json);
+                }
+            }
             command.current_dir(&repo_path);
 
             let mut cmd = format!("python {}", display_path_for(script_path, &repo_path));
@@ -16363,20 +16731,27 @@ async fn execute_bug_command(
             match command_output_with_timeout(command, timeout).await {
                 Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let stdout_raw = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr_raw = String::from_utf8_lossy(&output.stderr).to_string();
                     let success = output.status.success();
                     let duration_label = fmt_elapsed_compact(duration.as_secs());
                     let exit_code = output.status.code();
                     let observed_asan = plan.expect_asan
-                        && (contains_asan_signature(&stdout) || contains_asan_signature(&stderr));
+                        && (contains_asan_signature(&stdout_raw)
+                            || contains_asan_signature(&stderr_raw));
                     validation.status = classify_python_validation_status(
                         plan.expect_asan,
                         exit_code,
                         success,
-                        &stdout,
-                        &stderr,
+                        &stdout_raw,
+                        &stderr_raw,
                     );
+                    let mut stdout = stdout_raw;
+                    let mut stderr = stderr_raw;
+                    if let Some(web_validation) = web_validation.as_ref() {
+                        stdout = web_validation.redact(&stdout);
+                        stderr = web_validation.redact(&stderr);
+                    }
 
                     if matches!(validation.status, BugValidationStatus::UnableToValidate) {
                         let summary_line = summarize_process_output(false, &stdout, &stderr);
@@ -16461,7 +16836,7 @@ async fn execute_bug_command(
         }
         BugVerificationTool::Playwright => {
             let timeout = Duration::from_secs(VALIDATION_PLAYWRIGHT_TIMEOUT_SECS);
-            let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
+            let Some(target_raw) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for playwright"));
@@ -16472,46 +16847,164 @@ async fn execute_bug_command(
                     logs,
                 };
             };
-            if !is_local_target_url(&target) {
-                validation.status = BugValidationStatus::UnableToValidate;
-                validation.summary = Some(format!(
-                    "Refusing to validate against non-local target: {target}"
-                ));
-                logs.push(format!(
-                    "{label}: refusing to validate against non-local target {target}"
-                ));
-                validation.run_at = Some(OffsetDateTime::now_utc());
-                return BugCommandResult {
-                    index: plan.index,
-                    validation,
-                    logs,
-                };
-            }
+            let target = match web_validation.as_ref() {
+                Some(web_validation) => match resolve_web_validation_target(
+                    &web_validation.base_url,
+                    Some(target_raw.as_str()),
+                ) {
+                    Ok(url) => url.as_str().to_string(),
+                    Err(err) => {
+                        validation.status = BugValidationStatus::UnableToValidate;
+                        validation.summary = Some(format!(
+                            "Refusing to validate against non-target URL: {err}"
+                        ));
+                        logs.push(format!(
+                            "{label}: refusing to validate against non-target url {target_raw}: {err}"
+                        ));
+                        validation.run_at = Some(OffsetDateTime::now_utc());
+                        return BugCommandResult {
+                            index: plan.index,
+                            validation,
+                            logs,
+                        };
+                    }
+                },
+                None => {
+                    if !is_local_target_url(&target_raw) {
+                        validation.status = BugValidationStatus::UnableToValidate;
+                        validation.summary = Some(format!(
+                            "Refusing to validate against non-local target: {target_raw}"
+                        ));
+                        logs.push(format!(
+                            "{label}: refusing to validate against non-local target {target_raw}"
+                        ));
+                        validation.run_at = Some(OffsetDateTime::now_utc());
+                        return BugCommandResult {
+                            index: plan.index,
+                            validation,
+                            logs,
+                        };
+                    }
+                    target_raw
+                }
+            };
+            validation.target = Some(target.clone());
             let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
             let screenshot_path = bug_work_dir.join(format!("{file_stem}.png"));
+            let script_path = bug_work_dir.join("playwright_screenshot.js");
+            const PLAYWRIGHT_SCREENSHOT_SCRIPT: &str = r#"
+const { chromium } = require("playwright");
+
+function originOf(urlString) {
+  try {
+    return new URL(urlString).origin;
+  } catch {
+    return null;
+  }
+}
+
+(async () => {
+  const target = process.argv[2];
+  const screenshotPath = process.argv[3];
+
+  if (!target || !screenshotPath) {
+    console.error("usage: playwright_screenshot.js <target_url> <screenshot_path>");
+    process.exit(2);
+  }
+
+  const allowedOrigin = process.env.CODEX_WEB_ALLOWED_ORIGIN || "";
+  const headersJson = process.env.CODEX_WEB_HEADERS_JSON || "{}";
+  let extraHeaders = {};
+  try {
+    extraHeaders = JSON.parse(headersJson) || {};
+  } catch {
+    extraHeaders = {};
+  }
+
+  if (allowedOrigin && originOf(target) !== allowedOrigin) {
+    console.error(`Refusing to navigate to non-target origin: ${originOf(target)}`);
+    process.exit(2);
+  }
+
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  await page.route("**/*", async (route) => {
+    const request = route.request();
+    const requestOrigin = originOf(request.url());
+    if (allowedOrigin && requestOrigin === allowedOrigin) {
+      const merged = { ...request.headers(), ...extraHeaders };
+      await route.continue({ headers: merged });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await page.goto(target, { waitUntil: "networkidle", timeout: 15000 });
+
+  if (allowedOrigin) {
+    const finalOrigin = originOf(page.url());
+    if (finalOrigin !== allowedOrigin) {
+      throw new Error(`Refusing to follow redirect to non-target origin: ${finalOrigin}`);
+    }
+  }
+
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+  console.log(`Saved screenshot to ${screenshotPath}`);
+  await browser.close();
+})().catch((err) => {
+  console.error(String(err && err.stack ? err.stack : err));
+  process.exit(1);
+});
+"#;
+            let _ = tokio_fs::write(&script_path, PLAYWRIGHT_SCREENSHOT_SCRIPT).await;
+            let display_script = display_path_for(&script_path, &repo_path);
+            if !validation.artifacts.iter().any(|a| a == &display_script) {
+                validation.artifacts.push(display_script.clone());
+            }
+
+            let headers_json = web_validation.as_ref().map(|web_validation| {
+                let headers: HashMap<String, String> =
+                    web_validation.headers.iter().cloned().collect();
+                serde_json::to_string(&headers).unwrap_or_else(|_| "{}".to_string())
+            });
+            let allowed_origin = web_validation.as_ref().map(WebValidationConfig::origin);
 
             let control_target = base_url_for_control(&target);
             validation.control_target = control_target.clone();
             if let Some(control_target) = control_target.as_ref() {
                 let control_screenshot_path = bug_work_dir.join(format!("{file_stem}_control.png"));
                 validation.control_steps.push(format!(
-                    "Run: `npx --yes playwright screenshot {control_target} {}`",
+                    "Run: `npx --yes -p playwright node {display_script} {control_target} {}`",
                     display_path_for(&control_screenshot_path, &repo_path)
                 ));
 
                 let mut control_cmd = Command::new("npx");
                 control_cmd
                     .arg("--yes")
+                    .arg("-p")
                     .arg("playwright")
-                    .arg("screenshot")
+                    .arg("node")
+                    .arg(&script_path)
                     .arg(control_target)
                     .arg(&control_screenshot_path)
                     .current_dir(&repo_path);
+                if let Some(origin) = allowed_origin.as_ref() {
+                    control_cmd.env("CODEX_WEB_ALLOWED_ORIGIN", origin);
+                }
+                if let Some(json) = headers_json.as_ref() {
+                    control_cmd.env("CODEX_WEB_HEADERS_JSON", json);
+                }
 
                 match command_output_with_timeout(control_cmd, timeout).await {
                     Ok(CommandOutputOutcome::Completed(output)) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        if let Some(web_validation) = web_validation.as_ref() {
+                            stdout = web_validation.redact(&stdout);
+                            stderr = web_validation.redact(&stderr);
+                        }
                         let success = output.status.success();
                         if success {
                             validation.control_summary = Some(format!(
@@ -16569,24 +17062,36 @@ async fn execute_bug_command(
             }
 
             validation.repro_steps.push(format!(
-                "Run: `npx --yes playwright screenshot {target} {}`",
+                "Run: `npx --yes -p playwright node {display_script} {target} {}`",
                 display_path_for(&screenshot_path, &repo_path)
             ));
 
             let mut command = Command::new("npx");
             command
                 .arg("--yes")
+                .arg("-p")
                 .arg("playwright")
-                .arg("screenshot")
+                .arg("node")
+                .arg(&script_path)
                 .arg(&target)
                 .arg(&screenshot_path)
                 .current_dir(&repo_path);
+            if let Some(origin) = allowed_origin.as_ref() {
+                command.env("CODEX_WEB_ALLOWED_ORIGIN", origin);
+            }
+            if let Some(json) = headers_json.as_ref() {
+                command.env("CODEX_WEB_HEADERS_JSON", json);
+            }
 
             match command_output_with_timeout(command, timeout).await {
                 Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    if let Some(web_validation) = web_validation.as_ref() {
+                        stdout = web_validation.redact(&stdout);
+                        stderr = web_validation.redact(&stderr);
+                    }
                     let success = output.status.success();
                     validation.status = if success {
                         BugValidationStatus::Passed
@@ -16720,10 +17225,12 @@ pub(crate) async fn verify_bugs(
         let _ = tokio_fs::create_dir_all(&batch.work_dir).await;
 
         let mut command_results: Vec<BugCommandResult> = Vec::new();
+        let web_validation = batch.web_validation.clone();
         let mut futures = futures::stream::iter(plans.into_iter().map(|plan| {
             let repo_path = batch.repo_path.clone();
             let work_dir = batch.work_dir.clone();
-            async move { execute_bug_command(plan, repo_path, work_dir).await }
+            let web_validation = web_validation.clone();
+            async move { execute_bug_command(plan, repo_path, work_dir, web_validation).await }
         }))
         .buffer_unordered(VALIDATION_EXEC_CONCURRENCY)
         .collect::<Vec<_>>()
@@ -16946,12 +17453,13 @@ struct ValidationFindingsContext {
 
 fn build_validation_findings_context(
     snapshot: &SecurityReviewSnapshot,
+    include_web_browser: bool,
 ) -> ValidationFindingsContext {
     let mut required: Vec<&BugSnapshot> = snapshot
         .bugs
         .iter()
         .filter(|b| {
-            if has_verification_type(&b.bug, "web_browser") {
+            if !include_web_browser && has_verification_type(&b.bug, "web_browser") {
                 return false;
             }
             let sev = b.bug.severity.to_ascii_lowercase();
@@ -16989,7 +17497,7 @@ fn build_validation_findings_context(
         .filter(|b| {
             is_high_risk(&b.bug)
                 && crash_poc_category(&b.bug) != Some("crash_poc_func")
-                && !has_verification_type(&b.bug, "web_browser")
+                && (include_web_browser || !has_verification_type(&b.bug, "web_browser"))
         })
         .collect();
     high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
@@ -17500,6 +18008,8 @@ async fn run_asan_validation(
     auth_manager: Arc<AuthManager>,
     progress_sender: Option<AppEventSender>,
     metrics: Arc<ReviewMetrics>,
+    web_target_url: Option<String>,
+    web_creds_path: Option<PathBuf>,
 ) -> Result<(), BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
 
@@ -17565,8 +18075,74 @@ async fn run_asan_validation(
     let mut testing_md_context =
         trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
+    let web_validation = {
+        let target_raw = web_target_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        match target_raw {
+            Some(raw) => match normalize_web_validation_base_url(raw) {
+                Ok(base_url) => {
+                    let headers = if let Some(path) = web_creds_path.as_ref() {
+                        match tokio_fs::read_to_string(path).await {
+                            Ok(contents) => parse_web_validation_creds(&contents),
+                            Err(err) => {
+                                push_progress_log(
+                                    &progress_sender,
+                                    &None,
+                                    &mut logs,
+                                    format!(
+                                        "Failed to read creds file {}: {err}. Continuing without creds.",
+                                        path.display()
+                                    ),
+                                );
+                                Vec::new()
+                            }
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    Some(WebValidationConfig {
+                        base_url,
+                        redactions: redactions_for_headers(&headers),
+                        headers,
+                    })
+                }
+                Err(err) => {
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!("Web validation disabled: {err}."),
+                    );
+                    None
+                }
+            },
+            None => None,
+        }
+    };
+
+    let web_validation_context = if let Some(web_validation) = web_validation.as_ref() {
+        let header_names = if web_validation.headers.is_empty() {
+            "(none)".to_string()
+        } else {
+            web_validation
+                .headers
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        format!(
+            "- enabled: true\n- target_url: {}\n- headers: {header_names}\n- notes: only request this origin; header values are available but must not be printed",
+            web_validation.base_url.as_str()
+        )
+    } else {
+        "- enabled: false (no target URL provided)".to_string()
+    };
+
     // Build prompt
-    let findings = build_validation_findings_context(&snapshot);
+    let findings = build_validation_findings_context(&snapshot, web_validation.is_some());
     let finding_map: HashMap<BugIdentifier, ValidationFinding> = findings
         .findings
         .iter()
@@ -17613,11 +18189,13 @@ async fn run_asan_validation(
         let model = model.clone();
         let repo_root = repo_path.clone();
         let testing_md_context = testing_md_context.clone();
+        let web_validation_context = web_validation_context.clone();
         async move {
             let ValidationFinding { id, label, context } = finding;
             let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE
                 .replace("{findings}", &context)
-                .replace("{testing_md}", &testing_md_context);
+                .replace("{testing_md}", &testing_md_context)
+                .replace("{web_validation}", &web_validation_context);
             let result = run_validation_plan_agent(
                 config,
                 &provider,
@@ -17727,26 +18305,64 @@ async fn run_asan_validation(
                             continue;
                         };
 
+                        let python_target = web_validation
+                            .as_ref()
+                            .map(|web_validation| web_validation.base_url.as_str().to_string());
                         requests.push(BugVerificationRequest {
                             id,
                             tool: BugVerificationTool::Python,
-                            target: None,
+                            target: python_target,
                             script_path: None,
                             script_inline: Some(script.to_string()),
                         });
                     }
-                    "curl" | "playwright" => {
-                        if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                            mark_unable(
-                                entry,
-                                tool_raw,
-                                format!(
-                                    "Validation planning requested `{tool_raw}`, but web/API validation is disabled in this mode; no validation was run."
-                                ),
-                                &mut logs,
-                            );
+                    "curl" | "playwright" => match web_validation.as_ref() {
+                        None => {
+                            if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                                mark_unable(
+                                    entry,
+                                    tool_raw,
+                                    format!(
+                                        "Validation planning requested `{tool_raw}`, but web validation is disabled (no --target-url provided); no validation was run."
+                                    ),
+                                    &mut logs,
+                                );
+                            }
                         }
-                    }
+                        Some(web_validation) => {
+                            let target = match resolve_web_validation_target(
+                                &web_validation.base_url,
+                                parsed.target.as_deref(),
+                            ) {
+                                Ok(url) => url.as_str().to_string(),
+                                Err(err) => {
+                                    if matches!(
+                                        entry.bug.validation.status,
+                                        BugValidationStatus::Pending
+                                    ) {
+                                        mark_unable(
+                                            entry,
+                                            tool_raw,
+                                            format!("Invalid web validation target: {err}"),
+                                            &mut logs,
+                                        );
+                                    }
+                                    continue;
+                                }
+                            };
+                            let tool = match tool_raw.to_ascii_lowercase().as_str() {
+                                "curl" => BugVerificationTool::Curl,
+                                _ => BugVerificationTool::Playwright,
+                            };
+                            requests.push(BugVerificationRequest {
+                                id,
+                                tool,
+                                target: Some(target),
+                                script_path: None,
+                                script_inline: None,
+                            });
+                        }
+                    },
                     other => {
                         if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
                             mark_unable(
@@ -17823,6 +18439,7 @@ async fn run_asan_validation(
         repo_path,
         work_dir,
         requests,
+        web_validation: web_validation.clone(),
     };
 
     let mut verification_failed: Option<String> = None;
@@ -18029,13 +18646,14 @@ async fn run_asan_validation(
             last_failure
         }
 
-        if let Some(build_failure) = run_validation_build_preflight(
-            batch.repo_path.as_path(),
-            &batch.work_dir,
-            &progress_sender,
-            &mut logs,
-        )
-        .await
+        if batch.web_validation.is_none()
+            && let Some(build_failure) = run_validation_build_preflight(
+                batch.repo_path.as_path(),
+                &batch.work_dir,
+                &progress_sender,
+                &mut logs,
+            )
+            .await
         {
             let note = format!(
                 "Validation preflight failed; recording UnableToValidate statuses: {}",

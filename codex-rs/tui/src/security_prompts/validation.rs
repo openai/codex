@@ -1,4 +1,4 @@
-pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
+pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- If a deployed target URL is provided, you may validate web/API findings against it using curl/playwright.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
 pub(crate) const VALIDATION_PLAN_PROMPT_TEMPLATE: &str = r#"
 Validate that this bug exists.
 
@@ -13,8 +13,16 @@ Shared TESTING.md (read this first):
 Shared TESTING.md (may be truncated):
 {testing_md}
 
+Web validation mode:
+{web_validation}
+
+If web validation is enabled:
+- You may choose `tool:"curl"` or `tool:"playwright"` with a `target` URL/path to validate against the deployed app.
+- Only make requests to the provided target origin; do not contact other hosts.
+- Any provided credential headers will be applied automatically; do NOT print credential values.
+
 For each finding listed in Context, emit exactly one JSON line keyed by its `id_kind`/`id_value`:
-- If you can provide a safe, local reproduction, emit `tool:"python"` with an inline script in `script`.
+- If you can provide a safe reproduction, emit `tool:"python"` with an inline script in `script`, or `tool:"curl"`/`tool:"playwright"` with a `target` when validating against a deployed URL.
 - If you cannot validate safely (missing build instructions, unclear harness, requires complex dependencies), emit `tool:"none"` with a short `reason`.
 
 For python validations, the script must include both a CONTROL case and a TRIGGER case, and print the exact commands/inputs used with clear section headers.
@@ -45,7 +53,7 @@ Context (findings):
 {findings}
 
 Output format (one JSON object per line, no fences):
-- For validations: {"id_kind":"risk_rank|summary_id","id_value":<int>,"tool":"python|none","script":"<string, optional>","reason":"<string, optional>","testing_md_additions":"<string, optional>"}
+- For validations: {"id_kind":"risk_rank|summary_id","id_value":<int>,"tool":"python|curl|playwright|none","target":"<string, optional>","script":"<string, optional>","reason":"<string, optional>","testing_md_additions":"<string, optional>"}
 "#;
 
 pub(crate) const VALIDATION_REFINE_SYSTEM_PROMPT: &str = "You are an application security engineer doing post-validation refinement of a proof-of-concept (PoC). You may use tools to inspect files and run local commands. Do NOT modify the target repository. Respond ONLY with a single JSON object (no markdown, no prose).";
