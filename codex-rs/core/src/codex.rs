@@ -160,8 +160,8 @@ use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -1992,12 +1992,11 @@ mod handlers {
                 final_output_json_schema,
                 items,
             } => {
-                let collaboration_mode =
-                    Some(CollaborationMode::Custom(Settings {
-                        model,
-                        reasoning_effort: effort,
-                        developer_instructions: None,
-                    }));
+                let collaboration_mode = Some(CollaborationMode::Custom(Settings {
+                    model,
+                    reasoning_effort: effort,
+                    developer_instructions: None,
+                }));
                 (
                     items,
                     SessionSettingsUpdate {
