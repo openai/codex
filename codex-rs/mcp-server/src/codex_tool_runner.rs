@@ -34,21 +34,27 @@ pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 /// To adhere to MCP `tools/call` response format, include the Codex
 /// `threadId` in the `structured_content` field of the response.
-fn create_call_tool_result_with_thread_id(
+/// Some MCP clients ignore `content` when `structuredContent` is present, so
+/// mirror the text content there as well.
+pub(crate) fn create_call_tool_result_with_thread_id(
     thread_id: ThreadId,
     text: String,
     is_error: Option<bool>,
 ) -> CallToolResult {
+    let content = vec![ContentBlock::TextContent(TextContent {
+        r#type: "text".to_string(),
+        text: text.clone(),
+        annotations: None,
+    })];
+    let structured_content = json!({
+        "threadId": thread_id,
+        "text": text,
+        "content": content.clone(),
+    });
     CallToolResult {
-        content: vec![ContentBlock::TextContent(TextContent {
-            r#type: "text".to_string(),
-            text,
-            annotations: None,
-        })],
+        content,
         is_error,
-        structured_content: Some(json!({
-            "threadId": thread_id,
-        })),
+        structured_content: Some(structured_content),
     }
 }
 
@@ -398,6 +404,12 @@ mod tests {
             result.structured_content,
             Some(json!({
                 "threadId": thread_id,
+                "text": "done",
+                "content": vec![ContentBlock::TextContent(TextContent {
+                    r#type: "text".to_string(),
+                    text: "done".to_string(),
+                    annotations: None,
+                })],
             }))
         );
     }
