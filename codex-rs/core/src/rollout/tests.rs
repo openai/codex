@@ -7,6 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 use tempfile::TempDir;
+use time::Duration;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -574,6 +575,52 @@ async fn test_get_thread_contents() {
     let rec1 = serde_json::json!({"record_type": "response", "index": 1});
     let expected_content = format!("{meta}\n{user_event}\n{rec0}\n{rec1}\n");
     assert_eq!(content, expected_content);
+}
+
+#[tokio::test]
+async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-06-01T08-00-00";
+    let uuid = Uuid::from_u128(43);
+    write_session_file(home, ts, uuid, 0, Some(SessionSource::VSCode)).unwrap();
+
+    let created = PrimitiveDateTime::parse(
+        ts,
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]"),
+    )?
+    .assume_utc();
+    let updated = created + Duration::hours(2);
+    let expected_updated = updated.format(&time::format_description::well_known::Rfc3339)?;
+
+    let file_path = home
+        .join("sessions")
+        .join("2025")
+        .join("06")
+        .join("01")
+        .join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let file = File::open(&file_path)?;
+    let times = FileTimes::new().set_modified(updated.into());
+    file.set_times(times)?;
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        1,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await?;
+
+    let item = page.items.first().expect("conversation item");
+    assert_eq!(item.created_at.as_deref(), Some(ts));
+    assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
+
+    Ok(())
 }
 
 #[tokio::test]

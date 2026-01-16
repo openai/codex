@@ -177,8 +177,17 @@ impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
             self.more_matches_available = true;
             return ControlFlow::Break(());
         }
-        if let Some(item) =
-            build_thread_item(path, self.allowed_sources, self.provider_matcher, None).await
+        let updated_at = file_modified_time(&path)
+            .await
+            .unwrap_or(None)
+            .and_then(format_rfc3339);
+        if let Some(item) = build_thread_item(
+            path,
+            self.allowed_sources,
+            self.provider_matcher,
+            updated_at,
+        )
+        .await
         {
             self.items.push(item);
         }
@@ -462,7 +471,7 @@ async fn build_thread_item(
     path: PathBuf,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
-    updated_at_fallback: Option<String>,
+    updated_at: Option<String>,
 ) -> Option<ThreadItem> {
     // Read head and detect message events; stop once meta + user are found.
     let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
@@ -485,17 +494,17 @@ async fn build_thread_item(
         let HeadTailSummary {
             head,
             created_at,
-            mut updated_at,
+            updated_at: mut summary_updated_at,
             ..
         } = summary;
-        if updated_at.is_none() {
-            updated_at = updated_at_fallback.or_else(|| created_at.clone());
+        if summary_updated_at.is_none() {
+            summary_updated_at = updated_at.or_else(|| created_at.clone());
         }
         return Some(ThreadItem {
             path,
             head,
             created_at,
-            updated_at,
+            updated_at: summary_updated_at,
         });
     }
     None

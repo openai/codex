@@ -754,7 +754,7 @@ async fn thread_list_updated_at_tie_breaks_by_uuid() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_list_updated_at_uses_mtime_fallback() -> Result<()> {
+async fn thread_list_updated_at_uses_mtime() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
 
