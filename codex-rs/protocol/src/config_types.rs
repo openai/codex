@@ -134,80 +134,73 @@ pub enum AltScreenMode {
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum CollaborationMode {
-    Plan(CollaborationModeSettings),
-    Collaborate(CollaborationModeSettings),
-    Execute(CollaborationModeSettings),
-    None(CollaborationModeSettings),
+    Plan(Settings),
+    Collaborate(Settings),
+    Execute(Settings),
+    Custom(CustomSettings),
 }
 
 impl CollaborationMode {
-    pub fn model(&self) -> &str {
+    /// Returns a reference to the settings, regardless of variant.
+    fn settings(&self) -> &Settings {
         match self {
-            CollaborationMode::Plan(settings) => &settings.model,
-            CollaborationMode::Collaborate(settings) => &settings.model,
-            CollaborationMode::Execute(settings) => &settings.model,
-            CollaborationMode::None(settings) => &settings.model,
+            CollaborationMode::Plan(settings)
+            | CollaborationMode::Collaborate(settings)
+            | CollaborationMode::Execute(settings) => settings,
+            CollaborationMode::Custom(custom) => &custom.settings,
         }
     }
 
+    pub fn model(&self) -> &str {
+        self.settings().model.as_str()
+    }
+
     pub fn reasoning_effort(&self) -> Option<ReasoningEffort> {
-        match self {
-            CollaborationMode::Plan(settings) => settings.reasoning_effort,
-            CollaborationMode::Collaborate(settings) => settings.reasoning_effort,
-            CollaborationMode::Execute(settings) => settings.reasoning_effort,
-            CollaborationMode::None(settings) => settings.reasoning_effort,
-        }
+        self.settings().reasoning_effort
     }
 
     /// Updates the collaboration mode with new model and/or effort values.
     ///
     /// - `model`: `Some(s)` to update the model, `None` to keep the current model
     /// - `effort`: `Some(Some(e))` to set effort to `e`, `Some(None)` to clear effort, `None` to keep current effort
+    /// - `developer_instructions`: `Some(s)` to update developer instructions (Custom mode only), `None` to keep current
     ///
-    /// Returns `None` if neither model nor effort is provided, or if the provided values
-    /// are the same as the current values (no change needed).
-    /// Otherwise returns a new `CollaborationMode` with updated values, preserving the variant.
+    /// Returns a new `CollaborationMode` with updated values, preserving the variant.
     pub fn with_updates(
         &self,
         model: Option<String>,
         effort: Option<Option<ReasoningEffort>>,
-    ) -> Option<Self> {
-        let current_settings = match self {
-            CollaborationMode::Plan(settings) => settings,
-            CollaborationMode::Collaborate(settings) => settings,
-            CollaborationMode::Execute(settings) => settings,
-            CollaborationMode::None(settings) => settings,
+        developer_instructions: Option<String>,
+    ) -> Self {
+        let settings = self.settings();
+        let updated_settings = Settings {
+            model: model.unwrap_or_else(|| settings.model.clone()),
+            reasoning_effort: effort.unwrap_or(settings.reasoning_effort),
         };
 
-        let updated_model = model.as_ref().unwrap_or(&current_settings.model);
-        let updated_effort = effort.unwrap_or(current_settings.reasoning_effort);
-
-        // Check if there's actually a change
-        let model_changed = model.is_some() && updated_model != &current_settings.model;
-        let effort_changed =
-            effort.is_some() && updated_effort != current_settings.reasoning_effort;
-
-        if !model_changed && !effort_changed {
-            return None;
-        }
-
-        let updated_settings = CollaborationModeSettings {
-            model: updated_model.clone(),
-            reasoning_effort: updated_effort,
-        };
-
-        Some(match self {
+        match self {
             CollaborationMode::Plan(_) => CollaborationMode::Plan(updated_settings),
             CollaborationMode::Collaborate(_) => CollaborationMode::Collaborate(updated_settings),
             CollaborationMode::Execute(_) => CollaborationMode::Execute(updated_settings),
-            CollaborationMode::None(_) => CollaborationMode::None(updated_settings),
-        })
+            CollaborationMode::Custom(custom) => CollaborationMode::Custom(CustomSettings {
+                settings: updated_settings,
+                developer_instructions: developer_instructions
+                    .or_else(|| custom.developer_instructions.clone()),
+            }),
+        }
     }
 }
 
 /// Settings for a collaboration mode.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
-pub struct CollaborationModeSettings {
+pub struct Settings {
     pub model: String,
     pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// Custom settings that extend base settings with developer instructions.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
+pub struct CustomSettings {
+    pub settings: Settings,
+    pub developer_instructions: Option<String>,
 }
