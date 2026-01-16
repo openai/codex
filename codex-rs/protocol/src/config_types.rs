@@ -4,6 +4,8 @@ use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 
+use crate::openai_models::ReasoningEffort;
+
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
@@ -126,4 +128,38 @@ pub enum AltScreenMode {
     Always,
     /// Never use alternate screen (inline mode only).
     Never,
+}
+
+/// Collaboration mode for a Codex session.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum CollaborationMode {
+    Plan(CollaborationModeSettings),
+    Collaborate(CollaborationModeSettings),
+    Execute(CollaborationModeSettings),
+}
+
+impl CollaborationMode {
+    pub fn model(&self) -> &str {
+        match self {
+            CollaborationMode::Plan(settings) => &settings.model,
+            CollaborationMode::Collaborate(settings) => &settings.model,
+            CollaborationMode::Execute(settings) => &settings.model,
+        }
+    }
+
+    pub fn reasoning_effort(&self) -> ReasoningEffort {
+        match self {
+            CollaborationMode::Plan(settings) => settings.reasoning_effort,
+            CollaborationMode::Collaborate(settings) => settings.reasoning_effort,
+            CollaborationMode::Execute(settings) => settings.reasoning_effort,
+        }
+    }
+}
+
+/// Settings for a collaboration mode.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
+pub struct CollaborationModeSettings {
+    pub model: String,
+    pub reasoning_effort: ReasoningEffort,
 }
