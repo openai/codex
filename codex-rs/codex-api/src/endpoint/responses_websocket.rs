@@ -132,7 +132,7 @@ fn apply_auth_headers(headers: &mut HeaderMap, auth: &impl AuthProvider) {
 
 async fn connect_websocket(url: Url, headers: HeaderMap) -> Result<WsStream, ApiError> {
     let mut request = url
-        .clone()
+        .as_str()
         .into_client_request()
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
@@ -182,7 +182,7 @@ async fn run_websocket_response_stream(
         }
     };
 
-    if let Err(err) = ws_stream.send(Message::Text(request_text)).await {
+    if let Err(err) = ws_stream.send(Message::Text(request_text.into())).await {
         return Err(ApiError::Stream(format!(
             "failed to send websocket request: {err}"
         )));

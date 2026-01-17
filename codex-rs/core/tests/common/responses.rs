@@ -841,7 +841,7 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
                     let Ok(payload) = serde_json::to_string(event) else {
                         continue;
                     };
-                    if ws_stream.send(Message::Text(payload)).await.is_err() {
+                    if ws_stream.send(Message::Text(payload.into())).await.is_err() {
                         break;
                     }
                 }
