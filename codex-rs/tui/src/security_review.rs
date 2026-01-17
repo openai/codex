@@ -3522,6 +3522,14 @@ pub async fn run_security_review(
         request.writing_model = MARKDOWN_FIX_MODEL.to_string();
     }
 
+    let threat_model_model = request
+        .config
+        .security_review_models
+        .threat_model
+        .clone()
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or_else(|| THREAT_MODEL_MODEL.to_string());
+
     let global_reasoning_effort = request.config.model_reasoning_effort;
     let triage_reasoning_effort = request
         .config
@@ -3535,6 +3543,11 @@ pub async fn run_security_review(
         .spec
         .or(global_reasoning_effort)
         .or(Some(ReasoningEffort::High));
+    let threat_model_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .threat_model
+        .or(spec_reasoning_effort);
     let bug_reasoning_effort = request
         .config
         .security_review_reasoning_efforts
@@ -4124,8 +4137,8 @@ pub async fn run_security_review(
         plan_step_models.insert(
             SecurityReviewPlanStep::ThreatModel,
             PlanStepModelInfo {
-                model: THREAT_MODEL_MODEL.to_string(),
-                reasoning_effort: spec_reasoning_effort,
+                model: threat_model_model.clone(),
+                reasoning_effort: threat_model_reasoning_effort,
             },
         );
     }
@@ -4651,6 +4664,7 @@ pub async fn run_security_review(
         let repository_summary = repository_summary.clone();
         let spec_model = request.spec_model.clone();
         let writing_model = request.writing_model.clone();
+        let threat_model_model = threat_model_model.clone();
         Some(tokio::spawn(async move {
             let spec_generation = match generate_specs(
                 &model_client,
@@ -4680,8 +4694,8 @@ pub async fn run_security_review(
                     &model_client,
                     &provider,
                     &auth,
-                    THREAT_MODEL_MODEL,
-                    spec_reasoning_effort,
+                    threat_model_model.as_str(),
+                    threat_model_reasoning_effort,
                     writing_model.as_str(),
                     writing_reasoning_effort,
                     &repository_summary,

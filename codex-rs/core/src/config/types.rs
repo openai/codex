@@ -24,6 +24,8 @@ pub struct SecurityReviewModels {
     pub file_triage: Option<String>,
     /// Model used for specification generation.
     pub spec: Option<String>,
+    /// Model used for drafting a threat model.
+    pub threat_model: Option<String>,
     /// Model used for bug finding / analysis.
     pub bugs: Option<String>,
     /// Model used for validation and post-validation refinement.
@@ -38,6 +40,8 @@ pub struct SecurityReviewReasoningEfforts {
     pub file_triage: Option<ReasoningEffort>,
     /// Reasoning effort used for specification generation.
     pub spec: Option<ReasoningEffort>,
+    /// Reasoning effort used for drafting a threat model.
+    pub threat_model: Option<ReasoningEffort>,
     /// Reasoning effort used for bug finding / analysis.
     pub bugs: Option<ReasoningEffort>,
     /// Reasoning effort used for validation and post-validation refinement.

@@ -1328,6 +1328,7 @@ impl Config {
             SecurityReviewModels {
                 file_triage: normalize_non_empty(models.file_triage),
                 spec: normalize_non_empty(models.spec),
+                threat_model: normalize_non_empty(models.threat_model),
                 bugs: normalize_non_empty(models.bugs),
                 validation: normalize_non_empty(models.validation),
                 writing: normalize_non_empty(models.writing),
