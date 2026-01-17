@@ -131,3 +131,86 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_restores_base_instructions_from_rollout() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut initial_builder = test_codex().with_config(|config| {
+        config.base_instructions = Some("base instructions override".to_string());
+    });
+    let initial = initial_builder.build(&server).await?;
+    let codex = Arc::clone(&initial.codex);
+    let home = initial.home.clone();
+    let rollout_path = initial.session_configured.rollout_path.clone();
+
+    let initial_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-initial"),
+            ev_assistant_message("msg-1", "Completed first turn"),
+            ev_completed("resp-initial"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Record base instructions".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let initial_request = initial_mock.single_request();
+    let initial_body = initial_request.body_json();
+    let initial_instructions = initial_body["instructions"]
+        .as_str()
+        .expect("instructions string");
+    assert_eq!(initial_instructions, "base instructions override");
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        config.base_instructions = None;
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed_codex = Arc::clone(&resumed.codex);
+
+    let resumed_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-resumed"),
+            ev_assistant_message("msg-2", "Completed resumed turn"),
+            ev_completed("resp-resumed"),
+        ]),
+    )
+    .await;
+
+    resumed_codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Verify base instructions".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    wait_for_event(&resumed_codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let resumed_request = resumed_mock.single_request();
+    let resumed_body = resumed_request.body_json();
+    let resumed_instructions = resumed_body["instructions"]
+        .as_str()
+        .expect("instructions string");
+    assert_eq!(resumed_instructions, "base instructions override");
+
+    Ok(())
+}

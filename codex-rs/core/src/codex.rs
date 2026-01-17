@@ -250,6 +250,7 @@ impl Codex {
             );
         }
 
+        let base_instructions_from_history = load_instructions_from_history(&conversation_history);
         let user_instructions = get_user_instructions(&config, Some(&loaded_skills.skills)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
@@ -277,7 +278,10 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
-            base_instructions: config.base_instructions.clone(),
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .or(base_instructions_from_history),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -360,6 +364,22 @@ impl Codex {
     pub(crate) async fn agent_status(&self) -> AgentStatus {
         self.agent_status.borrow().clone()
     }
+}
+
+fn load_instructions_from_history(history: &InitialHistory) -> Option<String> {
+    let items = match history {
+        InitialHistory::Resumed(resumed) => resumed.history.as_slice(),
+        InitialHistory::Forked(forked) => forked.as_slice(),
+        InitialHistory::New => return None,
+    };
+
+    items.iter().find_map(|item| {
+        if let RolloutItem::TurnContext(ctx) = item {
+            ctx.base_instructions.clone()
+        } else {
+            None
+        }
+    })
 }
 
 /// Context for an initialized model agent
@@ -3265,6 +3285,36 @@ mod tests {
         expected.extend(session.build_initial_context(&turn_context));
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
+    }
+
+    #[test]
+    fn load_instructions_from_history_uses_initial_turn_context() {
+        let history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: vec![RolloutItem::TurnContext(TurnContextItem {
+                cwd: PathBuf::from("/tmp"),
+                approval_policy: AskForApproval::default(),
+                sandbox_policy: SandboxPolicy::WorkspaceWrite {
+                    writable_roots: Vec::new(),
+                    network_access: false,
+                    exclude_tmpdir_env_var: false,
+                    exclude_slash_tmp: false,
+                },
+                model: "test-model".to_string(),
+                effort: None,
+                summary: ReasoningSummaryConfig::default(),
+                base_instructions: Some("base override".to_string()),
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: None,
+            })],
+            rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
+        });
+
+        let restored = super::load_instructions_from_history(&history);
+
+        assert_eq!(restored, Some("base override".to_string()));
     }
 
     #[tokio::test]
