@@ -50,11 +50,18 @@ async fn run_remote_compact_task_inner_impl(
         .cloned()
         .collect();
 
+    let base_instructions = match &turn_context.base_instructions {
+        Some(base_instructions) => BaseInstructions {
+            text: base_instructions.clone(),
+        },
+        None => sess.get_base_instructions().await,
+    };
     let prompt = Prompt {
         input: history.for_prompt(),
         tools: vec![],
         parallel_tool_calls: false,
         base_instructions: sess.get_base_instructions().await,
+        personality: turn_context.personality.clone(),
         output_schema: None,
     };
 

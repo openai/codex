@@ -16,6 +16,7 @@ use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
+use crate::config::types::Personality;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
@@ -301,6 +302,7 @@ impl Codex {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             base_instructions,
+            personality: config.model_personality.clone(),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -412,6 +414,7 @@ pub(crate) struct TurnContext {
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
     pub(crate) developer_instructions: Option<String>,
+    pub(crate) personality: Option<Personality>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) approval_policy: AskForApproval,
@@ -455,6 +458,9 @@ pub(crate) struct SessionConfiguration {
 
     /// Base instructions for the session.
     base_instructions: String,
+
+    /// Optionally specify the personality of the model
+    personality: Option<Personality>,
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
@@ -563,6 +569,7 @@ impl Session {
             client,
             cwd: session_configuration.cwd.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
+            personality: session_configuration.personality.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
@@ -2680,6 +2687,7 @@ async fn spawn_review_thread(
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
         user_instructions: None,
+        personality: parent_turn_context.personality.clone(),
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -2964,6 +2972,7 @@ async fn run_sampling_request(
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
+        personality: turn_context.personality.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
@@ -3707,6 +3716,7 @@ mod tests {
                 .base_instructions
                 .clone()
                 .unwrap_or_else(|| model_info.base_instructions.clone()),
+            personality: config.model_personality.clone(),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -3782,6 +3792,7 @@ mod tests {
                 .base_instructions
                 .clone()
                 .unwrap_or_else(|| model_info.base_instructions.clone()),
+            personality: config.model_personality.clone(),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4041,6 +4052,7 @@ mod tests {
                 .base_instructions
                 .clone()
                 .unwrap_or_else(|| model_info.base_instructions.clone()),
+            personality: config.model_personality.clone(),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4145,6 +4157,7 @@ mod tests {
                 .base_instructions
                 .clone()
                 .unwrap_or_else(|| model_info.base_instructions.clone()),
+            personality: config.model_personality.clone(),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
