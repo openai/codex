@@ -1082,6 +1082,33 @@ impl Session {
         }
     }
 
+    fn build_settings_update_items(
+        &self,
+        previous_context: Option<&Arc<TurnContext>>,
+        current_context: &TurnContext,
+        previous_collaboration_mode: &CollaborationMode,
+        next_collaboration_mode: Option<&CollaborationMode>,
+    ) -> Vec<ResponseItem> {
+        let mut update_items = Vec::new();
+        if let Some(env_item) =
+            self.build_environment_update_item(previous_context, current_context)
+        {
+            update_items.push(env_item);
+        }
+        if let Some(permissions_item) =
+            self.build_permissions_update_item(previous_context, current_context)
+        {
+            update_items.push(permissions_item);
+        }
+        if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
+            previous_collaboration_mode,
+            next_collaboration_mode,
+        ) {
+            update_items.push(collaboration_mode_item);
+        }
+        update_items
+    }
+
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
@@ -2018,6 +2045,18 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
+        let previous_context = sess
+            .new_default_turn_with_sub_id(sess.next_internal_sub_id())
+            .await;
+        let previous_collaboration_mode = sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .collaboration_mode
+            .clone();
+        let next_collaboration_mode = updates.collaboration_mode.clone();
+
         if let Err(err) = sess.update_settings(updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -2027,6 +2066,19 @@ mod handlers {
                 }),
             })
             .await;
+            return;
+        }
+
+        let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let update_items = sess.build_settings_update_items(
+            Some(&previous_context),
+            &current_context,
+            &previous_collaboration_mode,
+            next_collaboration_mode.as_ref(),
+        );
+        if !update_items.is_empty() {
+            sess.record_conversation_items(&current_context, &update_items)
+                .await;
         }
     }
 
@@ -2099,23 +2151,12 @@ mod handlers {
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
-            let mut update_items = Vec::new();
-            if let Some(env_item) =
-                sess.build_environment_update_item(previous_context.as_ref(), &current_context)
-            {
-                update_items.push(env_item);
-            }
-            if let Some(permissions_item) =
-                sess.build_permissions_update_item(previous_context.as_ref(), &current_context)
-            {
-                update_items.push(permissions_item);
-            }
-            if let Some(collaboration_mode_item) = sess.build_collaboration_mode_update_item(
+            let update_items = sess.build_settings_update_items(
+                previous_context.as_ref(),
+                &current_context,
                 &previous_collaboration_mode,
                 next_collaboration_mode.as_ref(),
-            ) {
-                update_items.push(collaboration_mode_item);
-            }
+            );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;

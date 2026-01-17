@@ -13,6 +13,8 @@ use ts_rs::TS;
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
+use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -242,8 +244,12 @@ impl DeveloperInstructions {
         settings
             .developer_instructions
             .as_ref()
-            .filter(|instructions: &&String| !instructions.is_empty())
-            .map(|instructions| DeveloperInstructions::new(instructions.clone()))
+            .filter(|instructions| !instructions.is_empty())
+            .map(|instructions| {
+                DeveloperInstructions::new(format!(
+                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
+                ))
+            })
     }
 
     fn from_permissions_with_network(

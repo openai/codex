@@ -1,4 +1,6 @@
 use anyhow::Result;
+use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::config_types::CollaborationMode;
@@ -44,6 +46,10 @@ fn developer_texts(input: &[Value]) -> Vec<String> {
             Some(text.to_string())
         })
         .collect()
+}
+
+fn collab_xml(text: &str) -> String {
+    format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
 }
 
 fn count_exact(texts: &[String], target: &str) -> usize {
@@ -114,7 +120,8 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(count_exact(&dev_texts, collab_text), 1);
+    let collab_text = collab_xml(collab_text);
+    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -150,7 +157,8 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(count_exact(&dev_texts, collab_text), 1);
+    let collab_text = collab_xml(collab_text);
+    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -198,7 +206,8 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(count_exact(&dev_texts, collab_text), 1);
+    let collab_text = collab_xml(collab_text);
+    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -248,8 +257,10 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(count_exact(&dev_texts, base_text), 0);
-    assert_eq!(count_exact(&dev_texts, turn_text), 1);
+    let base_text = collab_xml(base_text);
+    let turn_text = collab_xml(turn_text);
+    assert_eq!(count_exact(&dev_texts, &base_text), 1);
+    assert_eq!(count_exact(&dev_texts, &turn_text), 1);
 
     Ok(())
 }
@@ -314,8 +325,10 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(count_exact(&dev_texts, first_text), 1);
-    assert_eq!(count_exact(&dev_texts, second_text), 1);
+    let first_text = collab_xml(first_text);
+    let second_text = collab_xml(second_text);
+    assert_eq!(count_exact(&dev_texts, &first_text), 1);
+    assert_eq!(count_exact(&dev_texts, &second_text), 1);
 
     Ok(())
 }
@@ -379,7 +392,8 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(count_exact(&dev_texts, collab_text), 1);
+    let collab_text = collab_xml(collab_text);
+    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -438,7 +452,8 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(count_exact(&dev_texts, collab_text), 1);
+    let collab_text = collab_xml(collab_text);
+    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -478,7 +493,8 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     assert_eq!(dev_texts.len(), 1);
-    assert_eq!(count_exact(&dev_texts, ""), 0);
+    let collab_text = collab_xml("");
+    assert_eq!(count_exact(&dev_texts, &collab_text), 0);
 
     Ok(())
 }
