@@ -1076,6 +1076,8 @@ impl Session {
             if previous_collaboration_mode == next_mode {
                 return None;
             }
+            // If the next mode has empty developer instructions, this returns None and we emit no
+            // update, so prior collaboration instructions remain in the prompt history.
             Some(DeveloperInstructions::from_collaboration_mode(next_mode)?.into())
         } else {
             None
