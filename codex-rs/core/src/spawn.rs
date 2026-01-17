@@ -44,7 +44,7 @@ pub(crate) async fn spawn_child_async(
     sandbox_policy: &SandboxPolicy,
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
-    detach_from_tty: bool,
+    #[cfg_attr(not(unix), allow(unused_variables))] detach_from_tty: bool,
 ) -> std::io::Result<Child> {
     trace!(
         "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} {env:?}"
