@@ -443,13 +443,8 @@ impl CodexMessageProcessor {
                 let thread_manager = self.thread_manager.clone();
 
                 tokio::spawn(async move {
-                    Self::list_collaboration_modes(
-                        outgoing,
-                        thread_manager,
-                        request_id,
-                        params,
-                    )
-                    .await;
+                    Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
+                        .await;
                 });
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {

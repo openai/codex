@@ -3,13 +3,8 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
 
 pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationMode> {
-    vec![
-        plan_preset(),
-        collaborate_preset(),
-        execute_preset(),
-    ]
+    vec![plan_preset(), collaborate_preset(), execute_preset()]
 }
-
 
 fn plan_preset() -> CollaborationMode {
     CollaborationMode::Plan(Settings {
