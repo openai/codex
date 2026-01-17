@@ -162,6 +162,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.timeout_ms.into(),
             req.sandbox_permissions,
             req.justification.clone(),
+            ctx.session.features().enabled(Feature::DetachNonTty),
         )?;
         let env = attempt
             .env_for(spec)

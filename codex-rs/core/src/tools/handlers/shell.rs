@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -29,7 +30,11 @@ pub struct ShellHandler;
 pub struct ShellCommandHandler;
 
 impl ShellHandler {
-    fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
+    fn to_exec_params(
+        params: ShellToolCallParams,
+        session: &crate::codex::Session,
+        turn_context: &TurnContext,
+    ) -> ExecParams {
         ExecParams {
             command: params.command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
@@ -38,6 +43,7 @@ impl ShellHandler {
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             justification: params.justification,
             arg0: None,
+            detach_from_tty: session.features().enabled(Feature::DetachNonTty),
         }
     }
 }
@@ -64,6 +70,7 @@ impl ShellCommandHandler {
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             justification: params.justification,
             arg0: None,
+            detach_from_tty: session.features().enabled(Feature::DetachNonTty),
         }
     }
 }
@@ -106,7 +113,7 @@ impl ToolHandler for ShellHandler {
         match payload {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
-                let exec_params = Self::to_exec_params(params, turn.as_ref());
+                let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
@@ -119,7 +126,7 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             ToolPayload::LocalShell { params } => {
-                let exec_params = Self::to_exec_params(params, turn.as_ref());
+                let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
@@ -297,6 +304,7 @@ mod tests {
 
     use crate::codex::make_session_and_context;
     use crate::exec_env::create_env;
+    use crate::features::Feature;
     use crate::is_safe_command::is_known_safe_command;
     use crate::powershell::try_find_powershell_executable_blocking;
     use crate::powershell::try_find_pwsh_executable_blocking;
@@ -387,6 +395,10 @@ mod tests {
         assert_eq!(exec_params.sandbox_permissions, sandbox_permissions);
         assert_eq!(exec_params.justification, justification);
         assert_eq!(exec_params.arg0, None);
+        assert_eq!(
+            exec_params.detach_from_tty,
+            session.features().enabled(Feature::DetachNonTty)
+        );
     }
 
     #[test]

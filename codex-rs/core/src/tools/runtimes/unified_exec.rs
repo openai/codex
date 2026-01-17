@@ -181,6 +181,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             command
         };
 
+        let detach_from_tty = ctx.session.features().enabled(Feature::DetachNonTty) && !req.tty;
         let spec = build_command_spec(
             &command,
             &req.cwd,
@@ -188,6 +189,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             ExecExpiration::DefaultTimeout,
             req.sandbox_permissions,
             req.justification.clone(),
+            detach_from_tty,
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt

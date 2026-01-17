@@ -25,6 +25,7 @@ pub(crate) fn build_command_spec(
     expiration: ExecExpiration,
     sandbox_permissions: SandboxPermissions,
     justification: Option<String>,
+    detach_from_tty: bool,
 ) -> Result<CommandSpec, ToolError> {
     let (program, args) = command
         .split_first()
@@ -37,6 +38,7 @@ pub(crate) fn build_command_spec(
         expiration,
         sandbox_permissions,
         justification,
+        detach_from_tty,
     })
 }
 

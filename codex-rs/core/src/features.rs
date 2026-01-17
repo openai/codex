@@ -88,6 +88,8 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Detach non-interactive child processes from the controlling TTY.
+    DetachNonTty,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Experimental TUI v2 (viewport) implementation.
@@ -355,6 +357,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Shell snapshot",
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
             announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DetachNonTty,
+        key: "detach_non_tty",
+        stage: Stage::Beta {
+            name: "Detach non-PTY commands",
+            menu_description: "Run non-interactive commands without inheriting the controlling TTY.",
+            announcement: "NEW! Try detaching non-PTY commands to avoid TTY issues. Enable in /experimental!",
         },
         default_enabled: false,
     },

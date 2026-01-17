@@ -60,6 +60,7 @@ pub struct ExecParams {
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+    pub detach_from_tty: bool,
 }
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
@@ -151,6 +152,7 @@ pub async fn process_exec_tool_call(
         sandbox_permissions,
         justification,
         arg0: _,
+        detach_from_tty,
     } = params;
 
     let (program, args) = command.split_first().ok_or_else(|| {
@@ -168,6 +170,7 @@ pub async fn process_exec_tool_call(
         expiration,
         sandbox_permissions,
         justification,
+        detach_from_tty,
     };
 
     let manager = SandboxManager::new();
@@ -199,6 +202,7 @@ pub(crate) async fn execute_exec_env(
         sandbox_permissions,
         justification,
         arg0,
+        detach_from_tty,
     } = env;
 
     let params = ExecParams {
@@ -209,6 +213,7 @@ pub(crate) async fn execute_exec_env(
         sandbox_permissions,
         justification,
         arg0,
+        detach_from_tty,
     };
 
     let start = Instant::now();
@@ -539,6 +544,7 @@ async fn exec(
         env,
         arg0,
         expiration,
+        detach_from_tty,
         ..
     } = params;
 
@@ -549,7 +555,7 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
-    let detach_from_tty = matches!(sandbox, SandboxType::None);
+    let detach_from_tty = detach_from_tty && matches!(sandbox, SandboxType::None);
     let child = spawn_child_async(
         PathBuf::from(program),
         args.into(),
@@ -852,6 +858,7 @@ mod tests {
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
+            detach_from_tty: false,
         };
 
         let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
@@ -897,6 +904,7 @@ mod tests {
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
+            detach_from_tty: false,
         };
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(1_000)).await;

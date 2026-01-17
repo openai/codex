@@ -35,6 +35,7 @@ pub struct CommandSpec {
     pub expiration: ExecExpiration,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
+    pub detach_from_tty: bool,
 }
 
 #[derive(Debug)]
@@ -47,6 +48,7 @@ pub struct ExecEnv {
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+    pub detach_from_tty: bool,
 }
 
 pub enum SandboxPreference {
@@ -163,6 +165,7 @@ impl SandboxManager {
             sandbox_permissions: spec.sandbox_permissions,
             justification: spec.justification,
             arg0: arg0_override,
+            detach_from_tty: spec.detach_from_tty,
         })
     }
 

@@ -471,7 +471,7 @@ impl UnifiedExecProcessManager {
             )
             .await
         } else {
-            let detach_from_tty = matches!(env.sandbox, SandboxType::None);
+            let detach_from_tty = env.detach_from_tty && matches!(env.sandbox, SandboxType::None);
             if detach_from_tty {
                 codex_utils_pty::pipe::spawn_process_no_stdin_detached(
                     program,

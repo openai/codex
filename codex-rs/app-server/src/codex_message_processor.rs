@@ -1215,6 +1215,7 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+        let detach_from_tty = self.config.features.enabled(Feature::DetachNonTty);
         let exec_params = ExecParams {
             command: params.command,
             cwd,
@@ -1223,6 +1224,7 @@ impl CodexMessageProcessor {
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
+            detach_from_tty,
         };
 
         let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());

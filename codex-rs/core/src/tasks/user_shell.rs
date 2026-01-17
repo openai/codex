@@ -16,6 +16,7 @@ use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_env;
 use crate::exec_env::create_env;
+use crate::features::Feature;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
@@ -111,6 +112,7 @@ impl SessionTask for UserShellCommandTask {
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
+            detach_from_tty: session.features().enabled(Feature::DetachNonTty),
         };
 
         let stdout_stream = Some(StdoutStream {

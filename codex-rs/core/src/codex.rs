@@ -4286,6 +4286,7 @@ mod tests {
             sandbox_permissions,
             justification: Some("test".to_string()),
             arg0: None,
+            detach_from_tty: false,
         };
 
         let params2 = ExecParams {
@@ -4296,6 +4297,7 @@ mod tests {
             env: HashMap::new(),
             justification: params.justification.clone(),
             arg0: None,
+            detach_from_tty: false,
         };
 
         let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
