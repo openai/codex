@@ -512,17 +512,22 @@ pub struct ConfigEdit {
 #[ts(export_to = "v2/")]
 pub enum CommandExecutionApprovalDecision {
     /// User approved the command.
+    #[serde(alias = "approved")]
     Accept,
     /// User approved the command and future identical commands should run without prompting.
+    #[serde(alias = "approved_for_session")]
     AcceptForSession,
     /// User approved the command, and wants to apply the proposed execpolicy amendment so future
     /// matching commands can run without prompting.
+    #[serde(alias = "approved_with_amendment")]
     AcceptWithExecpolicyAmendment {
         execpolicy_amendment: ExecPolicyAmendment,
     },
     /// User denied the command. The agent will continue the turn.
+    #[serde(alias = "denied")]
     Decline,
     /// User denied the command. The turn will also be immediately interrupted.
+    #[serde(alias = "abort")]
     Cancel,
 }
 
@@ -531,12 +536,16 @@ pub enum CommandExecutionApprovalDecision {
 #[ts(export_to = "v2/")]
 pub enum FileChangeApprovalDecision {
     /// User approved the file changes.
+    #[serde(alias = "approved")]
     Accept,
     /// User approved the file changes and future changes to the same files should run without prompting.
+    #[serde(alias = "approved_for_session")]
     AcceptForSession,
     /// User denied the file changes. The agent will continue the turn.
+    #[serde(alias = "denied")]
     Decline,
     /// User denied the file changes. The turn will also be immediately interrupted.
+    #[serde(alias = "abort")]
     Cancel,
 }
 
