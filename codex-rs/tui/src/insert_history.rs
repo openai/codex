@@ -1,3 +1,14 @@
+//! Inserts transcript history lines directly into terminal scrollback.
+//!
+//! The TUI keeps a viewport at the bottom of the screen, but on some terminals it is possible to
+//! extend scrollback by inserting lines above the viewport using ANSI scroll regions. This module
+//! implements that behavior with crossterm commands, keeping the cursor position stable and
+//! reusing the same wrapping rules as the on-screen TUI so scrollback mirrors the viewport.
+//!
+//! The implementation assumes ANSI scroll-region support (DECSTBM) and Reverse Index (RI, `ESC M`)
+//! are available. If the viewport is not at the screen bottom, it is shifted downward to make room
+//! for the inserted lines, and the viewport area is updated accordingly.
+
 use std::fmt;
 use std::io;
 use std::io::Write;
@@ -22,8 +33,12 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-/// Insert `lines` above the viewport using the terminal's backend writer
-/// (avoids direct stdout references).
+/// Inserts `lines` above the viewport using the terminal's backend writer.
+///
+/// This uses scroll regions to insert wrapped lines into terminal scrollback without touching
+/// stdout directly. The cursor position is restored before returning. If the viewport is not at
+/// the screen bottom, it is scrolled downward (up to the screen edge) and the terminal's stored
+/// viewport area is updated to match the shift.
 pub fn insert_history_lines<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
@@ -108,6 +123,7 @@ where
             ))
         )?;
         queue!(writer, Clear(ClearType::UntilNewLine))?;
+
         // Merge line-level style into each span so that ANSI colors reflect
         // line styles (e.g., blockquotes with green fg).
         let merged_spans: Vec<Span> = line
@@ -134,6 +150,7 @@ where
     Ok(())
 }
 
+/// Crossterm command to set the scroll region (DECSTBM) in 1-based rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetScrollRegion(pub std::ops::Range<u16>);
 
@@ -154,6 +171,7 @@ impl Command for SetScrollRegion {
     }
 }
 
+/// Crossterm command to reset the scroll region to the full screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResetScrollRegion;
 
@@ -174,12 +192,16 @@ impl Command for ResetScrollRegion {
     }
 }
 
+/// Describes a modifier transition so we can emit minimal ANSI updates.
 struct ModifierDiff {
+    /// Previously active modifier set.
     pub from: Modifier,
+    /// Next modifier set to apply.
     pub to: Modifier,
 }
 
 impl ModifierDiff {
+    /// Queues ANSI updates for modifier differences on the provided writer.
     fn queue<W>(self, mut w: W) -> io::Result<()>
     where
         W: io::Write,
@@ -241,6 +263,7 @@ impl ModifierDiff {
     }
 }
 
+/// Writes spans with correct color and modifier transitions, then resets styles.
 fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Span<'a>>,
@@ -325,6 +348,7 @@ mod tests {
         let height: u16 = 10;
         let backend = VT100Backend::new(width, height);
         let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+
         // Place viewport on the last line so history inserts scroll upward
         let viewport = Rect::new(0, height - 1, width, 1);
         term.set_viewport_area(viewport);
@@ -360,6 +384,7 @@ mod tests {
         let height: u16 = 8;
         let backend = VT100Backend::new(width, height);
         let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+
         // Viewport is the last line so history goes directly above it.
         let viewport = Rect::new(0, height - 1, width, 1);
         term.set_viewport_area(viewport);

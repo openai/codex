@@ -1,3 +1,10 @@
+//! Style helpers for consistent TUI theming.
+//!
+//! This module centralizes small style computations so the UI can adapt to the
+//! terminal's default palette. In particular, user-message backgrounds are
+//! derived by blending toward a contrasting tone and then mapping to the best
+//! available terminal color.
+
 use crate::color::blend;
 use crate::color::is_light;
 use crate::terminal_palette::best_color;
@@ -5,6 +12,7 @@ use crate::terminal_palette::default_bg;
 use ratatui::style::Color;
 use ratatui::style::Style;
 
+/// Returns the default style for user-authored messages.
 pub fn user_message_style() -> Style {
     user_message_style_for(default_bg())
 }
@@ -17,6 +25,7 @@ pub fn user_message_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
     }
 }
 
+/// Computes a blended background color for user messages based on the terminal background.
 #[allow(clippy::disallowed_methods)]
 pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> Color {
     let top = if is_light(terminal_bg) {

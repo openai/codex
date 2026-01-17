@@ -1,3 +1,12 @@
+//! A lightweight terminal wrapper derived from `ratatui::Terminal` with viewport support.
+//!
+//! This module keeps a pair of buffers, diffs them into drawing commands, and applies the minimal
+//! set of changes through the backend. It also tracks a viewport rectangle so callers can render
+//! into a sub-region without resizing the underlying terminal, which is important for tests and
+//! multi-pane layouts.
+//!
+//! Cursor handling is centralized in [`Frame`], which records the final cursor position during
+//! rendering so the terminal updates can be flushed before the cursor is moved.
 // This is derived from `ratatui::Terminal`, which is licensed under the following terms:
 //
 // The MIT License (MIT)
@@ -44,6 +53,7 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
 
+/// A snapshot of terminal state and buffers used while rendering a single frame.
 #[derive(Debug, Hash)]
 pub struct Frame<'a> {
     /// Where should the cursor be after drawing this frame?
@@ -74,7 +84,7 @@ impl Frame<'_> {
     /// Render a [`WidgetRef`] to the current buffer using [`WidgetRef::render_ref`].
     ///
     /// Usually the area argument is the size of the current frame or a sub-area of the current
-    /// frame (which can be obtained using [`Layout`] to split the total area).
+    /// frame (which can be obtained using [`ratatui::layout::Layout`] to split the total area).
     #[allow(clippy::needless_pass_by_value)]
     pub fn render_widget_ref<W: WidgetRef>(&mut self, widget: W, area: Rect) {
         widget.render_ref(area, self.buffer);
@@ -86,10 +96,6 @@ impl Frame<'_> {
     /// Note that this will interfere with calls to [`Terminal::hide_cursor`],
     /// [`Terminal::show_cursor`], and [`Terminal::set_cursor_position`]. Pick one of the APIs and
     /// stick with it.
-    ///
-    /// [`Terminal::hide_cursor`]: crate::Terminal::hide_cursor
-    /// [`Terminal::show_cursor`]: crate::Terminal::show_cursor
-    /// [`Terminal::set_cursor_position`]: crate::Terminal::set_cursor_position
     pub fn set_cursor_position<P: Into<Position>>(&mut self, position: P) {
         self.cursor_position = Some(position.into());
     }
@@ -100,26 +106,25 @@ impl Frame<'_> {
     }
 }
 
+/// A terminal wrapper that tracks buffers, viewport state, and cursor visibility.
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct Terminal<B>
 where
     B: Backend + Write,
 {
-    /// The backend used to interface with the terminal
+    /// The backend used to interface with the terminal.
     backend: B,
-    /// Holds the results of the current and previous draw calls. The two are compared at the end
-    /// of each draw pass to output the necessary updates to the terminal
+    /// Holds the results of the current and previous draw calls for diffing.
     buffers: [Buffer; 2],
-    /// Index of the current buffer in the previous array
+    /// Index of the current buffer in the buffer pair.
     current: usize,
-    /// Whether the cursor is currently hidden
+    /// Whether the cursor is currently hidden.
     pub hidden_cursor: bool,
-    /// Area of the viewport
+    /// Area of the viewport, in terminal coordinates.
     pub viewport_area: Rect,
-    /// Last known size of the terminal. Used to detect if the internal buffers have to be resized.
+    /// Last known size of the terminal, used to detect size changes.
     pub last_known_screen_size: Size,
-    /// Last known position of the cursor. Used to find the new area when the viewport is inlined
-    /// and the terminal resized.
+    /// Last known position of the cursor, used when the viewport is anchored to the cursor.
     pub last_known_cursor_pos: Position,
 }
 
@@ -144,7 +149,7 @@ where
     B: Backend,
     B: Write,
 {
-    /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
+    /// Creates a new [`Terminal`] with the given backend, using its size and cursor position.
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
         let cursor_pos = backend.get_cursor_position()?;
@@ -159,7 +164,7 @@ where
         })
     }
 
-    /// Get a Frame object which provides a consistent view into the terminal state for rendering.
+    /// Gets a `Frame` that provides a stable view into the terminal state for rendering.
     pub fn get_frame(&mut self) -> Frame<'_> {
         Frame {
             cursor_position: None,
@@ -188,18 +193,17 @@ where
         &mut self.buffers[1 - self.current]
     }
 
-    /// Gets the backend
+    /// Gets the backend.
     pub const fn backend(&self) -> &B {
         &self.backend
     }
 
-    /// Gets the backend as a mutable reference
+    /// Gets the backend as a mutable reference.
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
     }
 
-    /// Obtains a difference between the previous and the current buffer and passes it to the
-    /// current backend for drawing.
+    /// Diffs the buffers and passes the resulting draw commands to the backend.
     pub fn flush(&mut self) -> io::Result<()> {
         let updates = diff_buffers(self.previous_buffer(), self.current_buffer());
         let last_put_command = updates.iter().rfind(|command| command.is_put());
@@ -209,23 +213,22 @@ where
         draw(&mut self.backend, updates.into_iter())
     }
 
-    /// Updates the Terminal so that internal buffers match the requested area.
+    /// Updates the cached terminal size so it can be detected on the next draw pass.
     ///
-    /// Requested area will be saved to remain consistent when rendering. This leads to a full clear
-    /// of the screen.
+    /// The actual buffers are resized when the viewport area is set.
     pub fn resize(&mut self, screen_size: Size) -> io::Result<()> {
         self.last_known_screen_size = screen_size;
         Ok(())
     }
 
-    /// Sets the viewport area.
+    /// Sets the viewport area and resizes both backing buffers to match it.
     pub fn set_viewport_area(&mut self, area: Rect) {
         self.current_buffer_mut().resize(area);
         self.previous_buffer_mut().resize(area);
         self.viewport_area = area;
     }
 
-    /// Queries the backend for size and resizes if it doesn't match the previous size.
+    /// Queries the backend for size changes and updates the cached size.
     pub fn autoresize(&mut self) -> io::Result<()> {
         let screen_size = self.size()?;
         if screen_size != self.last_known_screen_size {
@@ -236,7 +239,7 @@ where
 
     /// Draws a single frame to the terminal.
     ///
-    /// Returns a [`CompletedFrame`] if successful, otherwise a [`std::io::Error`].
+    /// Returns `Ok(())` if successful, otherwise a [`std::io::Error`].
     ///
     /// If the render callback passed to this method can fail, use [`try_draw`] instead.
     ///
@@ -269,8 +272,7 @@ where
 
     /// Tries to draw a single frame to the terminal.
     ///
-    /// Returns [`Result::Ok`] containing a [`CompletedFrame`] if successful, otherwise
-    /// [`Result::Err`] containing the [`std::io::Error`] that caused the failure.
+    /// Returns `Ok(())` if successful, otherwise the [`std::io::Error`] that caused the failure.
     ///
     /// This is the equivalent of [`Terminal::draw`] but the render callback is a function or
     /// closure that returns a `Result` instead of nothing.
@@ -286,7 +288,7 @@ where
     /// - call the render callback, passing it a [`Frame`] reference to render to
     /// - flush the current internal state by copying the current buffer to the backend
     /// - move the cursor to the last known position if it was set during the rendering closure
-    /// - return a [`CompletedFrame`] with the current buffer and the area of the terminal
+    /// - leave the terminal in a consistent state for the next diff
     ///
     /// The render callback passed to `try_draw` can return any [`Result`] with an error type that
     /// can be converted into an [`std::io::Error`] using the [`Into`] trait. This makes it possible
@@ -294,8 +296,7 @@ where
     /// callback returns an error, the error will be returned from `try_draw` as an
     /// [`std::io::Error`] and the terminal will not be updated.
     ///
-    /// The [`CompletedFrame`] returned by this method can be useful for debugging or testing
-    /// purposes, but it is often not used in regular applicationss.
+    /// When the render callback fails, the terminal is left unchanged.
     ///
     /// The render callback should fully render the entire frame when called, including areas that
     /// are unchanged from the previous frame. This is because each frame is compared to the
@@ -368,7 +369,7 @@ where
         Ok(())
     }
 
-    /// Clear the terminal and force a full redraw on the next draw call.
+    /// Clears the viewport and forces a full redraw on the next draw call.
     pub fn clear(&mut self) -> io::Result<()> {
         if self.viewport_area.is_empty() {
             return Ok(());
@@ -381,7 +382,7 @@ where
         Ok(())
     }
 
-    /// Clears the inactive buffer and swaps it with the current buffer
+    /// Clears the inactive buffer and swaps it with the current buffer.
     pub fn swap_buffers(&mut self) {
         self.previous_buffer_mut().reset();
         self.current = 1 - self.current;
@@ -396,12 +397,16 @@ where
 use ratatui::buffer::Cell;
 use unicode_width::UnicodeWidthStr;
 
+/// A diff command describing how to update the terminal for one buffer cell or run.
 #[derive(Debug, IsVariant)]
 enum DrawCommand {
+    /// Update a single cell at the given terminal coordinates.
     Put { x: u16, y: u16, cell: Cell },
+    /// Clear to the end of the line starting at `(x, y)` with the given background.
     ClearToEnd { x: u16, y: u16, bg: Color },
 }
 
+/// Computes the draw commands needed to transform buffer `a` into buffer `b`.
 fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     let previous_buffer = &a.content;
     let next_buffer = &b.content;
@@ -464,6 +469,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     updates
 }
 
+/// Writes the draw commands to the terminal backend in sequence.
 fn draw<I>(writer: &mut impl Write, commands: I) -> io::Result<()>
 where
     I: Iterator<Item = DrawCommand>,
@@ -523,15 +529,16 @@ where
     Ok(())
 }
 
-/// The `ModifierDiff` struct is used to calculate the difference between two `Modifier`
-/// values. This is useful when updating the terminal display, as it allows for more
-/// efficient updates by only sending the necessary changes.
+/// The modifier delta to apply when switching between two style modifier sets.
 struct ModifierDiff {
+    /// The modifier state currently applied.
     pub from: Modifier,
+    /// The modifier state to apply.
     pub to: Modifier,
 }
 
 impl ModifierDiff {
+    /// Queues the minimal set of modifier changes to transition from `from` to `to`.
     fn queue<W: io::Write>(self, w: &mut W) -> io::Result<()> {
         use crossterm::style::Attribute as CAttribute;
         let removed = self.from - self.to;
@@ -597,6 +604,7 @@ mod tests {
     use ratatui::layout::Rect;
     use ratatui::style::Style;
 
+    /// Avoids emitting ClearToEnd when the last nonblank cell is at the row edge.
     #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
         let area = Rect::new(0, 0, 3, 2);
@@ -625,6 +633,7 @@ mod tests {
         );
     }
 
+    /// Starts ClearToEnd after the remaining wide character in the row.
     #[test]
     fn diff_buffers_clear_to_end_starts_after_wide_char() {
         let area = Rect::new(0, 0, 10, 1);

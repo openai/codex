@@ -19,9 +19,19 @@ use crate::markdown_render::MarkdownLogicalLine;
 use crate::markdown_stream::MarkdownStreamCollector;
 pub(crate) mod controller;
 
+/// Per-stream queueing state for newline-gated assistant output.
+///
+/// The collector buffers incoming deltas and commits completed logical lines, while the queue
+/// releases those lines one at a time to drive the streaming animation. The queue is FIFO so
+/// commit ticks preserve source order.
 pub(crate) struct StreamState {
+    /// Accumulates deltas and produces committed, width-agnostic logical lines.
     pub(crate) collector: MarkdownStreamCollector,
+    /// Buffered logical lines waiting to be emitted on commit ticks.
     queued_lines: VecDeque<MarkdownLogicalLine>,
+    /// Tracks whether any non-empty delta has been received for the stream.
+    ///
+    /// This allows callers to detect "empty" streams that never yielded output.
     pub(crate) has_seen_delta: bool,
 }
 
@@ -34,24 +44,29 @@ impl StreamState {
             has_seen_delta: false,
         }
     }
+
     /// Reset state for the next stream.
     pub(crate) fn clear(&mut self) {
         self.collector.clear();
         self.queued_lines.clear();
         self.has_seen_delta = false;
     }
+
     /// Pop at most one queued logical line (for commit-tick animation).
     pub(crate) fn step(&mut self) -> Vec<MarkdownLogicalLine> {
         self.queued_lines.pop_front().into_iter().collect()
     }
+
     /// Drain all queued logical lines (used on finalize).
     pub(crate) fn drain_all(&mut self) -> Vec<MarkdownLogicalLine> {
         self.queued_lines.drain(..).collect()
     }
+
     /// True when there is no queued output waiting to be emitted by commit ticks.
     pub(crate) fn is_idle(&self) -> bool {
         self.queued_lines.is_empty()
     }
+
     /// Enqueue newly committed logical lines.
     pub(crate) fn enqueue(&mut self, lines: Vec<MarkdownLogicalLine>) {
         self.queued_lines.extend(lines);

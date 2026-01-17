@@ -1,13 +1,19 @@
+//! Exercises `insert_history` rendering paths with a vt100-backed terminal.
+//!
+//! These tests validate the history insertion path used by the TUI to ensure
+//! cursor restoration, word wrapping, and mixed-width glyph handling work with
+//! a fixed viewport.
+
 #![cfg(feature = "vt100-tests")]
 #![expect(clippy::expect_used)]
 
 use crate::test_backend::VT100Backend;
+use pretty_assertions::assert_eq;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
-// Small helper macro to assert a collection contains an item with a clearer
-// failure message.
+/// Asserts a collection contains the expected item with a clearer failure message.
 macro_rules! assert_contains {
     ($collection:expr, $item:expr $(,)?) => {
         assert!(
@@ -22,11 +28,13 @@ macro_rules! assert_contains {
     };
 }
 
+/// Holds the terminal and viewport configuration for vt100 history assertions.
 struct TestScenario {
     term: codex_tui::custom_terminal::Terminal<VT100Backend>,
 }
 
 impl TestScenario {
+    /// Builds a vt100-backed terminal with a custom viewport for history insertion.
     fn new(width: u16, height: u16, viewport: Rect) -> Self {
         let backend = VT100Backend::new(width, height);
         let mut term = codex_tui::custom_terminal::Terminal::with_options(backend)
@@ -35,12 +43,14 @@ impl TestScenario {
         Self { term }
     }
 
+    /// Inserts history lines into the terminal while preserving cursor state.
     fn run_insert(&mut self, lines: Vec<Line<'static>>) {
         codex_tui::insert_history::insert_history_lines(&mut self.term, lines)
             .expect("Failed to insert history lines in test");
     }
 }
 
+/// Confirms that short lines land in the history region without wrapping.
 #[test]
 fn basic_insertion_no_wrap() {
     // Screen of 20x6; viewport is the last row (height=1 at y=5)
@@ -54,6 +64,7 @@ fn basic_insertion_no_wrap() {
     assert_contains!(rows, String::from("second"));
 }
 
+/// Ensures vt100 wrapping does not drop any bytes when a single token overflows.
 #[test]
 fn long_token_wraps() {
     let area = Rect::new(0, 5, 20, 1);
@@ -84,6 +95,7 @@ fn long_token_wraps() {
     );
 }
 
+/// Verifies multicolumn emoji and CJK glyphs survive the history insertion path.
 #[test]
 fn emoji_and_cjk() {
     let area = Rect::new(0, 5, 20, 1);
@@ -101,6 +113,7 @@ fn emoji_and_cjk() {
     }
 }
 
+/// Checks that ANSI-styled spans preserve text content in vt100 output.
 #[test]
 fn mixed_ansi_spans() {
     let area = Rect::new(0, 5, 20, 1);
@@ -112,6 +125,7 @@ fn mixed_ansi_spans() {
     assert_contains!(rows, String::from("red+plain"));
 }
 
+/// Verifies history insertion restores the cursor position for future edits.
 #[test]
 fn cursor_restoration() {
     let area = Rect::new(0, 5, 20, 1);
@@ -122,6 +136,7 @@ fn cursor_restoration() {
     assert_eq!(scenario.term.last_known_cursor_pos, (0, 0).into());
 }
 
+/// Ensures the word wrapper never splits a word across terminal lines.
 #[test]
 fn word_wrap_no_mid_word_split() {
     // Screen of 40x10; viewport is the last row
@@ -137,6 +152,7 @@ fn word_wrap_no_mid_word_split() {
     );
 }
 
+/// Guards the em-dash spacing case that previously split a word mid-line.
 #[test]
 fn em_dash_and_space_word_wrap() {
     // Repro from report: ensure we break before "inside", not mid-word.

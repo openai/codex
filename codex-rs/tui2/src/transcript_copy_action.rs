@@ -48,11 +48,15 @@ pub(crate) enum CopySelectionOutcome {
     Failed,
 }
 
+/// How long copy feedback remains visible before expiring.
 const TRANSCRIPT_COPY_FEEDBACK_DURATION: Duration = Duration::from_millis(1500);
 
+/// Tracks the visible feedback state and its expiration timestamp.
 #[derive(Debug, Clone, Copy)]
 struct TranscriptCopyFeedbackState {
+    /// The feedback message to render in the footer.
     kind: TranscriptCopyFeedback,
+    /// When the feedback should be cleared from the UI.
     expires_at: Instant,
 }
 
@@ -62,6 +66,7 @@ struct TranscriptCopyFeedbackState {
 /// selection" (either via the on-screen copy pill or the keyboard shortcut).
 #[derive(Debug, Default)]
 pub(crate) struct TranscriptCopyAction {
+    /// Active feedback to render and expire, if a copy attempt occurred recently.
     feedback: Option<TranscriptCopyFeedbackState>,
 }
 
@@ -194,6 +199,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
+    /// Leaves feedback available until the expiration time is reached.
     fn footer_feedback_returns_value_before_expiration() {
         let mut action = TranscriptCopyAction {
             feedback: Some(TranscriptCopyFeedbackState {
@@ -213,6 +219,7 @@ mod tests {
     }
 
     #[test]
+    /// Drops expired feedback immediately and returns `None` thereafter.
     fn footer_feedback_clears_after_expiration() {
         let mut action = TranscriptCopyAction {
             feedback: Some(TranscriptCopyFeedbackState {

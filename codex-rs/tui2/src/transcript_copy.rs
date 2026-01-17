@@ -1,48 +1,27 @@
 //! Converting a transcript selection to clipboard text.
 //!
-//! Copy is driven by a content-relative selection (`TranscriptSelectionPoint`),
-//! but the transcript is rendered with styling and wrapping for the TUI. This
-//! module reconstructs clipboard text from the rendered transcript lines while
-//! preserving user expectations:
+//! Copy is driven by a content-relative selection (`TranscriptSelectionPoint`), but the transcript
+//! is rendered with styling and wrapping for the TUI. This module reconstructs clipboard text from
+//! the rendered transcript lines while preserving user expectations: soft-wrapped prose is treated
+//! as a single logical line, code blocks keep indentation, and Markdown source markers are emitted
+//! (backticks for inline code, triple-backtick fences for code blocks) even if the on-screen
+//! rendering is styled differently.
 //!
-//! - Soft-wrapped prose is treated as a single logical line when copying.
-//! - Code blocks preserve meaningful indentation.
-//! - Markdown “source markers” are emitted when copying (backticks for inline
-//!   code, triple-backtick fences for code blocks) even if the on-screen
-//!   rendering is styled differently.
-//!
-//! ## Inputs and invariants
-//!
-//! Clipboard reconstruction is performed over the same *visual lines* that are
-//! rendered in the transcript viewport:
-//!
-//! - `lines`: wrapped transcript `Line`s, including the gutter spans.
-//! - `joiner_before`: a parallel vector describing which wrapped lines are
-//!   *soft wrap* continuations (and what to insert at the wrap boundary).
-//! - `(line_index, column)` selection points in *content space* (columns exclude
-//!   the gutter).
-//!
-//! Callers must keep `lines` and `joiner_before` aligned. In practice, `App`
-//! obtains both from `transcript_render`, which itself builds from each cell's
+//! Clipboard reconstruction is performed over the same visual lines rendered in the transcript
+//! viewport. Callers must keep the wrapped `lines` and `joiner_before` vectors aligned, and the
+//! selection points are expressed in content space (columns exclude the gutter). In practice,
+//! `App` obtains both vectors from `transcript_render`, which itself builds from each cell's
 //! `HistoryCell::transcript_lines_with_joiners` implementation.
 //!
-//! ## Style-derived Markdown cues
+//! For fidelity, we copy Markdown source markers even though the viewport renders content using
+//! styles instead of literal characters. The copy logic derives inline-code and code-block
+//! boundaries from the styling we apply during rendering (currently cyan spans/lines). If
+//! transcript styling changes, update `is_code_block_line` and [`span_is_inline_code`] so clipboard
+//! output continues to match user expectations.
 //!
-//! For fidelity, we copy Markdown source markers even though the viewport may
-//! render content using styles instead of literal characters. Today, the copy
-//! logic derives "inline code" and "code block" boundaries from the styling we
-//! apply during rendering (currently cyan spans/lines).
-//!
-//! If transcript styling changes (for example, if code blocks stop using cyan),
-//! update `is_code_block_line` and [`span_is_inline_code`] so clipboard output
-//! continues to match user expectations.
-//!
-//! The caller can choose whether copy covers only the visible viewport range
-//! (by passing `visible_start..visible_end`) or spans the entire transcript
-//! (by passing `0..lines.len()`).
-//!
-//! UI affordances (keybinding detection and the on-screen "copy" pill) live in
-//! `transcript_copy_ui`.
+//! The caller can choose whether copy covers only the visible viewport range (by passing
+//! `visible_start..visible_end`) or spans the entire transcript (by passing `0..lines.len()`). UI
+//! affordances (keybinding detection and the on-screen "copy" pill) live in `transcript_copy_ui`.
 
 use ratatui::text::Line;
 use ratatui::text::Span;

@@ -1,7 +1,25 @@
+//! Shared rendering helpers for bottom-pane selection popups.
+//!
+//! This module renders [`GenericDisplayRow`] values into a popup area, aligning
+//! descriptions to a shared column, applying fuzzy-match highlights, and
+//! styling the active selection. The renderer is presentation-only: callers own
+//! the filtered row list and the [`ScrollState`] that decides which rows are
+//! visible.
+//!
+//! The layout is intentionally manual rather than using `Table` widgets so it
+//! can compute wrapping and truncation consistently across popups. It treats
+//! `match_indices` as character indices into `name` and pads descriptions based
+//! on the widest visible name, including disabled markers when present. Selected
+//! rows are restyled with a cyan bold highlight so the same rendering logic
+//! applies to both active and inactive entries. Height calculations mirror the
+//! wrapping rules used at render time so callers can size popups without
+//! reimplementing layout logic.
+//!
+//! Callers should treat `match_indices` as character indices, not byte offsets,
+//! and should keep `ScrollState` synchronized with the list length so the visible
+//! window logic stays stable.
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-// Note: Table-based layout previously used Constraint; the manual renderer
-// below no longer requires it.
 use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
@@ -15,17 +33,29 @@ use crate::key_hint::KeyBinding;
 
 use super::scroll_state::ScrollState;
 
-/// A generic representation of a display row for selection popups.
+/// Describes one row of selectable content in a popup list.
 #[derive(Default)]
 pub(crate) struct GenericDisplayRow {
+    /// Primary label rendered at the start of the row.
     pub name: String,
+    /// Optional shortcut rendered in parentheses after the name.
     pub display_shortcut: Option<KeyBinding>,
-    pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
-    pub description: Option<String>,       // optional grey text after the name
-    pub disabled_reason: Option<String>,   // optional disabled message
-    pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
+    /// Character indices within `name` that should be bolded for matches.
+    ///
+    /// Indices refer to the `char` positions in `name`, not byte offsets.
+    pub match_indices: Option<Vec<usize>>,
+    /// Optional secondary description rendered in a dim style.
+    pub description: Option<String>,
+    /// Optional disabled message, shown next to the name and in the description column.
+    pub disabled_reason: Option<String>,
+    /// Optional indentation (in spaces) for wrapped lines; defaults to the description column.
+    pub wrap_indent: Option<usize>,
 }
 
+/// Wrap a styled line to the given width using zero indentation.
+///
+/// This is a convenience helper for popups that want wrapping without aligned
+/// continuation lines.
 pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {
     use crate::wrapping::RtOptions;
     use crate::wrapping::word_wrap_line;
@@ -37,12 +67,16 @@ pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'
     word_wrap_line(line, opts)
 }
 
+/// Measure the display width of a line using Unicode-width semantics.
 fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
 }
 
+/// Truncate a line to `max_width` cells without adding an ellipsis.
+///
+/// Span styles are preserved for any characters that fit within the limit.
 fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
@@ -91,6 +125,10 @@ fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static
     Line::from(spans_out)
 }
 
+/// Truncate a line to `max_width`, appending an ellipsis when it overflows.
+///
+/// The ellipsis inherits the style of the final visible span to keep emphasis
+/// consistent with the truncated content.
 fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
@@ -108,9 +146,12 @@ fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize
     Line::from(spans)
 }
 
-/// Compute a shared description-column start based on the widest visible name
-/// plus two spaces of padding. Ensures at least one column is left for the
-/// description.
+/// Compute a shared description-column start for the currently visible rows.
+///
+/// The column is based on the widest visible name plus two spaces of padding
+/// and is clamped to leave at least one column available for the description.
+/// Using only the visible range keeps wrapped alignment stable as the user
+/// scrolls.
 fn compute_desc_col(
     rows_all: &[GenericDisplayRow],
     start_idx: usize,
@@ -139,6 +180,9 @@ fn compute_desc_col(
 }
 
 /// Determine how many spaces to indent wrapped lines for a row.
+///
+/// When `wrap_indent` is not set, rows with descriptions or disabled reasons
+/// align their wrapped content under the shared description column.
 fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usize {
     let max_indent = max_width.saturating_sub(1) as usize;
     let indent = row.wrap_indent.unwrap_or_else(|| {
@@ -151,9 +195,11 @@ fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usiz
     indent.min(max_indent)
 }
 
-/// Build the full display line for a row with the description padded to start
-/// at `desc_col`. Applies fuzzy-match bolding when indices are present and
-/// dims the description.
+/// Build the full display line for a row with description padding.
+///
+/// The name is truncated to reserve space for the description column, match
+/// indices are bolded, disabled markers are appended, and the description is
+/// dimmed and aligned to `desc_col`.
 fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     let combined_description = match (&row.description, &row.disabled_reason) {
         (Some(desc), Some(reason)) => Some(format!("{desc} (disabled: {reason})")),
@@ -231,8 +277,13 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     Line::from(full_spans)
 }
 
-/// Render a list of rows using the provided ScrollState, with shared styling
-/// and behavior for selection popups.
+/// Render a list of rows using the provided [`ScrollState`].
+///
+/// The renderer computes the visible range, derives a shared description column,
+/// and then wraps each row to the available width while keeping the selected row
+/// styled in cyan bold. If `rows_all` is empty, the `empty_message` is rendered
+/// in a dim italic style. Selection and scroll state are resolved against the
+/// item list so wrapping remains item-based even when rows span multiple lines.
 pub(crate) fn render_rows(
     area: Rect,
     buf: &mut Buffer,
@@ -319,6 +370,10 @@ pub(crate) fn render_rows(
 }
 
 /// Render rows as a single line each (no wrapping), truncating overflow with an ellipsis.
+///
+/// This shares the same visible-range and selection rules as [`render_rows`],
+/// but uses single-line truncation instead of wrapping for dense popups. The
+/// description column logic still applies so alignment matches wrapped views.
 pub(crate) fn render_rows_single_line(
     area: Rect,
     buf: &mut Buffer,
@@ -384,10 +439,12 @@ pub(crate) fn render_rows_single_line(
     }
 }
 
-/// Compute the number of terminal rows required to render up to `max_results`
-/// items from `rows_all` given the current scroll/selection state and the
-/// available `width`. Accounts for description wrapping and alignment so the
-/// caller can allocate sufficient vertical space.
+/// Compute the number of terminal rows required to render the visible items.
+///
+/// This mirrors the wrapping and alignment logic used by [`render_rows`], using
+/// the same description column alignment and wrapping options. The returned
+/// height is clamped to at least one row to account for the empty-state message
+/// when there are no rows to render.
 pub(crate) fn measure_rows_height(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,

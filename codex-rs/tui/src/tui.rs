@@ -1,3 +1,20 @@
+//! Terminal lifecycle, input plumbing, and viewport control for the TUI.
+//!
+//! This module owns the interaction with the terminal itself: enabling and restoring raw
+//! input modes, entering and leaving the alternate screen, and translating low-level
+//! crossterm events into higher-level [`TuiEvent`]s. It also manages inline-viewport
+//! rendering, including the scrollback-aware viewport adjustments that keep the cursor in a
+//! stable position during resize events.
+//!
+//! The [`Tui`] type is the state owner for terminal-backed concerns (the ratatui backend,
+//! input event stream, draw scheduling, and focus tracking). It does not own application
+//! state or rendering logic; callers supply the draw closure and handle all application
+//! updates outside this module.
+//!
+//! Correctness depends on pairing [`set_modes`] with [`restore`] or [`restore_keep_raw`],
+//! and on using [`Tui::with_restored`] when running external interactive programs so the
+//! event stream and terminal modes are paused and re-established in a consistent order.
+
 use std::fmt;
 use std::future::Future;
 use std::io::IsTerminal;
@@ -52,13 +69,19 @@ mod frame_requester;
 #[cfg(unix)]
 mod job_control;
 
-/// A type alias for the terminal type used in this application
+/// A type alias for the terminal type used by the TUI layer.
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
+/// Enable terminal modes required for the interactive UI.
+///
+/// This turns on raw mode, bracketed paste, focus tracking, and best-effort keyboard
+/// enhancement flags. Callers must pair this with [`restore`] or
+/// [`restore_keep_raw`] on exit.
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
+
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
     // chat_composer.rs is using a keyboard event listener to enter for any modified keys
     // to create a new line that require this.
@@ -78,6 +101,7 @@ pub fn set_modes() -> Result<()> {
     Ok(())
 }
 
+/// ANSI command that enables alternate-scroll mode inside the alternate screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EnableAlternateScroll;
 
@@ -99,6 +123,7 @@ impl Command for EnableAlternateScroll {
     }
 }
 
+/// ANSI command that disables alternate-scroll mode on exit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DisableAlternateScroll;
 
@@ -120,6 +145,10 @@ impl Command for DisableAlternateScroll {
     }
 }
 
+/// Restore terminal modes with optional raw-mode disabling.
+///
+/// This is shared by [`restore`] and [`restore_keep_raw`] to ensure we unwind the same
+/// keyboard enhancement and focus settings regardless of raw-mode policy.
 fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
     // Pop may fail on platforms that didn't support the push; ignore errors.
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
@@ -133,7 +162,8 @@ fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
 }
 
 /// Restore the terminal to its original state.
-/// Inverse of `set_modes`.
+///
+/// This is the inverse of [`set_modes`] and disables raw mode.
 pub fn restore() -> Result<()> {
     let should_disable_raw_mode = true;
     restore_common(should_disable_raw_mode)
@@ -145,14 +175,19 @@ pub fn restore_keep_raw() -> Result<()> {
     restore_common(should_disable_raw_mode)
 }
 
+/// Controls how much terminal state should be restored after pausing the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestoreMode {
+    /// Fully restore the terminal (disables raw mode).
     #[allow(dead_code)]
-    Full, // Fully restore the terminal (disables raw mode).
-    KeepRaw, // Restore the terminal but keep raw mode enabled.
+    Full,
+
+    /// Restore the terminal but keep raw mode enabled.
+    KeepRaw,
 }
 
 impl RestoreMode {
+    /// Apply the selected restore policy.
     fn restore(self) -> Result<()> {
         match self {
             RestoreMode::Full => restore(),
@@ -161,8 +196,10 @@ impl RestoreMode {
     }
 }
 
-/// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
-/// For example, clears any user input that occurred while the crossterm EventStream was dropped.
+/// Flush the underlying stdin buffer to clear any input queued by the terminal.
+///
+/// This clears user input that arrived while the crossterm `EventStream` was
+/// temporarily dropped, preventing a backlog of stale keystrokes.
 #[cfg(unix)]
 fn flush_terminal_input_buffer() {
     // Safety: flushing the stdin queue is safe and does not move ownership.
@@ -173,8 +210,10 @@ fn flush_terminal_input_buffer() {
     }
 }
 
-/// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
-/// For example, clears any user input that occurred while the crossterm EventStream was dropped.
+/// Flush the underlying stdin buffer to clear any input queued by the terminal.
+///
+/// This clears user input that arrived while the crossterm `EventStream` was
+/// temporarily dropped, preventing a backlog of stale keystrokes.
 #[cfg(windows)]
 fn flush_terminal_input_buffer() {
     use windows_sys::Win32::Foundation::GetLastError;
@@ -197,10 +236,14 @@ fn flush_terminal_input_buffer() {
     }
 }
 
+/// Flush the underlying stdin buffer when the platform exposes a native queue.
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn flush_terminal_input_buffer() {}
 
-/// Initialize the terminal (inline viewport; history stays in normal scrollback)
+/// Initialize the terminal for inline rendering (history stays in normal scrollback).
+///
+/// This validates that stdin/stdout are terminals, enables TUI input modes, installs a
+/// panic hook that restores terminal state, and returns a configured [`Terminal`] wrapper.
 pub fn init() -> Result<Terminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
@@ -217,6 +260,7 @@ pub fn init() -> Result<Terminal> {
     Ok(tui)
 }
 
+/// Install a panic hook that attempts to restore terminal modes before unwinding.
 fn set_panic_hook() {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
@@ -225,33 +269,66 @@ fn set_panic_hook() {
     }));
 }
 
+/// Input and draw events emitted by the terminal event stream.
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
+    /// A keyboard event from crossterm.
     Key(KeyEvent),
+
+    /// A paste event containing the pasted text.
     Paste(String),
+
+    /// A draw tick (frame requested).
     Draw,
 }
 
+/// Owns the terminal instance, event stream, and draw scheduling.
+///
+/// The `Tui` struct is the single owner of terminal state and the bridge between
+/// crossterm's event stream and the application's render loop. It tracks viewport
+/// bookkeeping, focus state, and alternate-screen lifetime so that rendering can
+/// be driven externally without having to manage terminal invariants elsewhere.
 pub struct Tui {
+    /// Shared frame scheduler for debounced redraws.
     frame_requester: FrameRequester,
+
+    /// Draw trigger broadcast channel used by the event stream.
     draw_tx: broadcast::Sender<()>,
+
+    /// Broker for pausing/resuming crossterm events.
     event_broker: Arc<EventBroker>,
+
+    /// Underlying terminal wrapper used for rendering and viewport control.
     pub(crate) terminal: Terminal,
+
+    /// History lines buffered until the next draw cycle.
     pending_history_lines: Vec<Line<'static>>,
+
+    /// Saved inline viewport while in the alternate screen.
     alt_saved_viewport: Option<ratatui::layout::Rect>,
+
+    /// Suspend/resume state for Unix job control.
     #[cfg(unix)]
     suspend_context: SuspendContext,
-    // True when overlay alt-screen UI is active
+
+    /// Tracks whether an alternate-screen UI overlay is currently active.
     alt_screen_active: Arc<AtomicBool>,
-    // True when terminal/tab is focused; updated internally from crossterm events
+
+    /// Tracks whether the terminal/tab is focused based on crossterm events.
     terminal_focused: Arc<AtomicBool>,
+
+    /// Whether the terminal supports keyboard enhancement flags.
     enhanced_keys_supported: bool,
+
+    /// Optional desktop notification backend for unfocused updates.
     notification_backend: Option<DesktopNotificationBackend>,
-    // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
+
+    /// When false, `enter_alt_screen` becomes a no-op (for Zellij scrollback support).
     alt_screen_enabled: bool,
 }
 
 impl Tui {
+    /// Construct a new `Tui` wrapper around an initialized terminal.
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
@@ -259,6 +336,7 @@ impl Tui {
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
@@ -280,39 +358,44 @@ impl Tui {
         }
     }
 
-    /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
+    /// Set whether alternate screen is enabled.
+    ///
+    /// When disabled, [`Tui::enter_alt_screen`] becomes a no-op so that inline scrollback
+    /// remains available (for example, under Zellij).
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
     }
 
+    /// Return a handle to the frame requester used by this TUI.
     pub fn frame_requester(&self) -> FrameRequester {
         self.frame_requester.clone()
     }
 
+    /// Report whether keyboard enhancement flags are supported.
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
     }
 
+    /// Report whether the alternate screen is currently active.
     pub fn is_alt_screen_active(&self) -> bool {
         self.alt_screen_active.load(Ordering::Relaxed)
     }
 
-    // Drop crossterm EventStream to avoid stdin conflicts with other processes.
+    /// Drop the crossterm `EventStream` to avoid stdin conflicts with other processes.
     pub fn pause_events(&mut self) {
         self.event_broker.pause_events();
     }
 
-    // Resume crossterm EventStream to resume stdin polling.
-    // Inverse of `pause_events`.
+    /// Resume crossterm event polling after a [`Tui::pause_events`] call.
     pub fn resume_events(&mut self) {
         self.event_broker.resume_events();
     }
 
     /// Temporarily restore terminal state to run an external interactive program `f`.
     ///
-    /// This pauses crossterm's stdin polling by dropping the underlying event stream, restores
-    /// terminal modes (optionally keeping raw mode enabled), then re-applies Codex TUI modes and
-    /// flushes pending stdin input before resuming events.
+    /// The flow is: pause event polling, exit the alternate screen if needed, restore terminal
+    /// modes according to `mode`, run the external program, re-enable Codex TUI modes, flush
+    /// buffered input, re-enter the alternate screen if necessary, then resume events.
     pub async fn with_restored<R, F, Fut>(&mut self, mode: RestoreMode, f: F) -> R
     where
         F: FnOnce() -> Fut,
@@ -336,6 +419,7 @@ impl Tui {
         if let Err(err) = set_modes() {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
         }
+
         // After the external program `f` finishes, reset terminal state and flush any buffered keypresses.
         flush_terminal_input_buffer();
 
@@ -348,7 +432,9 @@ impl Tui {
     }
 
     /// Emit a desktop notification now if the terminal is unfocused.
-    /// Returns true if a notification was posted.
+    ///
+    /// Returns `true` if a notification was posted. When the configured backend fails, the
+    /// backend is downgraded or disabled to avoid repeated failures.
     pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
         if self.terminal_focused.load(Ordering::Relaxed) {
             return false;
@@ -394,6 +480,10 @@ impl Tui {
         }
     }
 
+    /// Return a stream of TUI events (draw ticks, key events, paste events).
+    ///
+    /// The stream is backed by a paused/resumable crossterm poller and a broadcast channel for
+    /// scheduled draw ticks, so consumers only need to poll a single source.
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
         #[cfg(unix)]
         let stream = TuiEventStream::new(
@@ -412,13 +502,15 @@ impl Tui {
         Box::pin(stream)
     }
 
-    /// Enter alternate screen and expand the viewport to full terminal size, saving the current
-    /// inline viewport for restoration when leaving.
+    /// Enter alternate screen and expand the viewport to full terminal size.
+    ///
+    /// This saves the current inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
         if !self.alt_screen_enabled {
             return Ok(());
         }
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
+
         // Enable "alternate scroll" so terminals may translate wheel to arrows
         let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
         if let Ok(size) = self.terminal.size() {
@@ -440,6 +532,7 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
+
         // Disable alternate scroll when leaving alt-screen
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
@@ -450,11 +543,16 @@ impl Tui {
         Ok(())
     }
 
+    /// Queue transcript history lines for insertion on the next draw.
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.pending_history_lines.extend(lines);
         self.frame_requester().schedule_frame();
     }
 
+    /// Draw the UI into the terminal with a synchronized update.
+    ///
+    /// This prepares any suspend/resume state, adjusts the viewport for inline rendering,
+    /// inserts pending history lines, and then delegates to the caller-provided draw function.
     pub fn draw(
         &mut self,
         height: u16,
@@ -488,6 +586,7 @@ impl Tui {
             let mut area = terminal.viewport_area;
             area.height = height.min(size.height);
             area.width = size.width;
+
             // If the viewport has expanded, scroll everything else up to make room.
             if area.bottom() > size.height {
                 terminal
@@ -528,6 +627,10 @@ impl Tui {
         })?
     }
 
+    /// Compute a new viewport area when terminal resize and cursor motion diverge.
+    ///
+    /// This keeps the cursor's relative position stable when the terminal size changes and
+    /// the cursor has moved since the last known size.
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
         let terminal = &mut self.terminal;
         let screen_size = terminal.size()?;
@@ -536,6 +639,7 @@ impl Tui {
             && let Ok(cursor_pos) = terminal.get_cursor_position()
         {
             let last_known_cursor_pos = terminal.last_known_cursor_pos;
+
             // If we resized AND the cursor moved, we adjust the viewport area to keep the
             // cursor in the same position. This is a heuristic that seems to work well
             // at least in iTerm2.

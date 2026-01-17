@@ -1,3 +1,8 @@
+//! Regression coverage for startup failures that should not panic the TUI.
+//!
+//! The test uses a PTY-backed CLI run to ensure the application gracefully
+//! reports a malformed rules setup without panicking or hanging on terminal IO.
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -47,11 +52,16 @@ model_provider = "ollama"
     Ok(())
 }
 
+/// Captured output and exit status from a CLI invocation.
 struct CodexCliOutput {
+    /// Process exit code reported by the PTY session.
     exit_code: i32,
+
+    /// Combined stdout/stderr payload collected from the PTY.
     output: String,
 }
 
+/// Spawns the Codex CLI under a PTY and returns its captured output.
 async fn run_codex_cli(
     codex_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,

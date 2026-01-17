@@ -1,3 +1,8 @@
+//! Helpers for formatting and normalizing exec command strings.
+//!
+//! These functions convert argv vectors into shell-friendly display strings and provide path
+//! helpers for making output more readable in the UI.
+
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -5,10 +10,12 @@ use codex_core::parse_command::extract_shell_command;
 use dirs::home_dir;
 use shlex::try_join;
 
+/// Join argv into a shell-escaped command line for display.
 pub(crate) fn escape_command(command: &[String]) -> String {
     try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
+/// Strip `bash -lc`/`zsh -lc` wrappers when possible, otherwise escape the argv.
 pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
     if let Some((_, script)) = extract_shell_command(command) {
         return script.to_string();
@@ -18,7 +25,7 @@ pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
 
 /// If `path` is absolute and inside $HOME, return the part *after* the home
 /// directory; otherwise, return the path as-is. Note if `path` is the homedir,
-/// this will return and empty path.
+/// this will return an empty path.
 pub(crate) fn relativize_to_home<P>(path: P) -> Option<PathBuf>
 where
     P: AsRef<Path>,

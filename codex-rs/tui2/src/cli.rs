@@ -1,9 +1,25 @@
+//! CLI argument definitions for the Codex TUI.
+//!
+//! This module mirrors the primary TUI CLI surface, including user-facing
+//! flags and internal control switches passed in from wrapper subcommands such
+//! as `codex resume` and `codex fork`. The internal fields are intentionally
+//! hidden from `clap` so the base `codex` command surface stays stable while
+//! higher-level commands can reuse the same launch path, and `tui2` can convert
+//! from the primary CLI definition without re-parsing.
+
 use clap::Parser;
 use clap::ValueHint;
 use codex_common::ApprovalModeCliArg;
 use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
 
+/// CLI arguments for launching the Codex TUI.
+///
+/// The struct mixes user-visible options (prompt content, model selection, and
+/// execution policy) with internal control fields set by subcommands. The
+/// hidden fields let higher-level commands reuse the same launch path without
+/// exposing extra flags on the base command, so only the parent CLI layer
+/// should populate them.
 #[derive(Parser, Debug)]
 #[command(version)]
 pub struct Cli {
@@ -15,16 +31,17 @@ pub struct Cli {
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     pub images: Vec<PathBuf>,
 
-    // Internal controls set by the top-level `codex resume` subcommand.
-    // These are not exposed as user flags on the base `codex` command.
+    /// Internal: show the resume picker UI instead of starting a new session.
+    /// Set by the top-level `codex resume` subcommand; not exposed as a flag.
     #[clap(skip)]
     pub resume_picker: bool,
 
+    /// Internal: resume the most recent session without showing a picker.
     #[clap(skip)]
     pub resume_last: bool,
 
-    /// Internal: resume a specific recorded session by id (UUID). Set by the
-    /// top-level `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
+    /// Internal: resume a specific recorded session by id (UUID).
+    /// Set by the top-level `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 
@@ -32,16 +49,17 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_show_all: bool,
 
-    // Internal controls set by the top-level `codex fork` subcommand.
-    // These are not exposed as user flags on the base `codex` command.
+    /// Internal: show the fork picker UI instead of forking immediately.
+    /// Set by the top-level `codex fork` subcommand; not exposed as a flag.
     #[clap(skip)]
     pub fork_picker: bool,
 
+    /// Internal: fork the most recent session without showing a picker.
     #[clap(skip)]
     pub fork_last: bool,
 
-    /// Internal: fork a specific recorded session by id (UUID). Set by the
-    /// top-level `codex fork <SESSION_ID>` wrapper; not exposed as a public flag.
+    /// Internal: fork a specific recorded session by id (UUID).
+    /// Set by the top-level `codex fork <SESSION_ID>` wrapper; not exposed as a public flag.
     #[clap(skip)]
     pub fork_session_id: Option<String>,
 
@@ -49,26 +67,25 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_show_all: bool,
 
-    /// Model the agent should use.
+    /// Model the agent should use, overriding any configured default.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
-    /// Convenience flag to select the local open source model provider. Equivalent to -c
-    /// model_provider=oss; verifies a local LM Studio or Ollama server is running.
+    /// Convenience flag to select the local open source model provider.
+    /// Equivalent to `-c model_provider=oss`; verifies a local LM Studio or Ollama server is running.
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 
     /// Specify which local provider to use (lmstudio, ollama, or ollama-chat).
-    /// If not specified with --oss, will use config default or show selection.
+    /// If not specified with `--oss`, will use the config default or show selection.
     #[arg(long = "local-provider")]
     pub oss_provider: Option<String>,
 
-    /// Configuration profile from config.toml to specify default options.
+    /// Configuration profile from `config.toml` to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Select the sandbox policy to use when executing model-generated shell
-    /// commands.
+    /// Select the sandbox policy to use when executing model-generated shell commands.
     #[arg(long = "sandbox", short = 's')]
     pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
 
@@ -76,7 +93,8 @@ pub struct Cli {
     #[arg(long = "ask-for-approval", short = 'a')]
     pub approval_policy: Option<ApprovalModeCliArg>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution
+    /// (`-a on-request`, `--sandbox workspace-write`).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
@@ -94,7 +112,8 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
-    /// Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
+    /// Enable live web search.
+    /// When enabled, the native Responses `web_search` tool is available to the model without per-call approval.
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
@@ -102,16 +121,25 @@ pub struct Cli {
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
 
-    /// Disable alternate screen mode for better scrollback in terminal multiplexers like Zellij.
-    /// This runs the TUI in inline mode, preserving terminal scrollback history.
+    /// Disable alternate screen mode.
+    ///
+    /// Runs the TUI in inline mode, preserving terminal scrollback history. This is useful
+    /// in terminal multiplexers like Zellij that follow the xterm spec strictly and disable
+    /// scrollback in alternate screen buffers.
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Internal: resolved config overrides for downstream processing.
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
 
 impl From<codex_tui::Cli> for Cli {
+    /// Convert the primary CLI definition into the tui2 wrapper type.
+    ///
+    /// This keeps `tui2` aligned with the main CLI parser while avoiding a
+    /// second clap parsing pass. The conversion is a field-for-field transfer
+    /// with no additional validation.
     fn from(cli: codex_tui::Cli) -> Self {
         Self {
             prompt: cli.prompt,

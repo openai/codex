@@ -1,8 +1,10 @@
-//! Public wrapper around the internal ChatComposer for simple, reusable text input.
+//! Public wrapper around the internal `ChatComposer` for reusable text input.
 //!
 //! This exposes a minimal interface suitable for other crates (e.g.,
 //! codex-cloud-tasks) to reuse the mature composer behavior: multi-line input,
-//! paste heuristics, Enter-to-submit, and Shift+Enter for newline.
+//! paste heuristics, Enter-to-submit, and Shift+Enter for newline. The wrapper
+//! owns a private event channel only to satisfy the internal composer API and
+//! drains those events eagerly so consumers do not need to handle them.
 
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -15,7 +17,7 @@ use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::InputResult;
 use crate::render::renderable::Renderable;
 
-/// Action returned from feeding a key event into the ComposerInput.
+/// Action returned from feeding a key event into the `ComposerInput`.
 pub enum ComposerAction {
     /// The user submitted the current text (typically via Enter). Contains the submitted text.
     Submitted(String),
@@ -23,11 +25,17 @@ pub enum ComposerAction {
     None,
 }
 
-/// A minimal, public wrapper for the internal `ChatComposer` that behaves as a
-/// reusable text input field with submit semantics.
+/// A minimal, public wrapper for `ChatComposer` with submit semantics.
+///
+/// The wrapper is intentionally lightweight: it delegates all rendering,
+/// editing, and paste-burst logic to the internal composer while hiding the
+/// internal event channel from callers.
 pub struct ComposerInput {
+    /// Internal composer that manages text state, hints, and paste heuristics.
     inner: ChatComposer,
+    /// Sender kept alive to satisfy the underlying composer API contract.
     _tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    /// Receiver drained after each interaction to avoid leaking events.
     rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 }
 
@@ -61,6 +69,7 @@ impl ComposerInput {
         action
     }
 
+    /// Feed pasted text into the composer, returning whether it was handled.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let handled = self.inner.handle_paste(pasted);
         self.drain_app_events();
@@ -68,7 +77,7 @@ impl ComposerInput {
     }
 
     /// Override the footer hint items displayed under the composer.
-    /// Each tuple is rendered as "<key> <label>", with keys styled.
+    /// Each tuple is rendered as `key label`, with keys styled.
     pub fn set_hint_items(&mut self, items: Vec<(impl Into<String>, impl Into<String>)>) {
         let mapped: Vec<(String, String)> = items
             .into_iter()
@@ -116,6 +125,7 @@ impl ComposerInput {
         crate::bottom_pane::ChatComposer::recommended_paste_flush_delay()
     }
 
+    /// Drain the internal app-event channel without dispatching any events.
     fn drain_app_events(&mut self) {
         while self.rx.try_recv().is_ok() {}
     }

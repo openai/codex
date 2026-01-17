@@ -1,3 +1,13 @@
+//! Bottom-pane popup for toggling experimental feature flags.
+//!
+//! The view renders a selectable list of feature toggles, tracks selection and
+//! scroll state, and emits a single update event when the user exits. It does
+//! not persist configuration itself or validate feature availability; those
+//! responsibilities live in the app event handler and config layer. The list is
+//! intentionally compact, clamped to [`MAX_POPUP_ROWS`], and uses a guttered
+//! layout consistent with other bottom-pane popups. Updates are emitted as
+//! [`AppEvent::UpdateFeatureFlags`] once the user dismisses the popup.
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -29,23 +39,47 @@ use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
 
+/// Row model describing a togglable experimental feature.
+///
+/// The view mutates the `enabled` flag in place as the user toggles items, then
+/// ships the final state back to the app for persistence.
 pub(crate) struct BetaFeatureItem {
+    /// Feature flag identifier forwarded to the config update event.
     pub feature: Feature,
+    /// Human-friendly name shown in the list.
     pub name: String,
+    /// Longer description rendered under the name row.
     pub description: String,
+    /// Whether the feature is currently enabled for this session.
+    ///
+    /// This flag is updated directly when the user presses the toggle key.
     pub enabled: bool,
 }
 
+/// Bottom-pane view that lets the user toggle experimental feature flags.
+///
+/// The view owns the list of features, a scroll/selection state, and the app
+/// event sender used to persist changes when exiting. It assumes ownership of
+/// the selection cursor while active and marks itself complete once it has
+/// emitted the update event. The caller remains responsible for swapping the
+/// view into the bottom pane and for applying the emitted config updates.
 pub(crate) struct ExperimentalFeaturesView {
+    /// Feature rows that will be rendered and mutated in place.
     features: Vec<BetaFeatureItem>,
+    /// Scroll and selection state for the list portion of the popup.
     state: ScrollState,
+    /// Completion flag checked by the bottom-pane controller.
     complete: bool,
+    /// Channel used to notify the app that feature flags changed.
     app_event_tx: AppEventSender,
+    /// Header renderer used for title and explanatory copy.
     header: Box<dyn Renderable>,
+    /// Footer line that describes the available actions.
     footer_hint: Line<'static>,
 }
 
 impl ExperimentalFeaturesView {
+    /// Builds a new view with the provided feature list and event sender.
     pub(crate) fn new(features: Vec<BetaFeatureItem>, app_event_tx: AppEventSender) -> Self {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Experimental features".bold()));
@@ -65,6 +99,7 @@ impl ExperimentalFeaturesView {
         view
     }
 
+    /// Initializes the selection cursor to the first visible item, if any.
     fn initialize_selection(&mut self) {
         if self.visible_len() == 0 {
             self.state.selected_idx = None;
@@ -73,10 +108,12 @@ impl ExperimentalFeaturesView {
         }
     }
 
+    /// Returns the number of selectable rows currently visible.
     fn visible_len(&self) -> usize {
         self.features.len()
     }
 
+    /// Builds the display rows for the feature list, including selection markers.
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
         let mut rows = Vec::with_capacity(self.features.len());
         let selected_idx = self.state.selected_idx;
@@ -98,6 +135,7 @@ impl ExperimentalFeaturesView {
         rows
     }
 
+    /// Moves the selection up, wrapping and keeping the cursor visible.
     fn move_up(&mut self) {
         let len = self.visible_len();
         if len == 0 {
@@ -107,6 +145,7 @@ impl ExperimentalFeaturesView {
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
+    /// Moves the selection down, wrapping and keeping the cursor visible.
     fn move_down(&mut self) {
         let len = self.visible_len();
         if len == 0 {
@@ -116,6 +155,7 @@ impl ExperimentalFeaturesView {
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
+    /// Toggles the enabled flag for the currently selected feature.
     fn toggle_selected(&mut self) {
         let Some(selected_idx) = self.state.selected_idx else {
             return;
@@ -126,12 +166,14 @@ impl ExperimentalFeaturesView {
         }
     }
 
+    /// Returns the width available to render rows after the gutter.
     fn rows_width(total_width: u16) -> u16 {
         total_width.saturating_sub(2)
     }
 }
 
 impl BottomPaneView for ExperimentalFeaturesView {
+    /// Handles navigation and toggling keys for the experimental feature list.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -185,12 +227,16 @@ impl BottomPaneView for ExperimentalFeaturesView {
         }
     }
 
+    /// Reports whether the view has finished and can be dismissed.
     fn is_complete(&self) -> bool {
         self.complete
     }
 
+    /// Emits the feature updates and marks the view complete.
+    ///
+    /// The update is sent once on cancellation/exit so the app can persist the
+    /// final toggle state to configuration.
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        // Save the updates
         if !self.features.is_empty() {
             let updates = self
                 .features
@@ -207,6 +253,7 @@ impl BottomPaneView for ExperimentalFeaturesView {
 }
 
 impl Renderable for ExperimentalFeaturesView {
+    /// Renders the feature list popup, including header, list, and hint line.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || area.width == 0 {
             return;
@@ -265,6 +312,7 @@ impl Renderable for ExperimentalFeaturesView {
         self.footer_hint.clone().dim().render(hint_area, buf);
     }
 
+    /// Returns the desired height for the popup given the available width.
     fn desired_height(&self, width: u16) -> u16 {
         let rows = self.build_rows();
         let rows_width = Self::rows_width(width);
@@ -281,6 +329,7 @@ impl Renderable for ExperimentalFeaturesView {
     }
 }
 
+/// Builds the footer hint line shown at the bottom of the popup.
 fn experimental_popup_hint_line() -> Line<'static> {
     Line::from(vec![
         "Press ".into(),

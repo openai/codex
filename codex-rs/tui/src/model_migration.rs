@@ -1,3 +1,14 @@
+//! UI flow for prompting users to migrate to a recommended model.
+//!
+//! This module builds the copy for a migration prompt and renders it on the terminal's
+//! alternate screen so the main scrollback is not polluted. It owns the event loop for the
+//! prompt (key handling, draw scheduling, and menu selection) and returns a
+//! [`ModelMigrationOutcome`] for the caller to act on.
+//!
+//! Rendering is driven by the [`ModelMigrationScreen`] state machine, which holds the
+//! copy content, current menu selection, and completion state. Callers are responsible for
+//! deciding when to invoke the prompt and for applying the chosen outcome.
+
 use crate::key_hint;
 use crate::markdown_render::render_markdown_text_with_width;
 use crate::render::Insets;
@@ -25,30 +36,43 @@ use tokio_stream::StreamExt;
 /// Outcome of the migration prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModelMigrationOutcome {
+    /// The user accepted the recommended model.
     Accepted,
+    /// The user chose to keep the existing model.
     Rejected,
+    /// The user explicitly requested to exit the prompt.
     Exit,
 }
 
+/// Copy payload used to render the migration prompt.
 #[derive(Clone)]
 pub(crate) struct ModelMigrationCopy {
+    /// Heading spans rendered at the top of the prompt.
     pub heading: Vec<Span<'static>>,
+    /// Content lines rendered beneath the heading.
     pub content: Vec<Line<'static>>,
+    /// Whether the user is allowed to opt out of migration.
     pub can_opt_out: bool,
+    /// Optional markdown body that replaces the heading/content copy.
     pub markdown: Option<String>,
 }
 
+/// Menu options shown when the user can opt out of migration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MigrationMenuOption {
+    /// Try the recommended replacement model.
     TryNewModel,
+    /// Stay on the existing model.
     UseExistingModel,
 }
 
 impl MigrationMenuOption {
+    /// Return the full set of menu options in presentation order.
     fn all() -> [Self; 2] {
         [Self::TryNewModel, Self::UseExistingModel]
     }
 
+    /// Return the display label for this option.
     fn label(self) -> &'static str {
         match self {
             Self::TryNewModel => "Try new model",
@@ -57,6 +81,10 @@ impl MigrationMenuOption {
     }
 }
 
+/// Build the prompt copy for a migration between two models.
+///
+/// This prefers the provided markdown template when present; otherwise it builds a
+/// heading/body copy from the supplied metadata and opt-out policy.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn migration_copy_for_models(
     current_model: &str,
@@ -134,6 +162,11 @@ pub(crate) fn migration_copy_for_models(
     }
 }
 
+/// Run the migration prompt on the alternate screen until a decision is made.
+///
+/// This sets up the alternate-screen guard, renders the initial screen, then
+/// drives a draw/event loop until the screen reports completion or the event
+/// stream ends.
 pub(crate) async fn run_model_migration_prompt(
     tui: &mut Tui,
     copy: ModelMigrationCopy,
@@ -168,15 +201,22 @@ pub(crate) async fn run_model_migration_prompt(
     screen.outcome()
 }
 
+/// Interactive prompt state for the model migration UI.
 struct ModelMigrationScreen {
+    /// Frame scheduler used to request redraws after state changes.
     request_frame: FrameRequester,
+    /// Copy payload used to render the prompt.
     copy: ModelMigrationCopy,
+    /// Whether the prompt has reached a terminal outcome.
     done: bool,
+    /// Final outcome to return once done.
     outcome: ModelMigrationOutcome,
+    /// Currently highlighted menu option.
     highlighted_option: MigrationMenuOption,
 }
 
 impl ModelMigrationScreen {
+    /// Create a new screen state with the provided copy.
     fn new(request_frame: FrameRequester, copy: ModelMigrationCopy) -> Self {
         Self {
             request_frame,
@@ -187,24 +227,29 @@ impl ModelMigrationScreen {
         }
     }
 
+    /// Finish the prompt with the provided outcome and schedule a final redraw.
     fn finish_with(&mut self, outcome: ModelMigrationOutcome) {
         self.outcome = outcome;
         self.done = true;
         self.request_frame.schedule_frame();
     }
 
+    /// Mark the prompt as accepted.
     fn accept(&mut self) {
         self.finish_with(ModelMigrationOutcome::Accepted);
     }
 
+    /// Mark the prompt as rejected.
     fn reject(&mut self) {
         self.finish_with(ModelMigrationOutcome::Rejected);
     }
 
+    /// Mark the prompt as exited.
     fn exit(&mut self) {
         self.finish_with(ModelMigrationOutcome::Exit);
     }
 
+    /// Confirm the current selection according to the opt-out policy.
     fn confirm_selection(&mut self) {
         if self.copy.can_opt_out {
             match self.highlighted_option {
@@ -216,6 +261,7 @@ impl ModelMigrationScreen {
         }
     }
 
+    /// Highlight a new menu option and schedule a redraw if it changed.
     fn highlight_option(&mut self, option: MigrationMenuOption) {
         if self.highlighted_option != option {
             self.highlighted_option = option;
@@ -223,6 +269,7 @@ impl ModelMigrationScreen {
         }
     }
 
+    /// Handle a single key event, updating state or final outcome.
     fn handle_key(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release {
             return;
@@ -240,16 +287,19 @@ impl ModelMigrationScreen {
         }
     }
 
+    /// Report whether the prompt is finished.
     fn is_done(&self) -> bool {
         self.done
     }
 
+    /// Return the final outcome.
     fn outcome(&self) -> ModelMigrationOutcome {
         self.outcome
     }
 }
 
 impl WidgetRef for &ModelMigrationScreen {
+    /// Render the prompt into the provided buffer.
     fn render_ref(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
         Clear.render(area, buf);
 
@@ -271,6 +321,7 @@ impl WidgetRef for &ModelMigrationScreen {
 }
 
 impl ModelMigrationScreen {
+    /// Handle menu navigation and selection keys.
     fn handle_menu_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Up | KeyCode::Char('k') => {
@@ -292,16 +343,19 @@ impl ModelMigrationScreen {
         }
     }
 
+    /// Render the heading line as a quoted prefix plus bold heading copy.
     fn heading_line(&self) -> Line<'static> {
         let mut heading = vec![Span::raw("> ")];
         heading.extend(self.copy.heading.iter().cloned());
         Line::from(heading)
     }
 
+    /// Render the non-markdown content lines into the column.
     fn render_content(&self, column: &mut ColumnRenderable) {
         self.render_lines(&self.copy.content, column);
     }
 
+    /// Render a list of lines with consistent left inset and wrapping.
     fn render_lines(&self, lines: &[Line<'static>], column: &mut ColumnRenderable) {
         for line in lines {
             column.push(
@@ -312,6 +366,7 @@ impl ModelMigrationScreen {
         }
     }
 
+    /// Render markdown content with a consistent inset and wrap width.
     fn render_markdown_content(
         &self,
         markdown: &str,
@@ -327,6 +382,7 @@ impl ModelMigrationScreen {
         }
     }
 
+    /// Render the selectable menu and its navigation hint.
     fn render_menu(&self, column: &mut ColumnRenderable) {
         column.push(Line::from(""));
         column.push(
@@ -360,14 +416,17 @@ impl ModelMigrationScreen {
     }
 }
 
-// Render the prompt on the terminal's alternate screen so exiting or cancelling
-// does not leave a large blank region in the normal scrollback. This does not
-// change the prompt's appearance – only where it is drawn.
+/// Guard that renders the prompt on the terminal's alternate screen.
+///
+/// Dropping this guard restores the previous screen so cancelling does not leave
+/// a large blank region in the normal scrollback.
 struct AltScreenGuard<'a> {
+    /// TUI handle used to enter/leave the alternate screen.
     tui: &'a mut Tui,
 }
 
 impl<'a> AltScreenGuard<'a> {
+    /// Enter the alternate screen and return a guard that will restore it.
     fn enter(tui: &'a mut Tui) -> Self {
         let _ = tui.enter_alt_screen();
         Self { tui }
@@ -375,16 +434,19 @@ impl<'a> AltScreenGuard<'a> {
 }
 
 impl Drop for AltScreenGuard<'_> {
+    /// Restore the original screen when the guard is dropped.
     fn drop(&mut self) {
         let _ = self.tui.leave_alt_screen();
     }
 }
 
+/// Return true when the key event matches a Ctrl+C/Ctrl+D exit combo.
 fn is_ctrl_exit_combo(key_event: KeyEvent) -> bool {
     key_event.modifiers.contains(KeyModifiers::CONTROL)
         && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
 }
 
+/// Fill the migration markdown template with model identifiers.
 fn fill_migration_markdown(template: &str, current_model: &str, target_model: &str) -> String {
     template
         .replace("{model_from}", current_model)

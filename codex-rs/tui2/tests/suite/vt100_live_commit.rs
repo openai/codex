@@ -1,9 +1,15 @@
+//! VT100 regression coverage for live-wrap commit behavior.
+//!
+//! These tests exercise the VT100 backend to ensure committed rows render above
+//! the viewport when the live ring overflows.
+
 #![cfg(feature = "vt100-tests")]
 
 use crate::test_backend::VT100Backend;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
+/// Validates that overflow commits earlier rows into history above the viewport.
 #[test]
 fn live_001_commit_on_overflow() {
     let backend = VT100Backend::new(20, 6);

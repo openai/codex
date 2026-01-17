@@ -1,77 +1,39 @@
 //! Caches for transcript rendering in `codex-tui2`.
 //!
-//! The inline transcript view is drawn every frame. Two parts of that draw can
-//! be expensive in steady state:
+//! The inline transcript view is drawn every frame. Two parts of that draw are expensive in steady
+//! state: building the wrapped transcript (flattening `HistoryCell` into visual [`Line`]s plus
+//! per-line metadata for scroll math) and rasterizing each visible line into the frame buffer.
+//! Ratatui's rendering performs grapheme segmentation and width/layout work, so repeatedly
+//! re-rendering the same visible lines can dominate CPU during streaming.
 //!
-//! - Building the *wrapped transcript* (`HistoryCell` → flattened `Line`s +
-//!   per-line metadata). This work is needed for rendering and for scroll math.
-//! - Rendering each visible `Line` into the frame buffer. Ratatui's rendering
-//!   path performs grapheme segmentation and width/layout work; repeatedly
-//!   rerendering the same visible lines can dominate CPU during streaming.
+//! This module provides two caches that mirror the two-stage pipeline:
 //!
-//! This module provides a pair of caches:
+//! - [`WrappedTranscriptCache`] memoizes the wrapped transcript for a given terminal width and
+//!   supports incremental append when new history cells are added.
+//! - [`TranscriptRasterCache`] memoizes the rasterized representation of individual wrapped lines
+//!   (a single terminal row of `Cell`s) so redraws can copy already-rendered cells instead of
+//!   re-running grapheme segmentation for every frame.
 //!
-//! - [`WrappedTranscriptCache`] memoizes the wrapped transcript for a given
-//!   terminal width and supports incremental append when new history cells are
-//!   added.
-//! - [`TranscriptRasterCache`] memoizes the *rasterized* representation of
-//!   individual wrapped lines (a single terminal row of `Cell`s) so redraws can
-//!   cheaply copy already-rendered cells instead of re-running grapheme
-//!   segmentation for every frame.
+//! All caches are invalidated on width changes because wrapping and layout depend on the viewport
+//! width. Rasterization is cached for base transcript content only; selection highlight and copy
+//! affordances are applied after rows are drawn, so they do not pollute the cache.
 //!
-//! Notes:
-//! - All caches are invalidated on width changes because wrapping and layout
-//!   depend on the viewport width.
-//! - Rasterization is cached for base transcript content only; selection
-//!   highlight and copy affordances are applied after the rows are drawn, so
-//!   they do not pollute the cache.
+//! At a high level, callers do the following during a draw tick:
+//! - Call [`TranscriptViewCache::ensure_wrapped`] with the current `cells` and viewport `width`.
+//!   This may append new cells or rebuild from scratch (on width change/truncation/replacement).
+//! - Use [`TranscriptViewCache::lines`] and [`TranscriptViewCache::line_meta`] for scroll math and
+//!   to resolve the visible `line_index` range.
+//! - Configure row caching via [`TranscriptViewCache::set_raster_capacity`] (usually a few
+//!   viewports worth).
+//! - For each visible `line_index`, call [`TranscriptViewCache::render_row_index_into`] to draw a
+//!   single terminal row.
 //!
-//! ## Algorithm overview
-//!
-//! At a high level, transcript rendering is a two-stage pipeline:
-//!
-//! 1. **Build wrapped transcript lines**: flatten the logical `HistoryCell` list into a single
-//!    vector of visual [`Line`]s and a parallel `meta` vector (`TranscriptLineMeta`) that maps each
-//!    visual line back to `(cell_index, line_in_cell)` or `Spacer`.
-//! 2. **Render visible lines into the frame buffer**: draw the subset of wrapped lines that are
-//!    currently visible in the viewport.
-//!
-//! The cache mirrors that pipeline:
-//!
-//! - [`WrappedTranscriptCache`] memoizes stage (1) for the current `width` and supports incremental
-//!   append when new cells are pushed during streaming.
-//! - [`TranscriptRasterCache`] memoizes stage (2) per line by caching the final rendered row
-//!   (`Vec<Cell>`) for a given `(line_index, is_user_row)` at the current `width`.
-//!
-//! ### Per draw tick
-//!
-//! Callers typically do the following during a draw tick:
-//!
-//! 1. Call [`TranscriptViewCache::ensure_wrapped`] with the current `cells` and viewport `width`.
-//!    This may append new cells or rebuild from scratch (on width change/truncation/replacement).
-//! 2. Use [`TranscriptViewCache::lines`] and [`TranscriptViewCache::line_meta`] for scroll math and
-//!    to resolve the visible `line_index` range.
-//! 3. Configure row caching via [`TranscriptViewCache::set_raster_capacity`] (usually a few
-//!    viewports worth).
-//! 4. For each visible `line_index`, call [`TranscriptViewCache::render_row_index_into`] to draw a
-//!    single terminal row.
-//!
-//! ### Rasterization details
-//!
-//! `render_row_index_into` delegates to `TranscriptRasterCache::render_row_into`:
-//!
-//! - On a **cache hit**, it copies cached cells into the destination buffer (no grapheme
-//!   segmentation, no span layout).
-//! - On a **cache miss**, it renders the wrapped [`Line`] into a scratch `Buffer` with height 1,
-//!   copies out the resulting cells, inserts them into the cache, and then copies them into the
-//!   destination buffer.
-//!
-//! Cached rows are invalidated when:
-//! - the wrapped transcript is rebuilt (line indices shift)
-//! - the width changes (layout changes)
-//!
-//! The raster cache is bounded by `capacity` using an approximate LRU so it does not grow without
-//! bound during long sessions.
+//! `render_row_index_into` delegates to `TranscriptRasterCache::render_row_into`: on a cache hit it
+//! copies cached cells into the destination buffer, and on a miss it renders into a 1-row scratch
+//! buffer, caches the resulting cells, and then copies them into place. Cached rows are invalidated
+//! when the wrapped transcript is rebuilt (line indices shift) or when the width changes. The
+//! raster cache is bounded by `capacity` using an approximate LRU so it does not grow without bound
+//! during long sessions.
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;

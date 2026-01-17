@@ -1,3 +1,12 @@
+//! Rendering helpers for exec history cells.
+//!
+//! This module turns [`ExecCell`] state into formatted `ratatui` lines for the transcript and
+//! compact display rows. It handles command highlighting, output truncation, and the special
+//! "exploring" presentation used for read/list/search tool calls.
+//!
+//! The rendering logic is careful to apply line limits to wrapped screen lines (not just logical
+//! lines) so long outputs cannot flood the viewport.
+
 use std::time::Instant;
 
 use super::model::CommandOutput;
@@ -24,17 +33,31 @@ use ratatui::style::Stylize;
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
+/// Maximum number of output lines shown for non-user tool calls.
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
+
+/// Maximum number of output lines shown for user shell commands.
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
+
+/// Maximum number of characters shown when previewing interaction input.
 const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
 
+/// Controls how command output is summarized into display lines.
 pub(crate) struct OutputLinesParams {
+    /// Maximum number of head/tail lines to include.
     pub(crate) line_limit: usize,
+
+    /// Whether to suppress output when the command succeeded.
     pub(crate) only_err: bool,
+
+    /// Whether to draw the angle pipe marker for the first line.
     pub(crate) include_angle_pipe: bool,
+
+    /// Whether to prefix lines with the standard indent.
     pub(crate) include_prefix: bool,
 }
 
+/// Construct a new exec cell for a just-started command.
 pub(crate) fn new_active_exec_command(
     call_id: String,
     command: Vec<String>,
@@ -58,6 +81,7 @@ pub(crate) fn new_active_exec_command(
     )
 }
 
+/// Format the summary line for a unified exec interaction call.
 fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
     let command_display = if let Some((_, script)) = extract_bash_command(command) {
         script.to_string()
@@ -73,6 +97,7 @@ fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> S
     }
 }
 
+/// Collapse interaction input into a short, escaped preview string.
 fn summarize_interaction_input(input: &str) -> String {
     let single_line = input.replace('\n', "\\n");
     let sanitized = single_line.replace('`', "\\`");
@@ -88,12 +113,17 @@ fn summarize_interaction_input(input: &str) -> String {
     preview
 }
 
+/// Result of formatting command output into lines.
 #[derive(Clone)]
 pub(crate) struct OutputLines {
+    /// Styled output lines to render.
     pub(crate) lines: Vec<Line<'static>>,
+
+    /// Number of omitted logical lines, if truncation occurred.
     pub(crate) omitted: Option<usize>,
 }
 
+/// Convert command output into displayable lines with optional truncation.
 pub(crate) fn output_lines(
     output: Option<&CommandOutput>,
     params: OutputLinesParams,
@@ -177,6 +207,7 @@ pub(crate) fn output_lines(
     }
 }
 
+/// Returns a spinner glyph for active commands, respecting animation settings.
 pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> Span<'static> {
     if !animations_enabled {
         return "•".dim();
@@ -194,6 +225,7 @@ pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> 
 }
 
 impl HistoryCell for ExecCell {
+    /// Render the compact display rows for the exec cell.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.is_exploring_cell() {
             self.exploring_display_lines(width)
@@ -202,10 +234,12 @@ impl HistoryCell for ExecCell {
         }
     }
 
+    /// Return the desired transcript height for this exec cell.
     fn desired_transcript_height(&self, width: u16) -> u16 {
         self.transcript_lines(width).len() as u16
     }
 
+    /// Render the transcript lines for the exec cell.
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = vec![];
         for (i, call) in self.iter_calls().enumerate() {
@@ -252,6 +286,7 @@ impl HistoryCell for ExecCell {
 }
 
 impl ExecCell {
+    /// Render the compact display for exploratory read/list/search calls.
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push(Line::from(vec![
@@ -355,6 +390,7 @@ impl ExecCell {
         out
     }
 
+    /// Render the compact display for a single non-exploring command.
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
@@ -491,6 +527,7 @@ impl ExecCell {
         lines
     }
 
+    /// Keep the first `keep` lines and append an ellipsis line when truncated.
     fn limit_lines_from_start(lines: &[Line<'static>], keep: usize) -> Vec<Line<'static>> {
         if lines.len() <= keep {
             return lines.to_vec();
@@ -504,6 +541,7 @@ impl ExecCell {
         out
     }
 
+    /// Truncate lines in the middle, preserving head/tail context and an ellipsis count.
     fn truncate_lines_middle(
         lines: &[Line<'static>],
         max: usize,
@@ -551,18 +589,24 @@ impl ExecCell {
         out
     }
 
+    /// Format an ellipsis line showing how many lines were omitted.
     fn ellipsis_line(omitted: usize) -> Line<'static> {
         Line::from(vec![format!("… +{omitted} lines").dim()])
     }
 }
 
+/// Layout configuration for blocks that render with a leading prefix.
 #[derive(Clone, Copy)]
 struct PrefixedBlock {
+    /// Prefix for the first line in the block.
     initial_prefix: &'static str,
+
+    /// Prefix for subsequent lines in the block.
     subsequent_prefix: &'static str,
 }
 
 impl PrefixedBlock {
+    /// Create a prefixed block definition.
     const fn new(initial_prefix: &'static str, subsequent_prefix: &'static str) -> Self {
         Self {
             initial_prefix,
@@ -570,6 +614,7 @@ impl PrefixedBlock {
         }
     }
 
+    /// Compute the available wrap width after accounting for prefixes.
     fn wrap_width(self, total_width: u16) -> usize {
         let prefix_width = UnicodeWidthStr::width(self.initial_prefix)
             .max(UnicodeWidthStr::width(self.subsequent_prefix));
@@ -577,15 +622,24 @@ impl PrefixedBlock {
     }
 }
 
+/// Layout constants for command display formatting.
 #[derive(Clone, Copy)]
 struct ExecDisplayLayout {
+    /// Prefix settings for wrapped command continuations.
     command_continuation: PrefixedBlock,
+
+    /// Maximum number of continuation lines to show.
     command_continuation_max_lines: usize,
+
+    /// Prefix settings for output blocks.
     output_block: PrefixedBlock,
+
+    /// Maximum number of output lines to show.
     output_max_lines: usize,
 }
 
 impl ExecDisplayLayout {
+    /// Create a display layout with the provided prefixes and limits.
     const fn new(
         command_continuation: PrefixedBlock,
         command_continuation_max_lines: usize,
@@ -601,6 +655,7 @@ impl ExecDisplayLayout {
     }
 }
 
+/// Default layout for compact exec display.
 const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
     PrefixedBlock::new("  │ ", "  │ "),
     2,

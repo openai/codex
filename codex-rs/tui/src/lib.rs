@@ -1,3 +1,20 @@
+//! Terminal UI implementation for Codex.
+//!
+//! This crate owns the on-screen state machine for the interactive client. It
+//! translates user input and protocol events into ratatui frames, manages
+//! terminal modes such as the alternate screen, and coordinates background work
+//! via an internal event channel.
+//!
+//! Core behavior (thread state, auth, config, models, protocol) lives in
+//! `codex-core` and `codex-protocol`. This crate is intentionally a rendering
+//! and input orchestration layer: it owns transient UI state, but it does not
+//! persist or mutate the underlying session data beyond what `codex-core`
+//! exposes through its APIs. The [`run_main`] entrypoint wires those layers
+//! together and returns [`AppExitInfo`] describing why the UI shut down.
+//!
+//! The library portion forbids stdout/stderr writes so the standalone binary can
+//! manage terminal modes without unexpected output.
+
 // Forbid accidental stdout/stderr writes in the *library* portion of the TUI.
 // The standalone `codex-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
@@ -5,7 +22,9 @@
 #![deny(clippy::disallowed_methods)]
 use additional_dirs::add_dir_warning_message;
 use app::App;
+/// Summary of how and why the TUI shut down.
 pub use app::AppExitInfo;
+/// High-level reason for shutdown returned alongside [`AppExitInfo`].
 pub use app::ExitReason;
 use codex_app_server_protocol::AuthMode;
 use codex_common::oss::ensure_oss_provider_ready;
@@ -98,16 +117,33 @@ use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
+/// Parsed CLI configuration for launching the TUI.
 pub use cli::Cli;
+/// Renders markdown into styled text for TUI display.
 pub use markdown_render::render_markdown_text;
+/// Actions emitted by the public composer input widget.
 pub use public_widgets::composer_input::ComposerAction;
+/// Public composer input widget used by external renderers.
 pub use public_widgets::composer_input::ComposerInput;
+
 // (tests access modules directly within the crate)
 
+/// Runs the TUI with the provided CLI options and returns the shutdown summary.
+///
+/// The setup phase resolves configuration, auth, and model provider defaults,
+/// then boots the [`App`] event loop against a configured [`Tui`]. On exit, the
+/// function returns [`AppExitInfo`] describing the shutdown path and any final
+/// session metadata for the caller to inspect.
+///
+/// Phases:
+/// 1. Derive CLI overrides and load configuration (including OSS provider/model selection).
+/// 2. Initialize logging and telemetry.
+/// 3. Launch the ratatui event loop and return the exit summary.
 pub async fn run_main(
     mut cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
+    // Phase 1: derive CLI overrides and resolve configuration.
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -133,8 +169,10 @@ pub async fn run_main(
     }
 
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
-    // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
+    // gpt-oss:20b) and ensure it is present locally. We still parse CLI
+    // overrides so non-model config values can be merged in.
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
+
     // `oss` model provider.
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
     let cli_kv_overrides = match overrides_cli.parse_overrides() {
@@ -147,7 +185,7 @@ pub async fn run_main(
         }
     };
 
-    // we load config.toml here to determine project state.
+    // Load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let codex_home = match find_codex_home() {
         Ok(codex_home) => codex_home.to_path_buf(),
@@ -245,9 +283,11 @@ pub async fn run_main(
         std::process::exit(1);
     }
 
+    // Phase 2: initialize logging and telemetry.
     let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
+
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
     log_file_opts.create(true).append(true);
@@ -267,7 +307,7 @@ pub async fn run_main(
     // Wrap file in non‑blocking writer.
     let (non_blocking, _guard) = non_blocking(log_file);
 
-    // use RUST_LOG env var, default to info for codex crates.
+    // Use RUST_LOG env var; default to info for codex crates.
     let env_filter = || {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
@@ -335,6 +375,7 @@ pub async fn run_main(
         .with(otel_tracing_layer)
         .try_init();
 
+    // Phase 3: run the ratatui event loop and surface exit info.
     run_ratatui_app(
         cli,
         config,
@@ -347,6 +388,17 @@ pub async fn run_main(
     .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
+/// Run the ratatui event loop and return the final exit summary.
+///
+/// This performs one-time initialization (tooltips, panic hooks, session log),
+/// runs onboarding when needed, resolves session selection (resume/fork/new),
+/// and then hands control to [`App::run`]. Terminal teardown and session-log
+/// finalization happen even on early exits.
+///
+/// Phases:
+/// 1. Initialize terminal helpers, tooltips, and panic reporting.
+/// 2. Run update prompts and onboarding flows, reloading config if needed.
+/// 3. Select a session and drive the main [`App`] event loop.
 async fn run_ratatui_app(
     cli: Cli,
     initial_config: Config,
@@ -357,6 +409,7 @@ async fn run_ratatui_app(
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
 
+    // Phase 1: initialize helpers and terminal state.
     tooltips::announcement::prewarm();
 
     // Forward panic reports through tracing so they appear in the UI status
@@ -394,6 +447,7 @@ async fn run_ratatui_app(
         }
     }
 
+    // Phase 2: run onboarding and reload config when user decisions change it.
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
@@ -430,7 +484,9 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
+
+        // If the user acknowledged Windows or explicitly trusted the directory,
+        // reload the config accordingly.
         if onboarding_result
             .directory_trust_decision
             .map(|d| d == TrustDirectorySelection::Trust)
@@ -444,6 +500,7 @@ async fn run_ratatui_app(
         initial_config
     };
 
+    // Phase 3: select the session to load and launch the app loop.
     let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
         Ok(notice) => notice,
         Err(err) => {
@@ -594,12 +651,18 @@ async fn run_ratatui_app(
     .await;
 
     restore();
+
     // Mark the end of the recorded session.
     session_log::log_session_end();
-    // ignore error when collecting usage – report underlying error instead
+
+    // Ignore errors when collecting usage; report underlying error instead.
     app_result
 }
 
+/// Restore the terminal to its pre-TUI state.
+///
+/// This is called on exit paths where writing to stderr is safe because the
+/// TUI has already been torn down.
 #[expect(
     clippy::print_stderr,
     reason = "TUI should no longer be displayed, so we can write to stderr."
@@ -615,10 +678,12 @@ fn restore() {
 /// Determine whether to use the terminal's alternate screen buffer.
 ///
 /// The alternate screen buffer provides a cleaner fullscreen experience without polluting
-/// the terminal's scrollback history. However, it conflicts with terminal multiplexers like
-/// Zellij that strictly follow the xterm spec, which disallows scrollback in alternate screen
+/// the terminal's scrollback history, but it conflicts with multiplexers that disable
+/// scrollback in alternate screen mode.
+///
+/// Zellij strictly follows the xterm spec, which disallows scrollback in alternate screen
 /// buffers. Zellij intentionally disables scrollback in alternate screen mode (see
-/// https://github.com/zellij-org/zellij/pull/1032) and offers no configuration option to
+/// <https://github.com/zellij-org/zellij/pull/1032>) and offers no configuration option to
 /// change this behavior.
 ///
 /// This function implements a pragmatic workaround:
@@ -643,12 +708,16 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
     }
 }
 
+/// Summary of auth setup used to determine onboarding prompts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginStatus {
+    /// Auth is configured for a provider that requires login.
     AuthMode(AuthMode),
+    /// No valid credentials are available.
     NotAuthenticated,
 }
 
+/// Determine the current login state for the configured provider.
 fn get_login_status(config: &Config) -> LoginStatus {
     if config.model_provider.requires_openai_auth {
         // Reading the OpenAI API key is an async operation because it may need
@@ -667,6 +736,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
     }
 }
 
+/// Reload configuration after onboarding and exit the process on failure.
 async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
@@ -681,9 +751,10 @@ async fn load_config_or_exit(
     }
 }
 
-/// Determine if user has configured a sandbox / approval policy,
-/// or if the current cwd project is already trusted. If not, we need to
-/// show the trust screen.
+/// Determine whether the trust screen should be shown for the current project.
+///
+/// The screen is skipped if the user has already configured approvals/sandbox
+/// policy or if a trust decision has been recorded for the current project.
 fn should_show_trust_screen(config: &Config) -> bool {
     if cfg!(target_os = "windows") && get_platform_sandbox().is_none() {
         // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access; skip the trust prompt entirely.
@@ -693,10 +764,12 @@ fn should_show_trust_screen(config: &Config) -> bool {
         // Respect explicit approval/sandbox overrides made by the user.
         return false;
     }
+
     // otherwise, show only if no trust decision has been made
     config.active_project.trust_level.is_none()
 }
 
+/// Decide whether onboarding should run given login and trust state.
 fn should_show_onboarding(
     login_status: LoginStatus,
     config: &Config,
@@ -709,6 +782,7 @@ fn should_show_onboarding(
     should_show_login_screen(login_status, config)
 }
 
+/// Determine whether the login prompt should be shown for the current provider.
 fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
     // Only show the login screen for providers that actually require OpenAI auth
     // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
@@ -727,6 +801,7 @@ mod tests {
     use serial_test::serial;
     use tempfile::TempDir;
 
+    /// Build a minimal config rooted at a temporary Codex home for tests.
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
             .codex_home(temp_dir.path().to_path_buf())
@@ -734,6 +809,7 @@ mod tests {
             .await
     }
 
+    /// Ensures Windows skips the trust prompt when the sandbox is disabled.
     #[tokio::test]
     #[serial]
     async fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
@@ -757,6 +833,8 @@ mod tests {
         }
         Ok(())
     }
+
+    /// Ensures Windows keeps the trust prompt when sandboxing is available.
     #[tokio::test]
     #[serial]
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
@@ -780,6 +858,8 @@ mod tests {
         }
         Ok(())
     }
+
+    /// Ensures explicit untrusted projects bypass the trust prompt.
     #[tokio::test]
     async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
         use codex_protocol::config_types::TrustLevel;

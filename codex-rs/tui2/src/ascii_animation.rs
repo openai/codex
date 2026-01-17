@@ -1,3 +1,9 @@
+//! Shared ASCII animation state for popups and onboarding.
+//!
+//! The animation tracks elapsed time and asks the [`FrameRequester`] to redraw
+//! at the next frame boundary. Callers can switch between preloaded variants
+//! without resetting the timing model.
+
 use std::convert::TryFrom;
 use std::time::Duration;
 use std::time::Instant;
@@ -10,18 +16,32 @@ use crate::tui::FrameRequester;
 
 /// Drives ASCII art animations shared across popups and onboarding widgets.
 pub(crate) struct AsciiAnimation {
+    /// Frame scheduler used to request UI redraws.
     request_frame: FrameRequester,
+
+    /// Immutable list of frame variants (each variant is a list of frames).
     variants: &'static [&'static [&'static str]],
+
+    /// Index into `variants` selecting the active animation.
     variant_idx: usize,
+
+    /// Duration between frame advances.
     frame_tick: Duration,
+
+    /// Start time used to compute frame offsets.
     start: Instant,
 }
 
 impl AsciiAnimation {
+    /// Build an animation using the shared variants and default frame tick.
     pub(crate) fn new(request_frame: FrameRequester) -> Self {
         Self::with_variants(request_frame, ALL_VARIANTS, 0)
     }
 
+    /// Build an animation with the provided variants and initial index.
+    ///
+    /// The start time is initialized immediately; callers can change variants later without
+    /// resetting the timing model.
     pub(crate) fn with_variants(
         request_frame: FrameRequester,
         variants: &'static [&'static [&'static str]],
@@ -41,6 +61,7 @@ impl AsciiAnimation {
         }
     }
 
+    /// Schedule a redraw at the next frame boundary based on `frame_tick`.
     pub(crate) fn schedule_next_frame(&self) {
         let tick_ms = self.frame_tick.as_millis();
         if tick_ms == 0 {
@@ -62,6 +83,7 @@ impl AsciiAnimation {
         }
     }
 
+    /// Return the current frame string for the active variant.
     pub(crate) fn current_frame(&self) -> &'static str {
         let frames = self.frames();
         if frames.is_empty() {
@@ -76,6 +98,9 @@ impl AsciiAnimation {
         frames[idx]
     }
 
+    /// Pick a new random variant and schedule a redraw if one exists.
+    ///
+    /// Returns `false` when there is only one variant, leaving state unchanged.
     pub(crate) fn pick_random_variant(&mut self) -> bool {
         if self.variants.len() <= 1 {
             return false;
@@ -90,11 +115,13 @@ impl AsciiAnimation {
         true
     }
 
+    /// Request an immediate frame redraw without changing animation state.
     #[allow(dead_code)]
     pub(crate) fn request_frame(&self) {
         self.request_frame.schedule_frame();
     }
 
+    /// Return the frame list for the current variant.
     fn frames(&self) -> &'static [&'static str] {
         self.variants[self.variant_idx]
     }

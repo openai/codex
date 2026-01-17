@@ -1,15 +1,40 @@
+//! Wraps streaming text into visual rows based on display cell width.
+//!
+//! This module provides a lightweight, allocation-friendly wrapper for
+//! incrementally breaking a stream into rows with explicit line-break
+//! semantics. It is intentionally plain-text only; styling and ANSI handling
+//! are layered in other render modules. Width is computed with
+//! [`unicode_width`], so wide glyphs and emoji consume multiple columns.
+//!
+//! [`RowBuilder`] is designed for streaming input: callers can feed arbitrarily
+//! fragmented chunks via [`RowBuilder::push_fragment`], and the resulting rows
+//! stay stable regardless of chunk boundaries. The builder preserves logical
+//! line breaks separately from hard wraps so downstream renderers can
+//! distinguish explicit newlines from width-based wrapping.
+
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-/// A single visual row produced by RowBuilder.
+/// A single visual row produced by [`RowBuilder`].
+///
+/// Rows are plain text plus a flag that records whether a newline ended the
+/// row. Hard wraps are represented with `explicit_break` set to `false`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
+    /// Text content for this row, stored without any styling metadata.
+    ///
+    /// The string excludes the trailing newline when `explicit_break` is true.
     pub text: String,
+
     /// True if this row ends with an explicit line break (as opposed to a hard wrap).
+    ///
+    /// When true, downstream renderers should treat the row as a logical line
+    /// boundary rather than a purely visual wrap.
     pub explicit_break: bool,
 }
 
 impl Row {
+    /// Returns the display width of the row text in terminal cells.
     pub fn width(&self) -> usize {
         self.text.width()
     }
@@ -17,16 +42,30 @@ impl Row {
 
 /// Incrementally wraps input text into visual rows of at most `width` cells.
 ///
-/// Step 1: plain-text only. ANSI-carry and styled spans will be added later.
+/// The builder maintains a buffer for the current logical line and a list of
+/// fully wrapped rows. Callers can push fragments as they arrive, then query or
+/// drain completed rows without losing partial-line state. This step is
+/// plain-text only; ANSI-carry and styled spans are layered elsewhere.
 pub struct RowBuilder {
+    /// Target display width in terminal cells; clamped to at least 1.
+    ///
+    /// The width uses Unicode column counts rather than byte length.
     target_width: usize,
-    /// Buffer for the current logical line (until a '\n' is seen).
+
+    /// Buffer for the current logical line (until a `\n` is seen).
+    ///
+    /// This buffer can be appended to incrementally between flushes.
     current_line: String,
-    /// Output rows built so far for the current logical line and previous ones.
+
+    /// Output rows built so far for completed logical lines.
+    ///
+    /// The current logical line remains in `current_line` until wrapped or
+    /// flushed with an explicit break.
     rows: Vec<Row>,
 }
 
 impl RowBuilder {
+    /// Creates a new row builder with the requested target width.
     pub fn new(target_width: usize) -> Self {
         Self {
             target_width: target_width.max(1),
@@ -35,12 +74,18 @@ impl RowBuilder {
         }
     }
 
+    /// Returns the target width in display cells.
     pub fn width(&self) -> usize {
         self.target_width
     }
 
+    /// Updates the target width and rewraps buffered content.
+    ///
+    /// All buffered rows and the current line are reflowed to match the new
+    /// width while preserving explicit break boundaries.
     pub fn set_width(&mut self, width: usize) {
         self.target_width = width.max(1);
+
         // Rewrap everything we have (simple approach for Step 1).
         let mut all = String::new();
         for row in self.rows.drain(..) {
@@ -54,7 +99,10 @@ impl RowBuilder {
         self.push_fragment(&all);
     }
 
-    /// Push an input fragment. May contain newlines.
+    /// Pushes an input fragment, which may contain newlines.
+    ///
+    /// The fragment is split on `\n`, each completed logical line is flushed,
+    /// and any trailing partial line is wrapped against the current width.
     pub fn push_fragment(&mut self, fragment: &str) {
         if fragment.is_empty() {
             return;
@@ -76,22 +124,24 @@ impl RowBuilder {
         }
     }
 
-    /// Mark the end of the current logical line (equivalent to pushing a '\n').
+    /// Marks the end of the current logical line (equivalent to pushing `\n`).
     pub fn end_line(&mut self) {
         self.flush_current_line(true);
     }
 
-    /// Drain and return all produced rows.
+    /// Drains and returns all produced rows, leaving no committed rows behind.
     pub fn drain_rows(&mut self) -> Vec<Row> {
         std::mem::take(&mut self.rows)
     }
 
-    /// Return a snapshot of produced rows (non-draining).
+    /// Returns a snapshot of produced rows without draining them.
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
 
-    /// Rows suitable for display, including the current partial line if any.
+    /// Returns rows suitable for display, including the current partial line if any.
+    ///
+    /// The returned rows are clones; the builder state is unchanged.
     pub fn display_rows(&self) -> Vec<Row> {
         let mut out = self.rows.clone();
         if !self.current_line.is_empty() {
@@ -103,8 +153,11 @@ impl RowBuilder {
         out
     }
 
-    /// Drain the oldest rows that exceed `max_keep` display rows (including the
-    /// current partial line, if any). Returns the drained rows in order.
+    /// Drains the oldest rows that exceed `max_keep` display rows.
+    ///
+    /// The count includes the current partial line (if any) so callers can keep
+    /// the newest `max_keep` rows visible while committing older ones in order.
+    /// Drained rows are returned oldest-first.
     pub fn drain_commit_ready(&mut self, max_keep: usize) -> Vec<Row> {
         let display_count = self.rows.len() + if self.current_line.is_empty() { 0 } else { 1 };
         if display_count <= max_keep {
@@ -119,9 +172,11 @@ impl RowBuilder {
         drained
     }
 
+    /// Flushes the current logical line into rows, optionally marking a newline.
     fn flush_current_line(&mut self, explicit_break: bool) {
         // Wrap any remaining content in the current line and then finalize with explicit_break.
         self.wrap_current_line();
+
         // If the current line ended exactly on a width boundary and is non-empty, represent
         // the explicit break as an empty explicit row so that fragmentation invariance holds.
         if explicit_break {
@@ -141,10 +196,12 @@ impl RowBuilder {
                 });
             }
         }
+
         // Reset current line buffer for next logical line.
         self.current_line.clear();
     }
 
+    /// Wraps buffered content into rows until the remainder fits the width.
     fn wrap_current_line(&mut self) {
         // While the current_line exceeds width, cut a prefix.
         loop {
@@ -182,8 +239,14 @@ impl RowBuilder {
     }
 }
 
-/// Take a prefix of `text` whose visible width is at most `max_cols`.
-/// Returns (prefix, suffix, prefix_width).
+/// Takes a prefix of `text` whose visible width is at most `max_cols`.
+///
+/// Returns the prefix, the remaining suffix, and the prefix width in display
+/// cells. Width is computed per Unicode scalar, so combining sequences may be
+/// split if they exceed the limit.
+///
+/// The returned prefix width may be less than `max_cols` if the next scalar
+/// would exceed the available display cells.
 pub fn take_prefix_by_width(text: &str, max_cols: usize) -> (String, &str, usize) {
     if max_cols == 0 || text.is_empty() {
         return (String::new(), text, 0);
@@ -237,6 +300,7 @@ mod tests {
         let mut rb = RowBuilder::new(6);
         rb.push_fragment("😀😀 你好");
         let rows = rb.rows().to_vec();
+
         // At width 6, we expect the first row to fit exactly two emojis and a space
         // (2 + 2 + 1 = 5) plus one more column for the first CJK char (2 would overflow),
         // so only the two emojis and the space fit; the rest remains buffered.
@@ -273,6 +337,7 @@ mod tests {
         let rows = rb.display_rows();
         assert!(rows.iter().any(|r| r.explicit_break));
         assert_eq!(rows[0].text, "hello");
+
         // Second row should begin with 'world'
         assert!(rows.iter().any(|r| r.text.starts_with("world")));
     }

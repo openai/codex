@@ -1,3 +1,8 @@
+//! CLI entrypoint for the `codex-file-search` binary.
+//!
+//! This module wires the parsed CLI options to the search runner and implements a
+//! `Reporter` that prints either JSON or human-readable output to stdout/stderr.
+
 use std::io::IsTerminal;
 use std::path::Path;
 
@@ -8,6 +13,7 @@ use codex_file_search::Reporter;
 use codex_file_search::run_main;
 use serde_json::json;
 
+/// Parse CLI arguments, run the search, and stream matches to stdout.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -19,12 +25,16 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Reporter that formats matches for stdout/stderr output.
 struct StdioReporter {
+    /// Emit each match as a JSON payload instead of plain text.
     write_output_as_json: bool,
+    /// Highlight matched character indices when stdout is a terminal.
     show_indices: bool,
 }
 
 impl Reporter for StdioReporter {
+    /// Print a single match in either JSON or human-readable form.
     fn report_match(&self, file_match: &FileMatch) {
         if self.write_output_as_json {
             println!("{}", serde_json::to_string(&file_match).unwrap());
@@ -33,6 +43,7 @@ impl Reporter for StdioReporter {
                 .indices
                 .as_ref()
                 .expect("--compute-indices was specified");
+
             // `indices` is guaranteed to be sorted in ascending order. Instead
             // of calling `contains` for every character (which would be O(N^2)
             // in the worst-case), walk through the `indices` vector once while
@@ -58,6 +69,7 @@ impl Reporter for StdioReporter {
         }
     }
 
+    /// Warn when the reported matches are truncated due to the limit.
     fn warn_matches_truncated(&self, total_match_count: usize, shown_match_count: usize) {
         if self.write_output_as_json {
             let value = json!({"matches_truncated": true});
@@ -69,6 +81,7 @@ impl Reporter for StdioReporter {
         }
     }
 
+    /// Warn when no search pattern was provided and a directory listing is used.
     fn warn_no_search_pattern(&self, search_directory: &Path) {
         eprintln!(
             "No search pattern specified. Showing the contents of the current directory ({}):",

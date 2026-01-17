@@ -1,25 +1,14 @@
 //! Streaming markdown accumulator for `tui2`.
 //!
-//! Streaming assistant output arrives as small text deltas. The UI wants to render "stable"
-//! transcript chunks during streaming without:
+//! Streaming assistant output arrives as small text deltas. This module buffers
+//! them, re-renders the completed prefix, and only emits logical lines after a
+//! hard newline is observed so partially formed markdown does not flicker in
+//! the transcript.
 //!
-//! - duplicating or reordering content when deltas split UTF-8 boundaries, and
-//! - baking viewport-width wrapping into the persisted transcript model.
-//!
-//! This module provides [`MarkdownStreamCollector`], which implements a deliberately simple model:
-//!
-//! - The collector buffers raw deltas in a `String`.
-//! - It only **commits** output when the buffered source contains a hard newline (`'\n'`).
-//!   This avoids showing partial final lines that may still change as the model continues to emit.
-//! - When committing, it re-renders the markdown for the *completed* prefix of the buffer and
-//!   returns only the newly completed logical lines since the last commit.
-//!
-//! ## Width-agnostic output
-//!
-//! The committed output is `Vec<MarkdownLogicalLine>`, produced by
-//! [`crate::markdown_render::render_markdown_logical_lines`]. These logical lines intentionally do
-//! not include viewport-derived wraps, which allows the transcript to reflow on resize (wrapping is
-//! performed later by the history cell at render time).
+//! The committed output is a `Vec<MarkdownLogicalLine>` produced by
+//! [`crate::markdown_render::render_markdown_logical_lines`]. These logical
+//! lines intentionally exclude viewport wrapping, which allows the transcript
+//! to reflow on resize later in the rendering pipeline.
 
 use crate::markdown_render::MarkdownLogicalLine;
 
@@ -36,6 +25,7 @@ pub(crate) struct MarkdownStreamCollector {
 }
 
 impl MarkdownStreamCollector {
+    /// Creates a new collector with an empty buffer.
     pub fn new() -> Self {
         Self {
             buffer: String::new(),
@@ -43,6 +33,7 @@ impl MarkdownStreamCollector {
         }
     }
 
+    /// Clears the buffered source and resets the committed line counter.
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_line_count = 0;
@@ -115,6 +106,7 @@ impl MarkdownStreamCollector {
     }
 }
 
+/// Returns true when a logical line has no visible content or indentation.
 fn is_blank_logical_line(line: &MarkdownLogicalLine) -> bool {
     crate::render::line_utils::is_blank_line_spaces_only(&line.content)
         && crate::render::line_utils::is_blank_line_spaces_only(&line.initial_indent)
@@ -122,6 +114,7 @@ fn is_blank_logical_line(line: &MarkdownLogicalLine) -> bool {
 }
 
 #[cfg(test)]
+/// Streams deltas through a collector and optionally finalizes the buffer.
 pub(crate) fn simulate_stream_markdown_for_tests(
     deltas: &[&str],
     finalize: bool,
@@ -145,6 +138,7 @@ mod tests {
     use super::*;
     use ratatui::style::Color;
 
+    /// Flattens a logical line to plain text for comparisons.
     fn logical_line_text(line: &MarkdownLogicalLine) -> String {
         line.initial_indent
             .spans

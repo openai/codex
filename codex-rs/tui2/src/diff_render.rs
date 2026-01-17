@@ -1,3 +1,10 @@
+//! Diff rendering helpers for bottom-pane views and summaries.
+//!
+//! This module turns [`FileChange`] payloads into `ratatui` `Line` values for
+//! display in the UI. It supports both summary output (file list with counts)
+//! and detailed diff rendering with line numbers, wrapping, and styled gutters.
+//! Path rendering is normalized to keep output stable across cwd or VCS layouts.
+
 use diffy::Hunk;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -21,31 +28,37 @@ use crate::render::renderable::Renderable;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::FileChange;
 
-// Internal representation for diff line rendering
+/// Classification of a diff line for styling and sign prefixing.
 enum DiffLineType {
     Insert,
     Delete,
     Context,
 }
 
+/// Summary view for a set of file changes.
 pub struct DiffSummary {
+    /// Mapping from paths to file changes.
     changes: HashMap<PathBuf, FileChange>,
+    /// Working directory used to shorten displayed paths.
     cwd: PathBuf,
 }
 
 impl DiffSummary {
+    /// Creates a summary view for the given changes.
     pub fn new(changes: HashMap<PathBuf, FileChange>, cwd: PathBuf) -> Self {
         Self { changes, cwd }
     }
 }
 
 impl Renderable for FileChange {
+    /// Renders a single file change as a diff block.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut lines = vec![];
         render_change(self, &mut lines, area.width as usize);
         Paragraph::new(lines).render(area, buf);
     }
 
+    /// Returns the height required to render the diff block.
     fn desired_height(&self, width: u16) -> u16 {
         let mut lines = vec![];
         render_change(self, &mut lines, width as usize);
@@ -54,6 +67,7 @@ impl Renderable for FileChange {
 }
 
 impl From<DiffSummary> for Box<dyn Renderable> {
+    /// Builds a column renderable with per-file headers and diff bodies.
     fn from(val: DiffSummary) -> Self {
         let mut rows: Vec<Box<dyn Renderable>> = vec![];
 
@@ -85,17 +99,23 @@ pub(crate) fn create_diff_summary(
     render_changes_block(rows, wrap_cols, cwd)
 }
 
-// Shared row for per-file presentation
+/// Shared row for per-file presentation in summaries.
 #[derive(Clone)]
 struct Row {
     #[allow(dead_code)]
+    /// Original path for the file change.
     path: PathBuf,
+    /// Optional destination path for moved files.
     move_path: Option<PathBuf>,
+    /// Total inserted line count.
     added: usize,
+    /// Total removed line count.
     removed: usize,
+    /// File change payload for rendering.
     change: FileChange,
 }
 
+/// Collects file rows and computes line counts for summary rendering.
 fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::new();
     for (path, change) in changes.iter() {
@@ -123,6 +143,7 @@ fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
     rows
 }
 
+/// Builds a `(+/-)` line count summary span list.
 fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan<'static>> {
     let mut spans = Vec::new();
     spans.push("(".into());
@@ -133,6 +154,7 @@ fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan<'static
     spans
 }
 
+/// Renders the full summary block, including header and per-file diff sections.
 fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtLine<'static>> {
     let mut out: Vec<RtLine<'static>> = Vec::new();
 
@@ -193,6 +215,7 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
     out
 }
 
+/// Renders a file change into wrapped, styled diff lines.
 fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usize) {
     match change {
         FileChange::Add { content } => {
@@ -299,9 +322,12 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
     }
 }
 
-/// Format a path for display relative to the current working directory when
-/// possible, keeping output stable in jj/no-`.git` workspaces (e.g. image
-/// tool calls should show `example.png` instead of an absolute path).
+/// Formats a path for display relative to the current working directory.
+///
+/// The formatting prefers a cwd-relative path when possible, falls back to a
+/// repo-relative path when both `cwd` and the target live in the same Git
+/// repository, and finally uses a home-relative path for stable output in
+/// environments without a `.git` directory (for example, jj workspaces).
 pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     if path.is_relative() {
         return path.display().to_string();
@@ -336,6 +362,7 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     chosen.display().to_string()
 }
 
+/// Computes added/removed counts from a unified diff string.
 fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     if let Ok(patch) = diffy::Patch::from_str(diff) {
         patch
@@ -353,6 +380,7 @@ fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     }
 }
 
+/// Builds one or more wrapped lines for a diff row.
 fn push_wrapped_diff_line(
     line_number: usize,
     kind: DiffLineType,
@@ -414,6 +442,7 @@ fn push_wrapped_diff_line(
     lines
 }
 
+/// Returns the display width of the largest line number.
 fn line_number_width(max_line_number: usize) -> usize {
     if max_line_number == 0 {
         1
@@ -422,18 +451,22 @@ fn line_number_width(max_line_number: usize) -> usize {
     }
 }
 
+/// Style used for the line-number gutter.
 fn style_gutter() -> Style {
     Style::default().add_modifier(Modifier::DIM)
 }
 
+/// Style used for context lines.
 fn style_context() -> Style {
     Style::default()
 }
 
+/// Style used for inserted lines.
 fn style_add() -> Style {
     Style::default().fg(Color::Green)
 }
 
+/// Style used for deleted lines.
 fn style_del() -> Style {
     Style::default().fg(Color::Red)
 }

@@ -1,13 +1,18 @@
 //! The bottom-pane footer renders transient hints and context indicators.
 //!
-//! The footer is pure rendering: it formats `FooterProps` into `Line`s without mutating any state.
-//! It intentionally does not decide *which* footer content should be shown; that is owned by the
-//! `ChatComposer` (which selects a `FooterMode`) and by higher-level state machines like
+//! The footer is pure rendering: it formats [`FooterProps`] into `Line`s without mutating any
+//! state. It intentionally does not decide *which* footer content should be shown; that is owned
+//! by the `ChatComposer` (which selects a [`FooterMode`]) and by higher-level state machines like
 //! `ChatWidget` (which decides when quit/interrupt is allowed).
 //!
 //! Some footer content is time-based rather than event-based, such as the "press again to quit"
 //! hint. The owning widgets schedule redraws so time-based hints can expire even if the UI is
 //! otherwise idle.
+//!
+//! Context indicators are rendered from caller-provided percentages or token counts. When both are
+//! present, the percentage takes precedence; when neither is present the footer assumes a full
+//! context window and renders a default hint. The footer also expands into a multi-line shortcut
+//! overlay that conditionally includes entries based on environment and compositor state.
 #[cfg(target_os = "linux")]
 use crate::clipboard_paste::is_probably_wsl;
 use crate::key_hint;
@@ -29,19 +34,27 @@ use ratatui::widgets::Widget;
 /// Callers are expected to construct `FooterProps` from higher-level state (`ChatComposer`,
 /// `BottomPane`, and `ChatWidget`) and pass it to `render_footer`. The footer treats these values as
 /// authoritative and does not attempt to infer missing state (for example, it does not query
-/// whether a task is running).
+/// whether a task is running). Context and shortcut hints are selected entirely by `mode`, while
+/// the remaining flags refine how those hints are worded or whether secondary hints appear.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
+    /// Which content variant to render in the footer.
     pub(crate) mode: FooterMode,
+    /// Whether `Esc` is currently primed for a second press backtrack.
     pub(crate) esc_backtrack_hint: bool,
+    /// Whether the newline hint should prefer Shift+Enter over Ctrl+J.
     pub(crate) use_shift_enter_hint: bool,
+    /// Whether a model task is currently running in the background.
     pub(crate) is_task_running: bool,
+    /// Whether steering/queueing is enabled for the active task.
     pub(crate) steer_enabled: bool,
     /// Which key the user must press again to quit.
     ///
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
     pub(crate) quit_shortcut_key: KeyBinding,
+    /// Percent of context remaining for the active model, if known.
     pub(crate) context_window_percent: Option<i64>,
+    /// Total tokens used so far in the context window, if known.
     pub(crate) context_window_used_tokens: Option<i64>,
 }
 
@@ -53,12 +66,20 @@ pub(crate) struct FooterProps {
 pub(crate) enum FooterMode {
     /// Transient "press again to quit" reminder (Ctrl+C/Ctrl+D).
     QuitShortcutReminder,
+    /// One-line hint showing the shortcut summary with context metadata.
     ShortcutSummary,
+    /// Multi-line overlay listing the most common shortcuts.
     ShortcutOverlay,
+    /// Inline `Esc` hint for editing the previous message.
     EscHint,
+    /// Context indicator only (no global shortcuts).
     ContextOnly,
 }
 
+/// Toggles the shortcut display between summary and overlay modes.
+///
+/// When the quit shortcut reminder is active, the footer stays in that mode if
+/// the caller still wants the Ctrl+C hint shown.
 pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
     if ctrl_c_hint && matches!(current, FooterMode::QuitShortcutReminder) {
         return current;
@@ -72,6 +93,10 @@ pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> Fo
     }
 }
 
+/// Returns the `Esc` hint mode unless a task is running.
+///
+/// Active tasks keep the current footer mode so the running-state hints remain
+/// visible instead of being replaced by the `Esc` reminder.
 pub(crate) fn esc_hint_mode(current: FooterMode, is_task_running: bool) -> FooterMode {
     if is_task_running {
         current
@@ -80,6 +105,10 @@ pub(crate) fn esc_hint_mode(current: FooterMode, is_task_running: bool) -> Foote
     }
 }
 
+/// Resets transient footer modes after user activity.
+///
+/// Activity (typing, streaming, etc.) collapses temporary overlays back to the
+/// default shortcut summary, while leaving stable modes unchanged.
 pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     match current {
         FooterMode::EscHint
@@ -90,10 +119,15 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
+/// Computes the number of rows required to render the footer for the given props.
 pub(crate) fn footer_height(props: FooterProps) -> u16 {
     footer_lines(props).len() as u16
 }
 
+/// Renders the footer into the provided area using the supplied props.
+///
+/// The renderer prepends a left indent so footer content aligns with the
+/// bottom-pane text area.
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     Paragraph::new(prefix_lines(
         footer_lines(props),
@@ -103,11 +137,12 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     .render(area, buf);
 }
 
+/// Builds the footer lines for the current mode and context metadata.
+///
+/// The context indicator is appended to the primary hint for single-line modes
+/// and omitted for the multi-line overlay. Context-only mode may additionally
+/// include the queue-message hint when a task is running and steering is enabled.
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
-    // Show the context indicator on the left, appended after the primary hint
-    // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
-    // the shortcut hint is hidden). Hide it only for the multi-line
-    // ShortcutOverlay.
     match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
@@ -153,17 +188,23 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     }
 }
 
+/// Aggregated flags that select which shortcut hint variants are visible.
 #[derive(Clone, Copy, Debug)]
 struct ShortcutsState {
+    /// Whether the newline hint should favor Shift+Enter over Ctrl+J.
     use_shift_enter_hint: bool,
+    /// Whether the backtrack hint uses the single-press wording.
     esc_backtrack_hint: bool,
+    /// Whether WSL-specific shortcut hints should be shown.
     is_wsl: bool,
 }
 
+/// Renders the "press again to quit" reminder line.
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
     Line::from(vec![key.into(), " again to quit".into()]).dim()
 }
 
+/// Renders the `Esc` hint line, adapting to the backtrack priming state.
 fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
     let esc = key_hint::plain(KeyCode::Esc);
     if esc_backtrack_hint {
@@ -179,6 +220,10 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
     }
 }
 
+/// Builds the multi-line shortcut overlay, ordered by the shortcut descriptor list.
+///
+/// Entries are populated based on the current display state, then laid out into
+/// two columns for compact rendering.
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
     let mut shell_commands = Line::from("");
@@ -225,6 +270,10 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     build_columns(ordered)
 }
 
+/// Arranges shortcut lines into padded columns with a fixed gap between columns.
+///
+/// The width computation is based on the rendered line width so aligned columns
+/// keep their key labels visually consistent.
 fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
     if entries.is_empty() {
         return Vec::new();
@@ -272,6 +321,10 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// Formats the context window indicator for the footer.
+///
+/// Percent-based hints take precedence when available; token counts are used
+/// otherwise, and the default assumes a full context window remaining.
 fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
     if let Some(percent) = percent {
         let percent = percent.clamp(0, 100);
@@ -286,41 +339,62 @@ fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'
     Line::from(vec![Span::from("100% context left").dim()])
 }
 
+/// Identifies each shortcut entry in the overlay list.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
+    /// Shows the slash-command shortcut.
     Commands,
+    /// Shows the shell-command shortcut.
     ShellCommands,
+    /// Shows the insert-newline shortcut.
     InsertNewline,
+    /// Shows the queue-message shortcut.
     QueueMessageTab,
+    /// Shows the file-paths shortcut.
     FilePaths,
+    /// Shows the paste-image shortcut.
     PasteImage,
+    /// Shows the external-editor shortcut.
     ExternalEditor,
+    /// Shows the edit-previous shortcut.
     EditPrevious,
+    /// Shows the quit shortcut.
     Quit,
+    /// Shows the transcript shortcut.
     ShowTranscript,
 }
 
+/// A key binding and the condition required for it to be shown.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ShortcutBinding {
+    /// The formatted key hint to display.
     key: KeyBinding,
+    /// The visibility rule for this binding.
     condition: DisplayCondition,
 }
 
 impl ShortcutBinding {
+    /// Returns true when the binding should be shown for the given state.
     fn matches(&self, state: ShortcutsState) -> bool {
         self.condition.matches(state)
     }
 }
 
+/// Governs whether a shortcut binding is visible in the overlay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DisplayCondition {
+    /// Always show the binding.
     Always,
+    /// Show the binding only when Shift+Enter should be hinted.
     WhenShiftEnterHint,
+    /// Show the binding when Shift+Enter should not be hinted.
     WhenNotShiftEnterHint,
+    /// Show the binding only for WSL environments.
     WhenUnderWSL,
 }
 
 impl DisplayCondition {
+    /// Returns true if the current state satisfies this condition.
     fn matches(self, state: ShortcutsState) -> bool {
         match self {
             DisplayCondition::Always => true,
@@ -331,18 +405,28 @@ impl DisplayCondition {
     }
 }
 
+/// Describes a shortcut entry, including its preferred bindings and label.
 struct ShortcutDescriptor {
+    /// Identifier used to place the entry in the overlay list.
     id: ShortcutId,
+    /// Candidate bindings, evaluated in order.
     bindings: &'static [ShortcutBinding],
+    /// Prefix text rendered before the key hint.
     prefix: &'static str,
+    /// Label text rendered after the key hint.
     label: &'static str,
 }
 
 impl ShortcutDescriptor {
+    /// Selects the first binding that matches the display state.
     fn binding_for(&self, state: ShortcutsState) -> Option<&'static ShortcutBinding> {
         self.bindings.iter().find(|binding| binding.matches(state))
     }
 
+    /// Builds the formatted line shown in the shortcut overlay.
+    ///
+    /// The edit-previous entry has a custom label that references the `Esc`
+    /// backtrack priming state.
     fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
         let binding = self.binding_for(state)?;
         let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
@@ -364,6 +448,7 @@ impl ShortcutDescriptor {
     }
 }
 
+/// Ordered list of shortcut entries rendered in the overlay.
 const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::Commands,
@@ -418,6 +503,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     },
     ShortcutDescriptor {
         id: ShortcutId::PasteImage,
+
         // Show Ctrl+Alt+V when running under WSL (terminals often intercept plain
         // Ctrl+V); otherwise fall back to Ctrl+V.
         bindings: &[
@@ -478,6 +564,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    /// Renders the footer into a fixed-size buffer and snapshots the result.
     fn snapshot_footer(name: &str, props: FooterProps) {
         let height = footer_height(props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
@@ -490,6 +577,7 @@ mod tests {
         assert_snapshot!(name, terminal.backend());
     }
 
+    /// Verifies the footer variants render stable, expected output.
     #[test]
     fn footer_snapshots() {
         snapshot_footer(

@@ -1,3 +1,14 @@
+//! Structured session logging for TUI events and ops.
+//!
+//! This module records a line-oriented JSON log of inbound app events, outbound ops,
+//! and lifecycle markers when session logging is enabled. Logging is opt-in via
+//! environment variables and writes to a per-session file under the configured log
+//! directory (or a temporary directory fallback).
+//!
+//! The logger is intentionally minimal: it serializes typed payloads to JSON values,
+//! writes them as JSONL, and keeps the file handle in a global `OnceLock` so callers
+//! can emit logs without threading state through the rest of the application.
+
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -13,19 +24,24 @@ use serde_json::json;
 
 use crate::app_event::AppEvent;
 
+/// Global session logger instance that owns the file handle.
 static LOGGER: LazyLock<SessionLogger> = LazyLock::new(SessionLogger::new);
 
+/// Lazily initialized JSONL writer for session logs.
 struct SessionLogger {
+    /// Mutex-protected log file, initialized on first successful `open`.
     file: OnceLock<Mutex<File>>,
 }
 
 impl SessionLogger {
+    /// Create a new logger with no file handle yet.
     fn new() -> Self {
         Self {
             file: OnceLock::new(),
         }
     }
 
+    /// Open the log file path and store the file handle if logging is enabled.
     fn open(&self, path: PathBuf) -> std::io::Result<()> {
         let mut opts = OpenOptions::new();
         opts.create(true).truncate(true).write(true);
@@ -41,6 +57,7 @@ impl SessionLogger {
         Ok(())
     }
 
+    /// Write a JSON value as a single line, flushing on each entry.
     fn write_json_line(&self, value: serde_json::Value) {
         let Some(mutex) = self.file.get() else {
             return;
@@ -67,16 +84,19 @@ impl SessionLogger {
         }
     }
 
+    /// Return true when the logger has an open file handle.
     fn is_enabled(&self) -> bool {
         self.file.get().is_some()
     }
 }
 
+/// Return an RFC3339 timestamp with milliseconds for log records.
 fn now_ts() -> String {
     // RFC3339 for readability; consumers can parse as needed.
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// Initialize session logging if the environment configuration enables it.
 pub(crate) fn maybe_init(config: &Config) {
     let enabled = std::env::var("CODEX_TUI_RECORD_SESSION")
         .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
@@ -118,6 +138,7 @@ pub(crate) fn maybe_init(config: &Config) {
     LOGGER.write_json_line(header);
 }
 
+/// Log inbound application events flowing into the TUI.
 pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     // Log only if enabled
     if !LOGGER.is_enabled() {
@@ -177,6 +198,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 }
 
+/// Log outbound ops emitted from the TUI to the core client.
 pub(crate) fn log_outbound_op(op: &Op) {
     if !LOGGER.is_enabled() {
         return;
@@ -184,6 +206,7 @@ pub(crate) fn log_outbound_op(op: &Op) {
     write_record("from_tui", "op", op);
 }
 
+/// Emit a session end marker to the log.
 pub(crate) fn log_session_end() {
     if !LOGGER.is_enabled() {
         return;
@@ -196,6 +219,7 @@ pub(crate) fn log_session_end() {
     LOGGER.write_json_line(value);
 }
 
+/// Write a typed payload with standard metadata fields.
 fn write_record<T>(dir: &str, kind: &str, obj: &T)
 where
     T: Serialize,

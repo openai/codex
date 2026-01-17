@@ -1,3 +1,28 @@
+//! Renders and filters the slash-command selection popup for the composer.
+//!
+//! This module builds the list of selectable slash commands shown beneath the
+//! composer when a line begins with `/`. It merges built-in [`SlashCommand`]
+//! entries with user-defined [`CustomPrompt`] items, filters them via fuzzy
+//! matching, and exposes a [`WidgetRef`] renderer that delegates row layout to
+//! [`selection_popup_common`].
+//!
+//! The popup owns the active filter token and the scroll/selection state; it
+//! does not execute commands or mutate composer text. When there is no filter,
+//! built-ins appear first in presentation order, followed by user prompts sorted
+//! by name. When a filter is active, matches are sorted by ascending fuzzy
+//! score, then by command or prompt name for stability across runs.
+//!
+//! The list of built-ins is feature-gated to hide commands that the runtime
+//! cannot support (for example, elevated sandbox toggles on Windows). Prompt
+//! rows default to a generic description when prompt frontmatter is missing so
+//! the layout stays stable even with sparse metadata.
+//!
+//! Custom prompt names that collide with built-in command names are excluded,
+//! and the prompt display names always use the `/prompts:` prefix. Highlight
+//! indices are computed against the non-slash display string and are shifted by
+//! one when rendered to account for the leading `/`.
+//!
+//! [`selection_popup_common`]: super::selection_popup_common
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
@@ -15,6 +40,10 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
+/// Returns whether the Windows sandbox is present but not fully elevated.
+///
+/// This is used to suppress the elevate-sandbox command when the degraded
+/// sandbox flow should not be surfaced to the user.
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
         && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -25,19 +54,47 @@ fn windows_degraded_sandbox_active() -> bool {
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
+    /// A built-in slash command defined by the TUI.
     Builtin(SlashCommand),
-    // Index into `prompts`
+    /// An index into [`CommandPopup::prompts`].
     UserPrompt(usize),
 }
 
+/// Owns the slash-command popup state and filtered command list.
+///
+/// The popup keeps a mutable filter token derived from the composer input and
+/// drives a [`ScrollState`] that tracks the current selection and scroll
+/// window. Built-in commands are cached so the list can be filtered quickly and
+/// user prompts are stored in sorted order for stable presentation. Selection
+/// indices always refer to the filtered list, so callers must treat them as
+/// ephemeral and refresh them whenever the filter changes.
 pub(crate) struct CommandPopup {
+    /// The active filter token derived from the composer, without the `/`.
+    ///
+    /// This preserves the original case from the composer so the UI can echo
+    /// exactly what the user typed even though matching is case-insensitive.
     command_filter: String,
+    /// Built-in slash commands paired with their display names.
+    ///
+    /// The list is cached in presentation order after feature gating so the
+    /// unfiltered popup is stable and filtering can reuse the same ordering.
     builtins: Vec<(&'static str, SlashCommand)>,
+    /// Custom prompts, filtered for name collisions and sorted by name.
     prompts: Vec<CustomPrompt>,
+    /// Scroll and selection state for the filtered command list.
+    ///
+    /// The selection index always refers to the filtered list, so it must be
+    /// clamped whenever the filter token changes.
     state: ScrollState,
 }
 
 impl CommandPopup {
+    /// Builds a popup with the provided prompts and feature flags.
+    ///
+    /// Built-in commands are filtered for feature availability (including the
+    /// Windows degraded-sandbox state), and custom prompts that collide with
+    /// built-in names are dropped. Prompts are sorted by name so the unfiltered
+    /// list is stable for users.
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, skills_enabled: bool) -> Self {
         let allow_elevate_sandbox = windows_degraded_sandbox_active();
         let builtins: Vec<(&'static str, SlashCommand)> = built_in_slash_commands()
@@ -45,6 +102,7 @@ impl CommandPopup {
             .filter(|(_, cmd)| skills_enabled || *cmd != SlashCommand::Skills)
             .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .collect();
+
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
         prompts.retain(|p| !exclude.contains(&p.name));
@@ -57,6 +115,10 @@ impl CommandPopup {
         }
     }
 
+    /// Replaces the prompt list, filtering collisions with built-ins.
+    ///
+    /// This keeps the same sort and collision rules as [`CommandPopup::new`]
+    /// while preserving the current filter and selection state.
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
         let exclude: HashSet<String> = self
             .builtins
@@ -68,14 +130,20 @@ impl CommandPopup {
         self.prompts = prompts;
     }
 
+    /// Returns the prompt at the provided index, if it still exists.
     pub(crate) fn prompt(&self, idx: usize) -> Option<&CustomPrompt> {
         self.prompts.get(idx)
     }
 
-    /// Update the filter string based on the current composer text. The text
-    /// passed in is expected to start with a leading '/'. Everything after the
-    /// *first* '/" on the *first* line becomes the active filter that is used
-    /// to narrow down the list of available commands.
+    /// Updates the active filter based on the current composer text.
+    ///
+    /// The text is expected to start with a leading `/`. Everything after the
+    /// first `/` on the first line becomes the filter token that narrows the
+    /// available commands. The filter keeps the original case for display
+    /// stability even though command matching is case-insensitive today.
+    ///
+    /// The update flow is: parse the first token, update the filter, then clamp
+    /// and scroll the selection to keep it inside the filtered list.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
 
@@ -103,8 +171,10 @@ impl CommandPopup {
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
 
-    /// Determine the preferred height of the popup for a given width.
-    /// Accounts for wrapped descriptions so that long tooltips don't overflow.
+    /// Determines the preferred popup height for the given width.
+    ///
+    /// This accounts for wrapped descriptions so long tooltips do not overflow
+    /// past the available viewport.
     pub(crate) fn calculate_required_height(&self, width: u16) -> u16 {
         use super::selection_popup_common::measure_rows_height;
         let rows = self.rows_from_matches(self.filtered());
@@ -112,9 +182,13 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Compute fuzzy-filtered matches over built-in commands and user prompts,
-    /// paired with optional highlight indices and score. Sorted by ascending
-    /// score, then by name for stability.
+    /// Computes the fuzzy-filtered matches and their highlight metadata.
+    ///
+    /// Each entry includes the matched item, the optional highlight indices
+    /// returned by [`fuzzy_match`], and its score. When a filter is present the
+    /// list is sorted by ascending score and then by name for deterministic
+    /// ordering. Custom prompts are matched against their `/prompts:name`
+    /// display strings so both `name` and `prompts:name` searches work.
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
@@ -123,6 +197,7 @@ impl CommandPopup {
             for (_, cmd) in self.builtins.iter() {
                 out.push((CommandItem::Builtin(*cmd), None, 0));
             }
+
             // Then prompts, already sorted by name.
             for idx in 0..self.prompts.len() {
                 out.push((CommandItem::UserPrompt(idx), None, 0));
@@ -135,6 +210,7 @@ impl CommandPopup {
                 out.push((CommandItem::Builtin(*cmd), Some(indices), score));
             }
         }
+
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
         // - Typing "prompts:name" should also work.
@@ -144,6 +220,7 @@ impl CommandPopup {
                 out.push((CommandItem::UserPrompt(idx), Some(indices), score));
             }
         }
+
         // When filtering, sort by ascending score and then by name for stability.
         out.sort_by(|a, b| {
             a.2.cmp(&b.2).then_with(|| {
@@ -161,10 +238,15 @@ impl CommandPopup {
         out
     }
 
+    /// Returns only the matched command items, discarding highlight metadata.
     fn filtered_items(&self) -> Vec<CommandItem> {
         self.filtered().into_iter().map(|(c, _, _)| c).collect()
     }
 
+    /// Builds display rows for the popup from match data.
+    ///
+    /// Highlight indices from [`fuzzy_match`] are shifted by one to account for
+    /// the leading `/` in the rendered command name.
     fn rows_from_matches(
         &self,
         matches: Vec<(CommandItem, Option<Vec<usize>>, i32)>,
@@ -199,14 +281,14 @@ impl CommandPopup {
             .collect()
     }
 
-    /// Move the selection cursor one step up.
+    /// Moves the selection cursor one step up, wrapping at the top.
     pub(crate) fn move_up(&mut self) {
         let len = self.filtered_items().len();
         self.state.move_up_wrap(len);
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
-    /// Move the selection cursor one step down.
+    /// Moves the selection cursor one step down, wrapping at the bottom.
     pub(crate) fn move_down(&mut self) {
         let matches_len = self.filtered_items().len();
         self.state.move_down_wrap(matches_len);
@@ -214,7 +296,7 @@ impl CommandPopup {
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
 
-    /// Return currently selected command, if any.
+    /// Returns the currently selected command, if any.
     pub(crate) fn selected_item(&self) -> Option<CommandItem> {
         let matches = self.filtered_items();
         self.state
@@ -224,6 +306,7 @@ impl CommandPopup {
 }
 
 impl WidgetRef for CommandPopup {
+    /// Renders the popup rows into the provided buffer.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
         render_rows(
@@ -242,9 +325,11 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// Exercises prefix filtering by asserting `/init` remains among matches.
     #[test]
     fn filter_includes_init_when_typing_prefix() {
         let mut popup = CommandPopup::new(Vec::new(), false);
+
         // Simulate the composer line starting with '/in' so the popup filters
         // matching commands by prefix.
         popup.on_composer_text_change("/in".to_string());
@@ -262,6 +347,7 @@ mod tests {
         );
     }
 
+    /// Verifies that exact matches are selected when the filter is fully typed.
     #[test]
     fn selecting_init_by_exact_match() {
         let mut popup = CommandPopup::new(Vec::new(), false);
@@ -277,6 +363,7 @@ mod tests {
         }
     }
 
+    /// Verifies fuzzy ordering ranks `/model` first for the `/mo` filter.
     #[test]
     fn model_is_first_suggestion_for_mo() {
         let mut popup = CommandPopup::new(Vec::new(), false);
@@ -291,6 +378,7 @@ mod tests {
         }
     }
 
+    /// Confirms unfiltered results include every custom prompt in name order.
     #[test]
     fn prompt_discovery_lists_custom_prompts() {
         let prompts = vec![
@@ -322,6 +410,7 @@ mod tests {
         assert_eq!(prompt_names, vec!["bar".to_string(), "foo".to_string()]);
     }
 
+    /// Asserts that prompts colliding with built-in names are dropped.
     #[test]
     fn prompt_name_collision_with_builtin_is_ignored() {
         // Create a prompt named like a builtin (e.g. "init").
@@ -346,6 +435,7 @@ mod tests {
         );
     }
 
+    /// Asserts prompt rows use frontmatter descriptions when provided.
     #[test]
     fn prompt_description_uses_frontmatter_metadata() {
         let popup = CommandPopup::new(
@@ -366,6 +456,7 @@ mod tests {
         );
     }
 
+    /// Asserts prompt rows fall back to a generic description when missing.
     #[test]
     fn prompt_description_falls_back_when_missing() {
         let popup = CommandPopup::new(
@@ -383,6 +474,7 @@ mod tests {
         assert_eq!(description, Some("send saved prompt"));
     }
 
+    /// Exercises fuzzy matching that allows non-prefix subsequences.
     #[test]
     fn fuzzy_filter_matches_subsequence_for_ac() {
         let mut popup = CommandPopup::new(Vec::new(), false);

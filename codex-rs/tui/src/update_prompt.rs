@@ -1,3 +1,10 @@
+//! Update prompt flow shown when a newer CLI version is available.
+//!
+//! This module renders a modal prompt that lets the user choose whether to run
+//! an update command immediately, skip for now, or dismiss until the next
+//! version. It owns the event loop while displayed and returns a high-level
+//! outcome to the caller.
+
 #![cfg(not(debug_assertions))]
 
 use crate::history_cell::padded_emoji;
@@ -27,11 +34,15 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 use tokio_stream::StreamExt;
 
+/// Outcome returned by the update prompt flow.
 pub(crate) enum UpdatePromptOutcome {
+    /// Continue without running an update command.
     Continue,
+    /// Run the supplied update action.
     RunUpdate(UpdateAction),
 }
 
+/// Runs the update prompt if a newer version is eligible for display.
 pub(crate) async fn run_update_prompt_if_needed(
     tui: &mut Tui,
     config: &Config,
@@ -83,23 +94,35 @@ pub(crate) async fn run_update_prompt_if_needed(
     }
 }
 
+/// User-facing options in the update prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UpdateSelection {
+    /// Run the update command immediately.
     UpdateNow,
+    /// Skip this prompt for now.
     NotNow,
+    /// Suppress prompts for this version.
     DontRemind,
 }
 
+/// Screen state for the interactive update prompt.
 struct UpdatePromptScreen {
+    /// Frame requester used to trigger redraws after selection changes.
     request_frame: FrameRequester,
+    /// Latest available version string.
     latest_version: String,
+    /// Current CLI version string.
     current_version: String,
+    /// Update action to run if the user confirms.
     update_action: UpdateAction,
+    /// Currently highlighted option.
     highlighted: UpdateSelection,
+    /// Final selection once the prompt is complete.
     selection: Option<UpdateSelection>,
 }
 
 impl UpdatePromptScreen {
+    /// Create a prompt screen with the version string and update action.
     fn new(
         request_frame: FrameRequester,
         latest_version: String,
@@ -115,6 +138,7 @@ impl UpdatePromptScreen {
         }
     }
 
+    /// Handles key input for navigation and selection.
     fn handle_key(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release {
             return;
@@ -137,6 +161,7 @@ impl UpdatePromptScreen {
         }
     }
 
+    /// Updates the highlighted option and triggers a redraw.
     fn set_highlight(&mut self, highlight: UpdateSelection) {
         if self.highlighted != highlight {
             self.highlighted = highlight;
@@ -144,26 +169,31 @@ impl UpdatePromptScreen {
         }
     }
 
+    /// Records a selection and triggers a redraw.
     fn select(&mut self, selection: UpdateSelection) {
         self.highlighted = selection;
         self.selection = Some(selection);
         self.request_frame.schedule_frame();
     }
 
+    /// Returns true when the user has made a selection.
     fn is_done(&self) -> bool {
         self.selection.is_some()
     }
 
+    /// Returns the selected action, if any.
     fn selection(&self) -> Option<UpdateSelection> {
         self.selection
     }
 
+    /// Returns the latest version string shown in the prompt.
     fn latest_version(&self) -> &str {
         self.latest_version.as_str()
     }
 }
 
 impl UpdateSelection {
+    /// Returns the next selection in display order.
     fn next(self) -> Self {
         match self {
             UpdateSelection::UpdateNow => UpdateSelection::NotNow,
@@ -172,6 +202,7 @@ impl UpdateSelection {
         }
     }
 
+    /// Returns the previous selection in display order.
     fn prev(self) -> Self {
         match self {
             UpdateSelection::UpdateNow => UpdateSelection::DontRemind,
@@ -182,6 +213,7 @@ impl UpdateSelection {
 }
 
 impl WidgetRef for &UpdatePromptScreen {
+    /// Renders the update prompt as a column of labeled options.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let mut column = ColumnRenderable::new();

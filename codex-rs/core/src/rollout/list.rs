@@ -436,7 +436,7 @@ async fn traverse_directories_for_paths_updated(
     })
 }
 
-/// Pagination cursor token format: "<ts>|<uuid>" where `ts` uses
+/// Pagination cursor token format: `"<ts>|<uuid>"` where `ts` uses
 /// YYYY-MM-DDThh-mm-ss (UTC, second precision).
 /// The cursor orders files by the requested sort key (timestamp desc, then UUID desc).
 pub fn parse_cursor(token: &str) -> Option<Cursor> {

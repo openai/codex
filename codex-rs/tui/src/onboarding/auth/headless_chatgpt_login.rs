@@ -1,3 +1,14 @@
+//! Drives the headless ChatGPT login flow used during onboarding.
+//!
+//! The logic here starts a device code login attempt, renders the device code prompt, and updates
+//! shared `SignInState` as the async flow progresses. A per-attempt `Notify` handle is stored in the
+//! state so only the active login task can mutate the UI; this prevents stale tasks from
+//! overwriting newer attempts when users restart or cancel.
+//!
+//! If requesting a device code fails with a missing helper binary, the flow falls back to running
+//! the local login server and waits for the browser-based sign-in to complete. Each state
+//! transition schedules a new frame so the UI stays responsive and shimmer animations keep moving.
+
 use codex_core::AuthManager;
 use codex_login::ServerOptions;
 use codex_login::complete_device_code_login;
@@ -22,6 +33,7 @@ use super::ContinueInBrowserState;
 use super::ContinueWithDeviceCodeState;
 use super::SignInState;
 
+/// Starts a background device-code login attempt and updates the sign-in state machine.
 pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts: ServerOptions) {
     opts.open_browser = false;
     let sign_in_state = widget.sign_in_state.clone();
@@ -128,6 +140,7 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
     });
 }
 
+/// Renders the device-code instructions or loading state for the active attempt.
 pub(super) fn render_device_code_login(
     widget: &AuthModeWidget,
     area: Rect,
@@ -187,6 +200,7 @@ pub(super) fn render_device_code_login(
         .render(area, buf);
 }
 
+/// Returns `true` when the sign-in state still matches the provided cancel token.
 fn device_code_attempt_matches(state: &SignInState, cancel: &Arc<Notify>) -> bool {
     matches!(
         state,
@@ -198,6 +212,7 @@ fn device_code_attempt_matches(state: &SignInState, cancel: &Arc<Notify>) -> boo
     )
 }
 
+/// Initializes a device-code attempt and returns the cancellation token for it.
 fn begin_device_code_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
     request_frame: &FrameRequester,
@@ -211,6 +226,7 @@ fn begin_device_code_attempt(
     cancel
 }
 
+/// Updates the sign-in state only if the current attempt has not been superseded.
 fn set_device_code_state_for_active_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
     request_frame: &FrameRequester,
@@ -228,6 +244,7 @@ fn set_device_code_state_for_active_attempt(
     true
 }
 
+/// Marks the active attempt successful and refreshes credentials if still current.
 fn set_device_code_success_message_for_active_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
     request_frame: &FrameRequester,
@@ -253,6 +270,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
+    /// Builds a sign-in state wrapper for tests that need a device-code attempt.
     fn device_code_sign_in_state(cancel: Arc<Notify>) -> Arc<RwLock<SignInState>> {
         Arc::new(RwLock::new(SignInState::ChatGptDeviceCode(
             ContinueWithDeviceCodeState {
@@ -262,6 +280,7 @@ mod tests {
         )))
     }
 
+    /// Ensures the cancel token gates which device-code attempt can update state.
     #[test]
     fn device_code_attempt_matches_only_for_matching_cancel() {
         let cancel = Arc::new(Notify::new());
@@ -281,6 +300,7 @@ mod tests {
         );
     }
 
+    /// Starts a device-code attempt and records the empty initial state.
     #[test]
     fn begin_device_code_attempt_sets_state() {
         let sign_in_state = Arc::new(RwLock::new(SignInState::PickMode));
@@ -297,6 +317,7 @@ mod tests {
         ));
     }
 
+    /// Updates state only when the cancel token matches the active attempt.
     #[test]
     fn set_device_code_state_for_active_attempt_updates_only_when_active() {
         let request_frame = FrameRequester::test_dummy();
@@ -333,6 +354,7 @@ mod tests {
         ));
     }
 
+    /// Updates to the success message only for the active attempt token.
     #[test]
     fn set_device_code_success_message_for_active_attempt_updates_only_when_active() {
         let request_frame = FrameRequester::test_dummy();

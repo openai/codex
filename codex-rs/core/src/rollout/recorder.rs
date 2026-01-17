@@ -38,7 +38,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 
-/// Records all [`ResponseItem`]s for a session and flushes them to disk after
+/// Records all [`codex_protocol::models::ResponseItem`]s for a session and flushes them to disk after
 /// every update.
 ///
 /// Rollouts are recorded as JSONL and can be inspected with tools such as:

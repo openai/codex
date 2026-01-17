@@ -3,6 +3,11 @@
 //! These tests treat the widget as the adapter between `codex_core::protocol::EventMsg` inputs and
 //! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
 //! changes show up as stable, reviewable diffs.
+//!
+//! Most tests build a widget with in-memory channels, inject protocol events or key presses, and
+//! then drain `AppEvent::InsertHistoryCell` output for inspection. VT100-backed snapshots capture
+//! end-to-end layout, while targeted helpers (`render_bottom_popup`, `active_blob`) focus on modal
+//! and active-cell rendering without requiring a full application loop.
 
 use super::*;
 use crate::app_event::AppEvent;
@@ -81,16 +86,19 @@ use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
+/// Sets the Windows sandbox feature flag for tests that need to toggle behavior.
 #[cfg(target_os = "windows")]
 fn set_windows_sandbox_enabled(enabled: bool) {
     codex_core::set_windows_sandbox_enabled(enabled);
 }
 
+/// Sets the elevated sandbox feature flag for tests that exercise degraded flows.
 #[cfg(target_os = "windows")]
 fn set_windows_elevated_sandbox_enabled(enabled: bool) {
     codex_core::set_windows_elevated_sandbox_enabled(enabled);
 }
 
+/// Builds a baseline config using temp directories to avoid host dependencies.
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     let codex_home = std::env::temp_dir();
@@ -101,6 +109,7 @@ async fn test_config() -> Config {
         .expect("config")
 }
 
+/// Constructs a constraint error for invalid values in test helpers.
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
     ConstraintError::InvalidValue {
         field_name: "<unknown>",
@@ -110,6 +119,7 @@ fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> Co
     }
 }
 
+/// Creates a rate-limit snapshot with a single primary window.
 fn snapshot(percent: f64) -> RateLimitSnapshot {
     RateLimitSnapshot {
         primary: Some(RateLimitWindow {
@@ -123,6 +133,7 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
     }
 }
 
+/// Replays `SessionConfigured` initial messages into the history stream.
 #[tokio::test]
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
@@ -181,7 +192,7 @@ async fn resumed_initial_messages_render_history() {
     );
 }
 
-/// Entering review mode uses the hint provided by the review request.
+/// Uses the review request hint when rendering the "review started" banner.
 #[tokio::test]
 async fn entered_review_mode_uses_request_hint() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
@@ -202,7 +213,7 @@ async fn entered_review_mode_uses_request_hint() {
     assert!(chat.is_review_mode);
 }
 
-/// Entering review mode renders the current changes banner when requested.
+/// Falls back to the default "current changes" review banner when no hint is provided.
 #[tokio::test]
 async fn entered_review_mode_defaults_to_current_changes_banner() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
@@ -221,7 +232,7 @@ async fn entered_review_mode_defaults_to_current_changes_banner() {
     assert!(chat.is_review_mode);
 }
 
-/// Exiting review restores the pre-review context window indicator.
+/// Restores the pre-review context window indicator after exiting review mode.
 #[tokio::test]
 async fn review_restores_context_window_indicator() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
@@ -270,7 +281,7 @@ async fn review_restores_context_window_indicator() {
     assert!(!chat.is_review_mode);
 }
 
-/// Receiving a TokenCount event without usage clears the context indicator.
+/// Clears the context window indicator when token usage is missing.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
@@ -297,6 +308,7 @@ async fn token_count_none_resets_context_indicator() {
     assert_eq!(chat.bottom_pane.context_window_percent(), None);
 }
 
+/// Falls back to used-token counts when the model's context window is unknown.
 #[tokio::test]
 async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("unknown-model")).await;
@@ -332,6 +344,7 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
     );
 }
 
+/// Ensures helper wiring is present without exercising external system APIs.
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"
@@ -365,7 +378,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let _ = &mut w;
 }
 
-// --- Helpers for tests that need direct construction and event draining ---
+/// Builds a chat widget with test-only channels and an optional model override.
 async fn make_chatwidget_manual(
     model_override: Option<&str>,
 ) -> (
@@ -449,6 +462,7 @@ async fn make_chatwidget_manual(
     (widget, rx, op_rx)
 }
 
+/// Switches the widget to a ChatGPT auth flow and refreshes the models manager.
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
@@ -458,6 +472,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
     ));
 }
 
+/// Returns a test widget plus its event sender and receivers for assertions.
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     ChatWidget,
     AppEventSender,
@@ -469,6 +484,7 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     (widget, app_event_tx, rx, op_rx)
 }
 
+/// Drains pending history insert events into renderable line buffers.
 fn drain_insert_history(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
@@ -485,6 +501,7 @@ fn drain_insert_history(
     out
 }
 
+/// Flattens styled lines into a single newline-delimited string for asserts.
 fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     let mut s = String::new();
     for line in lines {
@@ -496,7 +513,9 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     s
 }
 
+/// Builds a token usage info payload with a fixed context window.
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
+    /// Builds a defaulted token usage payload with the provided total.
     fn usage(total_tokens: i64) -> TokenUsage {
         TokenUsage {
             total_tokens,
@@ -511,6 +530,7 @@ fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
     }
 }
 
+/// Emits at most one warning per threshold level across primary and secondary limits.
 #[tokio::test]
 async fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
@@ -543,6 +563,7 @@ async fn rate_limit_warnings_emit_thresholds() {
     );
 }
 
+/// Emits monthly warnings once when the remaining percentage crosses thresholds.
 #[tokio::test]
 async fn test_rate_limit_warnings_monthly() {
     let mut state = RateLimitWarningState::default();
@@ -558,6 +579,7 @@ async fn test_rate_limit_warnings_monthly() {
     );
 }
 
+/// Preserves the prior credits balance when later snapshots omit credits.
 #[tokio::test]
 async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -607,6 +629,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     );
 }
 
+/// Updates plan type when supplied and retains the previous value when absent.
 #[tokio::test]
 async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -660,6 +683,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
 }
 
+/// Skips the model nudge prompt when already on the lower-cost model.
 #[tokio::test]
 async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
@@ -674,6 +698,7 @@ async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     ));
 }
 
+/// Shows the model switch prompt only once per session even as usage increases.
 #[tokio::test]
 async fn rate_limit_switch_prompt_shows_once_per_session() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -698,6 +723,7 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
     ));
 }
 
+/// Honors a stored notice preference to suppress the model switch prompt.
 #[tokio::test]
 async fn rate_limit_switch_prompt_respects_hidden_notice() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -713,6 +739,7 @@ async fn rate_limit_switch_prompt_respects_hidden_notice() {
     ));
 }
 
+/// Defers the model switch prompt until the task completes.
 #[tokio::test]
 async fn rate_limit_switch_prompt_defers_until_task_complete() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -734,6 +761,7 @@ async fn rate_limit_switch_prompt_defers_until_task_complete() {
     ));
 }
 
+/// Snapshots the model switch popup after it becomes visible.
 #[tokio::test]
 async fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
@@ -749,6 +777,7 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 
 // (removed experimental resize snapshot test)
 
+/// Approving an exec request emits decision history without leaking through history cells.
 #[tokio::test]
 async fn exec_approval_emits_proposed_command_and_decision_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -793,6 +822,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     );
 }
 
+/// Ensures multiline and long commands render in modals while history is truncated.
 #[tokio::test]
 async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -878,7 +908,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     );
 }
 
-// --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
+/// Emits an exec-begin event using the provided command source.
 fn begin_exec_with_source(
     chat: &mut ChatWidget,
     call_id: &str,
@@ -908,6 +938,7 @@ fn begin_exec_with_source(
     event
 }
 
+/// Emits a unified-exec startup begin event for snapshot tests.
 fn begin_unified_exec_startup(
     chat: &mut ChatWidget,
     call_id: &str,
@@ -933,6 +964,7 @@ fn begin_unified_exec_startup(
     event
 }
 
+/// Emits a terminal interaction event with captured stdin text.
 fn terminal_interaction(chat: &mut ChatWidget, call_id: &str, process_id: &str, stdin: &str) {
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
@@ -944,10 +976,12 @@ fn terminal_interaction(chat: &mut ChatWidget, call_id: &str, process_id: &str, 
     });
 }
 
+/// Convenience wrapper for agent-sourced exec begin events.
 fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecCommandBeginEvent {
     begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
 }
 
+/// Emits an exec-end event using the begin payload and output strings.
 fn end_exec(
     chat: &mut ChatWidget,
     begin_event: ExecCommandBeginEvent,
@@ -991,6 +1025,7 @@ fn end_exec(
     });
 }
 
+/// Renders the active history cell to a single string for assertions.
 fn active_blob(chat: &ChatWidget) -> String {
     let lines = chat
         .active_cell
@@ -1000,6 +1035,7 @@ fn active_blob(chat: &ChatWidget) -> String {
     lines_to_single_string(&lines)
 }
 
+/// Looks up a model preset by name in the cached model list.
 fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .models_manager
@@ -1012,6 +1048,7 @@ fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
         .unwrap_or_else(|| panic!("{model} preset not found"))
 }
 
+/// Leaves the queue empty when Enter is pressed with no composer text.
 #[tokio::test]
 async fn empty_enter_during_task_does_not_queue() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1026,6 +1063,7 @@ async fn empty_enter_during_task_does_not_queue() {
     assert!(chat.queued_user_messages.is_empty());
 }
 
+/// Moves the newest queued message back into the composer via Alt+Up.
 #[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1059,6 +1097,7 @@ async fn alt_up_edits_most_recent_queued_message() {
 /// Pressing Up to recall the most recent history entry and immediately queuing
 /// it while a task is running should always enqueue the same text, even when it
 /// is queued repeatedly.
+/// Re-queues recalled history prompts consistently across repeated cycles.
 #[tokio::test]
 async fn enqueueing_history_prompt_multiple_times_is_stable() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1086,6 +1125,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
     }
 }
 
+/// Keeps task-running state while streaming a final answer and handling interrupts.
 #[tokio::test]
 async fn streaming_final_answer_keeps_task_running_state() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
@@ -1117,6 +1157,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 }
 
+/// Accepts Ctrl+C even with Caps Lock and requests a shutdown exit mode.
 #[tokio::test]
 async fn ctrl_c_shutdown_works_with_caps_lock() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1126,6 +1167,7 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
+/// Exits immediately on Ctrl+D when no modal is active.
 #[tokio::test]
 async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1134,6 +1176,7 @@ async fn ctrl_d_quits_without_prompt() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
+/// Ignores Ctrl+D when an approval modal is open.
 #[tokio::test]
 async fn ctrl_d_with_modal_open_does_not_quit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1144,6 +1187,7 @@ async fn ctrl_d_with_modal_open_does_not_quit() {
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
+/// Restores a cleared prompt via history recall after Ctrl+C interruption.
 #[tokio::test]
 async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
@@ -1178,6 +1222,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     );
 }
 
+/// Finalizes an exec cell with a success summary once the command ends.
 #[tokio::test]
 async fn exec_history_cell_shows_working_then_completed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1208,6 +1253,7 @@ async fn exec_history_cell_shows_working_then_completed() {
     );
 }
 
+/// Finalizes an exec cell with failure output when the command exits nonzero.
 #[tokio::test]
 async fn exec_history_cell_shows_working_then_failed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1232,6 +1278,7 @@ async fn exec_history_cell_shows_working_then_failed() {
     assert!(blob.to_lowercase().contains("bloop"), "expected error text");
 }
 
+/// Uses the end event command when the begin event is missing.
 #[tokio::test]
 async fn exec_end_without_begin_uses_event_command() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1275,6 +1322,7 @@ async fn exec_end_without_begin_uses_event_command() {
     );
 }
 
+/// Renders unified-exec startup commands into history after completion.
 #[tokio::test]
 async fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1302,6 +1350,7 @@ async fn exec_history_shows_unified_exec_startup_commands() {
     );
 }
 
+/// Groups unified exec tool calls into the active "Explored" cell.
 #[tokio::test]
 async fn exec_history_shows_unified_exec_tool_calls() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1319,6 +1368,7 @@ async fn exec_history_shows_unified_exec_tool_calls() {
     assert_eq!(blob, "• Explored\n  └ List ls\n");
 }
 
+/// Suppresses late unified-exec completion after a task completes.
 #[tokio::test]
 async fn unified_exec_end_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1342,6 +1392,7 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     );
 }
 
+/// Updates the status header when an exec wait gains command display text.
 #[tokio::test]
 async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1363,6 +1414,7 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     );
 }
 
+/// Snapshots the empty-wait unified exec state after multiple empty inputs.
 #[tokio::test]
 async fn unified_exec_waiting_multiple_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1390,6 +1442,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
     assert_snapshot!("unified_exec_waiting_multiple_empty_after", combined);
 }
 
+/// Snapshots unified exec output when empty input is followed by text.
 #[tokio::test]
 async fn unified_exec_empty_then_non_empty_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1406,6 +1459,7 @@ async fn unified_exec_empty_then_non_empty_snapshot() {
     assert_snapshot!("unified_exec_empty_then_non_empty_after", combined);
 }
 
+/// Snapshots unified exec output when text is followed by empty input.
 #[tokio::test]
 async fn unified_exec_non_empty_then_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1447,8 +1501,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     assert_snapshot!("unified_exec_non_empty_then_empty_after", combined);
 }
 
-/// Selecting the custom prompt option from the review popup sends
-/// OpenReviewCustomPrompt to the app event channel.
+/// Selecting the custom prompt option dispatches the OpenReviewCustomPrompt event.
 #[tokio::test]
 async fn review_popup_custom_prompt_action_sends_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1474,6 +1527,7 @@ async fn review_popup_custom_prompt_action_sends_event() {
     assert!(found, "expected OpenReviewCustomPrompt event to be sent");
 }
 
+/// Emits the existing-doc warning and skips `/init` when the project doc exists.
 #[tokio::test]
 async fn slash_init_skips_when_project_doc_exists() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
@@ -1506,6 +1560,7 @@ async fn slash_init_skips_when_project_doc_exists() {
     );
 }
 
+/// Requests a shutdown exit when `/quit` is dispatched.
 #[tokio::test]
 async fn slash_quit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1515,6 +1570,7 @@ async fn slash_quit_requests_exit() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
+/// Requests a shutdown exit when `/exit` is dispatched.
 #[tokio::test]
 async fn slash_exit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1524,6 +1580,7 @@ async fn slash_exit_requests_exit() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
+/// Opens the resume picker when `/resume` is dispatched.
 #[tokio::test]
 async fn slash_resume_opens_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1533,6 +1590,7 @@ async fn slash_resume_opens_picker() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
 }
 
+/// Requests forking the current session when `/fork` is dispatched.
 #[tokio::test]
 async fn slash_fork_requests_current_fork() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1542,6 +1600,7 @@ async fn slash_fork_requests_current_fork() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
 }
 
+/// Renders the current rollout path when `/rollout` is dispatched.
 #[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1559,6 +1618,7 @@ async fn slash_rollout_displays_current_path() {
     );
 }
 
+/// Shows a "not available" message when no rollout path is set.
 #[tokio::test]
 async fn slash_rollout_handles_missing_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1578,6 +1638,7 @@ async fn slash_rollout_handles_missing_path() {
     );
 }
 
+/// Emits a default success message and hides the status indicator on undo completion.
 #[tokio::test]
 async fn undo_success_events_render_info_messages() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1615,6 +1676,7 @@ async fn undo_success_events_render_info_messages() {
     );
 }
 
+/// Emits the provided error message and hides the status indicator on undo failure.
 #[tokio::test]
 async fn undo_failure_events_render_error_message() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1650,6 +1712,7 @@ async fn undo_failure_events_render_error_message() {
     );
 }
 
+/// Hides the interrupt hint while undo is in progress.
 #[tokio::test]
 async fn undo_started_hides_interrupt_hint() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1669,7 +1732,7 @@ async fn undo_started_hides_interrupt_hint() {
     );
 }
 
-/// The commit picker shows only commit subjects (no timestamps).
+/// Ensures the review commit picker renders subjects without relative timestamps.
 #[tokio::test]
 async fn review_commit_picker_shows_subjects_without_timestamps() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1730,8 +1793,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
     );
 }
 
-/// Submitting the custom prompt view sends Op::Review with the typed prompt
-/// and uses the same text for the user-facing hint.
+/// Submits the custom review prompt and trims it before sending the Op::Review.
 #[tokio::test]
 async fn custom_prompt_submit_sends_review_op() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1759,7 +1821,7 @@ async fn custom_prompt_submit_sends_review_op() {
     }
 }
 
-/// Hitting Enter on an empty custom prompt view does not submit.
+/// Leaves the custom prompt view idle when Enter is pressed without input.
 #[tokio::test]
 async fn custom_prompt_enter_empty_does_not_send() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1772,6 +1834,7 @@ async fn custom_prompt_enter_empty_does_not_send() {
     assert!(rx.try_recv().is_err(), "no app event should be sent");
 }
 
+/// Adds a history cell when the agent requests a local image view.
 #[tokio::test]
 async fn view_image_tool_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1791,8 +1854,7 @@ async fn view_image_tool_call_adds_history_cell() {
     assert_snapshot!("local_image_attachment_history_snapshot", combined);
 }
 
-// Snapshot test: interrupting a running exec finalizes the active cell with a red ✗
-// marker (replacing the spinner) and flushes it into history.
+/// Snapshots the exec cell after an interruption finalizes it as failed.
 #[tokio::test]
 async fn interrupt_exec_marks_failed_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1820,8 +1882,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     assert_snapshot!("interrupt_exec_marks_failed", exec_blob);
 }
 
-// Snapshot test: after an interrupted turn, a gentle error message is inserted
-// suggesting the user to tell the model what to do differently and to use /feedback.
+/// Snapshots the friendly error message emitted after an interrupted turn.
 #[tokio::test]
 async fn interrupted_turn_error_message_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1851,8 +1912,7 @@ async fn interrupted_turn_error_message_snapshot() {
     assert_snapshot!("interrupted_turn_error_message", last);
 }
 
-/// Opening custom prompt from the review popup, pressing Esc returns to the
-/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
+/// Verifies Esc navigates from custom prompt to parent popup and then closes.
 #[tokio::test]
 async fn review_custom_prompt_escape_navigates_back_then_dismisses() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1886,8 +1946,7 @@ async fn review_custom_prompt_escape_navigates_back_then_dismisses() {
     );
 }
 
-/// Opening base-branch picker from the review popup, pressing Esc returns to the
-/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
+/// Verifies Esc navigates from the base-branch picker back to the review popup.
 #[tokio::test]
 async fn review_branch_picker_escape_navigates_back_then_dismisses() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1922,6 +1981,7 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
     );
 }
 
+/// Returns the first non-empty rendered row for bottom-pane header assertions.
 fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
@@ -1944,6 +2004,7 @@ fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     String::new()
 }
 
+/// Renders the bottom pane to a trimmed multiline string snapshot.
 fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
@@ -1975,6 +2036,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     lines.join("\n")
 }
 
+/// Snapshots the experimental features popup rendering with mixed toggles.
 #[tokio::test]
 async fn experimental_features_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2000,6 +2062,7 @@ async fn experimental_features_popup_snapshot() {
     assert_snapshot!("experimental_features_popup", popup);
 }
 
+/// Saves experimental feature toggles only when exiting the popup.
 #[tokio::test]
 async fn experimental_features_toggle_saves_on_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2040,6 +2103,7 @@ async fn experimental_features_toggle_saves_on_exit() {
     assert_eq!(updates, vec![(expected_feature, true)]);
 }
 
+/// Snapshots the model selection popup with a running session.
 #[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
@@ -2050,6 +2114,7 @@ async fn model_selection_popup_snapshot() {
     assert_snapshot!("model_selection_popup", popup);
 }
 
+/// Filters out models marked as hidden from the picker snapshot.
 #[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
@@ -2086,6 +2151,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     );
 }
 
+/// Snapshots the approval mode selection popup.
 #[tokio::test]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2102,6 +2168,7 @@ async fn approvals_selection_popup_snapshot() {
     assert_snapshot!("approvals_selection_popup", popup);
 }
 
+/// Snapshots the approval popup in the Windows degraded sandbox configuration.
 #[cfg(target_os = "windows")]
 #[tokio::test]
 #[serial]
@@ -2131,6 +2198,7 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     set_windows_elevated_sandbox_enabled(was_elevated_enabled);
 }
 
+/// Matches the preset when extra writable roots are present in the sandbox policy.
 #[tokio::test]
 async fn preset_matching_ignores_extra_writable_roots() {
     let preset = builtin_approval_presets()
@@ -2154,6 +2222,7 @@ async fn preset_matching_ignores_extra_writable_roots() {
     );
 }
 
+/// Snapshots the full access confirmation modal.
 #[tokio::test]
 async fn full_access_confirmation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2168,6 +2237,7 @@ async fn full_access_confirmation_popup_snapshot() {
     assert_snapshot!("full_access_confirmation_popup", popup);
 }
 
+/// Prompts the user to enable the Windows sandbox when auto mode requires it.
 #[cfg(target_os = "windows")]
 #[tokio::test]
 async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
@@ -2186,6 +2256,7 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     );
 }
 
+/// Shows the startup sandbox enable prompt when auto mode is downgraded.
 #[cfg(target_os = "windows")]
 #[tokio::test]
 async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
@@ -2213,6 +2284,7 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
     set_windows_sandbox_enabled(true);
 }
 
+/// Snapshots the reasoning effort selection popup for a model.
 #[tokio::test]
 async fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
@@ -2227,6 +2299,7 @@ async fn model_reasoning_selection_popup_snapshot() {
     assert_snapshot!("model_reasoning_selection_popup", popup);
 }
 
+/// Snapshots the extra-high reasoning warning variant of the popup.
 #[tokio::test]
 async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
@@ -2241,6 +2314,7 @@ async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     assert_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
 }
 
+/// Ensures the reasoning label uses "Extra high" spacing.
 #[tokio::test]
 async fn reasoning_popup_shows_extra_high_with_space() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
@@ -2261,6 +2335,7 @@ async fn reasoning_popup_shows_extra_high_with_space() {
     );
 }
 
+/// Skips the reasoning picker when only one effort option exists.
 #[tokio::test]
 async fn single_reasoning_option_skips_selection() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2302,6 +2377,7 @@ async fn single_reasoning_option_skips_selection() {
     );
 }
 
+/// Snapshots the feedback category selection popup.
 #[tokio::test]
 async fn feedback_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2313,6 +2389,7 @@ async fn feedback_selection_popup_snapshot() {
     assert_snapshot!("feedback_selection_popup", popup);
 }
 
+/// Snapshots the feedback upload consent prompt.
 #[tokio::test]
 async fn feedback_upload_consent_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2324,6 +2401,7 @@ async fn feedback_upload_consent_popup_snapshot() {
     assert_snapshot!("feedback_upload_consent_popup", popup);
 }
 
+/// Returns from the reasoning popup back to the model selection popup on Esc.
 #[tokio::test]
 async fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
@@ -2343,6 +2421,7 @@ async fn reasoning_popup_escape_returns_to_model_popup() {
     assert!(!after_escape.contains("Select Reasoning Level"));
 }
 
+/// Extends an active exec history cell when commands are consecutive.
 #[tokio::test]
 async fn exec_history_extends_previous_when_consecutive() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2374,6 +2453,7 @@ async fn exec_history_extends_previous_when_consecutive() {
     assert_snapshot!("exploring_step6_finish_cat_bar", active_blob(&chat));
 }
 
+/// Renders user shell output without tagging it as "exploring" history.
 #[tokio::test]
 async fn user_shell_command_renders_output_not_exploring() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2396,6 +2476,7 @@ async fn user_shell_command_renders_output_not_exploring() {
     assert_snapshot!("user_shell_ls_output", blob);
 }
 
+/// Snapshots the error shown when a disabled slash command is run mid-task.
 #[tokio::test]
 async fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
@@ -2415,6 +2496,7 @@ async fn disabled_slash_command_while_task_running_snapshot() {
     assert_snapshot!(blob);
 }
 
+/// Renders disabled approval presets with their validation messages.
 #[tokio::test]
 async fn approvals_popup_shows_disabled_presets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2451,6 +2533,7 @@ async fn approvals_popup_shows_disabled_presets() {
     );
 }
 
+/// Skips disabled approval presets during navigation and selection.
 #[tokio::test]
 async fn approvals_popup_navigation_skips_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
@@ -2520,11 +2603,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     );
 }
 
-//
-// Snapshot test: command approval modal
-//
-// Synthesizes a Codex ExecApprovalRequest event to trigger the approval modal
-// and snapshots the visual output using the ratatui TestBackend.
+/// Snapshots the command approval modal using a synthetic exec request.
 #[tokio::test]
 async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
     // Build a chat widget with manual channels to avoid spawning the agent.
@@ -2580,8 +2659,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Snapshot test: command approval modal without a reason
-// Ensures spacing looks correct when no reason text is provided.
+/// Snapshots the command approval modal when no reason text is provided.
 #[tokio::test]
 async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2621,8 +2699,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Snapshot test: approval modal with a proposed execpolicy prefix that is multi-line;
-// we should not offer adding it to execpolicy.
+/// Hides the execpolicy option when the proposed prefix spans multiple lines.
 #[tokio::test]
 async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
 -> anyhow::Result<()> {
@@ -2663,7 +2740,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
     Ok(())
 }
 
-// Snapshot test: patch approval modal
+/// Snapshots the patch approval modal with a single-file change.
 #[tokio::test]
 async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2705,6 +2782,7 @@ async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Restores queued messages into the composer when a task is interrupted.
 #[tokio::test]
 async fn interrupt_restores_queued_messages_into_composer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
@@ -2744,6 +2822,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     let _ = drain_insert_history(&mut rx);
 }
 
+/// Inserts queued messages ahead of existing draft text on interruption.
 #[tokio::test]
 async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
@@ -2778,6 +2857,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     let _ = drain_insert_history(&mut rx);
 }
 
+/// Clears unified exec process summaries when a turn is interrupted.
 #[tokio::test]
 async fn interrupt_clears_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2798,6 +2878,7 @@ async fn interrupt_clears_unified_exec_processes() {
     let _ = drain_insert_history(&mut rx);
 }
 
+/// Clears unified exec process summaries when a turn completes normally.
 #[tokio::test]
 async fn turn_complete_clears_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2818,8 +2899,7 @@ async fn turn_complete_clears_unified_exec_processes() {
     let _ = drain_insert_history(&mut rx);
 }
 
-// Snapshot test: ChatWidget at very small heights (idle)
-// Ensures overall layout behaves when terminal height is extremely constrained.
+/// Snapshots the idle layout at extremely small terminal heights.
 #[tokio::test]
 async fn ui_snapshots_small_heights_idle() {
     use ratatui::Terminal;
@@ -2835,8 +2915,7 @@ async fn ui_snapshots_small_heights_idle() {
     }
 }
 
-// Snapshot test: ChatWidget at very small heights (task running)
-// Validates how status + composer are presented within tight space.
+/// Snapshots the running-task layout at extremely small terminal heights.
 #[tokio::test]
 async fn ui_snapshots_small_heights_task_running() {
     use ratatui::Terminal;
@@ -2865,9 +2944,7 @@ async fn ui_snapshots_small_heights_task_running() {
     }
 }
 
-// Snapshot test: status widget + approval modal active together
-// The modal takes precedence visually; this captures the layout with a running
-// task (status indicator active) while an approval request is shown.
+/// Snapshots the layout when both the status indicator and approval modal are visible.
 #[tokio::test]
 async fn status_widget_and_approval_modal_snapshot() {
     use codex_core::protocol::ExecApprovalRequestEvent;
@@ -2920,8 +2997,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
 }
 
-// Snapshot test: status widget active (StatusIndicatorView)
-// Ensures the VT100 rendering of the status indicator is stable when active.
+/// Snapshots the active status indicator rendering in isolation.
 #[tokio::test]
 async fn status_widget_active_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2949,6 +3025,7 @@ async fn status_widget_active_snapshot() {
     assert_snapshot!("status_widget_active", terminal.backend());
 }
 
+/// Snapshots the MCP startup header while the server is booting.
 #[tokio::test]
 async fn mcp_startup_header_booting_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2971,6 +3048,7 @@ async fn mcp_startup_header_booting_snapshot() {
     assert_snapshot!("mcp_startup_header_booting", terminal.backend());
 }
 
+/// Leaves the running-task state intact after MCP startup completes.
 #[tokio::test]
 async fn mcp_startup_complete_does_not_clear_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2997,6 +3075,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
     assert!(chat.bottom_pane.status_indicator_visible());
 }
 
+/// Updates the status header in place when background events arrive.
 #[tokio::test]
 async fn background_event_updates_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3013,6 +3092,7 @@ async fn background_event_updates_status_header() {
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
+/// Surfaces patch approval, begin, and end events with the expected cells.
 #[tokio::test]
 async fn apply_patch_events_emit_history_cells() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3111,6 +3191,7 @@ async fn apply_patch_events_emit_history_cells() {
     );
 }
 
+/// Adjusts the apply header when a patch requires manual approval.
 #[tokio::test]
 async fn apply_patch_manual_approval_adjusts_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3160,6 +3241,7 @@ async fn apply_patch_manual_approval_adjusts_header() {
     );
 }
 
+/// Snapshots the manual approval flow once the patch apply begins.
 #[tokio::test]
 async fn apply_patch_manual_flow_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3213,6 +3295,7 @@ async fn apply_patch_manual_flow_snapshot() {
     );
 }
 
+/// Sends the submission id (not call id) when approving a patch.
 #[tokio::test]
 async fn apply_patch_approval_sends_op_with_submission_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3252,6 +3335,7 @@ async fn apply_patch_approval_sends_op_with_submission_id() {
     assert!(found, "expected PatchApproval op to be sent");
 }
 
+/// Exercises the full apply-patch flow from approval to begin/end events.
 #[tokio::test]
 async fn apply_patch_full_flow_integration_like() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
@@ -3330,6 +3414,7 @@ async fn apply_patch_full_flow_integration_like() {
     });
 }
 
+/// Shows the patch approval modal when approval policy is untrusted.
 #[tokio::test]
 async fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3377,6 +3462,7 @@ async fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Renders a diff summary in the approval modal for simple patches.
 #[tokio::test]
 async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3445,6 +3531,7 @@ async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Renders the plan update payload into a single history cell.
 #[tokio::test]
 async fn plan_update_renders_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3481,6 +3568,7 @@ async fn plan_update_renders_history_cell() {
     assert!(blob.contains("Write tests"));
 }
 
+/// Updates the status indicator on stream errors without writing history.
 #[tokio::test]
 async fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3509,6 +3597,7 @@ async fn stream_error_updates_status_indicator() {
     assert_eq!(status.details(), Some(details));
 }
 
+/// Adds a warning history cell when a Warning event arrives.
 #[tokio::test]
 async fn warning_event_adds_warning_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3528,6 +3617,7 @@ async fn warning_event_adds_warning_history_cell() {
     );
 }
 
+/// Restores the previous status header after stream recovery.
 #[tokio::test]
 async fn stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3563,6 +3653,7 @@ async fn stream_recovery_restores_previous_status_header() {
     assert!(chat.retry_status_header.is_none());
 }
 
+/// Emits multiple assistant message headers within a single turn.
 #[tokio::test]
 async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3617,6 +3708,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     assert!(first_idx < second_idx, "messages out of order: {combined}");
 }
 
+/// Renders final reasoning and message events without deltas.
 #[tokio::test]
 async fn final_reasoning_then_message_without_deltas_are_rendered() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3644,6 +3736,7 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
     assert_snapshot!(combined);
 }
 
+/// Renders delta streams followed by identical final messages without duplication.
 #[tokio::test]
 async fn deltas_then_same_final_message_are_rendered_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3705,9 +3798,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
     assert_snapshot!(combined);
 }
 
-// Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
-// This renders the final visual as seen in a terminal: history above, then a blank line,
-// then the exec block, another blank line, the status line, a blank line, and the composer.
+/// Snapshots a combined vt100 history + UI overlay layout for exec and status.
 #[tokio::test]
 async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3799,7 +3890,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
 
-// E2E vt100 snapshot for complex markdown with indented and nested fenced code blocks
+/// Snapshots vt100 output for complex markdown with nested code blocks.
 #[tokio::test]
 async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3891,6 +3982,7 @@ printf 'fenced within fenced\n'
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
 
+/// Snapshots a tall chat widget with queued user messages.
 #[tokio::test]
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3917,6 +4009,7 @@ async fn chatwidget_tall() {
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
 
+/// Snapshots queued message rendering while review mode is active.
 #[tokio::test]
 async fn review_queues_user_messages_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;

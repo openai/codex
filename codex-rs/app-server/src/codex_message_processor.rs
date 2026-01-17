@@ -1,3 +1,15 @@
+//! JSON-RPC request handling for the Codex app server.
+//!
+//! This module owns the request/response lifecycle for both the legacy
+//! conversation APIs (v1) and the newer thread/turn APIs (v2). It translates
+//! incoming `ClientRequest` values into core `CodexThread` operations, manages
+//! per-thread side state such as pending interrupts/rollbacks, and emits
+//! app-server notifications as core events stream back.
+//!
+//! The processor also hosts glue for auth flows, configuration refresh, model
+//! listing, and other helper endpoints that are not part of the turn stream but
+//! still require access to shared state (config, thread manager, login server).
+
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
@@ -192,36 +204,51 @@ use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
+/// Per-thread queue of interrupt requests waiting on `TurnAborted`.
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
+/// Shared interrupt queues keyed by conversation/thread.
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ThreadId, PendingInterruptQueue>>>;
 
+/// Shared rollback requests keyed by conversation/thread.
 pub(crate) type PendingRollbacks = Arc<Mutex<HashMap<ThreadId, RequestId>>>;
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
+    /// File-change items that have started but not yet completed.
     pub(crate) file_change_started: HashSet<String>,
+    /// Latest error observed for the active turn, if any.
     pub(crate) last_error: Option<TurnError>,
 }
 
+/// Shared summary store keyed by thread id.
 pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ThreadId, TurnSummary>>>;
 
+/// Default page size for thread list endpoints.
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
+/// Maximum page size allowed by thread list endpoints.
 const THREAD_LIST_MAX_LIMIT: usize = 100;
 
-// Duration before a ChatGPT login attempt is abandoned.
+/// Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// In-flight ChatGPT login flow state for cancellation/shutdown.
 struct ActiveLogin {
+    /// Shutdown handle for the temporary login server.
     shutdown_handle: ShutdownHandle,
+    /// Unique identifier for the login flow.
     login_id: Uuid,
 }
 
+/// Errors returned when canceling an account login.
 #[derive(Clone, Copy, Debug)]
 enum CancelLoginError {
+    /// No active login exists for the requested id.
     NotFound(Uuid),
 }
 
 impl Drop for ActiveLogin {
+    /// Ensure the temporary login server is shut down on drop.
     fn drop(&mut self) {
         self.shutdown_handle.shutdown();
     }
@@ -229,31 +256,47 @@ impl Drop for ActiveLogin {
 
 /// Handles JSON-RPC messages for Codex threads (and legacy conversation APIs).
 pub(crate) struct CodexMessageProcessor {
+    /// Authentication manager used for login flows and status queries.
     auth_manager: Arc<AuthManager>,
+    /// Thread manager that owns `CodexThread` instances.
     thread_manager: Arc<ThreadManager>,
+    /// Outgoing request/notification channel to the client.
     outgoing: Arc<OutgoingMessageSender>,
+    /// Optional path to the Linux sandbox helper binary.
     codex_linux_sandbox_exe: Option<PathBuf>,
+    /// Cached config snapshot used for request handling.
     config: Arc<Config>,
+    /// CLI override values used when reloading config.
     cli_overrides: Vec<(String, TomlValue)>,
+    /// Listener shutdown handles keyed by subscription id.
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    /// Mapping of subscription id to the thread it is bound to.
     listener_thread_ids_by_subscription: HashMap<Uuid, ThreadId>,
+    /// Currently active login flow, if any.
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
     // Queue of pending rollback requests per conversation. We reply when ThreadRollback arrives.
     pending_rollbacks: PendingRollbacks,
+    /// Accumulated per-thread turn summaries used to emit `TurnCompleted`.
     turn_summary_store: TurnSummaryStore,
+    /// Cancellation tokens for in-flight fuzzy file searches.
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// Feedback logger used for client-side feedback submissions.
     feedback: CodexFeedback,
 }
 
+/// API version associated with a request/response flow.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ApiVersion {
+    /// Legacy conversation APIs.
     V1,
+    /// Thread/turn APIs.
     V2,
 }
 
 impl CodexMessageProcessor {
+    /// Load a thread by id string and return the parsed id plus thread handle.
     async fn load_thread(
         &self,
         thread_id: &str,
@@ -277,6 +320,7 @@ impl CodexMessageProcessor {
 
         Ok((thread_id, thread))
     }
+    /// Construct a new message processor with shared state and config.
     pub fn new(
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
@@ -304,6 +348,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Reload configuration, returning an error payload on failure.
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
         Config::load_with_cli_overrides(self.cli_overrides.clone())
             .await
@@ -314,9 +359,11 @@ impl CodexMessageProcessor {
             })
     }
 
+    /// Convert a review target into a core review request and display hint.
     fn review_request_from_target(
         target: ApiReviewTarget,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
+        /// Build a standardized invalid-request error payload.
         fn invalid_request(message: String) -> JSONRPCErrorError {
             JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -373,6 +420,7 @@ impl CodexMessageProcessor {
         Ok((review_request, hint))
     }
 
+    /// Dispatch a client request into the appropriate handler.
     pub async fn process_request(&mut self, request: ClientRequest) {
         match request {
             ClientRequest::Initialize { .. } => {
@@ -558,6 +606,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Dispatch a V2 account login request to the appropriate flow.
     async fn login_v2(&mut self, request_id: RequestId, params: LoginAccountParams) {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
@@ -570,6 +619,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Validate and persist an API key login request.
     async fn login_api_key_common(
         &mut self,
         params: &LoginApiKeyParams,
@@ -610,6 +660,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Handle a legacy (V1) API key login request.
     async fn login_api_key_v1(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
         match self.login_api_key_common(&params).await {
             Ok(()) => {
@@ -630,6 +681,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Handle a V2 API key login request and notify account listeners.
     async fn login_api_key_v2(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
         match self.login_api_key_common(&params).await {
             Ok(()) => {
@@ -660,7 +712,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    // Build options for a ChatGPT login attempt; performs validation.
+    /// Build options for a ChatGPT login attempt, performing validation.
     async fn login_chatgpt_common(
         &self,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
@@ -685,7 +737,7 @@ impl CodexMessageProcessor {
         })
     }
 
-    // Deprecated in favor of login_chatgpt_v2.
+    /// Start a legacy ChatGPT login flow (deprecated in favor of V2).
     async fn login_chatgpt_v1(&mut self, request_id: RequestId) {
         match self.login_chatgpt_common().await {
             Ok(opts) => match run_login_server(opts) {
@@ -776,6 +828,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Start a V2 ChatGPT login flow and emit account notifications.
     async fn login_chatgpt_v2(&mut self, request_id: RequestId) {
         match self.login_chatgpt_common().await {
             Ok(opts) => match run_login_server(opts) {
@@ -869,6 +922,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Cancel an in-flight ChatGPT login attempt by id.
     async fn cancel_login_chatgpt_common(
         &mut self,
         login_id: Uuid,
@@ -884,6 +938,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Handle a legacy ChatGPT login cancellation request.
     async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
         match self.cancel_login_chatgpt_common(login_id).await {
             Ok(()) => {
@@ -902,6 +957,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Handle a V2 account login cancellation request.
     async fn cancel_login_v2(&mut self, request_id: RequestId, params: CancelLoginAccountParams) {
         let login_id = params.login_id;
         match Uuid::parse_str(&login_id) {
@@ -924,6 +980,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Perform logout and return the current auth mode (if any).
     async fn logout_common(&mut self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
         // Cancel any active login attempt.
         {
@@ -945,6 +1002,7 @@ impl CodexMessageProcessor {
         Ok(self.auth_manager.auth_cached().map(|auth| auth.mode))
     }
 
+    /// Handle a legacy logout request and emit auth status updates.
     async fn logout_v1(&mut self, request_id: RequestId) {
         match self.logout_common().await {
             Ok(current_auth_method) => {
@@ -965,6 +1023,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Handle a V2 account logout request and emit account updates.
     async fn logout_v2(&mut self, request_id: RequestId) {
         match self.logout_common().await {
             Ok(current_auth_method) => {
@@ -985,12 +1044,14 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Refresh the auth token when requested, logging failures.
     async fn refresh_token_if_requested(&self, do_refresh: bool) {
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
             tracing::warn!("failed to refresh token whilte getting account: {err}");
         }
     }
 
+    /// Respond with the current auth status, optionally including the token.
     async fn get_auth_status(&self, request_id: RequestId, params: GetAuthStatusParams) {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
@@ -1040,6 +1101,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Return account details for the current auth mode (if required).
     async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
         let do_refresh = params.refresh_token;
 
@@ -1090,12 +1152,14 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Return the current Codex user agent string.
     async fn get_user_agent(&self, request_id: RequestId) {
         let user_agent = get_codex_user_agent();
         let response = GetUserAgentResponse { user_agent };
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Fetch account rate limits for ChatGPT-authenticated users.
     async fn get_account_rate_limits(&self, request_id: RequestId) {
         match self.fetch_account_rate_limits().await {
             Ok(rate_limits) => {
@@ -1110,6 +1174,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Retrieve rate limits from the backend service.
     async fn fetch_account_rate_limits(&self) -> Result<CoreRateLimitSnapshot, JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(JSONRPCErrorError {
@@ -1144,6 +1209,7 @@ impl CodexMessageProcessor {
             })
     }
 
+    /// Load and return the user-saved configuration snapshot.
     async fn get_user_saved_config(&self, request_id: RequestId) {
         let service = ConfigService::new_with_defaults(self.config.codex_home.clone());
         let user_saved_config: UserSavedConfig = match service.load_user_saved_config().await {
@@ -1165,6 +1231,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Return best-effort user info derived from cached auth state.
     async fn get_user_info(&self, request_id: RequestId) {
         // Read alleged user email from cached auth (best-effort; not verified).
         let alleged_user_email = self
@@ -1176,6 +1243,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Persist the default model selection into user config.
     async fn set_default_model(&self, request_id: RequestId, params: SetDefaultModelParams) {
         let SetDefaultModelParams {
             model,
@@ -1203,6 +1271,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Execute a single command request and stream the result back.
     async fn exec_one_off_command(&self, request_id: RequestId, params: CommandExecParams) {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
 
@@ -1283,6 +1352,7 @@ impl CodexMessageProcessor {
         });
     }
 
+    /// Handle legacy new conversation creation and bootstrap a thread.
     async fn process_new_conversation(
         &mut self,
         request_id: RequestId,
@@ -1372,6 +1442,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Start a new thread with the provided configuration and attach a listener.
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
         let typesafe_overrides = self.build_thread_config_overrides(
             params.model,
@@ -1484,6 +1555,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Build config overrides from thread-start parameters.
     #[allow(clippy::too_many_arguments)]
     fn build_thread_config_overrides(
         &self,
@@ -1509,6 +1581,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Archive a thread by id and emit the archive response.
     async fn thread_archive(&mut self, request_id: RequestId, params: ThreadArchiveParams) {
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
@@ -1558,6 +1631,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Request a rollback and hold the response until the rollback event arrives.
     async fn thread_rollback(&mut self, request_id: RequestId, params: ThreadRollbackParams) {
         let ThreadRollbackParams {
             thread_id,
@@ -1603,6 +1677,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// List threads with pagination, sorting, and provider filtering.
     async fn thread_list(&self, request_id: RequestId, params: ThreadListParams) {
         let ThreadListParams {
             cursor,
@@ -1635,6 +1710,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Return the list of currently loaded threads with optional pagination.
     async fn thread_loaded_list(&self, request_id: RequestId, params: ThreadLoadedListParams) {
         let ThreadLoadedListParams { cursor, limit } = params;
         let mut data = self
@@ -1690,6 +1766,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Subscribe to thread-created events from the thread manager.
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.thread_manager.subscribe_thread_created()
     }
@@ -1715,6 +1792,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Resume an existing thread, optionally with overrides or explicit history.
     async fn thread_resume(&mut self, request_id: RequestId, params: ThreadResumeParams) {
         let ThreadResumeParams {
             thread_id,
@@ -1920,6 +1998,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Fork an existing thread, optionally applying configuration overrides.
     async fn thread_fork(&mut self, request_id: RequestId, params: ThreadForkParams) {
         let ThreadForkParams {
             thread_id,
@@ -2112,6 +2191,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    /// Fetch and return a conversation summary by thread id or rollout path.
     async fn get_thread_summary(
         &self,
         request_id: RequestId,
@@ -2170,6 +2250,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Handle legacy v1 list-conversations requests using the thread listing path.
     async fn handle_list_conversations(
         &self,
         request_id: RequestId,
@@ -2203,6 +2284,7 @@ impl CodexMessageProcessor {
         };
     }
 
+    /// List threads with cursor pagination and optional model-provider filtering.
     async fn list_threads_common(
         &self,
         requested_page_size: usize,
@@ -2307,6 +2389,7 @@ impl CodexMessageProcessor {
         Ok((items, next_cursor))
     }
 
+    /// List available models with limit/cursor pagination.
     async fn list_models(
         outgoing: Arc<OutgoingMessageSender>,
         thread_manager: Arc<ThreadManager>,
@@ -2371,6 +2454,7 @@ impl CodexMessageProcessor {
         outgoing.send_response(request_id, response).await;
     }
 
+    /// Reload MCP server configuration and trigger a refresh in the thread manager.
     async fn mcp_server_refresh(&self, request_id: RequestId, _params: Option<()>) {
         let config = match self.load_latest_config().await {
             Ok(config) => config,
@@ -2422,6 +2506,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Kick off an OAuth login flow for a configured MCP server.
     async fn mcp_server_oauth_login(
         &self,
         request_id: RequestId,
@@ -2517,6 +2602,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// List MCP server status entries asynchronously to avoid blocking the request loop.
     async fn list_mcp_server_status(
         &self,
         request_id: RequestId,
@@ -2536,6 +2622,7 @@ impl CodexMessageProcessor {
         });
     }
 
+    /// Collect MCP server status data and send a paginated response.
     async fn list_mcp_server_status_task(
         outgoing: Arc<OutgoingMessageSender>,
         request_id: RequestId,
@@ -2619,6 +2706,7 @@ impl CodexMessageProcessor {
         outgoing.send_response(request_id, response).await;
     }
 
+    /// Handle legacy resume-conversation requests by mapping them to thread resume.
     async fn handle_resume_conversation(
         &self,
         request_id: RequestId,
@@ -2805,6 +2893,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Handle legacy fork-conversation requests by mapping them to thread forks.
     async fn handle_fork_conversation(
         &self,
         request_id: RequestId,
@@ -2965,6 +3054,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Send a JSON-RPC invalid-request error response.
     async fn send_invalid_request_error(&self, request_id: RequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
@@ -2974,6 +3064,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
+    /// Send a JSON-RPC internal-error response.
     async fn send_internal_error(&self, request_id: RequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
@@ -2983,6 +3074,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
+    /// Handle legacy archive-conversation requests using thread archiving.
     async fn archive_conversation(
         &mut self,
         request_id: RequestId,
@@ -3006,6 +3098,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Validate and archive a rollout file, shutting down active threads first.
     async fn archive_thread_common(
         &mut self,
         thread_id: ThreadId,
@@ -3139,6 +3232,7 @@ impl CodexMessageProcessor {
         })
     }
 
+    /// Handle legacy user-message submissions (v1 conversation API).
     async fn send_user_message(&self, request_id: RequestId, params: SendUserMessageParams) {
         let SendUserMessageParams {
             conversation_id,
@@ -3183,6 +3277,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    /// Handle v2 user-turn submissions and forward them to the core thread.
     async fn send_user_turn(&self, request_id: RequestId, params: SendUserTurnParams) {
         let SendUserTurnParams {
             conversation_id,
@@ -3240,6 +3335,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    /// List skills for one or more working directories.
     async fn skills_list(&self, request_id: RequestId, params: SkillsListParams) {
         let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
@@ -3265,6 +3361,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    /// Persist skill enablement updates to the config.
     async fn skills_config_write(&self, request_id: RequestId, params: SkillsConfigWriteParams) {
         let SkillsConfigWriteParams { path, enabled } = params;
         let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
@@ -3296,6 +3393,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Interrupt a legacy conversation and reply when the abort event arrives.
+    /// Interrupt a v1 conversation and defer the response until TurnAborted.
     async fn interrupt_conversation(
         &mut self,
         request_id: RequestId,
@@ -3324,6 +3423,8 @@ impl CodexMessageProcessor {
         let _ = conversation.submit(Op::Interrupt).await;
     }
 
+    /// Start a v2 turn and emit the initial TurnStarted notification.
+    /// Start a v2 turn by applying overrides, submitting input, and emitting notifications.
     async fn turn_start(&self, request_id: RequestId, params: TurnStartParams) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
@@ -3403,6 +3504,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Build a synthetic review turn with an optional display hint.
+    /// Build the synthetic review turn used for review-start responses.
     fn build_review_turn(turn_id: String, display_text: &str) -> Turn {
         let items = if display_text.is_empty() {
             Vec::new()
@@ -3425,6 +3528,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Send the review-start response and the corresponding TurnStarted notification.
+    /// Send the review-start response and its paired TurnStarted notification.
     async fn emit_review_started(
         &self,
         request_id: &RequestId,
@@ -3449,6 +3554,8 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    /// Start a review turn within the existing thread.
+    /// Submit a review request against the current thread and emit start events.
     async fn start_inline_review(
         &self,
         request_id: &RequestId,
@@ -3479,6 +3586,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Fork a new review thread and run the review turn there.
+    /// Fork a dedicated review thread, submit the review, and emit start events.
     async fn start_detached_review(
         &mut self,
         request_id: &RequestId,
@@ -3567,6 +3676,8 @@ impl CodexMessageProcessor {
         Ok(())
     }
 
+    /// Dispatch a review-start request in either inline or detached mode.
+    /// Dispatch review-start requests to inline or detached review execution.
     async fn review_start(&mut self, request_id: RequestId, params: ReviewStartParams) {
         let ReviewStartParams {
             thread_id,
@@ -3621,6 +3732,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Interrupt a v2 turn and reply when TurnAborted is observed.
+    /// Interrupt a v2 turn and respond once the abort event is observed.
     async fn turn_interrupt(&mut self, request_id: RequestId, params: TurnInterruptParams) {
         let TurnInterruptParams { thread_id, .. } = params;
 
@@ -3644,6 +3757,8 @@ impl CodexMessageProcessor {
         let _ = thread.submit(Op::Interrupt).await;
     }
 
+    /// Register a legacy conversation listener subscription.
+    /// Register a v1 event listener and return a subscription id.
     async fn add_conversation_listener(
         &mut self,
         request_id: RequestId,
@@ -3667,6 +3782,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Remove a conversation listener subscription by id.
+    /// Remove an event subscription and stop its listener task.
     async fn remove_thread_listener(
         &mut self,
         request_id: RequestId,
@@ -3697,6 +3814,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Spawn the per-thread event forwarder and return its subscription id.
+    /// Spawn the event streaming task for a thread and track its subscription.
     async fn attach_conversation_listener(
         &mut self,
         conversation_id: ThreadId,
@@ -3799,6 +3918,8 @@ impl CodexMessageProcessor {
         Ok(subscription_id)
     }
 
+    /// Compute a git diff against the remote and return it to the client.
+    /// Compute a git diff against the configured remote for the given cwd.
     async fn git_diff_to_origin(&self, request_id: RequestId, cwd: PathBuf) {
         let diff = git_diff_to_remote(&cwd).await;
         match diff {
@@ -3820,6 +3941,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Run a fuzzy file search with optional cancellation.
+    /// Run a fuzzy file search with optional cancellation support.
     async fn fuzzy_file_search(&mut self, request_id: RequestId, params: FuzzyFileSearchParams) {
         let FuzzyFileSearchParams {
             query,
@@ -3860,6 +3983,8 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    /// Upload feedback, optionally including rollout logs for a conversation.
+    /// Upload feedback with optional log attachments.
     async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
         if !self.config.feedback_enabled {
             let error = JSONRPCErrorError {
@@ -3948,6 +4073,8 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Resolve the rollout path for a loaded conversation, if available.
+    /// Resolve a thread id to its rollout path if the thread is loaded.
     async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {
         match self.thread_manager.get_thread(conversation_id).await {
             Ok(conv) => Some(conv.rollout_path()),
@@ -3956,6 +4083,8 @@ impl CodexMessageProcessor {
     }
 }
 
+/// Convert core skill metadata into the API response shape.
+/// Map core skill metadata into protocol payloads.
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
     disabled_paths: &std::collections::HashSet<PathBuf>,
@@ -3986,6 +4115,8 @@ fn skills_to_info(
         .collect()
 }
 
+/// Convert core skill errors into API error info.
+/// Map core skill errors into protocol error entries.
 fn errors_to_info(
     errors: &[codex_core::skills::SkillError],
 ) -> Vec<codex_app_server_protocol::SkillErrorInfo> {
@@ -4028,6 +4159,7 @@ async fn derive_config_from_params(
         .await
 }
 
+/// Read a rollout header and synthesize a conversation summary.
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
@@ -4096,6 +4228,7 @@ pub(crate) async fn read_summary_from_rollout(
     })
 }
 
+/// Extract event messages from a rollout history file.
 pub(crate) async fn read_event_msgs_from_rollout(
     path: &Path,
 ) -> std::io::Result<Vec<codex_protocol::protocol::EventMsg>> {
@@ -4114,6 +4247,8 @@ pub(crate) async fn read_event_msgs_from_rollout(
         .collect())
 }
 
+/// Build a conversation summary from rollout head data and session metadata.
+/// Build a summary preview from a rollout header, favoring user messages.
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -4162,6 +4297,8 @@ fn extract_conversation_summary(
     })
 }
 
+/// Map core git metadata into the API wire format.
+/// Convert core git metadata into the summary representation.
 fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
         sha: git_info.commit_hash.clone(),
@@ -4170,6 +4307,8 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
+/// Parse an RFC3339 timestamp into UTC.
+/// Parse an RFC3339 timestamp into a UTC datetime.
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -4178,6 +4317,8 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
+/// Fetch the file mtime as an RFC3339 timestamp, falling back to the created time.
+/// Use file mtime to derive an updated_at timestamp, falling back to created_at.
 async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String> {
     let updated_at = tokio::fs::metadata(path)
         .await
@@ -4190,6 +4331,7 @@ async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String
     updated_at.or_else(|| created_at.map(str::to_string))
 }
 
+/// Convert a summary into a thread payload with parsed timestamps.
 pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
@@ -4236,6 +4378,7 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
+    /// Prefers the first plain user message when building a preview.
     #[test]
     fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
         let conversation_id = ThreadId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
@@ -4299,6 +4442,7 @@ mod tests {
         Ok(())
     }
 
+    /// Returns an empty preview when a rollout has no user messages.
     #[tokio::test]
     async fn read_summary_from_rollout_returns_empty_preview_when_no_user_message() -> Result<()> {
         use codex_protocol::protocol::RolloutItem;

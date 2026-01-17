@@ -1,3 +1,8 @@
+//! Status panel composition helpers and formatting utilities.
+//!
+//! This module wires together the status card rendering, account and rate-limit
+//! summaries, and compact formatting helpers used by the TUI status area.
+
 mod account;
 mod card;
 mod format;

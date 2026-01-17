@@ -1,3 +1,19 @@
+//! Application state and event loop for the TUI.
+//!
+//! This module owns the [`App`] state machine that bridges Codex conversations,
+//! UI widgets, and user input. The `App` is the single mutable owner of UI
+//! state; background tasks communicate via [`AppEventSender`] and never mutate
+//! state directly. The main loop processes [`AppEvent`] values emitted by async
+//! tasks alongside [`TuiEvent`] input from the terminal.
+//!
+//! In addition to the core chat workflow, this module coordinates transcript scrolling, selection
+//! and copy affordances, and the associated overlays that need to stay in sync with the chat
+//! widget's history cache.
+//!
+//! `App` is also responsible for high-level session lifecycle transitions such as
+//! start/resume/fork flows, overlay activation, and clean shutdown. It orchestrates
+//! the chat widget and transcript overlays while keeping all state mutations
+//! serialized on the main loop.
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -94,12 +110,21 @@ use tokio::sync::mpsc::unbounded_channel;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
 
+/// Summary of a completed TUI session.
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
+    /// Aggregate token usage captured during the session.
     pub token_usage: TokenUsage,
+
+    /// Conversation to resume, if the session created one.
     pub conversation_id: Option<ThreadId>,
+
+    /// Any update action the user confirmed before exit.
     pub update_action: Option<UpdateAction>,
+
+    /// Why the session ended.
     pub exit_reason: ExitReason,
+
     /// ANSI-styled transcript lines to print after the TUI exits.
     ///
     /// These lines are rendered against the same width as the final TUI
@@ -108,19 +133,25 @@ pub struct AppExitInfo {
     pub session_lines: Vec<String>,
 }
 
+/// Internal control flow for the app event loop.
 #[derive(Debug)]
 pub(crate) enum AppRunControl {
     Continue,
     Exit(ExitReason),
 }
 
+/// High-level reason the UI shut down.
 #[derive(Debug, Clone)]
 pub enum ExitReason {
+    /// The user explicitly requested exit (quit, cancel, or shutdown).
     UserRequested,
+
+    /// A fatal error occurred and the UI cannot continue.
     Fatal(String),
 }
 
 impl From<AppExitInfo> for codex_tui::AppExitInfo {
+    /// Convert the TUI2 exit info into the shared TUI exit format.
     fn from(info: AppExitInfo) -> Self {
         let exit_reason = match info.exit_reason {
             ExitReason::UserRequested => codex_tui::ExitReason::UserRequested,
@@ -135,6 +166,10 @@ impl From<AppExitInfo> for codex_tui::AppExitInfo {
     }
 }
 
+/// Build a short session summary when any token usage has accrued.
+///
+/// The summary includes a human-readable usage line and, when available, a resume command for the
+/// conversation created during the session.
 fn session_summary(
     token_usage: TokenUsage,
     conversation_id: Option<ThreadId>,
@@ -152,6 +187,7 @@ fn session_summary(
     })
 }
 
+/// Extract skill loading errors scoped to a specific working directory.
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
     response
         .skills
@@ -161,6 +197,10 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
         .unwrap_or_default()
 }
 
+/// Emit warning cells summarizing skill load failures.
+///
+/// Each warning is emitted as a history cell so it appears in the transcript alongside other
+/// system notices.
 fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
     if errors.is_empty() {
         return;
@@ -182,6 +222,7 @@ fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorI
     }
 }
 
+/// Emit a deprecation notice if the backend provided one.
 fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<DeprecationNoticeEvent>) {
     let Some(DeprecationNoticeEvent { summary, details }) = notice else {
         return;
@@ -191,12 +232,20 @@ fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<Depreca
     )));
 }
 
+/// Compact session summary presented at shutdown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
+    /// Human-readable usage summary line.
     usage_line: String,
+
+    /// Resume command shown when the session created a conversation id.
     resume_command: Option<String>,
 }
 
+/// Decide whether to prompt for a model migration based on history and availability.
+///
+/// This suppresses prompts when the target model matches the current selection or when the
+/// migration has already been acknowledged for the same source/target pair.
 fn should_show_model_migration_prompt(
     current_model: &str,
     target_model: &str,
@@ -230,6 +279,7 @@ fn should_show_model_migration_prompt(
     false
 }
 
+/// Return true if the migration prompt is hidden by config for a given key.
 fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool {
     match migration_config_key {
         HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => config
@@ -243,6 +293,10 @@ fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool 
     }
 }
 
+/// Show a model migration prompt if required and return early exit info when requested.
+///
+/// This resolves upgrade metadata for the current model, bails out if a prompt is hidden, then
+/// drives the prompt UI and applies any confirmed config changes before continuing.
 async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
@@ -354,33 +408,78 @@ async fn handle_model_migration_prompt_if_needed(
     None
 }
 
+/// Central, mutable TUI state owned by the main event loop.
+///
+/// `App` owns the high-level session lifecycle, coordinates chat widget swaps
+/// (new, resume, fork), and mediates between async events and rendering so UI
+/// updates remain serialized and consistent.
 pub(crate) struct App {
+    /// Thread manager used to create, resume, and shut down Codex sessions.
     pub(crate) server: Arc<ThreadManager>,
+
+    /// Sender for app-local events emitted by async tasks and helpers.
     pub(crate) app_event_tx: AppEventSender,
+
+    /// Primary chat widget, including the current conversation and input buffer.
+    ///
+    /// This is swapped when starting a new session or resuming/forking another thread.
     pub(crate) chat_widget: ChatWidget,
+
+    /// Shared auth manager used by onboarding and session startup.
     pub(crate) auth_manager: Arc<AuthManager>,
+
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+
+    /// Currently selected model identifier as shown in the UI.
     pub(crate) current_model: String,
+
+    /// Active config profile name, if one is selected.
     pub(crate) active_profile: Option<String>,
 
+    /// Background file search coordinator for the command palette.
     pub(crate) file_search: FileSearchManager,
 
+    /// Ordered transcript cells rendered in the main scrollback view.
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+
+    /// Cache of rendered transcript lines for fast scrollback redraws.
+    ///
+    /// This is regenerated when transcript content or width changes.
     transcript_view_cache: TranscriptViewCache,
 
+    /// Scroll model for transcript paging and mouse wheel navigation.
     #[allow(dead_code)]
     transcript_scroll: TranscriptScroll,
+
+    /// Selection state for text copied out of the transcript.
     transcript_selection: TranscriptSelection,
+
+    /// Multi-click tracking used for word/line selection gestures.
     transcript_multi_click: TranscriptMultiClick,
+
+    /// Index of the first visible transcript line.
     transcript_view_top: usize,
+
+    /// Total number of rendered transcript lines available.
     transcript_total_lines: usize,
+
+    /// UI state for the copy-overlay affordance.
+    ///
+    /// This coordinates selection handles, selection prompts, and copy feedback overlays.
     transcript_copy_ui: TranscriptCopyUi,
+
+    /// Pending copy action requested by the user.
     transcript_copy_action: TranscriptCopyAction,
+
+    /// Scrollbar UI state for the transcript view.
     transcript_scrollbar_ui: TranscriptScrollbarUi,
 
-    // Pager overlay state (Transcript or Static like Diff).
+    /// Pager overlay state (transcript view or static diff, etc.).
+    ///
+    /// When set, the overlay takes ownership of rendering and scrollback output.
     pub(crate) overlay: Option<Overlay>,
+
     /// History cells received while an overlay is active.
     ///
     /// While in an alt-screen overlay, the normal terminal buffer is not visible.
@@ -391,27 +490,40 @@ pub(crate) struct App {
     /// already-rendered `Vec<Line>`, we'd bake viewport-width wrapping based on the width at the
     /// time the cell arrived (which may differ from the width when the overlay closes).
     pub(crate) deferred_history_cells: Vec<Arc<dyn HistoryCell>>,
+
     /// True once at least one history cell has been inserted into terminal scrollback.
     ///
     /// Used to decide whether to insert an extra blank separator line when flushing deferred cells.
     pub(crate) has_emitted_history_lines: bool,
 
+    /// Whether the terminal supports keyboard enhancement flags.
     pub(crate) enhanced_keys_supported: bool,
 
     /// Controls the animation thread that sends CommitTick events.
+    ///
+    /// This flag is shared with the animation loop so it can stop cleanly when the app exits.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
 
+    /// Configured scroll behavior (smoothness, direction, overrides).
     scroll_config: ScrollConfig,
+
+    /// Accumulated mouse scroll state used to apply scroll steps.
     scroll_state: MouseScrollState,
 
-    // Esc-backtracking state grouped
+    /// Esc-backtracking state grouped together for rollback handling.
+    ///
+    /// This tracks whether a rollback is pending and which history cells must be trimmed.
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+
     /// When set, the next draw re-renders the transcript into terminal scrollback once.
     ///
     /// This is used after a confirmed conversation rollback to ensure scrollback reflects the
     /// trimmed transcript cells.
     pub(crate) backtrack_render_pending: bool,
+
+    /// Feedback submission state for the session.
     pub(crate) feedback: codex_feedback::CodexFeedback,
+
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -419,10 +531,14 @@ pub(crate) struct App {
     /// stopping a conversation (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
 
-    // One-shot suppression of the next world-writable scan after user confirmation.
+    /// One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
 }
 impl App {
+    /// Request shutdown for the active conversation and clear any rollback guard.
+    ///
+    /// This clears pending rollback state, sends a shutdown op, and removes the thread from the
+    /// thread manager once it exits.
     async fn shutdown_current_conversation(&mut self) {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
             // Clear any in-flight rollback guard when switching conversations.
@@ -433,6 +549,11 @@ impl App {
         }
     }
 
+    /// Run the main TUI event loop until the user exits or a fatal error occurs.
+    ///
+    /// The loop wires up the initial session, spawns background tasks (commit animation, file
+    /// search, model refresh), and then interleaves terminal input, async app events, and redraw
+    /// ticks to keep the UI responsive while preserving a single mutation owner.
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
@@ -691,6 +812,10 @@ impl App {
         })
     }
 
+    /// Handle a terminal event, routing it to overlays, scrolling, or the chat widget.
+    ///
+    /// This updates scroll state on draw ticks, forwards mouse/key input to the appropriate
+    /// handler, and normalizes paste input before feeding it into the composer.
     pub(crate) async fn handle_tui_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -791,6 +916,10 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    /// Render transcript cells into the frame and return the y-offset for the chat widget.
+    ///
+    /// This ensures cached wrapping is up to date, applies scroll state, draws the transcript
+    /// buffer and scrollbar UI, and returns the top row where the composer should render.
     pub(crate) fn render_transcript_cells(
         &mut self,
         frame: &mut Frame,
@@ -1016,6 +1145,7 @@ impl App {
                 || self.transcript_selection.head.is_some())
             {
                 self.transcript_selection = TranscriptSelection::default();
+
                 // Mouse events do not inherently trigger a redraw; schedule one so the cleared
                 // highlight is reflected immediately.
                 tui.frame_requester().schedule_frame();
@@ -1400,10 +1530,12 @@ impl App {
         }
     }
 
+    /// Return any pending transcript copy feedback for the footer.
     fn transcript_copy_feedback_for_footer(&mut self) -> Option<TranscriptCopyFeedback> {
         self.transcript_copy_action.footer_feedback()
     }
 
+    /// Return the key binding used to copy the current transcript selection.
     fn copy_selection_key(&self) -> crate::key_hint::KeyBinding {
         self.transcript_copy_ui.key_binding()
     }
@@ -1439,6 +1571,10 @@ impl App {
         Some(TranscriptSelectionPoint { line_index, column })
     }
 
+    /// Handle a single app event and update UI state accordingly.
+    ///
+    /// This routes events to the appropriate UI transitions, updates overlays/history, and returns
+    /// the control flow outcome for the main loop.
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
@@ -1665,6 +1801,7 @@ impl App {
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
+
                 // Enter alternate screen using TUI helper and build pager lines
                 let _ = tui.enter_alt_screen();
                 let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
@@ -2096,6 +2233,7 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    /// Map reasoning effort configuration to a short label for UI display.
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
         match reasoning_effort {
             Some(ReasoningEffortConfig::Minimal) => "minimal",
@@ -2107,6 +2245,7 @@ impl App {
         }
     }
 
+    /// Return the reasoning label unless the model suppresses it (e.g., codex-auto).
     fn reasoning_label_for(
         model: &str,
         reasoning_effort: Option<ReasoningEffortConfig>,
@@ -2114,15 +2253,21 @@ impl App {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
+    /// Return the current session token usage snapshot.
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
 
+    /// Apply a reasoning-effort update to the widget and config.
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
     }
 
+    /// Handle global keybindings that are owned by the app (overlays, selection).
+    ///
+    /// This routes overlay commands, transcript selection shortcuts, and backtrack flows before
+    /// delegating remaining input to the chat widget.
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -2136,6 +2281,7 @@ impl App {
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
+
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward
             // Esc so the active UI (e.g. status indicator, modals, popups)
@@ -2247,6 +2393,7 @@ impl App {
                 self.transcript_scroll = TranscriptScroll::ToBottom;
                 tui.frame_requester().schedule_frame();
             }
+
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
                 code: KeyCode::Enter,
@@ -2273,11 +2420,13 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
+
                 // Ignore Release key events.
             }
         };
     }
 
+    /// Run the world-writable scan on a blocking thread and emit warnings on failure.
     #[cfg(target_os = "windows")]
     fn spawn_world_writable_scan(
         cwd: PathBuf,
@@ -2307,6 +2456,7 @@ impl App {
     }
 }
 
+/// Test helpers and behavior checks for the app event loop.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2338,6 +2488,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
 
+    /// Build a minimal `App` instance for unit tests.
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -2387,6 +2538,7 @@ mod tests {
         }
     }
 
+    /// Build a test `App` along with its event and op channels.
     async fn make_test_app_with_channels() -> (
         App,
         tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
@@ -2444,10 +2596,12 @@ mod tests {
         )
     }
 
+    /// Return a fresh copy of all model presets for tests.
     fn all_model_presets() -> Vec<ModelPreset> {
         codex_core::models_manager::model_presets::all_model_presets().clone()
     }
 
+    /// Flatten model migration copy into plain text for assertions.
     fn model_migration_copy_to_plain_text(
         copy: &crate::model_migration::ModelMigrationCopy,
     ) -> String {
@@ -2469,6 +2623,7 @@ mod tests {
         s
     }
 
+    /// Shows migration prompts only when a model is deprecated with an upgrade target.
     #[tokio::test]
     async fn model_migration_prompt_only_shows_for_deprecated_models() {
         let seen = BTreeMap::new();
@@ -2504,6 +2659,7 @@ mod tests {
         ));
     }
 
+    /// Prompts when the current model is hidden but has a valid upgrade path.
     #[tokio::test]
     async fn model_migration_prompt_shows_for_hidden_model() {
         let codex_home = tempdir().expect("temp codex home");
@@ -2558,6 +2714,7 @@ mod tests {
         );
     }
 
+    /// Copies include offscreen transcript lines when selecting across them.
     #[tokio::test]
     async fn transcript_selection_copy_includes_offscreen_lines() {
         let mut app = make_test_app().await;
@@ -2590,6 +2747,7 @@ mod tests {
         assert_eq!(text, "one\ntwo\nthree\nfour");
     }
 
+    /// Honors migration hide flags and no-op self-target upgrades.
     #[tokio::test]
     async fn model_migration_prompt_respects_hide_flag_and_self_target() {
         let mut seen = BTreeMap::new();
@@ -2608,6 +2766,7 @@ mod tests {
         ));
     }
 
+    /// Updates both app config and chat widget when reasoning effort changes.
     #[tokio::test]
     async fn update_reasoning_effort_updates_config() {
         let mut app = make_test_app().await;
@@ -2627,6 +2786,7 @@ mod tests {
         );
     }
 
+    /// Deduplicates backtrack selections when history cells share a turn.
     #[tokio::test]
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
@@ -2724,6 +2884,7 @@ mod tests {
         assert_eq!(rollback_turns, Some(1));
     }
 
+    /// Keeps transcript selection in sync when scrolling changes the view window.
     #[tokio::test]
     async fn transcript_selection_moves_with_scroll() {
         use ratatui::buffer::Buffer;
@@ -2786,6 +2947,7 @@ mod tests {
         }
     }
 
+    /// Renders the copy affordance pill when a selection is active.
     #[tokio::test]
     async fn transcript_selection_renders_copy_affordance() {
         use ratatui::buffer::Buffer;
@@ -2845,6 +3007,7 @@ mod tests {
         assert!(app.transcript_copy_ui.hit_test(10, 2));
     }
 
+    /// Uses the VSCode-style copy hint when configured.
     #[tokio::test]
     async fn transcript_selection_renders_ctrl_y_copy_affordance_in_vscode_mode() {
         use ratatui::buffer::Buffer;
@@ -2906,6 +3069,7 @@ mod tests {
         assert!(app.transcript_copy_ui.hit_test(10, 2));
     }
 
+    /// Hides the copy affordance while the user is actively dragging a selection.
     #[tokio::test]
     async fn transcript_selection_hides_copy_affordance_while_dragging() {
         use ratatui::buffer::Buffer;
@@ -2964,6 +3128,7 @@ mod tests {
         assert!(!app.transcript_copy_ui.hit_test(10, 2));
     }
 
+    /// Sends shutdown when starting a new session after another conversation is active.
     #[tokio::test]
     async fn new_session_requests_shutdown_for_previous_conversation() {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
@@ -3001,11 +3166,13 @@ mod tests {
         }
     }
 
+    /// Skips building a summary when token usage is zero.
     #[tokio::test]
     async fn session_summary_skip_zero_usage() {
         assert!(session_summary(TokenUsage::default(), None).is_none());
     }
 
+    /// Pads user lines to full width when rendering ANSI transcript output.
     #[tokio::test]
     async fn render_lines_to_ansi_pads_user_rows_to_full_width() {
         let line: Line<'static> = Line::from("hi");
@@ -3027,6 +3194,7 @@ mod tests {
         assert!(rendered[0].contains("hi"));
     }
 
+    /// Includes a resume hint when a conversation id is available.
     #[tokio::test]
     async fn session_summary_includes_resume_hint() {
         let usage = TokenUsage {

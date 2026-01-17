@@ -1,3 +1,14 @@
+//! Presents a terminal UI for choosing a local open-source provider.
+//!
+//! The selection flow probes local ports for LM Studio and Ollama, auto-selects
+//! a running provider when only one is available, and falls back to an
+//! interactive modal when the choice is ambiguous. The widget returns the
+//! chosen provider ID and persists it as the default for subsequent sessions.
+//!
+//! The modal runs in raw mode on the alternate screen to avoid disturbing the
+//! main scrollback. Cancellation is surfaced to callers via the `"__CANCELLED__"`
+//! sentinel string so upstream logic can decide whether to retry or abort.
+
 use std::io;
 use std::sync::LazyLock;
 
@@ -38,29 +49,42 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::time::Duration;
 
+/// Display metadata for a provider entry in the status prompt.
 #[derive(Clone)]
 struct ProviderOption {
+    /// Human-friendly provider name shown in the status list.
     name: String,
+    /// Current runtime status used to select the status glyph.
     status: ProviderStatus,
 }
 
+/// Runtime availability of a local provider.
 #[derive(Clone)]
 enum ProviderStatus {
+    /// The provider is reachable on its expected local port.
     Running,
+    /// The port probe failed, indicating the provider is likely stopped.
     NotRunning,
+    /// The probe failed in an unexpected way.
     Unknown,
 }
 
-/// Options displayed in the *select* mode.
+/// Options displayed in the select-mode button row.
 ///
-/// The `key` is matched case-insensitively.
+/// The `key` is matched case-insensitively so uppercase and lowercase both
+/// trigger the same choice.
 struct SelectOption {
+    /// The styled label used for the button.
     label: Line<'static>,
+    /// Short description shown beneath the buttons.
     description: &'static str,
+    /// Shortcut key used to select this option.
     key: KeyCode,
+    /// Provider ID to persist when this option is selected.
     provider_id: &'static str,
 }
 
+/// Shared select-mode options for the local provider choices.
 static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
     vec![
         SelectOption {
@@ -84,21 +108,29 @@ static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
     ]
 });
 
+/// Modal widget used to pick a local open-source provider.
+///
+/// This owns the selection state, confirmation prompt copy, and the final
+/// selected provider ID for the caller to retrieve once complete.
 pub struct OssSelectionWidget<'a> {
+    /// Shared catalog of selectable provider options.
     select_options: &'a Vec<SelectOption>,
+    /// Intro copy plus status list shown above the buttons.
     confirmation_prompt: Paragraph<'a>,
 
     /// Currently selected index in *select* mode.
     selected_option: usize,
 
-    /// Set to `true` once a decision has been sent – the parent view can then
+    /// Set to `true` once a decision has been sent; the parent view can then
     /// remove this widget from its queue.
     done: bool,
 
+    /// The provider ID selected by the user, if any.
     selection: Option<String>,
 }
 
 impl OssSelectionWidget<'_> {
+    /// Builds the selection widget with precomputed provider status rows.
     fn new(lmstudio_status: ProviderStatus, ollama_status: ProviderStatus) -> io::Result<Self> {
         let providers = vec![
             ProviderOption {
@@ -153,16 +185,17 @@ impl OssSelectionWidget<'_> {
         })
     }
 
+    /// Measures the prompt height for the current width.
     fn get_confirmation_prompt_height(&self, width: u16) -> u16 {
         // Should cache this for last value of width.
         self.confirmation_prompt.line_count(width) as u16
     }
 
-    /// Process a `KeyEvent` coming from crossterm. Always consumes the event
-    /// while the modal is visible.
-    /// Process a key event originating from crossterm. As the modal fully
-    /// captures input while visible, we don't need to report whether the event
-    /// was consumed—callers can assume it always is.
+    /// Process a key event originating from crossterm.
+    ///
+    /// As the modal fully captures input while visible, callers can assume the
+    /// event is consumed; when a decision is made, the selected provider ID is
+    /// returned.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<String> {
         if key.kind == KeyEventKind::Press {
             self.handle_select_key(key);
@@ -175,8 +208,9 @@ impl OssSelectionWidget<'_> {
     }
 
     /// Normalize a key for comparison.
-    /// - For `KeyCode::Char`, converts to lowercase for case-insensitive matching.
-    /// - Other key codes are returned unchanged.
+    ///
+    /// `KeyCode::Char` values are lowercased for case-insensitive matching;
+    /// other key codes are returned unchanged.
     fn normalize_keycode(code: KeyCode) -> KeyCode {
         match code {
             KeyCode::Char(c) => KeyCode::Char(c.to_ascii_lowercase()),
@@ -184,6 +218,10 @@ impl OssSelectionWidget<'_> {
         }
     }
 
+    /// Apply selection-mode bindings to the current state.
+    ///
+    /// The `Ctrl+C` path uses a sentinel provider ID so the caller can treat
+    /// it as a user-cancel signal.
     fn handle_select_key(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('c')
@@ -220,6 +258,7 @@ impl OssSelectionWidget<'_> {
         }
     }
 
+    /// Record a completed selection and mark the widget as done.
     fn send_decision(&mut self, selection: String) {
         self.selection = Some(selection);
         self.done = true;
@@ -231,12 +270,14 @@ impl OssSelectionWidget<'_> {
         self.done
     }
 
+    /// Calculates the total height needed to render the prompt and buttons.
     pub fn desired_height(&self, width: u16) -> u16 {
         self.get_confirmation_prompt_height(width) + self.select_options.len() as u16
     }
 }
 
 impl WidgetRef for &OssSelectionWidget<'_> {
+    /// Draws the prompt, option buttons, and description line.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let prompt_height = self.get_confirmation_prompt_height(area.width);
         let [prompt_chunk, response_chunk] = Layout::default()
@@ -286,6 +327,7 @@ impl WidgetRef for &OssSelectionWidget<'_> {
     }
 }
 
+/// Returns the status glyph and color used for the provider status list.
 fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, Color) {
     match status {
         ProviderStatus::Running => ("●", Color::Green),
@@ -294,12 +336,17 @@ fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, Color)
     }
 }
 
+/// Runs the full selection flow and persists the chosen provider.
+///
+/// The flow probes known ports, auto-selects a single running provider, and
+/// otherwise displays a modal for user choice. If the user cancels, the
+/// sentinel `"__CANCELLED__"` selection is returned to the caller.
 pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<String> {
-    // Check provider statuses first
+    // Check provider statuses first.
     let lmstudio_status = check_lmstudio_status().await;
     let ollama_status = check_ollama_status().await;
 
-    // Autoselect if only one is running
+    // Autoselect if only one is running.
     match (&lmstudio_status, &ollama_status) {
         (ProviderStatus::Running, ProviderStatus::NotRunning) => {
             let provider = LMSTUDIO_OSS_PROVIDER_ID.to_string();
@@ -310,7 +357,7 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
             return Ok(provider);
         }
         _ => {
-            // Both running or both not running - show UI
+            // Both running or both not running - show UI.
         }
     }
 
@@ -349,6 +396,7 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
     result
 }
 
+/// Probes the LM Studio server port and returns the derived status.
 async fn check_lmstudio_status() -> ProviderStatus {
     match check_port_status(DEFAULT_LMSTUDIO_PORT).await {
         Ok(true) => ProviderStatus::Running,
@@ -357,6 +405,7 @@ async fn check_lmstudio_status() -> ProviderStatus {
     }
 }
 
+/// Probes the Ollama server port and returns the derived status.
 async fn check_ollama_status() -> ProviderStatus {
     match check_port_status(DEFAULT_OLLAMA_PORT).await {
         Ok(true) => ProviderStatus::Running,
@@ -365,6 +414,7 @@ async fn check_ollama_status() -> ProviderStatus {
     }
 }
 
+/// Returns `true` when a successful HTTP response is received from localhost.
 async fn check_port_status(port: u16) -> io::Result<bool> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))

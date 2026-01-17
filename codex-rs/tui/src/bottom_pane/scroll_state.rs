@@ -1,16 +1,39 @@
-/// Generic scroll/selection state for a vertical list menu.
+//! Scroll and selection bookkeeping for bottom-pane list popups.
+//!
+//! This module provides a tiny state machine used by selection lists to track
+//! the highlighted row and the first visible index of the scroll window. It
+//! encapsulates wrap-around navigation and the logic to keep the selected row
+//! within the currently visible range.
+//!
+//! The state is intentionally generic and does not know about item content or
+//! rendering; callers must supply the list length and visible row count.
+//!
+//! Callers are expected to clamp selection whenever the list length changes and
+//! to call [`ScrollState::ensure_visible`] after navigation so `scroll_top`
+//! tracks the highlighted row.
+
+/// Scroll and selection state for a vertical list menu.
 ///
-/// Encapsulates the common behavior of a selectable list that supports:
-/// - Optional selection (None when list is empty)
-/// - Wrap-around navigation on Up/Down
-/// - Maintaining a scroll window (`scroll_top`) so the selected row stays visible
+/// The state tracks the selected index and the first visible row in the list
+/// viewport. Callers are responsible for keeping it in sync with their item
+/// collection and the number of visible rows they can render. Navigation methods
+/// only update the selection; callers must invoke [`ScrollState::ensure_visible`]
+/// to keep the scroll window aligned.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ScrollState {
+    /// Currently selected row in the full list, or `None` when the list is empty.
     pub selected_idx: Option<usize>,
+    /// Index of the first visible row in the list viewport.
+    ///
+    /// When the list is non-empty, this is expected to stay within `0..len`.
     pub scroll_top: usize,
 }
 
 impl ScrollState {
+    /// Creates a fresh state with no selection and a zero scroll offset.
+    ///
+    /// Call [`ScrollState::clamp_selection`] once the list has items to set an
+    /// initial selection.
     pub fn new() -> Self {
         Self {
             selected_idx: None,
@@ -18,13 +41,16 @@ impl ScrollState {
         }
     }
 
-    /// Reset selection and scroll.
+    /// Resets selection and scroll position back to the initial state.
     pub fn reset(&mut self) {
         self.selected_idx = None;
         self.scroll_top = 0;
     }
 
-    /// Clamp selection to be within the [0, len-1] range, or None when empty.
+    /// Clamps selection to the valid range for a list of the given length.
+    ///
+    /// If the list is empty, the selection is cleared and the scroll offset is
+    /// reset to zero.
     pub fn clamp_selection(&mut self, len: usize) {
         self.selected_idx = match len {
             0 => None,
@@ -35,7 +61,11 @@ impl ScrollState {
         }
     }
 
-    /// Move selection up by one, wrapping to the bottom when necessary.
+    /// Moves selection up by one row, wrapping to the bottom when needed.
+    ///
+    /// If the list is empty, the selection is cleared and the scroll offset is
+    /// reset to zero. This does not adjust `scroll_top`; call
+    /// [`ScrollState::ensure_visible`] after moving.
     pub fn move_up_wrap(&mut self, len: usize) {
         if len == 0 {
             self.selected_idx = None;
@@ -49,7 +79,11 @@ impl ScrollState {
         });
     }
 
-    /// Move selection down by one, wrapping to the top when necessary.
+    /// Moves selection down by one row, wrapping to the top when needed.
+    ///
+    /// If the list is empty, the selection is cleared and the scroll offset is
+    /// reset to zero. This does not adjust `scroll_top`; call
+    /// [`ScrollState::ensure_visible`] after moving.
     pub fn move_down_wrap(&mut self, len: usize) {
         if len == 0 {
             self.selected_idx = None;
@@ -62,8 +96,10 @@ impl ScrollState {
         });
     }
 
-    /// Adjust `scroll_top` so that the current `selected_idx` is visible within
-    /// the window of `visible_rows`.
+    /// Adjusts `scroll_top` so the selected row stays within the visible window.
+    ///
+    /// The caller supplies the total list length and number of visible rows; if
+    /// either is zero, the scroll position resets to zero.
     pub fn ensure_visible(&mut self, len: usize, visible_rows: usize) {
         if len == 0 || visible_rows == 0 {
             self.scroll_top = 0;
@@ -84,10 +120,13 @@ impl ScrollState {
     }
 }
 
+/// Snapshot-style tests for wrap-around navigation and visibility tracking.
 #[cfg(test)]
 mod tests {
     use super::ScrollState;
+    use pretty_assertions::assert_eq;
 
+    /// Drives the selection past each edge and asserts it remains visible.
     #[test]
     fn wrap_navigation_and_visibility() {
         let mut s = ScrollState::new();

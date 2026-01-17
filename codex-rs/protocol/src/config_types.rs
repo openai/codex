@@ -8,7 +8,7 @@ use crate::openai_models::ReasoningEffort;
 
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
+/// See <https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries>
 #[derive(
     Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS,
 )]
@@ -103,7 +103,7 @@ pub enum TrustLevel {
 /// that alternate screen buffers should not have scrollback.
 ///
 /// **Zellij's behavior:** Zellij intentionally disables scrollback in alternate screen mode
-/// (see https://github.com/zellij-org/zellij/pull/1032) to comply with the xterm spec. This
+/// (see <https://github.com/zellij-org/zellij/pull/1032>) to comply with the xterm spec. This
 /// is by design and not configurable in Zellij—there is no option to enable scrollback in
 /// alternate screen mode.
 ///

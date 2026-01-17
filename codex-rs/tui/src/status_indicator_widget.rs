@@ -1,5 +1,9 @@
-//! A live status indicator that shows the *latest* log line emitted by the
-//! application while the agent is processing a long‑running task.
+//! Renders the live status indicator shown while the agent runs a task.
+//!
+//! The widget owns the timing state used to render a spinner, elapsed time,
+//! and optional detail lines. It is intentionally self-contained so callers
+//! can update the header/details strings and let the widget drive animation
+//! frame scheduling on each render.
 
 use std::time::Duration;
 use std::time::Instant;
@@ -27,25 +31,45 @@ use crate::tui::FrameRequester;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
+/// Maximum number of detail lines to render below the header.
 const DETAILS_MAX_LINES: usize = 3;
+
+/// Prefix used to visually nest detail lines under the header.
 const DETAILS_PREFIX: &str = "  └ ";
 
+/// Live status indicator with an optional detail line and elapsed timer.
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
+
+    /// Optional detail text rendered under the header.
     details: Option<String>,
+
+    /// Whether to show the "(esc to interrupt)" hint.
     show_interrupt_hint: bool,
 
+    /// Accumulated run time excluding pauses.
     elapsed_running: Duration,
+
+    /// Timestamp for the last resume, used to compute elapsed time.
     last_resume_at: Instant,
+
+    /// Whether the timer is currently paused.
     is_paused: bool,
+
+    /// Channel for dispatching interrupt ops back to the app.
     app_event_tx: AppEventSender,
+
+    /// Scheduler used to request animation frames.
     frame_requester: FrameRequester,
+
+    /// Whether to animate spinner/shimmer effects.
     animations_enabled: bool,
 }
 
-// Format elapsed seconds into a compact human-friendly form used by the status line.
-// Examples: 0s, 59s, 1m 00s, 59m 59s, 1h 00m 00s, 2h 03m 09s
+/// Formats elapsed seconds into a compact human-friendly form used by the status line.
+///
+/// Examples: `0s`, `59s`, `1m 00s`, `59m 59s`, `1h 00m 00s`, `2h 03m 09s`.
 pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     if elapsed_secs < 60 {
         return format!("{elapsed_secs}s");
@@ -62,6 +86,7 @@ pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 }
 
 impl StatusIndicatorWidget {
+    /// Creates a new status indicator widget for the given event channel.
     pub(crate) fn new(
         app_event_tx: AppEventSender,
         frame_requester: FrameRequester,
@@ -81,6 +106,7 @@ impl StatusIndicatorWidget {
         }
     }
 
+    /// Sends an interrupt operation back to the application.
     pub(crate) fn interrupt(&self) {
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
@@ -107,23 +133,28 @@ impl StatusIndicatorWidget {
         self.details.as_deref()
     }
 
+    /// Control visibility of the Esc interrupt hint in the status line.
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
         self.show_interrupt_hint = visible;
     }
 
     #[cfg(test)]
+    /// Returns whether the interrupt hint is currently visible.
     pub(crate) fn interrupt_hint_visible(&self) -> bool {
         self.show_interrupt_hint
     }
 
+    /// Freezes the timer using the current instant.
     pub(crate) fn pause_timer(&mut self) {
         self.pause_timer_at(Instant::now());
     }
 
+    /// Resumes the timer using the current instant.
     pub(crate) fn resume_timer(&mut self) {
         self.resume_timer_at(Instant::now());
     }
 
+    /// Freezes the elapsed time at a specific instant.
     pub(crate) fn pause_timer_at(&mut self, now: Instant) {
         if self.is_paused {
             return;
@@ -132,6 +163,7 @@ impl StatusIndicatorWidget {
         self.is_paused = true;
     }
 
+    /// Resumes the elapsed clock from a specific instant and requests a redraw.
     pub(crate) fn resume_timer_at(&mut self, now: Instant) {
         if !self.is_paused {
             return;
@@ -141,6 +173,7 @@ impl StatusIndicatorWidget {
         self.frame_requester.schedule_frame();
     }
 
+    /// Computes elapsed duration at the provided instant.
     fn elapsed_duration_at(&self, now: Instant) -> Duration {
         let mut elapsed = self.elapsed_running;
         if !self.is_paused {
@@ -149,10 +182,12 @@ impl StatusIndicatorWidget {
         elapsed
     }
 
+    /// Returns elapsed seconds at the provided instant.
     fn elapsed_seconds_at(&self, now: Instant) -> u64 {
         self.elapsed_duration_at(now).as_secs()
     }
 
+    /// Returns the current elapsed seconds based on `Instant::now`.
     pub fn elapsed_seconds(&self) -> u64 {
         self.elapsed_seconds_at(Instant::now())
     }
@@ -191,10 +226,12 @@ impl StatusIndicatorWidget {
 }
 
 impl Renderable for StatusIndicatorWidget {
+    /// Returns the number of rows needed for the header plus optional details.
     fn desired_height(&self, width: u16) -> u16 {
         1 + u16::try_from(self.wrapped_details_lines(width).len()).unwrap_or(0)
     }
 
+    /// Render the header line, elapsed timer, and optional details.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;

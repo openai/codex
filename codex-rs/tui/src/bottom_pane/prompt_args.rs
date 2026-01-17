@@ -1,3 +1,27 @@
+//! Parses and expands argument placeholders for custom prompt invocations.
+//!
+//! The bottom pane supports `/prompts:name ...` commands that expand a saved prompt template with
+//! caller-provided arguments. This module parses that invocation, validates required placeholders,
+//! and performs the replacement without mutating any UI state.
+//!
+//! Supported placeholders:
+//!
+//! - Named placeholders like `$USER`, replaced from `key=value` arguments.
+//! - Numeric placeholders like `$1`..`$9`, replaced from positional arguments.
+//! - The aggregate `$ARGUMENTS`, which expands to all positional arguments joined by spaces.
+//!
+//! Named placeholders are detected with a regex and require explicit `key=value` assignments.
+//! Numeric placeholders allow positional arguments and can be mixed with `$ARGUMENTS`. Escaped
+//! placeholders prefixed with `$$` are treated as literals and preserved as-is so templates can
+//! reference dollars verbatim.
+//!
+//! Named placeholders take precedence: if a prompt declares any `$NAME` tokens (other than
+//! `$ARGUMENTS`), the invocation must supply matching `key=value` inputs and positional expansion
+//! is skipped entirely.
+//!
+//! Placeholder detection is deliberately conservative so unrelated `$` sequences (for example in
+//! Markdown) are not treated as prompt variables. Escaped placeholders (`$$NAME`) are preserved
+//! verbatim in both the named and numeric expansion paths.
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use lazy_static::lazy_static;
@@ -7,17 +31,27 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 lazy_static! {
+    /// Regex that matches candidate named placeholders like `$USER`.
+    ///
+    /// The pattern is intentionally conservative (uppercase letters, digits, underscore) so it
+    /// does not accidentally capture `$` sequences used by Markdown or other template syntax.
     static ref PROMPT_ARG_REGEX: Regex =
         Regex::new(r"\$[A-Z][A-Z0-9_]*").unwrap_or_else(|_| std::process::abort());
 }
 
+/// Errors raised while parsing `key=value` prompt inputs.
+///
+/// These errors are intended for user-facing feedback and preserve the original token text.
 #[derive(Debug)]
 pub enum PromptArgsError {
+    /// A token did not contain `=` and could not be parsed.
     MissingAssignment { token: String },
+    /// A token had an empty key before `=`.
     MissingKey { token: String },
 }
 
 impl PromptArgsError {
+    /// Format a user-facing error message that mentions the original command.
     fn describe(&self, command: &str) -> String {
         match self {
             PromptArgsError::MissingAssignment { token } => format!(
@@ -30,12 +64,17 @@ impl PromptArgsError {
     }
 }
 
+/// Errors raised while expanding a custom prompt invocation.
+///
+/// These errors contain enough context to render a friendly message in the UI.
 #[derive(Debug)]
 pub enum PromptExpansionError {
+    /// Named argument parsing failed for a specific invocation.
     Args {
         command: String,
         error: PromptArgsError,
     },
+    /// A required named placeholder was not provided by the user.
     MissingArgs {
         command: String,
         missing: Vec<String>,
@@ -43,6 +82,7 @@ pub enum PromptExpansionError {
 }
 
 impl PromptExpansionError {
+    /// Render a user-facing message suitable for UI display.
     pub fn user_message(&self) -> String {
         match self {
             PromptExpansionError::Args { command, error } => error.describe(command),
@@ -57,8 +97,12 @@ impl PromptExpansionError {
 }
 
 /// Parse a first-line slash command of the form `/name <rest>`.
-/// Returns `(name, rest_after_name)` if the line begins with `/` and contains
-/// a non-empty name; otherwise returns `None`.
+///
+/// Returns `(name, rest_after_name)` if the line begins with `/` and contains a
+/// non-empty name; otherwise returns `None`.
+///
+/// The parser only splits on whitespace and does not interpret the command name beyond that, so
+/// callers must still validate prefixes like `prompts:`.
 pub fn parse_slash_name(line: &str) -> Option<(&str, &str)> {
     let stripped = line.strip_prefix('/')?;
     let mut name_end = stripped.len();
@@ -77,15 +121,21 @@ pub fn parse_slash_name(line: &str) -> Option<(&str, &str)> {
 }
 
 /// Parse positional arguments using shlex semantics (supports quoted tokens).
+///
+/// This matches the shell-like quoting used in prompt invocations so quoted
+/// values stay intact as a single argument.
+///
+/// The resulting list is used for `$1`..`$9` and `$ARGUMENTS` expansion only.
 pub fn parse_positional_args(rest: &str) -> Vec<String> {
     Shlex::new(rest).collect()
 }
 
-/// Extracts the unique placeholder variable names from a prompt template.
+/// Extract the unique placeholder variable names from a prompt template.
 ///
 /// A placeholder is any token that matches the pattern `$[A-Z][A-Z0-9_]*`
-/// (for example `$USER`). The function returns the variable names without
-/// the leading `$`, de-duplicated and in the order of first appearance.
+/// (for example `$USER`). The function returns the variable names without the
+/// leading `$`, de-duplicated and in the order of first appearance, skipping
+/// escaped placeholders and the `$ARGUMENTS` aggregate.
 pub fn prompt_argument_names(content: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut names = Vec::new();
@@ -106,11 +156,13 @@ pub fn prompt_argument_names(content: &str) -> Vec<String> {
     names
 }
 
-/// Parses the `key=value` pairs that follow a custom prompt name.
+/// Parse the `key=value` pairs that follow a custom prompt name.
 ///
-/// The input is split using shlex rules, so quoted values are supported
-/// (for example `USER="Alice Smith"`). The function returns a map of parsed
+/// The input is split using shlex rules, so quoted values are supported (for
+/// example `USER="Alice Smith"`). The function returns a map of parsed
 /// arguments, or an error if a token is missing `=` or if the key is empty.
+///
+/// When the same key appears multiple times, the last occurrence wins.
 pub fn parse_prompt_inputs(rest: &str) -> Result<HashMap<String, String>, PromptArgsError> {
     let mut map = HashMap::new();
     if rest.trim().is_empty() {
@@ -129,11 +181,13 @@ pub fn parse_prompt_inputs(rest: &str) -> Result<HashMap<String, String>, Prompt
     Ok(map)
 }
 
-/// Expands a message of the form `/prompts:name [value] [value] …` using a matching saved prompt.
+/// Expand a `/prompts:name ...` invocation using a matching saved prompt.
 ///
-/// If the text does not start with `/prompts:`, or if no prompt named `name` exists,
-/// the function returns `Ok(None)`. On success it returns
-/// `Ok(Some(expanded))`; otherwise it returns a descriptive error.
+/// If the text does not start with `/prompts:`, or if no prompt named `name`
+/// exists, the function returns `Ok(None)`. On success it returns
+/// `Ok(Some(expanded))`; otherwise it returns a descriptive error. Named
+/// placeholders always win over positional ones, so prompts with `$USER`-style
+/// placeholders require `key=value` inputs.
 pub fn expand_custom_prompt(
     text: &str,
     custom_prompts: &[CustomPrompt],
@@ -192,7 +246,9 @@ pub fn expand_custom_prompt(
     Ok(Some(expanded))
 }
 
-/// Detect whether `content` contains numeric placeholders ($1..$9) or `$ARGUMENTS`.
+/// Detect whether `content` contains numeric placeholders (`$1`..`$9`) or `$ARGUMENTS`.
+///
+/// This is a shallow scan used for quick gating; it does not parse escapes.
 pub fn prompt_has_numeric_placeholders(content: &str) -> bool {
     if content.contains("$ARGUMENTS") {
         return true;
@@ -211,8 +267,11 @@ pub fn prompt_has_numeric_placeholders(content: &str) -> bool {
     false
 }
 
-/// Extract positional arguments from a composer first line like "/name a b" for a given prompt name.
-/// Returns empty when the command name does not match or when there are no args.
+/// Extract positional arguments from `/prompts:name a b` for a given prompt name.
+///
+/// Returns empty when the command name does not match or when there are no
+/// args, preserving the rule that positional expansion only happens for the
+/// selected prompt.
 pub fn extract_positional_args_for_prompt_line(line: &str, prompt_name: &str) -> Vec<String> {
     let trimmed = line.trim_start();
     let Some(rest) = trimmed.strip_prefix('/') else {
@@ -234,8 +293,11 @@ pub fn extract_positional_args_for_prompt_line(line: &str, prompt_name: &str) ->
     parse_positional_args(args_str)
 }
 
-/// If the prompt only uses numeric placeholders and the first line contains
-/// positional args for it, expand and return Some(expanded); otherwise None.
+/// Expand numeric placeholders when the prompt is numeric-only and arguments are provided.
+///
+/// Returns `None` when named placeholders are present, when no numeric
+/// placeholders are used, or when the invocation does not include positional
+/// arguments.
 pub fn expand_if_numeric_with_positional_args(
     prompt: &CustomPrompt,
     first_line: &str,
@@ -254,6 +316,9 @@ pub fn expand_if_numeric_with_positional_args(
 }
 
 /// Expand `$1..$9` and `$ARGUMENTS` in `content` with values from `args`.
+///
+/// `$ARGUMENTS` is expanded lazily so joining happens at most once per call.
+/// `$1`..`$9` placeholders are skipped when the corresponding argument is missing.
 pub fn expand_numeric_placeholders(content: &str, args: &[String]) -> String {
     let mut out = String::with_capacity(content.len());
     let mut i = 0;
@@ -296,13 +361,17 @@ pub fn expand_numeric_placeholders(content: &str, args: &[String]) -> String {
     out
 }
 
-/// Constructs a command text for a custom prompt with arguments.
+/// Construct `/prompts:name key="" ...` text for named placeholders.
+///
 /// Returns the text and the cursor position (inside the first double quote).
+///
+/// The cursor position is used by the caller to place focus inside the first argument value so
+/// users can begin typing immediately.
 pub fn prompt_command_with_arg_placeholders(name: &str, args: &[String]) -> (String, usize) {
     let mut text = format!("/{PROMPTS_CMD_PREFIX}:{name}");
     let mut cursor: usize = text.len();
     for (i, arg) in args.iter().enumerate() {
-        text.push_str(format!(" {arg}=\"\"").as_str());
+        text.push_str(&format!(" {arg}=\"\""));
         if i == 0 {
             cursor = text.len() - 1; // inside first ""
         }
@@ -314,6 +383,7 @@ pub fn prompt_command_with_arg_placeholders(name: &str, args: &[String]) -> (Str
 mod tests {
     use super::*;
 
+    /// Replaces named placeholders with supplied `key=value` arguments.
     #[test]
     fn expand_arguments_basic() {
         let prompts = vec![CustomPrompt {
@@ -329,6 +399,7 @@ mod tests {
         assert_eq!(out, Some("Review Alice changes on main".to_string()));
     }
 
+    /// Ensures shlex parsing preserves quoted values with spaces.
     #[test]
     fn quoted_values_ok() {
         let prompts = vec![CustomPrompt {
@@ -347,6 +418,7 @@ mod tests {
         assert_eq!(out, Some("Pair Alice Smith with dev-main".to_string()));
     }
 
+    /// Emits a user-facing error when a token is missing `key=value`.
     #[test]
     fn invalid_arg_token_reports_error() {
         let prompts = vec![CustomPrompt {
@@ -362,6 +434,7 @@ mod tests {
         assert!(err.contains("expected key=value"));
     }
 
+    /// Reports missing required keys when some named placeholders are absent.
     #[test]
     fn missing_required_args_reports_error() {
         let prompts = vec![CustomPrompt {
@@ -378,6 +451,7 @@ mod tests {
         assert!(err.contains("BRANCH"));
     }
 
+    /// Skips escaped placeholders when extracting required names.
     #[test]
     fn escaped_placeholder_is_ignored() {
         assert_eq!(
@@ -390,6 +464,7 @@ mod tests {
         );
     }
 
+    /// Leaves `$$`-escaped placeholders intact during expansion.
     #[test]
     fn escaped_placeholder_remains_literal() {
         let prompts = vec![CustomPrompt {

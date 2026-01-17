@@ -1,3 +1,10 @@
+//! Generates animated shimmer spans for attention-grabbing UI banners.
+//!
+//! The shimmer effect is time-based and synchronized to process start, so multiple widgets can
+//! share a stable animation phase. When the terminal supports true-color output, the shimmer uses
+//! blended RGB colors derived from the default palette; otherwise it falls back to bold/dim
+//! styling to preserve contrast.
+
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
@@ -11,13 +18,16 @@ use crate::color::blend;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
 
+/// Lazily captures the process start time for consistent shimmer animation timing.
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
+/// Returns the duration elapsed since the shimmer timer was initialized.
 fn elapsed_since_start() -> Duration {
     let start = PROCESS_START.get_or_init(Instant::now);
     start.elapsed()
 }
 
+/// Builds a sequence of styled spans that animate a sweeping highlight over `text`.
 pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
@@ -68,6 +78,7 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     spans
 }
 
+/// Maps the shimmer intensity to a bold/dim fallback style.
 fn color_for_level(intensity: f32) -> Style {
     // Tune fallback styling so the shimmer band reads even without RGB support.
     if intensity < 0.2 {

@@ -14,7 +14,7 @@ use std::sync::RwLock;
 /// However, future users of this should use this with caution as a result.
 /// In addition, we want to be confident that this value is used for ALL clients and doing that requires a
 /// lot of wiring and it's easy to miss code paths by doing so.
-/// See https://github.com/openai/codex/pull/3388/files for an example of what that would look like.
+/// See <https://github.com/openai/codex/pull/3388/files> for an example of what that would look like.
 /// Finally, we want to make sure this is set for ALL mcp clients without needing to know a special env var
 /// or having to set data that they already specified in the mcp initialize request somewhere else.
 ///

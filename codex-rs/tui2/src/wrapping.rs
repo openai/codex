@@ -1,3 +1,10 @@
+//! Text wrapping helpers for `ratatui` lines and spans.
+//!
+//! The functions in this module adapt `textwrap` behavior to `ratatui`'s
+//! styled lines, preserving span styles while splitting content across rows.
+//! Public helpers accept both borrowed and owned lines, and indentation can be
+//! specified independently for the first and subsequent lines.
+
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::borrow::Cow;
@@ -6,6 +13,10 @@ use textwrap::Options;
 
 use crate::render::line_utils::push_owned_lines;
 
+/// Wraps a plain string and returns byte ranges into the original text.
+///
+/// The returned ranges include trailing spaces and a sentinel extra byte so
+/// callers can preserve alignment when rendering whitespace-sensitive content.
 pub(crate) fn wrap_ranges<'a, O>(text: &str, width_or_options: O) -> Vec<Range<usize>>
 where
     O: Into<Options<'a>>,
@@ -15,6 +26,7 @@ where
     for line in textwrap::wrap(text, opts).iter() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
+                // SAFETY: `textwrap::wrap` returns borrowed slices of `text` when possible.
                 let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
                 let end = start + slice.len();
                 let trailing_spaces = text[end..].chars().take_while(|c| *c == ' ').count();
@@ -38,6 +50,7 @@ where
     for line in textwrap::wrap(text, opts).iter() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
+                // SAFETY: `textwrap::wrap` returns borrowed slices of `text` when possible.
                 let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
                 let end = start + slice.len();
                 lines.push(start..end);
@@ -48,6 +61,7 @@ where
     lines
 }
 
+/// Rendering-friendly wrapper around `textwrap::Options`.
 #[derive(Debug, Clone)]
 pub struct RtOptions<'a> {
     /// The width in columns at which the text will be wrapped.
@@ -76,6 +90,7 @@ pub struct RtOptions<'a> {
     pub word_splitter: textwrap::WordSplitter,
 }
 impl From<usize> for RtOptions<'_> {
+    /// Builds options with the given width and default settings.
     fn from(width: usize) -> Self {
         RtOptions::new(width)
     }
@@ -83,6 +98,7 @@ impl From<usize> for RtOptions<'_> {
 
 #[allow(dead_code)]
 impl<'a> RtOptions<'a> {
+    /// Creates default wrapping options for the given width.
     pub fn new(width: usize) -> Self {
         RtOptions {
             width,
@@ -96,6 +112,7 @@ impl<'a> RtOptions<'a> {
         }
     }
 
+    /// Sets the line ending to use when wrapping.
     pub fn line_ending(self, line_ending: textwrap::LineEnding) -> Self {
         RtOptions {
             line_ending,
@@ -103,10 +120,12 @@ impl<'a> RtOptions<'a> {
         }
     }
 
+    /// Sets the wrapping width in columns.
     pub fn width(self, width: usize) -> Self {
         RtOptions { width, ..self }
     }
 
+    /// Sets the indent for the first wrapped line.
     pub fn initial_indent(self, initial_indent: Line<'a>) -> Self {
         RtOptions {
             initial_indent,
@@ -114,6 +133,7 @@ impl<'a> RtOptions<'a> {
         }
     }
 
+    /// Sets the indent for subsequent wrapped lines.
     pub fn subsequent_indent(self, subsequent_indent: Line<'a>) -> Self {
         RtOptions {
             subsequent_indent,
@@ -121,6 +141,7 @@ impl<'a> RtOptions<'a> {
         }
     }
 
+    /// Controls whether long words can be broken.
     pub fn break_words(self, break_words: bool) -> Self {
         RtOptions {
             break_words,
@@ -128,6 +149,7 @@ impl<'a> RtOptions<'a> {
         }
     }
 
+    /// Sets the word separator algorithm.
     pub fn word_separator(self, word_separator: textwrap::WordSeparator) -> RtOptions<'a> {
         RtOptions {
             word_separator,
@@ -135,6 +157,7 @@ impl<'a> RtOptions<'a> {
         }
     }
 
+    /// Sets the wrap algorithm used by `textwrap`.
     pub fn wrap_algorithm(self, wrap_algorithm: textwrap::WrapAlgorithm) -> RtOptions<'a> {
         RtOptions {
             wrap_algorithm,
@@ -142,6 +165,7 @@ impl<'a> RtOptions<'a> {
         }
     }
 
+    /// Sets the word splitting strategy.
     pub fn word_splitter(self, word_splitter: textwrap::WordSplitter) -> RtOptions<'a> {
         RtOptions {
             word_splitter,
@@ -150,6 +174,7 @@ impl<'a> RtOptions<'a> {
     }
 }
 
+/// Wraps a single line, preserving span styles across wrapped segments.
 #[must_use]
 pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> Vec<Line<'a>>
 where
@@ -334,6 +359,7 @@ enum LineInput<'a> {
 }
 
 impl<'a> LineInput<'a> {
+    /// Returns a borrowed view of the inner line.
     fn as_ref(&self) -> &Line<'a> {
         match self {
             LineInput::Borrowed(line) => line,
@@ -344,52 +370,61 @@ impl<'a> LineInput<'a> {
 
 /// This trait makes it easier to pass whatever we need into word_wrap_lines.
 trait IntoLineInput<'a> {
+    /// Converts the input into a `LineInput` wrapper.
     fn into_line_input(self) -> LineInput<'a>;
 }
 
 impl<'a> IntoLineInput<'a> for &'a Line<'a> {
+    /// Wrap a borrowed line without allocating.
     fn into_line_input(self) -> LineInput<'a> {
         LineInput::Borrowed(self)
     }
 }
 
 impl<'a> IntoLineInput<'a> for &'a mut Line<'a> {
+    /// Wrap a mutable borrowed line without allocating.
     fn into_line_input(self) -> LineInput<'a> {
         LineInput::Borrowed(self)
     }
 }
 
 impl<'a> IntoLineInput<'a> for Line<'a> {
+    /// Wrap an owned line.
     fn into_line_input(self) -> LineInput<'a> {
         LineInput::Owned(self)
     }
 }
 
 impl<'a> IntoLineInput<'a> for String {
+    /// Wrap an owned string as a line.
     fn into_line_input(self) -> LineInput<'a> {
         LineInput::Owned(Line::from(self))
     }
 }
 
 impl<'a> IntoLineInput<'a> for &'a str {
+    /// Wrap a string slice as a line.
     fn into_line_input(self) -> LineInput<'a> {
         LineInput::Owned(Line::from(self))
     }
 }
 
 impl<'a> IntoLineInput<'a> for Cow<'a, str> {
+    /// Wrap a borrowed-or-owned string as a line.
     fn into_line_input(self) -> LineInput<'a> {
         LineInput::Owned(Line::from(self))
     }
 }
 
 impl<'a> IntoLineInput<'a> for Span<'a> {
+    /// Wrap a single span as a line.
     fn into_line_input(self) -> LineInput<'a> {
         LineInput::Owned(Line::from(self))
     }
 }
 
 impl<'a> IntoLineInput<'a> for Vec<Span<'a>> {
+    /// Wrap a span list as a line.
     fn into_line_input(self) -> LineInput<'a> {
         LineInput::Owned(Line::from(self))
     }
@@ -425,6 +460,7 @@ where
 }
 
 #[allow(dead_code)]
+/// Wraps borrowed lines while preserving their lifetime.
 pub(crate) fn word_wrap_lines_borrowed<'a, I, O>(lines: I, width_or_options: O) -> Vec<Line<'a>>
 where
     I: IntoIterator<Item = &'a Line<'a>>,
@@ -447,6 +483,7 @@ where
     out
 }
 
+/// Slices a line into spans that overlap the requested byte range.
 fn slice_line_spans<'a>(
     original: &'a Line<'a>,
     span_bounds: &[(Range<usize>, ratatui::style::Style)],

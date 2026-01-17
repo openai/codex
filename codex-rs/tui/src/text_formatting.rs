@@ -1,7 +1,14 @@
+//! Text formatting helpers for truncation and display.
+//!
+//! These utilities handle grapheme-aware truncation, compact JSON formatting
+//! for terminal wrapping, and path shortening that preserves key prefixes and
+//! suffixes within a fixed display width.
+
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+/// Capitalizes the first character of a string, leaving the rest unchanged.
 pub(crate) fn capitalize_first(input: &str) -> String {
     let mut chars = input.chars();
     match chars.next() {
@@ -14,8 +21,11 @@ pub(crate) fn capitalize_first(input: &str) -> String {
     }
 }
 
-/// Truncate a tool result to fit within the given height and width. If the text is valid JSON, we format it in a compact way before truncating.
-/// This is a best-effort approach that may not work perfectly for text where 1 grapheme is rendered as multiple terminal cells.
+/// Truncates a tool result to fit within the given height and width.
+///
+/// If the text is valid JSON, it is formatted in a compact form before
+/// truncation. This is a best-effort approach and may not be exact for text
+/// where one grapheme occupies multiple terminal cells.
 pub(crate) fn format_and_truncate_tool_result(
     text: &str,
     max_lines: usize,
@@ -33,14 +43,12 @@ pub(crate) fn format_and_truncate_tool_result(
     }
 }
 
-/// Format JSON text in a compact single-line format with spaces for better Ratatui wrapping.
-/// Ex: `{"a":"b",c:["d","e"]}` -> `{"a": "b", "c": ["d", "e"]}`
-/// Returns the formatted JSON string if the input is valid JSON, otherwise returns None.
-/// This is a little complicated, but it's necessary because Ratatui's wrapping is *very* limited
-/// and can only do line breaks at whitespace. If we use the default serde_json format, we get lines
-/// without spaces that Ratatui can't wrap nicely. If we use the serde_json pretty format as-is,
-/// it's much too sparse and uses too many terminal rows.
-/// Relevant issue: https://github.com/ratatui/ratatui/issues/293
+/// Formats JSON into a compact single-line representation suitable for wrapping.
+///
+/// Example: `{"a":"b",c:["d","e"]}` becomes `{"a": "b", "c": ["d", "e"]}`.
+/// Returns the formatted JSON string if the input is valid JSON, otherwise `None`.
+/// The output adds whitespace after `:` and `,` so `ratatui` can wrap on spaces.
+/// See <https://github.com/ratatui/ratatui/issues/293> for background.
 pub(crate) fn format_json_compact(text: &str) -> Option<String> {
     let json = serde_json::from_str::<serde_json::Value>(text).ok()?;
     let json_pretty = serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string());
@@ -87,7 +95,9 @@ pub(crate) fn format_json_compact(text: &str) -> Option<String> {
     Some(result)
 }
 
-/// Truncate `text` to `max_graphemes` graphemes. Using graphemes to avoid accidentally truncating in the middle of a multi-codepoint character.
+/// Truncates `text` to `max_graphemes` graphemes, adding an ellipsis if needed.
+///
+/// Grapheme-aware slicing avoids splitting multi-codepoint characters.
 pub(crate) fn truncate_text(text: &str, max_graphemes: usize) -> String {
     let mut graphemes = text.grapheme_indices(true);
 
@@ -114,9 +124,11 @@ pub(crate) fn truncate_text(text: &str, max_graphemes: usize) -> String {
     }
 }
 
-/// Truncate a path-like string to the given display width, keeping leading and trailing segments
-/// where possible and inserting a single Unicode ellipsis between them. If an individual segment
-/// cannot fit, it is front-truncated with an ellipsis.
+/// Truncates a path-like string to the given display width.
+///
+/// The algorithm keeps leading and trailing segments where possible and inserts
+/// a single Unicode ellipsis between them. If an individual segment cannot fit,
+/// it is front-truncated with an ellipsis.
 pub(crate) fn center_truncate_path(path: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();

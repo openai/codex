@@ -1,9 +1,14 @@
+//! Update action selection for CLI self-updates.
+//!
+//! The update action is derived from the environment and installation location
+//! so the prompt can offer an appropriate command to run.
+
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// Update via `npm install -g @openai/codex@latest`.
+    /// Update via `npm install -g @openai/codex`.
     NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
+    /// Update via `bun install -g @openai/codex`.
     BunGlobalLatest,
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
@@ -19,7 +24,7 @@ impl UpdateAction {
         }
     }
 
-    /// Returns string representation of the command-line arguments for invoking the update.
+    /// Returns a shell-friendly string representation of the update command.
     pub fn command_str(self) -> String {
         let (command, args) = self.command_args();
         shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
@@ -28,6 +33,7 @@ impl UpdateAction {
 }
 
 #[cfg(not(debug_assertions))]
+/// Determines the update action based on environment variables and install path.
 pub(crate) fn get_update_action() -> Option<UpdateAction> {
     let exe = std::env::current_exe().unwrap_or_default();
     let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
@@ -42,6 +48,7 @@ pub(crate) fn get_update_action() -> Option<UpdateAction> {
 }
 
 #[cfg(any(not(debug_assertions), test))]
+/// Core update-action detection logic, parameterized for testing.
 fn detect_update_action(
     is_macos: bool,
     current_exe: &std::path::Path,

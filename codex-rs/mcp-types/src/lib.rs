@@ -817,7 +817,7 @@ impl From<ListToolsResult> for serde_json::Value {
 /// The severity of a log message.
 ///
 /// These map to syslog message severities, as specified in RFC-5424:
-/// https://datatracker.ietf.org/doc/html/rfc5424#section-6.2.1
+/// <https://datatracker.ietf.org/doc/html/rfc5424#section-6.2.1>
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub enum LoggingLevel {
     #[serde(rename = "alert")]

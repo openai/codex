@@ -1,3 +1,20 @@
+//! Renders the queue of user messages entered while a turn is still running.
+//!
+//! The queue is visual-only state: it shows what the user typed while the app
+//! was busy and offers a hint for editing the most recent queued message. It
+//! does not own submission behavior; it only wraps, truncates, and styles the
+//! queued strings for display in the bottom pane.
+//!
+//! Correctness relies on preserving message order and on keeping the hint
+//! aligned with the actual edit action (currently `Alt+Up`). The rendering path
+//! never mutates queue contents; callers remain responsible for enqueueing and
+//! dequeuing messages as turns begin or end.
+//!
+//! Each message is rendered with a dimmed gutter (`↳`), wrapped to the available
+//! width, and truncated to three lines with an ellipsis line when additional
+//! content exists. A final hint line is appended only when there is at least one
+//! queued message.
+
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -10,18 +27,33 @@ use crate::render::renderable::Renderable;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
-/// Widget that displays a list of user messages queued while a turn is in progress.
+/// Displays user messages queued while a turn is in progress.
+///
+/// The widget truncates each queued message to three wrapped lines, appending a
+/// dimmed ellipsis when more content exists, then ends with a keyboard hint for
+/// editing the latest queued message.
 pub(crate) struct QueuedUserMessages {
+    /// Ordered queued messages, oldest first.
+    ///
+    /// New messages are appended by the caller; the renderer preserves this
+    /// ordering so users can see the queue in chronological sequence.
     pub messages: Vec<String>,
 }
 
 impl QueuedUserMessages {
+    /// Creates an empty queue widget with no visible height.
     pub(crate) fn new() -> Self {
         Self {
             messages: Vec::new(),
         }
     }
 
+    /// Converts the queued messages into a renderable paragraph for a width.
+    ///
+    /// Returns an empty renderable when there is insufficient space to display
+    /// the gutters or when there are no messages to show. Each message is
+    /// wrapped with a two-character gutter, truncated to three lines, and
+    /// followed by an ellipsis line when content was clipped.
     fn as_renderable(&self, width: u16) -> Box<dyn Renderable> {
         if self.messages.is_empty() || width < 4 {
             return Box::new(());
@@ -59,6 +91,7 @@ impl QueuedUserMessages {
 }
 
 impl Renderable for QueuedUserMessages {
+    /// Renders the queued messages paragraph into the given area.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
@@ -67,6 +100,10 @@ impl Renderable for QueuedUserMessages {
         self.as_renderable(area.width).render(area, buf);
     }
 
+    /// Returns the desired height for the current queue at the given width.
+    ///
+    /// The height matches the wrapped, truncated paragraph returned by
+    /// [`QueuedUserMessages::as_renderable`].
     fn desired_height(&self, width: u16) -> u16 {
         self.as_renderable(width).desired_height(width)
     }
@@ -78,12 +115,14 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
 
+    /// Verifies empty queues have no height.
     #[test]
     fn desired_height_empty() {
         let queue = QueuedUserMessages::new();
         assert_eq!(queue.desired_height(40), 0);
     }
 
+    /// Ensures a single short message fits in two lines (message + hint).
     #[test]
     fn desired_height_one_message() {
         let mut queue = QueuedUserMessages::new();
@@ -91,6 +130,7 @@ mod tests {
         assert_eq!(queue.desired_height(40), 2);
     }
 
+    /// Snapshots the rendering for one queued message.
     #[test]
     fn render_one_message() {
         let mut queue = QueuedUserMessages::new();
@@ -102,6 +142,7 @@ mod tests {
         assert_snapshot!("render_one_message", format!("{buf:?}"));
     }
 
+    /// Snapshots the rendering for two queued messages.
     #[test]
     fn render_two_messages() {
         let mut queue = QueuedUserMessages::new();
@@ -114,6 +155,7 @@ mod tests {
         assert_snapshot!("render_two_messages", format!("{buf:?}"));
     }
 
+    /// Snapshots the rendering when more than three messages are queued.
     #[test]
     fn render_more_than_three_messages() {
         let mut queue = QueuedUserMessages::new();
@@ -128,6 +170,7 @@ mod tests {
         assert_snapshot!("render_more_than_three_messages", format!("{buf:?}"));
     }
 
+    /// Snapshots wrapping behavior for a long queued message.
     #[test]
     fn render_wrapped_message() {
         let mut queue = QueuedUserMessages::new();
@@ -142,6 +185,7 @@ mod tests {
         assert_snapshot!("render_wrapped_message", format!("{buf:?}"));
     }
 
+    /// Snapshots rendering of queued messages containing explicit newlines.
     #[test]
     fn render_many_line_message() {
         let mut queue = QueuedUserMessages::new();

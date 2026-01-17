@@ -47,20 +47,26 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
+/// Overlay variants rendered above the main TUI viewport.
 pub(crate) enum Overlay {
+    /// Scrollable transcript overlay with optional live tail.
     Transcript(TranscriptOverlay),
+    /// Static, scrollable text overlay (help, changelog, etc.).
     Static(StaticOverlay),
 }
 
 impl Overlay {
+    /// Build a transcript overlay from committed history cells.
     pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self::Transcript(TranscriptOverlay::new(cells))
     }
 
+    /// Build a static overlay from pre-wrapped lines and a title.
     pub(crate) fn new_static_with_lines(lines: Vec<Line<'static>>, title: String) -> Self {
         Self::Static(StaticOverlay::with_title(lines, title))
     }
 
+    /// Build a static overlay from custom renderables and a title.
     pub(crate) fn new_static_with_renderables(
         renderables: Vec<Box<dyn Renderable>>,
         title: String,
@@ -68,6 +74,7 @@ impl Overlay {
         Self::Static(StaticOverlay::with_renderables(renderables, title))
     }
 
+    /// Route input and draw events to the active overlay implementation.
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
@@ -75,6 +82,7 @@ impl Overlay {
         }
     }
 
+    /// Reports whether the overlay has requested dismissal.
     pub(crate) fn is_done(&self) -> bool {
         match self {
             Overlay::Transcript(o) => o.is_done(),
@@ -103,14 +111,14 @@ const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 
-// Common pager navigation hints rendered on the first line
+// Common pager navigation hints rendered on the first line.
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
     (&[KEY_UP, KEY_DOWN], "to scroll"),
     (&[KEY_PAGE_UP, KEY_PAGE_DOWN], "to page"),
     (&[KEY_HOME, KEY_END], "to jump"),
 ];
 
-// Render a single line of key hints from (key(s), description) pairs.
+/// Render a single line of key hints from (key(s), description) pairs.
 fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)]) {
     let mut spans: Vec<Span<'static>> = vec![" ".into()];
     let mut first = true;
@@ -133,16 +141,22 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)
 
 /// Generic widget for rendering a pager view.
 struct PagerView {
+    /// Renderables that make up the scrollable content body.
     renderables: Vec<Box<dyn Renderable>>,
+    /// Top-most content row currently visible in the viewport.
     scroll_offset: usize,
+    /// Header title shown in the pager chrome.
     title: String,
+    /// Height of the content area used for paging calculations.
     last_content_height: Option<usize>,
+    /// Total rendered height of the content at the last draw width.
     last_rendered_height: Option<usize>,
     /// If set, on next render ensure this chunk is visible.
     pending_scroll_chunk: Option<usize>,
 }
 
 impl PagerView {
+    /// Construct a pager view with initial scroll offset.
     fn new(renderables: Vec<Box<dyn Renderable>>, title: String, scroll_offset: usize) -> Self {
         Self {
             renderables,
@@ -154,6 +168,7 @@ impl PagerView {
         }
     }
 
+    /// Measure the total height required by all renderables for the width.
     fn content_height(&self, width: u16) -> usize {
         self.renderables
             .iter()
@@ -161,6 +176,7 @@ impl PagerView {
             .sum()
     }
 
+    /// Render the pager chrome, content, and bottom bar.
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         self.render_header(area, buf);
@@ -182,6 +198,7 @@ impl PagerView {
         self.render_bottom_bar(area, content_area, buf, content_height);
     }
 
+    /// Render the pager header line.
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
         Span::from("/ ".repeat(area.width as usize / 2))
             .dim()
@@ -190,6 +207,7 @@ impl PagerView {
         header.dim().render_ref(area, buf);
     }
 
+    /// Render the scrollable content body for the current scroll offset.
     fn render_content(&self, area: Rect, buf: &mut Buffer) {
         let mut y = -(self.scroll_offset as isize);
         let mut drawn_bottom = area.y;
@@ -226,6 +244,7 @@ impl PagerView {
         }
     }
 
+    /// Render the bottom separator and percent indicator.
     fn render_bottom_bar(
         &self,
         full_area: Rect,
@@ -258,6 +277,7 @@ impl PagerView {
             .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
     }
 
+    /// Apply pager navigation key bindings and schedule a redraw.
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
             e if KEY_UP.is_press(e) || KEY_K.is_press(e) => {
@@ -330,10 +350,12 @@ impl PagerView {
             .unwrap_or_else(|| self.content_area(viewport_area).height as usize)
     }
 
+    /// Record the last content-area height for paging math.
     fn update_last_content_height(&mut self, height: u16) {
         self.last_content_height = Some(height as usize);
     }
 
+    /// Compute the content area rectangle without header/footer chrome.
     fn content_area(&self, area: Rect) -> Rect {
         let mut area = area;
         area.y = area.y.saturating_add(1);
@@ -343,6 +365,7 @@ impl PagerView {
 }
 
 impl PagerView {
+    /// Reports whether the view is scrolled to the bottom sentinel.
     fn is_scrolled_to_bottom(&self) -> bool {
         if self.scroll_offset == usize::MAX {
             return true;
@@ -368,6 +391,7 @@ impl PagerView {
         self.pending_scroll_chunk = Some(chunk_index);
     }
 
+    /// Adjust the scroll offset so the given chunk is fully visible.
     fn ensure_chunk_visible(&mut self, idx: usize, area: Rect) {
         if area.height == 0 || idx >= self.renderables.len() {
             return;
@@ -391,12 +415,16 @@ impl PagerView {
 
 /// A renderable that caches its desired height.
 struct CachedRenderable {
+    /// Wrapped renderable used for actual drawing.
     renderable: Box<dyn Renderable>,
+    /// Cached height for the last measured width.
     height: std::cell::Cell<Option<u16>>,
+    /// Width used for the cached height value.
     last_width: std::cell::Cell<Option<u16>>,
 }
 
 impl CachedRenderable {
+    /// Wrap a renderable with a width-aware height cache.
     fn new(renderable: impl Into<Box<dyn Renderable>>) -> Self {
         Self {
             renderable: renderable.into(),
@@ -420,8 +448,11 @@ impl Renderable for CachedRenderable {
     }
 }
 
+/// Renderable wrapper for a single history cell with a fixed style.
 struct CellRenderable {
+    /// History cell whose transcript lines should be rendered.
     cell: Arc<dyn HistoryCell>,
+    /// Style applied to all rendered transcript lines.
     style: Style,
 }
 
@@ -437,6 +468,7 @@ impl Renderable for CellRenderable {
     }
 }
 
+/// Overlay that displays the full transcript history in a pager.
 pub(crate) struct TranscriptOverlay {
     /// Pager UI state and the renderables currently displayed.
     ///
@@ -445,9 +477,11 @@ pub(crate) struct TranscriptOverlay {
     view: PagerView,
     /// Committed transcript cells (does not include the live tail).
     cells: Vec<Arc<dyn HistoryCell>>,
+    /// Optional cell index to highlight and scroll into view.
     highlight_cell: Option<usize>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
+    /// Indicates the overlay should close on the next event loop tick.
     is_done: bool,
 }
 
@@ -651,6 +685,7 @@ impl TranscriptOverlay {
         renderable
     }
 
+    /// Render keybinding hints for the transcript overlay footer.
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
@@ -664,6 +699,7 @@ impl TranscriptOverlay {
         render_key_hints(line2, buf, &pairs);
     }
 
+    /// Draw the transcript overlay with header, content, and footer hints.
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
@@ -674,6 +710,7 @@ impl TranscriptOverlay {
 }
 
 impl TranscriptOverlay {
+    /// Handle input and draw events for the transcript overlay.
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
@@ -693,22 +730,28 @@ impl TranscriptOverlay {
             _ => Ok(()),
         }
     }
+    /// Reports whether the overlay has requested dismissal.
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
     }
 }
 
+/// Overlay that renders static content with pager chrome.
 pub(crate) struct StaticOverlay {
+    /// Pager state for the static content.
     view: PagerView,
+    /// Indicates the overlay should close on the next event loop tick.
     is_done: bool,
 }
 
 impl StaticOverlay {
+    /// Build a static overlay from raw lines and a title.
     pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
         let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         Self::with_renderables(vec![Box::new(CachedRenderable::new(paragraph))], title)
     }
 
+    /// Build a static overlay from renderables and a title.
     pub(crate) fn with_renderables(renderables: Vec<Box<dyn Renderable>>, title: String) -> Self {
         Self {
             view: PagerView::new(renderables, title, 0),
@@ -716,6 +759,7 @@ impl StaticOverlay {
         }
     }
 
+    /// Render keybinding hints for the static overlay footer.
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
@@ -724,6 +768,7 @@ impl StaticOverlay {
         render_key_hints(line2, buf, &pairs);
     }
 
+    /// Draw the static overlay with header, content, and footer hints.
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
@@ -734,6 +779,7 @@ impl StaticOverlay {
 }
 
 impl StaticOverlay {
+    /// Handle input and draw events for the static overlay.
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
@@ -753,11 +799,13 @@ impl StaticOverlay {
             _ => Ok(()),
         }
     }
+    /// Reports whether the overlay has requested dismissal.
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
     }
 }
 
+/// Render a renderable into a tall scratch buffer, then copy a scrolled slice.
 fn render_offset_content(
     area: Rect,
     buf: &mut Buffer,

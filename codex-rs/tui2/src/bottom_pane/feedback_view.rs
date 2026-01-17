@@ -1,3 +1,24 @@
+//! Bottom-pane UI for collecting feedback notes and driving the feedback flow.
+//!
+//! This module renders the overlay used to capture an optional feedback note,
+//! maps selected categories to backend classifications, and emits [`AppEvent`]s
+//! that advance the flow (category → consent → note → upload). It owns only the
+//! transient UI state (textarea content, cursor state, completion flag) and
+//! forwards a caller-provided [`codex_feedback::CodexLogSnapshot`] when the user
+//! submits. Selection-parameter helpers translate categories into popup content
+//! and actions without storing any long-lived state.
+//!
+//! The UI layer is intentionally thin: it does not build snapshots, does not
+//! retry uploads, and does not own the modal stack. Instead it publishes events
+//! that drive the surrounding app state and relies on the caller to decide when
+//! to open or close the overlay.
+//!
+//! Correctness relies on using the same [`FeedbackCategory`] for UI copy and
+//! classification, and on honoring `include_logs` when deciding whether to
+//! attach rollout artifacts. The set of categories that surface issue URLs must
+//! stay in sync with the selection list so UI copy and backend labels remain
+//! aligned, and the consent prompt must reflect the same log bundle that the
+//! upload path will attach.
 use std::cell::RefCell;
 use std::path::PathBuf;
 
@@ -27,25 +48,64 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
+/// Base URL for prefilled bug reports when the flow suggests filing an issue.
+///
+/// The final URL injects the thread identifier via a `steps` query parameter so
+/// the issue template can reference the uploaded transcript.
 const BASE_BUG_ISSUE_URL: &str =
     "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
 
-/// Minimal input overlay to collect an optional feedback note, then upload
-/// both logs and rollout with classification + metadata.
+/// Collects an optional feedback note and dispatches the feedback upload.
+///
+/// The view owns the text input widget, cursor state, and completion flag, but
+/// defers log collection and persistence to the surrounding application.
+/// Completion is terminal: once the user submits or cancels, the view no longer
+/// accepts input or emits further events.
 pub(crate) struct FeedbackNoteView {
+    /// Category that drives copy, classification, and issue-link behavior.
+    ///
+    /// This must stay aligned with the selection list so labels and upload
+    /// classifications match what the user saw.
     category: FeedbackCategory,
+    /// Snapshot containing the log metadata and thread identifier to upload.
+    ///
+    /// The snapshot is supplied by the caller so this view never recomputes
+    /// log contents; it forwards the metadata to `codex_feedback`.
     snapshot: codex_feedback::CodexLogSnapshot,
+    /// Optional rollout artifact path appended to uploads when logs are shared.
+    ///
+    /// The path is only sent when `include_logs` is true; otherwise it is
+    /// ignored even if present.
     rollout_path: Option<PathBuf>,
+    /// Channel used to emit history updates or transitions after submission.
+    ///
+    /// Events emitted here are the only way the view communicates with the
+    /// application; it does not mutate shared state directly.
     app_event_tx: AppEventSender,
+    /// Whether the submission should include logs and rollout artifacts.
+    ///
+    /// This gates both the upload payload and the success copy shown to the
+    /// user after a successful submission.
     include_logs: bool,
 
-    // UI state
+    /// Input widget used to capture the optional user note.
     textarea: TextArea,
+    /// Mutable widget state tracked across renders and cursor queries.
+    ///
+    /// A `RefCell` is used because `render` and `cursor_pos` mutate state while
+    /// the view is held immutably by the renderer.
     textarea_state: RefCell<TextAreaState>,
+    /// Terminal flag that closes the overlay after submit or cancel.
+    ///
+    /// Once set, the view reports completion and ignores further input.
     complete: bool,
 }
 
 impl FeedbackNoteView {
+    /// Builds a feedback note overlay for the requested category and snapshot.
+    ///
+    /// The snapshot and rollout path are provided by the caller so the view can
+    /// render immediately without reaching into log collection.
     pub(crate) fn new(
         category: FeedbackCategory,
         snapshot: codex_feedback::CodexLogSnapshot,
@@ -65,6 +125,15 @@ impl FeedbackNoteView {
         }
     }
 
+    /// Submits the feedback note and emits a history entry describing the result.
+    ///
+    /// The flow trims the current text, determines the category classification,
+    /// uploads via `codex_feedback`, and posts either a success or error cell to
+    /// the history stream before marking the overlay complete. The
+    /// `include_logs` flag controls whether rollout artifacts are attached and
+    /// which success copy is shown. A successful upload also includes the
+    /// thread identifier in the rendered history entry so users can reference
+    /// it in follow-up reports.
     fn submit(&mut self) {
         let note = self.textarea.text().trim().to_string();
         let reason_opt = if note.is_empty() {
@@ -136,6 +205,10 @@ impl FeedbackNoteView {
 }
 
 impl BottomPaneView for FeedbackNoteView {
+    /// Routes keyboard input to the textarea or triggers submit/cancel actions.
+    ///
+    /// The Enter key submits only when unmodified; modified Enter continues to
+    /// feed the textarea so users can insert newlines.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -162,15 +235,18 @@ impl BottomPaneView for FeedbackNoteView {
         }
     }
 
+    /// Closes the overlay without submitting feedback.
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.complete = true;
         CancellationEvent::Handled
     }
 
+    /// Reports whether the overlay has finished its submit/cancel flow.
     fn is_complete(&self) -> bool {
         self.complete
     }
 
+    /// Inserts pasted text into the input buffer.
     fn handle_paste(&mut self, pasted: String) -> bool {
         if pasted.is_empty() {
             return false;
@@ -181,10 +257,15 @@ impl BottomPaneView for FeedbackNoteView {
 }
 
 impl Renderable for FeedbackNoteView {
+    /// Returns the height needed for the title, input area, and footer hint.
     fn desired_height(&self, width: u16) -> u16 {
         1u16 + self.input_height(width) + 3u16
     }
 
+    /// Computes the terminal cursor position inside the input area, if visible.
+    ///
+    /// The cursor is only returned when the input gutter has room and the
+    /// textarea height is non-zero.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if area.height < 2 || area.width <= 2 {
             return None;
@@ -193,7 +274,7 @@ impl Renderable for FeedbackNoteView {
         if text_area_height == 0 {
             return None;
         }
-        let top_line_count = 1u16; // title only
+        let top_line_count = 1u16;
         let textarea_rect = Rect {
             x: area.x.saturating_add(2),
             y: area.y.saturating_add(top_line_count).saturating_add(1),
@@ -204,6 +285,11 @@ impl Renderable for FeedbackNoteView {
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 
+    /// Renders the title, text input, and footer hint for the feedback overlay.
+    ///
+    /// Rendering proceeds in three phases: draw the title gutter, paint the
+    /// input box with placeholder text when empty, and render the standardized
+    /// hint line at the bottom when there is space.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || area.width == 0 {
             return;
@@ -212,7 +298,6 @@ impl Renderable for FeedbackNoteView {
         let (title, placeholder) = feedback_title_and_placeholder(self.category);
         let input_height = self.input_height(area.width);
 
-        // Title line
         let title_area = Rect {
             x: area.x,
             y: area.y,
@@ -222,7 +307,6 @@ impl Renderable for FeedbackNoteView {
         let title_spans: Vec<Span<'static>> = vec![gutter(), title.bold()];
         Paragraph::new(Line::from(title_spans)).render(title_area, buf);
 
-        // Input line
         let input_area = Rect {
             x: area.x,
             y: area.y.saturating_add(1),
@@ -294,6 +378,10 @@ impl Renderable for FeedbackNoteView {
 }
 
 impl FeedbackNoteView {
+    /// Computes the height of the input region, clamping it to a small range.
+    ///
+    /// The height includes one row for the top padding inside the gutter and
+    /// keeps the textarea between one and eight lines tall.
     fn input_height(&self, width: u16) -> u16 {
         let usable_width = width.saturating_sub(2);
         let text_height = self.textarea.desired_height(usable_width).clamp(1, 8);
@@ -301,10 +389,17 @@ impl FeedbackNoteView {
     }
 }
 
+/// Returns the left gutter span used by the feedback overlay.
+///
+/// The cyan bar visually matches other bottom-pane prompts.
 fn gutter() -> Span<'static> {
     "▌ ".cyan()
 }
 
+/// Returns the user-facing title and placeholder for a feedback category.
+///
+/// Both strings are localized per category so copy and classification remain
+/// aligned throughout the feedback flow.
 fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String) {
     match category {
         FeedbackCategory::BadResult => (
@@ -326,6 +421,10 @@ fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String
     }
 }
 
+/// Maps a feedback category to the upload classification string.
+///
+/// Keep this mapping in sync with the selection list and UI copy so analytics
+/// and labels reflect what the user actually chose.
 fn feedback_classification(category: FeedbackCategory) -> &'static str {
     match category {
         FeedbackCategory::BadResult => "bad_result",
@@ -335,6 +434,10 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
     }
 }
 
+/// Returns the issue URL for categories that should file a bug report.
+///
+/// The thread identifier is injected so the issue template can reference the
+/// relevant transcript without additional user input.
 fn issue_url_for_category(category: FeedbackCategory, thread_id: &str) -> Option<String> {
     match category {
         FeedbackCategory::Bug | FeedbackCategory::BadResult | FeedbackCategory::Other => Some(
@@ -344,7 +447,11 @@ fn issue_url_for_category(category: FeedbackCategory, thread_id: &str) -> Option
     }
 }
 
-// Build the selection popup params for feedback categories.
+/// Builds the selection popup for choosing a feedback category.
+///
+/// Each selection item emits an [`AppEvent::OpenFeedbackConsent`] action for
+/// the chosen category so the caller can decide whether to show the upload
+/// consent dialog.
 pub(crate) fn feedback_selection_params(
     app_event_tx: AppEventSender,
 ) -> super::SelectionViewParams {
@@ -380,7 +487,9 @@ pub(crate) fn feedback_selection_params(
     }
 }
 
-/// Build the selection popup params shown when feedback is disabled.
+/// Builds the selection popup shown when feedback is disabled by configuration.
+///
+/// The popup is read-only and only provides a close action.
 pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
     super::SelectionViewParams {
         title: Some("Sending feedback is disabled".to_string()),
@@ -395,6 +504,10 @@ pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
     }
 }
 
+/// Builds a selection item that opens the feedback consent prompt.
+///
+/// The returned item owns an action closure that captures the category so the
+/// selection list stays data-driven.
 fn make_feedback_item(
     app_event_tx: AppEventSender,
     name: &str,
@@ -413,7 +526,10 @@ fn make_feedback_item(
     }
 }
 
-/// Build the upload consent popup params for a given feedback category.
+/// Builds the upload consent popup for a given feedback category.
+///
+/// The header lists the standard log filename plus any rollout artifact name
+/// provided by `rollout_path`.
 pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
@@ -442,7 +558,6 @@ pub(crate) fn feedback_upload_consent_params(
         }
     });
 
-    // Build header listing files that would be sent if user consents.
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
         Line::from("Upload logs?".bold()).into(),
         Line::from("").into(),
@@ -483,12 +598,14 @@ pub(crate) fn feedback_upload_consent_params(
     }
 }
 
+/// Snapshot coverage for feedback view rendering and issue URL behavior.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
 
+    /// Renders the feedback overlay to a trimmed string for snapshot testing.
     fn render(view: &FeedbackNoteView, width: u16) -> String {
         let height = view.desired_height(width);
         let area = Rect::new(0, 0, width, height);
@@ -519,6 +636,7 @@ mod tests {
         lines.join("\n")
     }
 
+    /// Builds a feedback note view with an empty snapshot for rendering tests.
     fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -526,6 +644,7 @@ mod tests {
         FeedbackNoteView::new(category, snapshot, None, tx, true)
     }
 
+    /// Ensures the bad-result overlay renders a stable snapshot.
     #[test]
     fn feedback_view_bad_result() {
         let view = make_view(FeedbackCategory::BadResult);
@@ -533,6 +652,7 @@ mod tests {
         insta::assert_snapshot!("feedback_view_bad_result", rendered);
     }
 
+    /// Ensures the good-result overlay renders a stable snapshot.
     #[test]
     fn feedback_view_good_result() {
         let view = make_view(FeedbackCategory::GoodResult);
@@ -540,6 +660,7 @@ mod tests {
         insta::assert_snapshot!("feedback_view_good_result", rendered);
     }
 
+    /// Ensures the bug overlay renders a stable snapshot.
     #[test]
     fn feedback_view_bug() {
         let view = make_view(FeedbackCategory::Bug);
@@ -547,6 +668,7 @@ mod tests {
         insta::assert_snapshot!("feedback_view_bug", rendered);
     }
 
+    /// Ensures the other overlay renders a stable snapshot.
     #[test]
     fn feedback_view_other() {
         let view = make_view(FeedbackCategory::Other);
@@ -554,6 +676,7 @@ mod tests {
         insta::assert_snapshot!("feedback_view_other", rendered);
     }
 
+    /// Verifies which categories produce issue URLs.
     #[test]
     fn issue_url_available_for_bug_bad_result_and_other() {
         let bug_url = issue_url_for_category(FeedbackCategory::Bug, "thread-1");

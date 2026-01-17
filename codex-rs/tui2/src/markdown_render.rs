@@ -73,20 +73,35 @@ pub(crate) struct MarkdownLogicalLine {
     pub(crate) is_preformatted: bool,
 }
 
+/// Style palette for markdown tokens rendered into `ratatui` lines.
 struct MarkdownStyles {
+    /// Style applied to level-one headings.
     h1: Style,
+    /// Style applied to level-two headings.
     h2: Style,
+    /// Style applied to level-three headings.
     h3: Style,
+    /// Style applied to level-four headings.
     h4: Style,
+    /// Style applied to level-five headings.
     h5: Style,
+    /// Style applied to level-six headings.
     h6: Style,
+    /// Style applied to inline and fenced code spans.
     code: Style,
+    /// Style applied to emphasized spans.
     emphasis: Style,
+    /// Style applied to strong spans.
     strong: Style,
+    /// Style applied to strikethrough spans.
     strikethrough: Style,
+    /// Style applied to ordered list markers.
     ordered_list_marker: Style,
+    /// Style applied to unordered list markers.
     unordered_list_marker: Style,
+    /// Style applied to rendered link URLs.
     link: Style,
+    /// Style applied to blockquote lines.
     blockquote: Style,
 }
 
@@ -114,6 +129,7 @@ impl Default for MarkdownStyles {
 }
 
 #[derive(Clone, Debug)]
+/// Tracks indentation and list markers for nested structures.
 struct IndentContext {
     /// Prefix spans to apply for this nesting level (e.g., blockquote `> `, list indentation).
     prefix: Vec<Span<'static>>,
@@ -125,6 +141,7 @@ struct IndentContext {
 }
 
 impl IndentContext {
+    /// Creates a new indentation context.
     fn new(prefix: Vec<Span<'static>>, marker: Option<Vec<Span<'static>>>, is_list: bool) -> Self {
         Self {
             prefix,
@@ -174,27 +191,48 @@ struct Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
+    /// Markdown event iterator produced by the parser.
     iter: I,
+    /// Rendered output when emitting `Text`.
     text: Text<'static>,
+    /// Rendered output when emitting logical lines.
     logical_lines: Vec<MarkdownLogicalLine>,
+    /// Style palette for markdown elements.
     styles: MarkdownStyles,
+    /// Stack of inline styles currently active.
     inline_styles: Vec<Style>,
+    /// Stack of indentation contexts for lists and blockquotes.
     indent_stack: Vec<IndentContext>,
+    /// Stack of list indices tracking ordered list numbering.
     list_indices: Vec<Option<u64>>,
+    /// Active link destination used to append a URL suffix.
     link: Option<String>,
+    /// Whether the next block-level element should start on a new line.
     needs_newline: bool,
+    /// Whether the current line is reserved for a list marker.
     pending_marker_line: bool,
+    /// Whether we are currently inside a paragraph.
     in_paragraph: bool,
+    /// Whether we are currently inside a code block.
     in_code_block: bool,
+    /// Optional wrapping width for soft wrapping of non-code lines.
     wrap_width: Option<usize>,
+    /// Accumulated content for the line currently being built.
     current_line_content: Option<Line<'static>>,
+    /// Indent spans applied to the first wrapped line.
     current_initial_indent: Vec<Span<'static>>,
+    /// Indent spans applied to subsequent wrapped lines.
     current_subsequent_indent: Vec<Span<'static>>,
+    /// Style applied to the current line, including blockquotes.
     current_line_style: Style,
+    /// Whether the current line was produced inside a code block.
     current_line_in_code_block: bool,
 
+    /// Whether to populate the `Text` output.
     emit_text: bool,
+    /// Whether to populate the logical-line output.
     emit_logical_lines: bool,
+    /// Whether any output has been produced for spacing decisions.
     has_output_lines: bool,
 }
 
@@ -202,6 +240,7 @@ impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
+    /// Creates a writer for the given markdown event stream.
     fn new(iter: I, wrap_width: Option<usize>, emit_text: bool, emit_logical_lines: bool) -> Self {
         Self {
             iter,
@@ -228,6 +267,7 @@ where
         }
     }
 
+    /// Consumes all events and finalizes any buffered line.
     fn run(&mut self) {
         while let Some(ev) = self.iter.next() {
             self.handle_event(ev);
@@ -235,6 +275,7 @@ where
         self.flush_current_line();
     }
 
+    /// Dispatches a parser event to the appropriate handler.
     fn handle_event(&mut self, event: Event<'a>) {
         match event {
             Event::Start(tag) => self.start_tag(tag),
@@ -258,6 +299,7 @@ where
         }
     }
 
+    /// Starts a tag by updating indentation, styles, or block state.
     fn start_tag(&mut self, tag: Tag<'a>) {
         match tag {
             Tag::Paragraph => self.start_paragraph(),
@@ -291,6 +333,7 @@ where
         }
     }
 
+    /// Ends a tag and clears any styles or indentation it introduced.
     fn end_tag(&mut self, tag: TagEnd) {
         match tag {
             TagEnd::Paragraph => self.end_paragraph(),
@@ -315,6 +358,7 @@ where
         }
     }
 
+    /// Begins a paragraph, inserting a blank separator if needed.
     fn start_paragraph(&mut self) {
         if self.needs_newline {
             self.push_blank_line();
@@ -324,12 +368,14 @@ where
         self.in_paragraph = true;
     }
 
+    /// Marks the end of the current paragraph.
     fn end_paragraph(&mut self) {
         self.needs_newline = true;
         self.in_paragraph = false;
         self.pending_marker_line = false;
     }
 
+    /// Begins a heading and applies the heading style to subsequent text.
     fn start_heading(&mut self, level: HeadingLevel) {
         if self.needs_newline {
             self.push_line(Line::default());
@@ -349,11 +395,13 @@ where
         self.needs_newline = false;
     }
 
+    /// Ends a heading and restores the previous inline style.
     fn end_heading(&mut self) {
         self.needs_newline = true;
         self.pop_inline_style();
     }
 
+    /// Starts a blockquote by pushing a `> ` prefix context.
     fn start_blockquote(&mut self) {
         if self.needs_newline {
             self.push_blank_line();
@@ -363,11 +411,13 @@ where
             .push(IndentContext::new(vec![Span::from("> ")], None, false));
     }
 
+    /// Ends the current blockquote context.
     fn end_blockquote(&mut self) {
         self.indent_stack.pop();
         self.needs_newline = true;
     }
 
+    /// Renders plain text spans, respecting paragraph and code-block boundaries.
     fn text(&mut self, text: CowStr<'a>) {
         if self.pending_marker_line {
             self.push_line(Line::default());
@@ -407,6 +457,7 @@ where
         self.needs_newline = false;
     }
 
+    /// Renders inline code using the code style.
     fn code(&mut self, code: CowStr<'a>) {
         if self.pending_marker_line {
             self.push_line(Line::default());
@@ -416,6 +467,7 @@ where
         self.push_span(span);
     }
 
+    /// Renders HTML as literal text, honoring inline or block context.
     fn html(&mut self, html: CowStr<'a>, inline: bool) {
         self.pending_marker_line = false;
         for (i, line) in html.lines().enumerate() {
@@ -432,14 +484,17 @@ where
         self.needs_newline = !inline;
     }
 
+    /// Inserts a forced line break.
     fn hard_break(&mut self) {
         self.push_line(Line::default());
     }
 
+    /// Inserts a soft line break.
     fn soft_break(&mut self) {
         self.push_line(Line::default());
     }
 
+    /// Starts a list context with an optional ordered list index.
     fn start_list(&mut self, index: Option<u64>) {
         if self.list_indices.is_empty() && self.needs_newline {
             self.push_line(Line::default());
@@ -447,11 +502,13 @@ where
         self.list_indices.push(index);
     }
 
+    /// Ends the current list context.
     fn end_list(&mut self) {
         self.list_indices.pop();
         self.needs_newline = true;
     }
 
+    /// Starts a list item and prepares its marker and indentation.
     fn start_item(&mut self) {
         self.pending_marker_line = true;
         let depth = self.list_indices.len();
@@ -489,6 +546,7 @@ where
         self.needs_newline = false;
     }
 
+    /// Starts a code block and applies an indentation prefix if needed.
     fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
         self.flush_current_line();
         if self.has_output_lines {
@@ -503,26 +561,31 @@ where
         self.needs_newline = true;
     }
 
+    /// Ends a code block and clears its indentation context.
     fn end_codeblock(&mut self) {
         self.needs_newline = true;
         self.in_code_block = false;
         self.indent_stack.pop();
     }
 
+    /// Pushes a new inline style by patching the current style stack.
     fn push_inline_style(&mut self, style: Style) {
         let current = self.inline_styles.last().copied().unwrap_or_default();
         let merged = current.patch(style);
         self.inline_styles.push(merged);
     }
 
+    /// Pops the most recent inline style.
     fn pop_inline_style(&mut self) {
         self.inline_styles.pop();
     }
 
+    /// Starts a link so its URL can be appended when the tag closes.
     fn push_link(&mut self, dest_url: String) {
         self.link = Some(dest_url);
     }
 
+    /// Appends the stored link URL and clears the active link context.
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             self.push_span(" (".into());
@@ -626,6 +689,7 @@ where
         self.pending_marker_line = false;
     }
 
+    /// Appends a span to the current line, creating a line if needed.
     fn push_span(&mut self, span: Span<'static>) {
         if let Some(line) = self.current_line_content.as_mut() {
             line.push_span(span);
@@ -634,6 +698,7 @@ where
         }
     }
 
+    /// Inserts a blank line, accounting for list-only indentation stacks.
     fn push_blank_line(&mut self) {
         self.flush_current_line();
         if self.indent_stack.iter().all(|ctx| ctx.is_list) {
@@ -696,6 +761,10 @@ where
     }
 }
 
+/// Snapshot and unit tests for markdown rendering behavior.
+///
+/// Covers line shaping, list and blockquote indentation, and style application
+/// across a range of markdown constructs.
 #[cfg(test)]
 mod markdown_render_tests {
     include!("markdown_render_tests.rs");
@@ -707,6 +776,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::text::Text;
 
+    /// Collects rendered lines into plain strings for assertions.
     fn lines_to_strings(text: &Text<'_>) -> Vec<String> {
         text.lines
             .iter()

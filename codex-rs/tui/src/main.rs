@@ -1,18 +1,28 @@
+//! CLI entry point for the Codex TUI binary.
+//!
+//! This wrapper merges top-level config overrides with the TUI CLI arguments,
+//! dispatches into the async runtime entry point, and prints token usage
+//! summaries when available.
+
 use clap::Parser;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_common::CliConfigOverrides;
 use codex_tui::Cli;
 use codex_tui::run_main;
 
+/// Top-level CLI arguments that wrap the TUI CLI with shared overrides.
 #[derive(Parser, Debug)]
 struct TopCli {
+    /// Config override arguments collected at the top level.
     #[clap(flatten)]
     config_overrides: CliConfigOverrides,
 
+    /// The nested TUI CLI arguments.
     #[clap(flatten)]
     inner: Cli,
 }
 
+/// Parse CLI args, run the async TUI entry point, and emit token usage.
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         let top_cli = TopCli::parse();

@@ -1,18 +1,45 @@
+//! Orchestrates streaming assistant output into immutable transcript cells.
+//!
+//! The UI receives assistant output as a sequence of deltas. This controller:
+//!
+//! - gates commits on newline boundaries so partial markdown isn't rendered,
+//! - animates streaming by releasing one logical line per commit tick, and
+//! - emits immutable history cells with a single header per stream.
+//!
+//! It relies on [`StreamState`] and [`MarkdownStreamCollector`] for buffering and rendering, but
+//! it is responsible for deciding when to emit history cells and when to flush the stream. The
+//! controller never mutates past cells; it only drains queued lines into new, immutable cells.
+//!
+//! [`MarkdownStreamCollector`]: crate::markdown_stream::MarkdownStreamCollector
+
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
 use ratatui::text::Line;
 
 use super::StreamState;
 
-/// Controller that manages newline-gated streaming, header emission, and
-/// commit animation across streams.
+/// Drives the newline-gated streaming pipeline for one assistant message.
+///
+/// The controller owns the stream-local state, converts incoming deltas into queued lines, and
+/// emits [`HistoryCell`] instances as those lines are committed. It is not responsible for timing
+/// commit ticks; callers decide when to call [`Self::on_commit_tick`].
 pub(crate) struct StreamController {
+    /// Per-stream state for buffering deltas and queued, committed lines.
     state: StreamState,
+    /// Placeholder for a two-phase drain lifecycle; currently always reset to `false`.
+    ///
+    /// This is kept to mirror upstream stream-control state even though the TUI
+    /// currently drains in a single pass.
     finishing_after_drain: bool,
+    /// Tracks whether the assistant header has been emitted for this stream.
     header_emitted: bool,
 }
 
 impl StreamController {
+    /// Creates a controller scoped to a single assistant stream.
+    ///
+    /// The optional `width` is forwarded to the markdown stream collector so wrapping matches the
+    /// current viewport at commit time.
     pub(crate) fn new(width: Option<usize>) -> Self {
         Self {
             state: StreamState::new(width),
@@ -21,7 +48,10 @@ impl StreamController {
         }
     }
 
-    /// Push a delta; if it contains a newline, commit completed lines and start animation.
+    /// Pushes a streaming delta and enqueues newly completed lines.
+    ///
+    /// Returns `true` when at least one line was committed, which callers can use to start or
+    /// continue commit-tick animation.
     pub(crate) fn push(&mut self, delta: &str) -> bool {
         let state = &mut self.state;
         if !delta.is_empty() {
@@ -38,7 +68,10 @@ impl StreamController {
         false
     }
 
-    /// Finalize the active stream. Drain and emit now.
+    /// Finalizes the active stream and emits any remaining lines.
+    ///
+    /// This forces the collector to commit a trailing partial line (if present) and resets the
+    /// controller for the next stream. Returns `None` if the stream produced no lines.
     pub(crate) fn finalize(&mut self) -> Option<Box<dyn HistoryCell>> {
         // Finalize collector first.
         let remaining = {
@@ -62,12 +95,16 @@ impl StreamController {
         self.emit(out_lines)
     }
 
-    /// Step animation: commit at most one queued line and handle end-of-drain cleanup.
+    /// Advances the commit-tick animation by at most one queued line.
+    ///
+    /// Returns `(cell, idle)` where `cell` is the next history cell to append (if any) and `idle`
+    /// reports whether the queue is fully drained.
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.state.step();
         (self.emit(step), self.state.is_idle())
     }
 
+    /// Wraps committed lines into a history cell, emitting a header only once per stream.
     fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
@@ -84,6 +121,7 @@ impl StreamController {
 mod tests {
     use super::*;
 
+    /// Convert ratatui lines into plain strings for snapshot-friendly comparisons.
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines
             .iter()
@@ -97,6 +135,7 @@ mod tests {
             .collect()
     }
 
+    /// Confirms commit-tick streaming output matches a full markdown render.
     #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
         let mut ctrl = StreamController::new(None);

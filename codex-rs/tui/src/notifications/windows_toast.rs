@@ -1,3 +1,11 @@
+//! Sends Windows toast notifications using an encoded PowerShell script.
+//!
+//! The backend emits a small PowerShell script that creates a ToastText02
+//! notification, encoding user-provided strings to keep the command safe and
+//! avoid shell parsing issues. Encoding happens in UTF-16LE with base64 to
+//! match PowerShell's `-EncodedCommand` expectations, and user text is XML-escaped
+//! before being inserted into the toast template.
+
 use std::io;
 use std::process::Command;
 use std::process::Stdio;
@@ -5,15 +13,26 @@ use std::process::Stdio;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+/// Application identifier shown in the Windows toast UI.
 const APP_ID: &str = "Codex";
+/// PowerShell executable used to deliver toast notifications.
 const POWERSHELL_EXE: &str = "powershell.exe";
 
+/// Windows-specific notification backend using toast notifications.
+///
+/// The backend pre-encodes the static title so each call only encodes the
+/// per-notification body.
 #[derive(Debug)]
 pub struct WindowsToastBackend {
+    /// Base64-encoded title used for all notifications.
     encoded_title: String,
 }
 
 impl WindowsToastBackend {
+    /// Send a toast notification with the provided message.
+    ///
+    /// The message is XML-escaped, base64-encoded, and embedded into a
+    /// PowerShell script that is executed via `powershell.exe`.
     pub fn notify(&mut self, message: &str) -> io::Result<()> {
         let encoded_body = encode_argument(message);
         let encoded_command = build_encoded_command(&self.encoded_title, &encoded_body);
@@ -29,6 +48,10 @@ impl Default for WindowsToastBackend {
     }
 }
 
+/// Spawn PowerShell to execute the encoded notification script.
+///
+/// Standard streams are silenced to keep the TUI output clean; any non-zero
+/// exit status is surfaced as an `io::Error`.
 fn spawn_powershell(encoded_command: String) -> io::Result<()> {
     let mut command = Command::new(POWERSHELL_EXE);
     command
@@ -50,11 +73,16 @@ fn spawn_powershell(encoded_command: String) -> io::Result<()> {
     }
 }
 
+/// Build and encode the PowerShell script that will emit the toast notification.
 fn build_encoded_command(encoded_title: &str, encoded_body: &str) -> String {
     let script = build_ps_script(encoded_title, encoded_body);
     encode_script_for_powershell(&script)
 }
 
+/// Render the PowerShell script that constructs and displays the toast.
+///
+/// The script decodes the base64 fields back into UTF-8 strings and inserts
+/// them into a ToastText02 template before showing the notification.
 fn build_ps_script(encoded_title: &str, encoded_body: &str) -> String {
     format!(
         r#"
@@ -72,6 +100,7 @@ $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
     )
 }
 
+/// Encode the script as UTF-16LE and base64 for `-EncodedCommand`.
 fn encode_script_for_powershell(script: &str) -> String {
     let mut wide: Vec<u8> = Vec::with_capacity((script.len() + 1) * 2);
     for unit in script.encode_utf16() {
@@ -81,10 +110,17 @@ fn encode_script_for_powershell(script: &str) -> String {
     BASE64.encode(wide)
 }
 
+/// Encode a string for transport inside the PowerShell script.
+///
+/// This escapes XML entities and then base64-encodes the UTF-8 string so the
+/// PowerShell script can safely decode it.
 fn encode_argument(value: &str) -> String {
     BASE64.encode(escape_for_xml(value))
 }
 
+/// Escape XML entities used in the toast template.
+///
+/// This mirrors the minimal escaping required by the toast XML payload.
 pub fn escape_for_xml(input: &str) -> String {
     let mut escaped = String::with_capacity(input.len());
     for ch in input.chars() {

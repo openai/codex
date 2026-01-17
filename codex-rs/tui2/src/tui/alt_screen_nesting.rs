@@ -12,12 +12,15 @@
 //! `AltScreenNesting` tracks a small nesting depth so only the outermost enter/leave actually
 //! toggles the terminal mode.
 
+/// Tracks nested alternate-screen requests so only the outermost toggles run.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AltScreenNesting {
+    /// Current nesting depth for alternate-screen usage.
     depth: u16,
 }
 
 impl AltScreenNesting {
+    /// Returns `true` if the UI is currently considered to be in the alternate screen.
     pub(crate) fn is_active(self) -> bool {
         self.depth > 0
     }

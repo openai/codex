@@ -1,3 +1,9 @@
+//! Welcome screen widget shown at the start of onboarding.
+//!
+//! The welcome step optionally renders an ASCII animation and a static
+//! introduction line. It is hidden for already-authenticated users so the
+//! onboarding flow can skip straight to later steps.
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -19,16 +25,24 @@ use crate::tui::FrameRequester;
 
 use super::onboarding_screen::StepState;
 
+/// Minimum height required to show the animation without clipping.
 const MIN_ANIMATION_HEIGHT: u16 = 20;
+
+/// Minimum width required to show the animation without clipping.
 const MIN_ANIMATION_WIDTH: u16 = 60;
 
+/// Renders the welcome message and optional ASCII animation.
 pub(crate) struct WelcomeWidget {
+    /// Whether the user is already authenticated.
     pub is_logged_in: bool,
+    /// Animated ASCII background used for the welcome screen.
     animation: AsciiAnimation,
+    /// Enables animation updates and key handling.
     animations_enabled: bool,
 }
 
 impl KeyboardHandler for WelcomeWidget {
+    /// Handles `ctrl+.` to rotate the animation when animations are enabled.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if !self.animations_enabled {
             return;
@@ -44,6 +58,7 @@ impl KeyboardHandler for WelcomeWidget {
 }
 
 impl WelcomeWidget {
+    /// Creates a welcome widget with the requested animation settings.
     pub(crate) fn new(
         is_logged_in: bool,
         request_frame: FrameRequester,
@@ -58,6 +73,7 @@ impl WelcomeWidget {
 }
 
 impl WidgetRef for &WelcomeWidget {
+    /// Renders the welcome header and optional animation into the buffer.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         if self.animations_enabled {
@@ -88,6 +104,7 @@ impl WidgetRef for &WelcomeWidget {
 }
 
 impl StepStateProvider for WelcomeWidget {
+    /// Returns `Hidden` when already logged in, otherwise marks the step complete.
     fn get_step_state(&self) -> StepState {
         match self.is_logged_in {
             true => StepState::Hidden,

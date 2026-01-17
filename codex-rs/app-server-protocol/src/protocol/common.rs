@@ -530,7 +530,7 @@ pub struct FuzzyFileSearchParams {
     pub cancellation_token: Option<String>,
 }
 
-/// Superset of [`codex_file_search::FileMatch`]
+/// Superset of `codex_file_search::FileMatch`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct FuzzyFileSearchResult {
     pub root: String,

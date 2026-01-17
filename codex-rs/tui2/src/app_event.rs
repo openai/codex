@@ -23,22 +23,29 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::openai_models::ReasoningEffort;
 
+/// Windows sandbox enablement mode chosen by the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
+    /// Use the elevated helper binary to enable the Windows sandbox.
     Elevated,
+    /// Fall back to the legacy setup flow for the Windows sandbox.
     Legacy,
 }
 
+/// Reason a Windows sandbox elevation attempt failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxFallbackReason {
+    /// Elevation failed and the UI must fall back to a non-elevated flow.
     ElevationFailed,
 }
 
+/// High-level UI events processed by the main app loop.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
+    /// Deliver a backend protocol event to the UI.
     CodexEvent(Event),
 
     /// Start a new session.
@@ -74,20 +81,29 @@ pub(crate) enum AppEvent {
     /// original search term so the UI can decide whether the results are
     /// still relevant.
     FileSearchResult {
+        /// Search query that produced these results.
         query: String,
+
+        /// Matching file paths for the query.
         matches: Vec<FileMatch>,
     },
 
-    /// Result of refreshing rate limits
+    /// Result of refreshing rate limits.
     RateLimitSnapshotFetched(RateLimitSnapshot),
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Insert a pre-rendered history cell into the transcript.
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Start emitting periodic commit tick events for animations.
     StartCommitAnimation,
+
+    /// Stop emitting periodic commit tick events.
     StopCommitAnimation,
+
+    /// Periodic animation tick used by shimmers and spinners.
     CommitTick,
 
     /// Update the current reasoning effort in the running app and widget.
@@ -98,22 +114,28 @@ pub(crate) enum AppEvent {
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
+        /// Selected model slug to persist.
         model: String,
+
+        /// Selected reasoning effort to persist.
         effort: Option<ReasoningEffort>,
     },
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
+        /// Model preset selected before choosing a reasoning effort.
         model: ModelPreset,
     },
 
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
+        /// Available presets to display in the picker.
         models: Vec<ModelPreset>,
     },
 
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
+        /// Approval preset that will be applied if the user confirms.
         preset: ApprovalPreset,
     },
 
@@ -124,10 +146,13 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
         preset: Option<ApprovalPreset>,
+
         /// Up to 3 sample world-writable directories to display in the warning.
         sample_paths: Vec<String>,
+
         /// If there are more than `sample_paths`, this carries the remaining count.
         extra_count: usize,
+
         /// True when the scan failed (e.g. ACL query error) and protections could not be verified.
         failed_scan: bool,
     },
@@ -135,26 +160,34 @@ pub(crate) enum AppEvent {
     /// Prompt to enable the Windows sandbox feature before using Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {
+        /// Approval preset to apply if the sandbox is enabled.
         preset: ApprovalPreset,
     },
 
     /// Open the Windows sandbox fallback prompt after declining or failing elevation.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxFallbackPrompt {
+        /// Approval preset to apply if the fallback is accepted.
         preset: ApprovalPreset,
+
+        /// Why the fallback prompt is required.
         reason: WindowsSandboxFallbackReason,
     },
 
     /// Begin the elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxElevatedSetup {
+        /// Approval preset to apply after elevated setup completes.
         preset: ApprovalPreset,
     },
 
     /// Enable the Windows sandbox feature and switch to Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     EnableWindowsSandboxForAgentMode {
+        /// Approval preset to apply after enabling the sandbox.
         preset: ApprovalPreset,
+
+        /// Setup mode to use when enabling the sandbox.
         mode: WindowsSandboxEnableMode,
     },
 
@@ -186,7 +219,10 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {
+        /// Model slug the user is migrating from.
         from_model: String,
+
+        /// Model slug the user is migrating to.
         to_model: String,
     },
 
@@ -211,12 +247,16 @@ pub(crate) enum AppEvent {
 
     /// Open the feedback note entry overlay after the user selects a category.
     OpenFeedbackNote {
+        /// Category chosen for the feedback note.
         category: FeedbackCategory,
+
+        /// Whether to include logs when submitting feedback.
         include_logs: bool,
     },
 
     /// Open the upload consent popup for feedback after selecting a category.
     OpenFeedbackConsent {
+        /// Category chosen for the feedback consent flow.
         category: FeedbackCategory,
     },
 }
@@ -230,6 +270,7 @@ pub(crate) enum AppEvent {
 pub(crate) enum ExitMode {
     /// Shutdown core and exit after completion.
     ShutdownFirst,
+
     /// Exit the UI loop immediately without waiting for shutdown.
     ///
     /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
@@ -237,10 +278,18 @@ pub(crate) enum ExitMode {
     Immediate,
 }
 
+/// Categories used by the feedback UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FeedbackCategory {
+    /// User wants to report a bad result.
     BadResult,
+
+    /// User wants to report a good result.
     GoodResult,
+
+    /// User wants to report a bug or defect.
     Bug,
+
+    /// User feedback that doesn't match other categories.
     Other,
 }

@@ -1,3 +1,8 @@
+//! External editor integration for editing long prompts.
+//!
+//! This module resolves the editor command from environment variables, opens a temporary file,
+//! and returns the edited contents once the editor exits.
+
 use std::env;
 use std::fs;
 use std::process::Stdio;
@@ -8,13 +13,17 @@ use tempfile::Builder;
 use thiserror::Error;
 use tokio::process::Command;
 
+/// Errors that can occur while resolving or launching the editor command.
 #[derive(Debug, Error)]
 pub(crate) enum EditorError {
+    /// Neither `VISUAL` nor `EDITOR` is set in the environment.
     #[error("neither VISUAL nor EDITOR is set")]
     MissingEditor,
     #[cfg(not(windows))]
+    /// The editor command could not be parsed into arguments.
     #[error("failed to parse editor command")]
     ParseFailed,
+    /// The resolved editor command was empty.
     #[error("editor command is empty")]
     EmptyCommand,
 }
@@ -51,6 +60,9 @@ pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, Edito
 }
 
 /// Write `seed` to a temp file, launch the editor command, and return the updated content.
+///
+/// The temp file is created with a `.md` suffix and is persisted after the editor exits so the
+/// contents can be read back on all platforms.
 pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<String> {
     if editor_cmd.is_empty() {
         return Err(Report::msg("editor command is empty"));

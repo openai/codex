@@ -126,6 +126,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+/// Return true when the Windows sandbox is in degraded (non-elevated) mode.
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
         && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -140,76 +141,165 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 /// Result returned when the user interacts with the text area.
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
+    /// The input was submitted as a user message.
     Submitted(String),
+
+    /// The input should be queued until the current task finishes.
     Queued(String),
+
+    /// A slash command was invoked without arguments.
     Command(SlashCommand),
+
+    /// A slash command was invoked with trailing arguments.
     CommandWithArgs(SlashCommand, String),
+
+    /// No submission or command was produced.
     None,
 }
 
+/// Image attachment tracked alongside its placeholder in the buffer.
 #[derive(Clone, Debug, PartialEq)]
 struct AttachedImage {
+    /// Placeholder text inserted into the editor buffer.
     placeholder: String,
+
+    /// Absolute or workspace-relative file path for the image.
     path: PathBuf,
 }
 
+/// How the prompt selection popup should apply a chosen entry.
 enum PromptSelectionMode {
+    /// Insert the prompt and keep editing.
     Completion,
+
+    /// Insert the prompt and submit immediately.
     Submit,
 }
 
+/// Action returned when a prompt selection is applied.
 enum PromptSelectionAction {
+    /// Insert text at the cursor and optionally reposition it.
     Insert { text: String, cursor: Option<usize> },
+
+    /// Insert text and submit it as a message.
     Submit { text: String },
 }
 
+/// Editable input state machine for the bottom-pane composer.
+///
+/// Owns the textarea buffer, popup state, and per-session history, while emitting
+/// [`AppEvent`]s to request side effects (file search, prompt expansion, etc.).
+/// It also tracks transient UI state such as paste bursts, attachment placeholders,
+/// and footer hints so rendering can stay derived from this central state.
 pub(crate) struct ChatComposer {
+    /// Editable text area for composer input.
     textarea: TextArea,
+
+    /// Shared state used to render and measure the textarea.
     textarea_state: RefCell<TextAreaState>,
+
+    /// Currently active popup (slash commands, file search, skills).
     active_popup: ActivePopup,
+
+    /// Channel for emitting composer-driven app events.
     app_event_tx: AppEventSender,
+
+    /// History buffer for cycling prior input.
     history: ChatComposerHistory,
+
+    /// Deadline for the double-press quit shortcut.
     quit_shortcut_expires_at: Option<Instant>,
+
+    /// Key used to arm the quit shortcut (Ctrl+C vs Ctrl+D).
     quit_shortcut_key: KeyBinding,
+
+    /// Whether the footer should show the Esc backtrack hint.
     esc_backtrack_hint: bool,
+
+    /// Whether to show the Shift+Enter hint in the footer.
     use_shift_enter_hint: bool,
+
+    /// Token used to suppress reopening the file popup after dismissal.
     dismissed_file_popup_token: Option<String>,
+
+    /// Current file-search query driving the file popup.
     current_file_query: Option<String>,
+
+    /// Pending large paste placeholders mapped to full text content.
     pending_pastes: Vec<(String, String)>,
+
+    /// Counters used to generate unique placeholders per paste size.
     large_paste_counters: HashMap<usize, usize>,
+
+    /// Whether the composer currently owns focus.
     has_focus: bool,
+
+    /// Attached images represented by placeholder text.
     attached_images: Vec<AttachedImage>,
+
+    /// Placeholder string shown when the composer is empty.
     placeholder_text: String,
+
+    /// Whether a task is currently running (affects submit/queue behavior).
     is_task_running: bool,
+
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
+
+    /// Placeholder shown while input is disabled.
     input_disabled_placeholder: Option<String>,
+
     /// Non-bracketed paste burst tracker (see `bottom_pane/paste_burst.rs`).
     paste_burst: PasteBurst,
-    // When true, disables paste-burst logic and inserts characters immediately.
+
+    /// When true, bypasses paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
+
+    /// Custom prompts list used by the slash command popup.
     custom_prompts: Vec<CustomPrompt>,
+
+    /// Current footer display mode.
     footer_mode: FooterMode,
+
+    /// Optional footer hint override.
     footer_hint_override: Option<Vec<(String, String)>>,
+
+    /// Cached context window percent for status display.
     context_window_percent: Option<i64>,
+
+    /// Cached context window token usage for status display.
     context_window_used_tokens: Option<i64>,
+
+    /// Skills available for mention popup.
     skills: Option<Vec<SkillMetadata>>,
+
+    /// Token used to suppress reopening the skill popup after dismissal.
     dismissed_skill_popup_token: Option<String>,
+
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
 enum ActivePopup {
+    /// No popup is active.
     None,
+
+    /// Slash command selection popup.
     Command(CommandPopup),
+
+    /// File search popup for `@file` mentions.
     File(FileSearchPopup),
+
+    /// Skill mention popup.
     Skill(SkillPopup),
 }
 
+/// Extra spacing row inserted between the composer and footer (when enabled).
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
+    /// Create a new chat composer with the given initial state.
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -250,11 +340,13 @@ impl ChatComposer {
             dismissed_skill_popup_token: None,
             steer_enabled: false,
         };
+
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
         this
     }
 
+    /// Replace the available skills for mention popup rendering.
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
     }
@@ -269,6 +361,7 @@ impl ChatComposer {
         self.steer_enabled = enabled;
     }
 
+    /// Compute composer, footer, and popup layout regions within the given area.
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
         let footer_hint_height = self
@@ -292,6 +385,7 @@ impl ChatComposer {
         [composer_rect, textarea_rect, popup_rect]
     }
 
+    /// Return the spacing row count between composer and footer.
     fn footer_spacing(footer_hint_height: u16) -> u16 {
         if footer_hint_height == 0 {
             0
@@ -356,12 +450,16 @@ impl ChatComposer {
         } else {
             self.textarea.insert_str(&pasted);
         }
+
         // Explicit paste events should not trigger Enter suppression.
         self.paste_burst.clear_after_explicit_paste();
         self.sync_popups();
         true
     }
 
+    /// Try to interpret a pasted string as an image path and attach it.
+    ///
+    /// Returns `true` if the path resolves to a readable image and is attached.
     pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
@@ -483,6 +581,9 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    /// Return the current text with any large-paste placeholders expanded.
+    ///
+    /// This is used when submitting input so large paste buffers are restored.
     pub(crate) fn current_text_with_pending(&self) -> String {
         let mut text = self.textarea.text().to_string();
         for (placeholder, actual) in &self.pending_pastes {
@@ -510,6 +611,7 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    /// Clear the composer in response to Ctrl+C and record the draft in history.
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
         if self.is_empty() {
             return None;
@@ -530,6 +632,7 @@ impl ChatComposer {
     pub fn attach_image(&mut self, path: PathBuf) {
         let image_number = self.attached_images.len() + 1;
         let placeholder = local_image_label_text(image_number);
+
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
@@ -537,6 +640,7 @@ impl ChatComposer {
             .push(AttachedImage { placeholder, path });
     }
 
+    /// Drain attached images so they can be sent with the next submission.
     pub fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         let images = std::mem::take(&mut self.attached_images);
         images.into_iter().map(|img| img.path).collect()
@@ -619,6 +723,9 @@ impl ChatComposer {
             .is_some_and(|expires_at| Instant::now() < expires_at)
     }
 
+    /// Generate a unique placeholder label for a large paste buffer.
+    ///
+    /// Suffixes are incremented per character count to avoid collisions.
     fn next_large_paste_placeholder(&mut self, char_count: usize) -> String {
         let base = format!("[Pasted Content {char_count} chars]");
         let next_suffix = self.large_paste_counters.entry(char_count).or_insert(0);
@@ -630,6 +737,7 @@ impl ChatComposer {
         }
     }
 
+    /// Insert text at the cursor and refresh popup state.
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.textarea.insert_str(text);
         self.sync_popups();
@@ -805,6 +913,7 @@ impl ChatComposer {
                         }
                     }
                 }
+
                 // Fallback to default newline handling if no command selected.
                 self.handle_key_event_without_popup(key_event)
             }
@@ -813,6 +922,7 @@ impl ChatComposer {
     }
 
     #[inline]
+    /// Clamp a byte offset to the nearest valid UTF-8 character boundary.
     fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
         let mut p = pos.min(text.len());
         if p < text.len() && !text.is_char_boundary(p) {
@@ -860,6 +970,7 @@ impl ChatComposer {
             if self.paste_burst.try_append_char_if_active(ch, now) {
                 return (InputResult::None, true);
             }
+
             // Non-ASCII input often comes from IMEs and can arrive in quick bursts.
             // We do not want to hold the first char (flicker suppression) on this path, but we
             // still want to detect paste-like bursts. Before applying any non-ASCII input, flush
@@ -889,10 +1000,12 @@ impl ChatComposer {
                             if !grab.grabbed.is_empty() {
                                 self.textarea.replace_range(grab.start_byte..safe_cur, "");
                             }
+
                             // seed the paste burst buffer with everything (grabbed + new)
                             self.paste_burst.append_char_to_buffer(ch, now);
                             return (InputResult::None, true);
                         }
+
                         // If decide_begin_buffer opted not to start buffering,
                         // fall through to normal insertion below.
                     }
@@ -976,6 +1089,7 @@ impl ChatComposer {
                 };
 
                 let sel_path = sel.to_string();
+
                 // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
                 let is_image = Self::is_image_path(&sel_path);
                 if is_image {
@@ -984,10 +1098,12 @@ impl ChatComposer {
                     match image::image_dimensions(&path_buf) {
                         Ok((width, height)) => {
                             tracing::debug!("selected image dimensions={}x{}", width, height);
+
                             // Remove the current @token (mirror logic from insert_selected_path without inserting text)
                             // using the flat text and byte-offset cursor API.
                             let cursor_offset = self.textarea.cursor();
                             let text = self.textarea.text();
+
                             // Clamp to a valid char boundary to avoid panics when slicing.
                             let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
                             let before_cursor = &text[..safe_cursor];
@@ -1010,11 +1126,13 @@ impl ChatComposer {
                             self.textarea.set_cursor(start_idx);
 
                             self.attach_image(path_buf);
+
                             // Add a trailing space to keep typing fluid.
                             self.textarea.insert_str(" ");
                         }
                         Err(err) => {
                             tracing::trace!("image dimensions lookup failed: {err}");
+
                             // Fallback to plain path insertion if metadata read fails.
                             self.insert_selected_path(&sel_path);
                         }
@@ -1023,6 +1141,7 @@ impl ChatComposer {
                     // Non-image: inserting file path.
                     self.insert_selected_path(&sel_path);
                 }
+
                 // No selection: treat Enter as closing the popup/session.
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -1031,6 +1150,7 @@ impl ChatComposer {
         }
     }
 
+    /// Handle key input when the skill mention popup is active.
     fn handle_key_event_with_skill_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
@@ -1093,15 +1213,18 @@ impl ChatComposer {
         }
     }
 
+    /// Return true if the path looks like a supported image file.
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
         lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
     }
 
+    /// Return true when skill mentions are enabled and populated.
     fn skills_enabled(&self) -> bool {
         self.skills.as_ref().is_some_and(|s| !s.is_empty())
     }
 
+    /// Return the active skill list, if configured.
     pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
         self.skills.as_ref()
     }
@@ -1127,6 +1250,7 @@ impl ChatComposer {
 
         // Adjust the provided byte offset to the nearest valid char boundary at or before it.
         let mut safe_cursor = cursor_offset.min(text.len());
+
         // If we're not on a char boundary, move back to the start of the current char.
         if safe_cursor < text.len() && !text.is_char_boundary(safe_cursor) {
             // Find the last valid boundary <= cursor_offset.
@@ -1219,6 +1343,7 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', false)
     }
 
+    /// Extract the `$token` under the cursor for skill completion, if any.
     fn current_skill_token(&self) -> Option<String> {
         if !self.skills_enabled() {
             return None;
@@ -1234,6 +1359,7 @@ impl ChatComposer {
     fn insert_selected_path(&mut self, path: &str) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
+
         // Clamp to a valid char boundary to avoid panics when slicing.
         let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
 
@@ -1277,6 +1403,7 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
+    /// Replace the active `$token` under the cursor with a selected skill name.
     fn insert_selected_skill(&mut self, skill_name: &str) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
@@ -1529,6 +1656,7 @@ impl ChatComposer {
                 kind: KeyEventKind::Press,
                 ..
             } if self.is_empty() => (InputResult::None, false),
+
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
             // empty or when the cursor is at the correct position, to avoid
@@ -1676,6 +1804,7 @@ impl ChatComposer {
                             self.paste_burst.append_char_to_buffer(ch, now);
                             return (InputResult::None, true);
                         }
+
                         // If decide_begin_buffer opted not to start buffering,
                         // fall through to normal insertion below.
                     }
@@ -1706,6 +1835,7 @@ impl ChatComposer {
         {
             self.handle_paste(pasted);
         }
+
         // Backspace at the start of an image placeholder should delete that placeholder (rather
         // than deleting content before it). Do this without scanning the full text by consulting
         // the textarea's element list.
@@ -1742,6 +1872,7 @@ impl ChatComposer {
                 }
             }
             KeyCode::Enter => {
+
                 // Keep burst window alive (supports blank lines in paste).
             }
             _ => {
@@ -1753,6 +1884,7 @@ impl ChatComposer {
         (InputResult::None, true)
     }
 
+    /// Remove an image placeholder element that starts at the cursor, if present.
     fn try_remove_image_element_at_cursor_start(&mut self) -> bool {
         if self.attached_images.is_empty() {
             return false;
@@ -1776,6 +1908,7 @@ impl ChatComposer {
         true
     }
 
+    /// Reconcile deleted placeholder elements and drop related attachments.
     fn reconcile_deleted_elements(&mut self, elements_before: Vec<String>) {
         let elements_after: HashSet<String> =
             self.textarea.element_payloads().into_iter().collect();
@@ -1802,6 +1935,7 @@ impl ChatComposer {
         }
     }
 
+    /// Re-label attached images in order and update any placeholder elements.
     fn relabel_attached_images_and_update_placeholders(&mut self) {
         for idx in 0..self.attached_images.len() {
             let expected = local_image_label_text(idx + 1);
@@ -1815,6 +1949,7 @@ impl ChatComposer {
         }
     }
 
+    /// Toggle the shortcut overlay when the user presses `?`.
     fn handle_shortcut_overlay_key(&mut self, key_event: &KeyEvent) -> bool {
         if key_event.kind != KeyEventKind::Press {
             return false;
@@ -1835,6 +1970,7 @@ impl ChatComposer {
         changed
     }
 
+    /// Build the footer props used to render the composer hint line.
     fn footer_props(&self) -> FooterProps {
         FooterProps {
             mode: self.footer_mode(),
@@ -1848,6 +1984,7 @@ impl ChatComposer {
         }
     }
 
+    /// Compute the effective footer mode based on current state and hints.
     fn footer_mode(&self) -> FooterMode {
         match self.footer_mode {
             FooterMode::EscHint => FooterMode::EscHint,
@@ -1864,17 +2001,20 @@ impl ChatComposer {
         }
     }
 
+    /// Return the height override for custom footer hints, if any.
     fn custom_footer_height(&self) -> Option<u16> {
         self.footer_hint_override
             .as_ref()
             .map(|items| if items.is_empty() { 0 } else { 1 })
     }
 
+    /// Refresh popup state based on the current text and cursor position.
     fn sync_popups(&mut self) {
         let file_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
             .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
+
         // When browsing input history (shell-style Up/Down recall), skip all popup
         // synchronization so nothing steals focus from continued history navigation.
         if browsing_history {
@@ -1975,6 +2115,7 @@ impl ChatComposer {
             }
             return;
         }
+
         // Determine whether the caret is inside the initial '/name' token on the first line.
         let text = self.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
@@ -2015,6 +2156,7 @@ impl ChatComposer {
         }
     }
 
+    /// Replace the custom prompts list and update the command popup if active.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {
@@ -2058,6 +2200,7 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
     }
 
+    /// Synchronize the skill popup with the current `$` token query.
     fn sync_skill_popup(&mut self, query: String) {
         if self.dismissed_skill_popup_token.as_ref() == Some(&query) {
             return;
@@ -2084,11 +2227,13 @@ impl ChatComposer {
         }
     }
 
+    /// Update focus state so footer hints can render appropriately.
     fn set_has_focus(&mut self, has_focus: bool) {
         self.has_focus = has_focus;
     }
 
     #[allow(dead_code)]
+    /// Enable or disable input and update the placeholder accordingly.
     pub(crate) fn set_input_enabled(&mut self, enabled: bool, placeholder: Option<String>) {
         self.input_enabled = enabled;
         self.input_disabled_placeholder = if enabled { None } else { placeholder };
@@ -2099,10 +2244,12 @@ impl ChatComposer {
         }
     }
 
+    /// Record whether a task is currently running to drive footer hints.
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
     }
 
+    /// Update context window usage for footer display.
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
         if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
         {
@@ -2112,6 +2259,7 @@ impl ChatComposer {
         self.context_window_used_tokens = used_tokens;
     }
 
+    /// Show or hide the Esc backtrack hint and update footer mode.
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
         if show {
@@ -2123,6 +2271,7 @@ impl ChatComposer {
 }
 
 impl Renderable for ChatComposer {
+    /// Return the cursor position for the composer, if input is enabled.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if !self.input_enabled {
             return None;
@@ -2133,6 +2282,7 @@ impl Renderable for ChatComposer {
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 
+    /// Return the height needed to render the composer and footer at the given width.
     fn desired_height(&self, width: u16) -> u16 {
         let footer_props = self.footer_props();
         let footer_hint_height = self
@@ -2152,6 +2302,7 @@ impl Renderable for ChatComposer {
             }
     }
 
+    /// Render the composer and footer into the provided buffer.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
         match &self.active_popup {
@@ -2236,6 +2387,10 @@ impl Renderable for ChatComposer {
     }
 }
 
+/// Decide whether a prompt selection should insert placeholders or submit content.
+///
+/// This inspects the prompt template to decide between immediate submission and placeholder
+/// insertion, returning the appropriate action for the current selection mode.
 fn prompt_selection_action(
     prompt: &CustomPrompt,
     first_line: &str,
@@ -2303,6 +2458,7 @@ mod tests {
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
 
+    /// Ensure the footer hint row is separated from the composer content.
     #[test]
     fn footer_hint_row_is_separated_from_composer() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -2357,6 +2513,7 @@ mod tests {
         );
     }
 
+    /// Render the composer with a setup closure and snapshot its buffer.
     fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
     where
         F: FnOnce(&mut ChatComposer),
@@ -2386,6 +2543,7 @@ mod tests {
         insta::assert_snapshot!(name, terminal.backend());
     }
 
+    /// Snapshot footer mode variants for the hint line.
     #[test]
     fn footer_mode_snapshots() {
         use crossterm::event::KeyCode;
@@ -2438,6 +2596,7 @@ mod tests {
         });
     }
 
+    /// Ensure the Esc hint does not appear when draft text is present.
     #[test]
     fn esc_hint_stays_hidden_with_draft_content() {
         use crossterm::event::KeyCode;
@@ -2467,6 +2626,7 @@ mod tests {
         assert!(!composer.esc_backtrack_hint);
     }
 
+    /// Verify Ctrl+C clears the draft and records it in history.
     #[test]
     fn clear_for_ctrl_c_records_cleared_draft() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -2585,6 +2745,7 @@ mod tests {
         assert_ne!(composer.footer_mode, FooterMode::ShortcutOverlay);
     }
 
+    /// Ensure the shortcut overlay remains visible while a task is running.
     #[test]
     fn shortcut_overlay_persists_while_task_running() {
         use crossterm::event::KeyCode;
@@ -2614,6 +2775,7 @@ mod tests {
         assert_eq!(composer.footer_mode(), FooterMode::ShortcutOverlay);
     }
 
+    /// Validate basic `@token` extraction cases.
     #[test]
     fn test_current_at_token_basic_cases() {
         let test_cases = vec![
@@ -2672,6 +2834,7 @@ mod tests {
         }
     }
 
+    /// Verify `@token` extraction at different cursor positions.
     #[test]
     fn test_current_at_token_cursor_positions() {
         let test_cases = vec![
@@ -2706,6 +2869,7 @@ mod tests {
         }
     }
 
+    /// Confirm `@token` extraction across whitespace boundaries.
     #[test]
     fn test_current_at_token_whitespace_boundaries() {
         let test_cases = vec![
@@ -3121,6 +3285,7 @@ mod tests {
         }
     }
 
+    /// Ensure Enter on empty input returns `InputResult::None`.
     #[test]
     fn empty_enter_returns_none() {
         use crossterm::event::KeyCode;
@@ -3216,6 +3381,7 @@ mod tests {
         assert!(composer.pending_pastes.is_empty());
     }
 
+    /// Snapshot various composer states for visual regression testing.
     #[test]
     fn ui_snapshots() {
         use crossterm::event::KeyCode;
@@ -3254,8 +3420,10 @@ mod tests {
             } else if name == "multiple_pastes" {
                 // First large paste
                 composer.handle_paste("x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 3));
+
                 // Second large paste
                 composer.handle_paste("y".repeat(LARGE_PASTE_CHAR_THRESHOLD + 7));
+
                 // Small paste
                 composer.handle_paste(" another short paste".to_string());
             } else if name == "backspace_after_pastes" {
@@ -3263,6 +3431,7 @@ mod tests {
                 composer.handle_paste("a".repeat(LARGE_PASTE_CHAR_THRESHOLD + 2));
                 composer.handle_paste("b".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4));
                 composer.handle_paste("c".repeat(LARGE_PASTE_CHAR_THRESHOLD + 6));
+
                 // Move cursor to end and press backspace
                 composer.textarea.set_cursor(composer.textarea.text().len());
                 composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
@@ -3276,6 +3445,7 @@ mod tests {
         }
     }
 
+    /// Snapshot image placeholder rendering for single and multiple attachments.
     #[test]
     fn image_placeholder_snapshots() {
         snapshot_composer_state("image_placeholder_single", false, |composer| {
@@ -3288,6 +3458,7 @@ mod tests {
         });
     }
 
+    /// Ensure the `/mo` popup shows `/model` first in UI snapshots.
     #[test]
     fn slash_popup_model_first_for_mo_ui() {
         use ratatui::Terminal;
@@ -3320,6 +3491,7 @@ mod tests {
         insta::assert_snapshot!("slash_popup_mo", terminal.backend());
     }
 
+    /// Ensure the `/mo` popup selects `/model` first in logic.
     #[test]
     fn slash_popup_model_first_for_mo_logic() {
         use super::super::command_popup::CommandItem;
@@ -3349,6 +3521,7 @@ mod tests {
         }
     }
 
+    /// Ensure the `/res` popup shows `/resume` first in UI snapshots.
     #[test]
     fn slash_popup_resume_for_res_ui() {
         use ratatui::Terminal;
@@ -3378,6 +3551,7 @@ mod tests {
         insta::assert_snapshot!("slash_popup_res", terminal.backend());
     }
 
+    /// Ensure the `/res` popup selects `/resume` first in logic.
     #[test]
     fn slash_popup_resume_for_res_logic() {
         use super::super::command_popup::CommandItem;
@@ -3406,12 +3580,13 @@ mod tests {
         }
     }
 
+    /// Flush a paste burst after the recommended delay in tests.
     fn flush_after_paste_burst(composer: &mut ChatComposer) -> bool {
         std::thread::sleep(PasteBurst::recommended_active_flush_delay());
         composer.flush_paste_burst_if_due()
     }
 
-    // Test helper: simulate human typing with a brief delay and flush the paste-burst buffer
+    /// Simulate human typing with delays so paste-burst heuristics do not trigger.
     fn type_chars_humanlike(composer: &mut ChatComposer, chars: &[char]) {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -3423,6 +3598,7 @@ mod tests {
         }
     }
 
+    /// Verify `/init` dispatches a command instead of literal submission.
     #[test]
     fn slash_init_dispatches_command_and_does_not_submit_literal_text() {
         use crossterm::event::KeyCode;
@@ -3466,6 +3642,7 @@ mod tests {
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
 
+    /// Ensure quoted path args parse as a single positional argument.
     #[test]
     fn extract_args_supports_quoted_paths_single_arg() {
         let args = extract_positional_args_for_prompt_line(
@@ -3475,6 +3652,7 @@ mod tests {
         assert_eq!(args, vec!["docs/My File.md".to_string()]);
     }
 
+    /// Ensure mixed quoted and unquoted args parse in order.
     #[test]
     fn extract_args_supports_mixed_quoted_and_unquoted() {
         let args =
@@ -3482,6 +3660,7 @@ mod tests {
         assert_eq!(args, vec!["with spaces".to_string(), "simple".to_string()]);
     }
 
+    /// Verify Tab completion moves the cursor to the end of the command.
     #[test]
     fn slash_tab_completion_moves_cursor_to_end() {
         use crossterm::event::KeyCode;
@@ -3507,6 +3686,7 @@ mod tests {
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
     }
 
+    /// Verify Tab-completed commands dispatch on Enter.
     #[test]
     fn slash_tab_then_enter_dispatches_builtin_command() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -3545,6 +3725,7 @@ mod tests {
         assert!(composer.textarea.is_empty());
     }
 
+    /// Ensure `/mention` dispatches and inserts `@`.
     #[test]
     fn slash_mention_dispatches_command_and_inserts_at() {
         use crossterm::event::KeyCode;
@@ -3668,6 +3849,7 @@ mod tests {
         }
     }
 
+    /// Ensure deleting a placeholder drops its pending paste entry.
     #[test]
     fn test_placeholder_deletion() {
         use crossterm::event::KeyCode;
@@ -3821,6 +4003,7 @@ mod tests {
         assert_eq!(composer.pending_pastes[1].0, third);
     }
 
+    /// Ensure partial deletion of a placeholder clears pending paste tracking.
     #[test]
     fn test_partial_placeholder_deletion() {
         use crossterm::event::KeyCode;
@@ -3873,6 +4056,7 @@ mod tests {
     }
 
     // --- Image attachment tests ---
+    /// Ensure attached images are included in submitted paths.
     #[test]
     fn attach_image_and_submit_includes_image_paths() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -3898,6 +4082,7 @@ mod tests {
         assert_eq!(vec![path], imgs);
     }
 
+    /// Ensure image-only submissions include images and empty text.
     #[test]
     fn attach_image_without_text_submits_empty_text_and_images() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -3924,6 +4109,7 @@ mod tests {
         assert!(composer.attached_images.is_empty());
     }
 
+    /// Verify duplicate image placeholders are numbered with suffixes.
     #[test]
     fn duplicate_image_placeholders_get_suffix() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -3947,6 +4133,7 @@ mod tests {
         assert_eq!(composer.attached_images[1].placeholder, "[Image #2]");
     }
 
+    /// Ensure image placeholder backspace behavior mirrors text placeholders.
     #[test]
     fn image_placeholder_backspace_behaves_like_text_placeholder() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -3972,6 +4159,7 @@ mod tests {
         // and drop the image mapping (same as text placeholder behavior).
         composer.attach_image(path);
         let placeholder2 = composer.attached_images[0].placeholder.clone();
+
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
             let mid_pos = start_pos + (placeholder2.len() / 2);
@@ -3984,6 +4172,7 @@ mod tests {
         }
     }
 
+    /// Guard against panics when backspacing near multibyte text.
     #[test]
     fn backspace_with_multibyte_text_before_placeholder_does_not_panic() {
         use crossterm::event::KeyCode;
@@ -4003,6 +4192,7 @@ mod tests {
         // Insert an image placeholder at the start
         let path = PathBuf::from("/tmp/image_multibyte.png");
         composer.attach_image(path);
+
         // Add multibyte text after the placeholder
         composer.textarea.insert_str("日本語");
 
@@ -4014,6 +4204,7 @@ mod tests {
         assert!(composer.textarea.text().starts_with("[Image #1]"));
     }
 
+    /// Ensure deleting one of two image placeholders leaves one attachment.
     #[test]
     fn deleting_one_of_duplicate_image_placeholders_removes_one_entry() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4030,6 +4221,7 @@ mod tests {
         let path2 = PathBuf::from("/tmp/image_dup2.png");
 
         composer.attach_image(path1);
+
         // separate placeholders with a space for clarity
         composer.handle_paste(" ".into());
         composer.attach_image(path2.clone());
@@ -4070,6 +4262,7 @@ mod tests {
         );
     }
 
+    /// Ensure deleting the first element renumbers the remaining image placeholder.
     #[test]
     fn deleting_first_text_element_renumbers_following_text_element() {
         use crossterm::event::KeyCode;
@@ -4106,6 +4299,7 @@ mod tests {
         assert_eq!(composer.textarea.text(), "[Image #1]");
     }
 
+    /// Verify pasting a file path attaches the image and adds a placeholder.
     #[test]
     fn pasting_filepath_attaches_image() {
         let tmp = tempdir().expect("create TempDir");
@@ -4132,6 +4326,7 @@ mod tests {
         assert_eq!(imgs, vec![tmp_path]);
     }
 
+    /// Ensure selecting a prompt without args submits its content.
     #[test]
     fn selecting_custom_prompt_without_args_submits_content() {
         let prompt_text = "Hello from saved prompt";
@@ -4171,6 +4366,7 @@ mod tests {
         assert!(composer.textarea.is_empty());
     }
 
+    /// Ensure custom prompt submissions expand named arguments.
     #[test]
     fn custom_prompt_submission_expands_arguments() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4206,6 +4402,7 @@ mod tests {
         assert!(composer.textarea.is_empty());
     }
 
+    /// Ensure quoted values are accepted when expanding custom prompts.
     #[test]
     fn custom_prompt_submission_accepts_quoted_values() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4308,6 +4505,7 @@ mod tests {
         assert!(composer.pending_pastes.is_empty());
     }
 
+    /// Ensure slash-prefixed paths submit as text, not commands.
     #[test]
     fn slash_path_input_submits_without_command_error() {
         use crossterm::event::KeyCode;
@@ -4345,6 +4543,7 @@ mod tests {
         }
     }
 
+    /// Ensure leading-space slash text submits literally.
     #[test]
     fn slash_with_leading_space_submits_as_text() {
         use crossterm::event::KeyCode;
@@ -4380,6 +4579,7 @@ mod tests {
         }
     }
 
+    /// Verify invalid prompt arguments trigger an error event.
     #[test]
     fn custom_prompt_invalid_args_reports_error() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
@@ -4430,6 +4630,7 @@ mod tests {
         assert!(found_error, "expected error history cell to be sent");
     }
 
+    /// Verify missing required prompt arguments trigger an error event.
     #[test]
     fn custom_prompt_missing_required_args_reports_error() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
@@ -4480,6 +4681,7 @@ mod tests {
         );
     }
 
+    /// Ensure prompts with args expand numeric placeholders and $ARGUMENTS.
     #[test]
     fn selecting_custom_prompt_with_args_expands_placeholders() {
         // Support $1..$9 and $ARGUMENTS in prompt content.
@@ -4519,6 +4721,7 @@ mod tests {
         assert_eq!(InputResult::Submitted(expected), result);
     }
 
+    /// Ensure numeric placeholder prompts accept positional args without error.
     #[test]
     fn numeric_prompt_positional_args_does_not_error() {
         // Ensure that a prompt with only numeric placeholders does not trigger
@@ -4551,6 +4754,7 @@ mod tests {
         assert!(composer.textarea.is_empty());
     }
 
+    /// Ensure selecting a prompt with no args inserts the command template.
     #[test]
     fn selecting_custom_prompt_with_no_args_inserts_template() {
         let prompt_text = "X:$1 Y:$2 All:[$ARGUMENTS]";
@@ -4586,6 +4790,7 @@ mod tests {
         assert_eq!("/prompts:p ", composer.textarea.text());
     }
 
+    /// Ensure literal `$$` is preserved during prompt expansion.
     #[test]
     fn selecting_custom_prompt_preserves_literal_dollar_dollar() {
         // '$$' should remain untouched.
@@ -4625,6 +4830,7 @@ mod tests {
         );
     }
 
+    /// Ensure `$ARGUMENTS` expansion reuses cached joins.
     #[test]
     fn selecting_custom_prompt_reuses_cached_arguments_join() {
         let prompt_text = "First: $ARGUMENTS\nSecond: $ARGUMENTS";
@@ -4795,6 +5001,7 @@ mod tests {
         assert!(composer.pending_pastes.is_empty());
     }
 
+    /// Ensure slash popup does not open for "/ " history-like input.
     #[test]
     fn slash_popup_not_activated_for_slash_space_text_history_like_input() {
         use crossterm::event::KeyCode;
@@ -4827,9 +5034,9 @@ mod tests {
         assert_eq!(result, InputResult::None);
     }
 
+    /// Ensure slash popup activates for valid prefixes and bare slash.
     #[test]
     fn slash_popup_activated_for_bare_slash_and_valid_prefixes() {
-        // use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use tokio::sync::mpsc::unbounded_channel;
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4873,6 +5080,7 @@ mod tests {
         );
     }
 
+    /// Ensure external edits rebuild text and keep matching attachments.
     #[test]
     fn apply_external_edit_rebuilds_text_and_attachments() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4907,6 +5115,7 @@ mod tests {
         assert_eq!(composer.textarea.cursor(), composer.current_text().len());
     }
 
+    /// Ensure external edits drop attachments whose placeholders are removed.
     #[test]
     fn apply_external_edit_drops_missing_attachments() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4932,6 +5141,7 @@ mod tests {
         assert!(composer.attached_images.is_empty());
     }
 
+    /// Ensure pending placeholders expand to their original text.
     #[test]
     fn current_text_with_pending_expands_placeholders() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4957,6 +5167,7 @@ mod tests {
         );
     }
 
+    /// Ensure external edits keep attachments only for matching placeholders.
     #[test]
     fn apply_external_edit_limits_duplicates_to_occurrences() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4985,6 +5196,7 @@ mod tests {
         assert_eq!(composer.attached_images.len(), 1);
     }
 
+    /// Ensure disabled input ignores keypresses and hides the cursor.
     #[test]
     fn input_disabled_ignores_keypresses_and_hides_cursor() {
         use crossterm::event::KeyCode;

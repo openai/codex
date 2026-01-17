@@ -1,3 +1,21 @@
+//! Agent bootstrap and event forwarding glue for the TUI chat widget.
+//!
+//! This module bridges the UI event loop with the async Codex runtime. It
+//! spawns background tasks that start or attach to a [`CodexThread`], forwards
+//! UI-originated [`Op`] messages into the thread, and relays incoming protocol
+//! [`Event`]s back to the UI via [`AppEvent`]. It owns no long-lived state of
+//! its own; instead it wires together channels and tasks so the UI remains
+//! responsive while the agent runs.
+//!
+//! Correctness relies on forwarding the initial `SessionConfigured` event
+//! before normal event streaming begins so the UI can render session metadata
+//! consistently, and on reporting initialization failures as fatal exits so the
+//! UI can shut down cleanly. Event forwarding is best-effort and unbuffered at
+//! the protocol level; the UI is responsible for ordering and deduping if it
+//! aggregates multiple sources.
+//!
+//! The op channel is intentionally unbounded to avoid blocking the UI thread;
+//! callers must drop the sender to shut the submission task down.
 use std::sync::Arc;
 
 use codex_core::CodexThread;
@@ -13,8 +31,15 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
-/// Spawn the agent bootstrapper and op forwarding loop, returning the
-/// `UnboundedSender<Op>` used by the UI to submit operations.
+/// Spawns the agent bootstrapper and op-forwarding loop for a new thread.
+///
+/// The returned sender is used by the UI to submit [`Op`]s. A background task
+/// initializes the thread via [`ThreadManager::start_thread`], forwards the
+/// resulting `SessionConfigured` event, and then streams events to the UI. A
+/// second task drains the op channel and submits each op to the thread.
+///
+/// The op channel is unbounded and the submission loop runs until the channel is
+/// closed, so callers must drop the sender when the UI is shutting down.
 pub(crate) fn spawn_agent(
     config: Config,
     app_event_tx: AppEventSender,
@@ -37,6 +62,7 @@ pub(crate) fn spawn_agent(
                     id: "".to_string(),
                     msg: EventMsg::Error(err.to_error_event(None)),
                 }));
+                // Surface the error to the UI and request a clean shutdown.
                 app_event_tx_clone.send(AppEvent::FatalExitRequest(message));
                 tracing::error!("failed to initialize codex: {err}");
                 return;
@@ -69,9 +95,14 @@ pub(crate) fn spawn_agent(
     codex_op_tx
 }
 
-/// Spawn agent loops for an existing thread (e.g., a forked thread).
-/// Sends the provided `SessionConfiguredEvent` immediately, then forwards subsequent
-/// events and accepts Ops for submission.
+/// Spawns agent loops for an existing thread (for example, a forked thread).
+///
+/// The provided `SessionConfiguredEvent` is forwarded immediately so the UI can
+/// render session metadata, then subsequent protocol events are streamed while
+/// the op channel is drained and submitted to the thread.
+///
+/// This mirrors [`spawn_agent`] but skips thread creation; it assumes the
+/// caller already owns a live [`CodexThread`].
 pub(crate) fn spawn_agent_from_existing(
     thread: std::sync::Arc<CodexThread>,
     session_configured: codex_core::protocol::SessionConfiguredEvent,

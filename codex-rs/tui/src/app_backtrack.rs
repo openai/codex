@@ -86,7 +86,10 @@ pub(crate) struct BacktrackSelection {
 /// the same active thread we issued the request for.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingBacktrackRollback {
+    /// Selection that triggered the rollback request.
     pub(crate) selection: BacktrackSelection,
+
+    /// Thread id the rollback was issued against.
     pub(crate) thread_id: Option<ThreadId>,
 }
 
@@ -381,6 +384,7 @@ impl App {
         self.chat_widget.clear_esc_backtrack_hint();
     }
 
+    /// Apply a confirmed backtrack selection and schedule a redraw.
     pub(crate) fn apply_backtrack_selection(
         &mut self,
         tui: &mut tui::Tui,
@@ -390,6 +394,7 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    /// React to rollback-related core events and clear guards when needed.
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::ThreadRolledBack(_) => self.finish_pending_backtrack(),
@@ -420,6 +425,7 @@ impl App {
         self.backtrack_render_pending = true;
     }
 
+    /// Build a backtrack selection if the base thread still matches the active thread.
     fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
         let base_id = self.backtrack.base_id?;
         if self.chat_widget.thread_id() != Some(base_id) {
@@ -444,6 +450,7 @@ impl App {
     }
 }
 
+/// Trim the transcript cells to everything before the requested user message index.
 fn trim_transcript_cells_to_nth_user(
     transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
     nth_user_message: usize,
@@ -457,10 +464,12 @@ fn trim_transcript_cells_to_nth_user(
     }
 }
 
+/// Count user messages since the most recent session start marker.
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
     user_positions_iter(cells).count()
 }
 
+/// Return the transcript index of the nth user message, if present.
 fn nth_user_position(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
     nth: usize,
@@ -470,6 +479,7 @@ fn nth_user_position(
         .find_map(|(i, idx)| (i == nth).then_some(idx))
 }
 
+/// Iterate transcript indices for user messages after the last session start cell.
 fn user_positions_iter(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> impl Iterator<Item = usize> + '_ {

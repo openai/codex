@@ -7,11 +7,13 @@ use ratatui::text::Text;
 use crate::markdown_render::render_markdown_text;
 use insta::assert_snapshot;
 
+/// Covers empty.
 #[test]
 fn empty() {
     assert_eq!(render_markdown_text(""), Text::default());
 }
 
+/// Covers paragraph single.
 #[test]
 fn paragraph_single() {
     assert_eq!(
@@ -20,6 +22,7 @@ fn paragraph_single() {
     );
 }
 
+/// Covers paragraph soft break.
 #[test]
 fn paragraph_soft_break() {
     assert_eq!(
@@ -28,6 +31,7 @@ fn paragraph_soft_break() {
     );
 }
 
+/// Covers paragraph multiple.
 #[test]
 fn paragraph_multiple() {
     assert_eq!(
@@ -36,6 +40,7 @@ fn paragraph_multiple() {
     );
 }
 
+/// Covers headings.
 #[test]
 fn headings() {
     let md = "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n##### Heading 5\n###### Heading 6\n";
@@ -56,6 +61,7 @@ fn headings() {
     assert_eq!(text, expected);
 }
 
+/// Covers blockquote single.
 #[test]
 fn blockquote_single() {
     let text = render_markdown_text("> Blockquote");
@@ -63,6 +69,7 @@ fn blockquote_single() {
     assert_eq!(text, expected);
 }
 
+/// Covers blockquote soft break.
 #[test]
 fn blockquote_soft_break() {
     // Soft break via lazy continuation should render as a new line in blockquotes.
@@ -86,6 +93,7 @@ fn blockquote_soft_break() {
     );
 }
 
+/// Covers blockquote multiple with break.
 #[test]
 fn blockquote_multiple_with_break() {
     let text = render_markdown_text("> Blockquote 1\n\n> Blockquote 2\n");
@@ -97,6 +105,7 @@ fn blockquote_multiple_with_break() {
     assert_eq!(text, expected);
 }
 
+/// Covers blockquote three paragraphs short lines.
 #[test]
 fn blockquote_three_paragraphs_short_lines() {
     let md = "> one\n>\n> two\n>\n> three\n";
@@ -111,6 +120,7 @@ fn blockquote_three_paragraphs_short_lines() {
     assert_eq!(text, expected);
 }
 
+/// Covers blockquote nested two levels.
 #[test]
 fn blockquote_nested_two_levels() {
     let md = "> Level 1\n>> Level 2\n";
@@ -123,6 +133,7 @@ fn blockquote_nested_two_levels() {
     assert_eq!(text, expected);
 }
 
+/// Covers blockquote with list items.
 #[test]
 fn blockquote_with_list_items() {
     let md = "> - item 1\n> - item 2\n";
@@ -134,6 +145,7 @@ fn blockquote_with_list_items() {
     assert_eq!(text, expected);
 }
 
+/// Covers blockquote with ordered list.
 #[test]
 fn blockquote_with_ordered_list() {
     let md = "> 1. first\n> 2. second\n";
@@ -155,6 +167,7 @@ fn blockquote_with_ordered_list() {
     assert_eq!(text, expected);
 }
 
+/// Covers blockquote list then nested blockquote.
 #[test]
 fn blockquote_list_then_nested_blockquote() {
     let md = "> - parent\n>   > child\n";
@@ -166,6 +179,7 @@ fn blockquote_list_then_nested_blockquote() {
     assert_eq!(text, expected);
 }
 
+/// Covers list item with inline blockquote on same line.
 #[test]
 fn list_item_with_inline_blockquote_on_same_line() {
     let md = "1. > quoted\n";
@@ -177,6 +191,7 @@ fn list_item_with_inline_blockquote_on_same_line() {
     assert_eq!(s, "1. > quoted");
 }
 
+/// Covers blockquote surrounded by blank lines.
 #[test]
 fn blockquote_surrounded_by_blank_lines() {
     let md = "foo\n\n> bar\n\nbaz\n";
@@ -203,6 +218,7 @@ fn blockquote_surrounded_by_blank_lines() {
     );
 }
 
+/// Covers blockquote in ordered list on next line.
 #[test]
 fn blockquote_in_ordered_list_on_next_line() {
     // Blockquote begins on a new line within an ordered list item; it should
@@ -222,6 +238,7 @@ fn blockquote_in_ordered_list_on_next_line() {
     assert_eq!(lines, vec!["1. > quoted".to_string()]);
 }
 
+/// Covers blockquote in unordered list on next line.
 #[test]
 fn blockquote_in_unordered_list_on_next_line() {
     // Blockquote begins on a new line within an unordered list item; it should
@@ -241,6 +258,7 @@ fn blockquote_in_unordered_list_on_next_line() {
     assert_eq!(lines, vec!["- > quoted".to_string()]);
 }
 
+/// Covers blockquote two paragraphs inside ordered list has blank line.
 #[test]
 fn blockquote_two_paragraphs_inside_ordered_list_has_blank_line() {
     // Two blockquote paragraphs inside a list item should be separated by a blank line.
@@ -267,6 +285,7 @@ fn blockquote_two_paragraphs_inside_ordered_list_has_blank_line() {
     );
 }
 
+/// Covers blockquote inside nested list.
 #[test]
 fn blockquote_inside_nested_list() {
     let md = "1. A\n    - B\n      > inner\n";
@@ -284,6 +303,7 @@ fn blockquote_inside_nested_list() {
     assert_eq!(lines, vec!["1. A", "    - B", "      > inner"]);
 }
 
+/// Covers list item text then blockquote.
 #[test]
 fn list_item_text_then_blockquote() {
     let md = "1. before\n   > quoted\n";
@@ -301,6 +321,7 @@ fn list_item_text_then_blockquote() {
     assert_eq!(lines, vec!["1. before", "   > quoted"]);
 }
 
+/// Covers list item blockquote then text.
 #[test]
 fn list_item_blockquote_then_text() {
     let md = "1.\n   > quoted\n   after\n";
@@ -318,6 +339,7 @@ fn list_item_blockquote_then_text() {
     assert_eq!(lines, vec!["1. > quoted", "   > after"]);
 }
 
+/// Covers list item text blockquote text.
 #[test]
 fn list_item_text_blockquote_text() {
     let md = "1. before\n   > quoted\n   after\n";
@@ -335,6 +357,7 @@ fn list_item_text_blockquote_text() {
     assert_eq!(lines, vec!["1. before", "   > quoted", "   > after"]);
 }
 
+/// Covers blockquote with heading and paragraph.
 #[test]
 fn blockquote_with_heading_and_paragraph() {
     let md = "> # Heading\n> paragraph text\n";
@@ -360,6 +383,7 @@ fn blockquote_with_heading_and_paragraph() {
     );
 }
 
+/// Covers blockquote heading inherits heading style.
 #[test]
 fn blockquote_heading_inherits_heading_style() {
     let text = render_markdown_text("> # test header\n> in blockquote\n");
@@ -378,6 +402,7 @@ fn blockquote_heading_inherits_heading_style() {
     );
 }
 
+/// Covers blockquote with code block.
 #[test]
 fn blockquote_with_code_block() {
     let md = "> ```\n> code\n> ```\n";
@@ -395,6 +420,7 @@ fn blockquote_with_code_block() {
     assert_eq!(lines, vec!["> code".to_string()]);
 }
 
+/// Covers blockquote with multiline code block.
 #[test]
 fn blockquote_with_multiline_code_block() {
     let md = "> ```\n> first\n> second\n> ```\n";
@@ -412,6 +438,7 @@ fn blockquote_with_multiline_code_block() {
     assert_eq!(lines, vec!["> first", "> second"]);
 }
 
+/// Covers nested blockquote with inline and fenced code.
 #[test]
 fn nested_blockquote_with_inline_and_fenced_code() {
     /*
@@ -455,6 +482,7 @@ fn nested_blockquote_with_inline_and_fenced_code() {
     );
 }
 
+/// Covers list unordered single.
 #[test]
 fn list_unordered_single() {
     let text = render_markdown_text("- List item 1\n");
@@ -462,6 +490,7 @@ fn list_unordered_single() {
     assert_eq!(text, expected);
 }
 
+/// Covers list unordered multiple.
 #[test]
 fn list_unordered_multiple() {
     let text = render_markdown_text("- List item 1\n- List item 2\n");
@@ -472,6 +501,7 @@ fn list_unordered_multiple() {
     assert_eq!(text, expected);
 }
 
+/// Covers list ordered.
 #[test]
 fn list_ordered() {
     let text = render_markdown_text("1. List item 1\n2. List item 2\n");
@@ -482,6 +512,7 @@ fn list_ordered() {
     assert_eq!(text, expected);
 }
 
+/// Covers list nested.
 #[test]
 fn list_nested() {
     let text = render_markdown_text("- List item 1\n  - Nested list item 1\n");
@@ -492,6 +523,7 @@ fn list_nested() {
     assert_eq!(text, expected);
 }
 
+/// Covers list ordered custom start.
 #[test]
 fn list_ordered_custom_start() {
     let text = render_markdown_text("3. First\n4. Second\n");
@@ -502,6 +534,7 @@ fn list_ordered_custom_start() {
     assert_eq!(text, expected);
 }
 
+/// Covers nested unordered in ordered.
 #[test]
 fn nested_unordered_in_ordered() {
     let md = "1. Outer\n    - Inner A\n    - Inner B\n2. Next\n";
@@ -515,6 +548,7 @@ fn nested_unordered_in_ordered() {
     assert_eq!(text, expected);
 }
 
+/// Covers nested ordered in unordered.
 #[test]
 fn nested_ordered_in_unordered() {
     let md = "- Outer\n    1. One\n    2. Two\n- Last\n";
@@ -528,6 +562,7 @@ fn nested_ordered_in_unordered() {
     assert_eq!(text, expected);
 }
 
+/// Covers loose list item multiple paragraphs.
 #[test]
 fn loose_list_item_multiple_paragraphs() {
     let md = "1. First paragraph\n\n   Second paragraph of same item\n\n2. Next item\n";
@@ -541,6 +576,7 @@ fn loose_list_item_multiple_paragraphs() {
     assert_eq!(text, expected);
 }
 
+/// Covers tight item with soft break.
 #[test]
 fn tight_item_with_soft_break() {
     let md = "- item line1\n  item line2\n";
@@ -552,6 +588,7 @@ fn tight_item_with_soft_break() {
     assert_eq!(text, expected);
 }
 
+/// Covers deeply nested mixed three levels.
 #[test]
 fn deeply_nested_mixed_three_levels() {
     let md = "1. A\n    - B\n        1. C\n2. D\n";
@@ -565,6 +602,7 @@ fn deeply_nested_mixed_three_levels() {
     assert_eq!(text, expected);
 }
 
+/// Covers loose items due to blank line between items.
 #[test]
 fn loose_items_due_to_blank_line_between_items() {
     let md = "1. First\n\n2. Second\n";
@@ -576,6 +614,7 @@ fn loose_items_due_to_blank_line_between_items() {
     assert_eq!(text, expected);
 }
 
+/// Covers mixed tight then loose in one list.
 #[test]
 fn mixed_tight_then_loose_in_one_list() {
     let md = "1. Tight\n\n2.\n   Loose\n";
@@ -587,6 +626,7 @@ fn mixed_tight_then_loose_in_one_list() {
     assert_eq!(text, expected);
 }
 
+/// Covers ordered item with indented continuation is tight.
 #[test]
 fn ordered_item_with_indented_continuation_is_tight() {
     let md = "1. Foo\n   Bar\n";
@@ -598,6 +638,7 @@ fn ordered_item_with_indented_continuation_is_tight() {
     assert_eq!(text, expected);
 }
 
+/// Covers inline code.
 #[test]
 fn inline_code() {
     let text = render_markdown_text("Example of `Inline code`");
@@ -605,6 +646,7 @@ fn inline_code() {
     assert_eq!(text, expected);
 }
 
+/// Covers strong.
 #[test]
 fn strong() {
     assert_eq!(
@@ -613,6 +655,7 @@ fn strong() {
     );
 }
 
+/// Covers emphasis.
 #[test]
 fn emphasis() {
     assert_eq!(
@@ -621,6 +664,7 @@ fn emphasis() {
     );
 }
 
+/// Covers strikethrough.
 #[test]
 fn strikethrough() {
     assert_eq!(
@@ -629,6 +673,7 @@ fn strikethrough() {
     );
 }
 
+/// Covers strong emphasis.
 #[test]
 fn strong_emphasis() {
     let text = render_markdown_text("**Strong *emphasis***");
@@ -639,6 +684,7 @@ fn strong_emphasis() {
     assert_eq!(text, expected);
 }
 
+/// Covers link.
 #[test]
 fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
@@ -651,6 +697,7 @@ fn link() {
     assert_eq!(text, expected);
 }
 
+/// Covers code block unhighlighted.
 #[test]
 fn code_block_unhighlighted() {
     let text = render_markdown_text("```rust\nfn main() {}\n```\n");
@@ -658,6 +705,7 @@ fn code_block_unhighlighted() {
     assert_eq!(text, expected);
 }
 
+/// Covers code block multiple lines root.
 #[test]
 fn code_block_multiple_lines_root() {
     let md = "```\nfirst\nsecond\n```\n";
@@ -669,6 +717,7 @@ fn code_block_multiple_lines_root() {
     assert_eq!(text, expected);
 }
 
+/// Covers code block indented.
 #[test]
 fn code_block_indented() {
     let md = "    function greet() {\n      console.log(\"Hi\");\n    }\n";
@@ -681,6 +730,7 @@ fn code_block_indented() {
     assert_eq!(text, expected);
 }
 
+/// Covers horizontal rule renders em dashes.
 #[test]
 fn horizontal_rule_renders_em_dashes() {
     let md = "Before\n\n---\n\nAfter\n";
@@ -698,6 +748,7 @@ fn horizontal_rule_renders_em_dashes() {
     assert_eq!(lines, vec!["Before", "", "———", "", "After"]);
 }
 
+/// Covers code block with inner triple backticks outer four.
 #[test]
 fn code_block_with_inner_triple_backticks_outer_four() {
     let md = r#"````text
@@ -735,6 +786,7 @@ Here is a code block that shows another fenced block:
     );
 }
 
+/// Covers code block inside unordered list item is indented.
 #[test]
 fn code_block_inside_unordered_list_item_is_indented() {
     let md = "- Item\n\n  ```\n  code line\n  ```\n";
@@ -752,6 +804,7 @@ fn code_block_inside_unordered_list_item_is_indented() {
     assert_eq!(lines, vec!["- Item", "", "  code line"]);
 }
 
+/// Covers code block multiple lines inside unordered list.
 #[test]
 fn code_block_multiple_lines_inside_unordered_list() {
     let md = "- Item\n\n  ```\n  first\n  second\n  ```\n";
@@ -769,6 +822,7 @@ fn code_block_multiple_lines_inside_unordered_list() {
     assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
 }
 
+/// Covers code block inside unordered list item multiple lines.
 #[test]
 fn code_block_inside_unordered_list_item_multiple_lines() {
     let md = "- Item\n\n  ```\n  first\n  second\n  ```\n";
@@ -786,6 +840,7 @@ fn code_block_inside_unordered_list_item_multiple_lines() {
     assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
 }
 
+/// Covers markdown render complex snapshot.
 #[test]
 fn markdown_render_complex_snapshot() {
     let md = r#"# H1: Markdown Streaming Test
@@ -857,6 +912,7 @@ URL with parentheses: [link](https://example.com/path_(with)_parens).
     assert_snapshot!(rendered);
 }
 
+/// Covers ordered item with code block and nested bullet.
 #[test]
 fn ordered_item_with_code_block_and_nested_bullet() {
     let md = "1. **item 1**\n\n2. **item 2**\n   ```\n   code\n   ```\n   - `PROCESS_START` (a `OnceLock<Instant>`) keeps the start time for the entire process.\n";
@@ -883,6 +939,7 @@ fn ordered_item_with_code_block_and_nested_bullet() {
     );
 }
 
+/// Covers nested five levels mixed lists.
 #[test]
 fn nested_five_levels_mixed_lists() {
     let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
@@ -900,6 +957,7 @@ fn nested_five_levels_mixed_lists() {
     assert_eq!(text, expected);
 }
 
+/// Covers html inline is verbatim.
 #[test]
 fn html_inline_is_verbatim() {
     let md = "Hello <span>world</span>!";
@@ -908,6 +966,7 @@ fn html_inline_is_verbatim() {
     assert_eq!(text, expected);
 }
 
+/// Covers html block is verbatim multiline.
 #[test]
 fn html_block_is_verbatim_multiline() {
     let md = "<div>\n  <span>hi</span>\n</div>\n";
@@ -920,6 +979,7 @@ fn html_block_is_verbatim_multiline() {
     assert_eq!(text, expected);
 }
 
+/// Covers html in tight ordered item soft breaks with space.
 #[test]
 fn html_in_tight_ordered_item_soft_breaks_with_space() {
     let md = "1. Foo\n   <i>Bar</i>\n";
@@ -931,6 +991,7 @@ fn html_in_tight_ordered_item_soft_breaks_with_space() {
     assert_eq!(text, expected);
 }
 
+/// Covers html continuation paragraph in unordered item indented.
 #[test]
 fn html_continuation_paragraph_in_unordered_item_indented() {
     let md = "- Item\n\n  <em>continued</em>\n";
@@ -943,6 +1004,7 @@ fn html_continuation_paragraph_in_unordered_item_indented() {
     assert_eq!(text, expected);
 }
 
+/// Covers unordered item continuation paragraph is indented.
 #[test]
 fn unordered_item_continuation_paragraph_is_indented() {
     let md = "- Intro\n\n  Continuation paragraph line 1\n  Continuation paragraph line 2\n";
@@ -968,6 +1030,7 @@ fn unordered_item_continuation_paragraph_is_indented() {
     );
 }
 
+/// Covers ordered item continuation paragraph is indented.
 #[test]
 fn ordered_item_continuation_paragraph_is_indented() {
     let md = "1. Intro\n\n   More details about intro\n";
@@ -980,6 +1043,7 @@ fn ordered_item_continuation_paragraph_is_indented() {
     assert_eq!(text, expected);
 }
 
+/// Covers nested item continuation paragraph is indented.
 #[test]
 fn nested_item_continuation_paragraph_is_indented() {
     let md = "1. A\n    - B\n\n      Continuation for B\n2. C\n";

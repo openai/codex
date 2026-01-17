@@ -1,3 +1,15 @@
+//! Full-screen picker for resuming or forking past sessions.
+//!
+//! The picker renders a paginated list of recorded rollout files, tracks the
+//! current selection and search query, and emits a [`SessionSelection`] once
+//! the user confirms or exits. It owns only UI state; it does not mutate or
+//! delete rollout files, and persistence happens in the core rollout recorder.
+//!
+//! Pagination is driven by background tasks that stream pages into the picker.
+//! The UI keeps the list stable across incremental loads by deduplicating
+//! paths and preserving backend order. Searches reuse the same paging pipeline
+//! and continue loading until a match appears or the scan cap is reached.
+
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -37,24 +49,35 @@ use crate::tui::TuiEvent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionMetaLine;
 
+/// Number of sessions requested per page from the rollout recorder.
 const PAGE_SIZE: usize = 25;
+/// Number of remaining rows before we prefetch another page.
 const LOAD_NEAR_THRESHOLD: usize = 5;
 
+/// The high-level outcome chosen by the user in the picker UI.
 #[derive(Debug, Clone)]
 pub enum SessionSelection {
+    /// Start a new session without loading any historical data.
     StartFresh,
+    /// Resume the selected rollout at the provided path.
     Resume(PathBuf),
+    /// Fork the selected rollout at the provided path.
     Fork(PathBuf),
+    /// Exit the application entirely.
     Exit,
 }
 
+/// Action variant controlling picker labels and the emitted selection.
 #[derive(Clone, Copy, Debug)]
 pub enum SessionPickerAction {
+    /// Resume the selected session as-is.
     Resume,
+    /// Create a fork of the selected session.
     Fork,
 }
 
 impl SessionPickerAction {
+    /// Returns the title used in the picker header for this action.
     fn title(self) -> &'static str {
         match self {
             SessionPickerAction::Resume => "Resume a previous session",
@@ -62,6 +85,7 @@ impl SessionPickerAction {
         }
     }
 
+    /// Returns the verb used in the picker hint line.
     fn action_label(self) -> &'static str {
         match self {
             SessionPickerAction::Resume => "resume",
@@ -69,6 +93,7 @@ impl SessionPickerAction {
         }
     }
 
+    /// Converts the selected path into a concrete `SessionSelection`.
     fn selection(self, path: PathBuf) -> SessionSelection {
         match self {
             SessionPickerAction::Resume => SessionSelection::Resume(path),
@@ -77,18 +102,27 @@ impl SessionPickerAction {
     }
 }
 
+/// Arguments needed to request another page of sessions in the background.
 #[derive(Clone)]
 struct PageLoadRequest {
+    /// Root directory where rollout files are stored.
     codex_home: PathBuf,
+    /// Cursor to continue pagination from, if any.
     cursor: Option<Cursor>,
+    /// Token identifying the in-flight request.
     request_token: usize,
+    /// Search token used to correlate results with the active search query.
     search_token: Option<usize>,
+    /// Provider filter used by the rollout recorder.
     default_provider: String,
 }
 
+/// Shared callback used to enqueue background page loads.
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
 
+/// Background work results forwarded to the picker event loop.
 enum BackgroundEvent {
+    /// A page finished loading from the rollout recorder.
     PageLoaded {
         request_token: usize,
         search_token: Option<usize>,
@@ -96,9 +130,11 @@ enum BackgroundEvent {
     },
 }
 
-/// Interactive session picker that lists recorded rollout files with simple
-/// search and pagination. Shows the first user input as the preview, relative
-/// time (e.g., "5 seconds ago"), and the absolute path.
+/// Interactive session picker that lists recorded rollout files.
+///
+/// The picker supports incremental loading, search filtering, and keyboard
+/// navigation. Each row displays the most recent update time, git branch, and
+/// working directory (when available), plus a preview of the first user input.
 pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
@@ -115,6 +151,7 @@ pub async fn run_resume_picker(
     .await
 }
 
+/// Same as [`run_resume_picker`], but emits fork selections and labels.
 pub async fn run_fork_picker(
     tui: &mut Tui,
     codex_home: &Path,
@@ -131,6 +168,7 @@ pub async fn run_fork_picker(
     .await
 }
 
+/// Runs the picker for the provided action until a selection is made.
 async fn run_session_picker(
     tui: &mut Tui,
     codex_home: &Path,
@@ -222,10 +260,12 @@ async fn run_session_picker(
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
 struct AltScreenGuard<'a> {
+    /// Borrowed TUI handle used to enter/exit the alt screen.
     tui: &'a mut Tui,
 }
 
 impl<'a> AltScreenGuard<'a> {
+    /// Enters the alternate screen immediately.
     fn enter(tui: &'a mut Tui) -> Self {
         let _ = tui.enter_alt_screen();
         Self { tui }
@@ -233,69 +273,108 @@ impl<'a> AltScreenGuard<'a> {
 }
 
 impl Drop for AltScreenGuard<'_> {
+    /// Leaves the alternate screen even if the picker exits early.
     fn drop(&mut self) {
         let _ = self.tui.leave_alt_screen();
     }
 }
 
+/// Mutable state for the picker UI and pagination logic.
 struct PickerState {
+    /// Root directory containing rollout files.
     codex_home: PathBuf,
+    /// Frame scheduler used to trigger redraws on state changes.
     requester: FrameRequester,
+    /// Pagination bookkeeping for the rollout recorder.
     pagination: PaginationState,
+    /// All unique rows loaded so far.
     all_rows: Vec<Row>,
+    /// Rows after applying the current working directory and search filters.
     filtered_rows: Vec<Row>,
+    /// Set of rollout paths already seen to avoid duplicates.
     seen_paths: HashSet<PathBuf>,
+    /// Index of the selected row within `filtered_rows`.
     selected: usize,
+    /// Index of the first visible row in the list.
     scroll_top: usize,
+    /// Current search query string.
     query: String,
+    /// Search activity tracking for async page loads.
     search_state: SearchState,
+    /// Monotonic token generator for page requests.
     next_request_token: usize,
+    /// Monotonic token generator for search requests.
     next_search_token: usize,
+    /// Background page loader callback.
     page_loader: PageLoader,
+    /// Optional number of rows visible in the list viewport.
     view_rows: Option<usize>,
+    /// Provider name used to filter recorded sessions.
     default_provider: String,
+    /// Whether to show sessions outside the current working directory.
     show_all: bool,
+    /// Current working directory filter, when enabled.
     filter_cwd: Option<PathBuf>,
+    /// Action controlling labels and selection behavior.
     action: SessionPickerAction,
 }
 
+/// Tracks pagination progress and loading state for the picker.
 struct PaginationState {
+    /// Cursor pointing to the next page, if any.
     next_cursor: Option<Cursor>,
+    /// Count of files scanned by the backend so far.
     num_scanned_files: usize,
+    /// Whether the backend scan cap was reached.
     reached_scan_cap: bool,
+    /// Current loading state for async page requests.
     loading: LoadingState,
 }
 
+/// Whether a background page load is in flight.
 #[derive(Clone, Copy, Debug)]
 enum LoadingState {
+    /// No active request.
     Idle,
+    /// A request is pending and must match its token to apply.
     Pending(PendingLoad),
 }
 
+/// Tokens used to correlate a pending page load with responses.
 #[derive(Clone, Copy, Debug)]
 struct PendingLoad {
+    /// Request token for the active page load.
     request_token: usize,
+    /// Optional search token that triggered the load.
     search_token: Option<usize>,
 }
 
+/// Tracks whether the picker is actively searching.
 #[derive(Clone, Copy, Debug)]
 enum SearchState {
+    /// No active search in progress.
     Idle,
+    /// Search in progress with a token to match.
     Active { token: usize },
 }
 
+/// Reason a background load was triggered.
 enum LoadTrigger {
+    /// A scroll action neared the end of the list.
     Scroll,
+    /// A search query triggered a load with the given token.
     Search { token: usize },
 }
 
 impl LoadingState {
+    /// Returns true when a request is currently pending.
     fn is_pending(&self) -> bool {
         matches!(self, LoadingState::Pending(_))
     }
 }
 
 impl SearchState {
+    /// Returns the active search token, if any.
     fn active_token(&self) -> Option<usize> {
         match self {
             SearchState::Idle => None,
@@ -303,22 +382,31 @@ impl SearchState {
         }
     }
 
+    /// Returns true when a search is active.
     fn is_active(&self) -> bool {
         self.active_token().is_some()
     }
 }
 
+/// Lightweight row model used by the picker list.
 #[derive(Clone)]
 struct Row {
+    /// Absolute path to the rollout file.
     path: PathBuf,
+    /// Preview text drawn from the first real user message.
     preview: String,
+    /// Parsed creation timestamp, if available.
     created_at: Option<DateTime<Utc>>,
+    /// Parsed updated timestamp, if available.
     updated_at: Option<DateTime<Utc>>,
+    /// Working directory captured in session metadata, if present.
     cwd: Option<PathBuf>,
+    /// Git branch captured in session metadata, if present.
     git_branch: Option<String>,
 }
 
 impl PickerState {
+    /// Constructs a picker state with the provided dependencies and defaults.
     fn new(
         codex_home: PathBuf,
         requester: FrameRequester,
@@ -355,10 +443,12 @@ impl PickerState {
         }
     }
 
+    /// Requests a UI frame redraw via the frame requester.
     fn request_frame(&self) {
         self.requester.schedule_frame();
     }
 
+    /// Handles a key event, updating state and returning a selection if any.
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
         match key.code {
             KeyCode::Esc => return Ok(Some(SessionSelection::StartFresh)),
@@ -429,6 +519,7 @@ impl PickerState {
         Ok(None)
     }
 
+    /// Resets state and kicks off the first page load.
     fn start_initial_load(&mut self) {
         self.reset_pagination();
         self.all_rows.clear();
@@ -453,6 +544,7 @@ impl PickerState {
         });
     }
 
+    /// Applies a completed background event to the picker state.
     fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
         match event {
             BackgroundEvent::PageLoaded {
@@ -477,6 +569,7 @@ impl PickerState {
         Ok(())
     }
 
+    /// Resets pagination counters and loading state.
     fn reset_pagination(&mut self) {
         self.pagination.next_cursor = None;
         self.pagination.num_scanned_files = 0;
@@ -484,6 +577,7 @@ impl PickerState {
         self.pagination.loading = LoadingState::Idle;
     }
 
+    /// Merges a newly loaded page into the row list and reapplies filters.
     fn ingest_page(&mut self, page: ThreadsPage) {
         if let Some(cursor) = page.next_cursor.clone() {
             self.pagination.next_cursor = Some(cursor);
@@ -508,6 +602,7 @@ impl PickerState {
         self.apply_filter();
     }
 
+    /// Applies the cwd filter and search query to produce `filtered_rows`.
     fn apply_filter(&mut self) {
         let base_iter = self
             .all_rows
@@ -532,6 +627,7 @@ impl PickerState {
         self.request_frame();
     }
 
+    /// Returns true if a row should be visible under the cwd filter.
     fn row_matches_filter(&self, row: &Row) -> bool {
         if self.show_all {
             return true;
@@ -545,6 +641,7 @@ impl PickerState {
         paths_match(row_cwd, filter_cwd)
     }
 
+    /// Updates the search query and triggers any required background loads.
     fn set_query(&mut self, new_query: String) {
         if self.query == new_query {
             return;
@@ -569,6 +666,7 @@ impl PickerState {
         self.load_more_if_needed(LoadTrigger::Search { token });
     }
 
+    /// Continues an active search when no matches have appeared yet.
     fn continue_search_if_needed(&mut self) {
         let Some(token) = self.search_state.active_token() else {
             return;
@@ -584,6 +682,7 @@ impl PickerState {
         self.load_more_if_needed(LoadTrigger::Search { token });
     }
 
+    /// Continues a search only if the completed token matches the active one.
     fn continue_search_if_token_matches(&mut self, completed_token: Option<usize>) {
         let Some(active) = self.search_state.active_token() else {
             return;
@@ -596,6 +695,7 @@ impl PickerState {
         self.continue_search_if_needed();
     }
 
+    /// Ensures the selected row stays within the visible scroll window.
     fn ensure_selected_visible(&mut self) {
         if self.filtered_rows.is_empty() {
             self.scroll_top = 0;
@@ -618,6 +718,7 @@ impl PickerState {
         }
     }
 
+    /// Prefetches more rows when the view height exceeds available rows.
     fn ensure_minimum_rows_for_view(&mut self, minimum_rows: usize) {
         if minimum_rows == 0 {
             return;
@@ -635,11 +736,13 @@ impl PickerState {
         }
     }
 
+    /// Updates the cached number of visible rows and refreshes selection.
     fn update_view_rows(&mut self, rows: usize) {
         self.view_rows = if rows == 0 { None } else { Some(rows) };
         self.ensure_selected_visible();
     }
 
+    /// Prefetches more rows when scrolling near the end of the list.
     fn maybe_load_more_for_scroll(&mut self) {
         if self.pagination.loading.is_pending() {
             return;
@@ -656,6 +759,7 @@ impl PickerState {
         }
     }
 
+    /// Dispatches a new background page load if pagination allows it.
     fn load_more_if_needed(&mut self, trigger: LoadTrigger) {
         if self.pagination.loading.is_pending() {
             return;
@@ -683,12 +787,14 @@ impl PickerState {
         });
     }
 
+    /// Allocates a monotonically increasing request token.
     fn allocate_request_token(&mut self) -> usize {
         let token = self.next_request_token;
         self.next_request_token = self.next_request_token.wrapping_add(1);
         token
     }
 
+    /// Allocates a monotonically increasing search token.
     fn allocate_search_token(&mut self) -> usize {
         let token = self.next_search_token;
         self.next_search_token = self.next_search_token.wrapping_add(1);
@@ -696,10 +802,12 @@ impl PickerState {
     }
 }
 
+/// Converts rollout items into picker rows, preserving backend order.
 fn rows_from_items(items: Vec<ThreadItem>) -> Vec<Row> {
     items.into_iter().map(|item| head_to_row(&item)).collect()
 }
 
+/// Builds a single picker row from the thread head metadata and messages.
 fn head_to_row(item: &ThreadItem) -> Row {
     let created_at = item
         .created_at
@@ -728,6 +836,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
     }
 }
 
+/// Extracts cwd and git branch metadata from the thread head.
 fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf>, Option<String>) {
     for value in head {
         if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
@@ -739,6 +848,7 @@ fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf
     (None, None)
 }
 
+/// Returns true if two paths should be considered equivalent for filtering.
 fn paths_match(a: &Path, b: &Path) -> bool {
     if let (Ok(ca), Ok(cb)) = (
         path_utils::normalize_for_path_comparison(a),
@@ -749,12 +859,14 @@ fn paths_match(a: &Path, b: &Path) -> bool {
     a == b
 }
 
+/// Parses RFC 3339 timestamps and normalizes them to UTC.
 fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(ts)
         .map(|dt| dt.with_timezone(&Utc))
         .ok()
 }
 
+/// Extracts RFC 3339 timestamps from a JSON value, if present.
 fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
     value
         .get("timestamp")
@@ -763,6 +875,7 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+/// Finds the first real user message in the head and returns its text.
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
@@ -772,6 +885,7 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
         })
 }
 
+/// Draws the picker screen for the current state.
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     // Render full-screen overlay
     let height = tui.terminal.size()?.height;
@@ -825,6 +939,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     })
 }
 
+/// Renders the list portion of the picker, including loading indicators.
 fn render_list(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,
@@ -941,6 +1056,7 @@ fn render_list(
     }
 }
 
+/// Builds the status line shown when the list is empty or searching.
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     if !state.query.is_empty() {
         if state.search_state.is_active()
@@ -969,6 +1085,7 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     vec!["No sessions yet".italic().dim()].into()
 }
 
+/// Formats a relative time label for session timestamps.
 fn human_time_ago(ts: DateTime<Utc>) -> String {
     let now = Utc::now();
     let delta = now - ts;
@@ -1004,6 +1121,7 @@ fn human_time_ago(ts: DateTime<Utc>) -> String {
     }
 }
 
+/// Selects the best available timestamp label for a row.
 fn format_updated_label(row: &Row) -> String {
     match (row.updated_at, row.created_at) {
         (Some(updated), _) => human_time_ago(updated),
@@ -1012,6 +1130,7 @@ fn format_updated_label(row: &Row) -> String {
     }
 }
 
+/// Renders the column headers above the list.
 fn render_column_headers(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,
@@ -1053,13 +1172,19 @@ fn render_column_headers(
     frame.render_widget_ref(Line::from(spans), area);
 }
 
+/// Computed column widths and labels for the list view.
 struct ColumnMetrics {
+    /// Display width of the "Updated" column.
     max_updated_width: usize,
+    /// Display width of the "Branch" column.
     max_branch_width: usize,
+    /// Display width of the "CWD" column.
     max_cwd_width: usize,
+    /// Precomputed labels for each row, aligned to column widths.
     labels: Vec<(String, String, String)>,
 }
 
+/// Computes column widths and labels based on the current rows.
 fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     fn right_elide(s: &str, max: usize) -> String {
         if s.chars().count() <= max {
@@ -1130,6 +1255,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
+    /// Builds a thread head with a timestamp and a single user text payload.
     fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
         vec![
             json!({ "timestamp": ts }),
@@ -1144,6 +1270,7 @@ mod tests {
         ]
     }
 
+    /// Creates a minimal thread item for row conversion tests.
     fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
         ThreadItem {
             path: PathBuf::from(path),
@@ -1153,11 +1280,13 @@ mod tests {
         }
     }
 
+    /// Builds a cursor from the serialized backend format.
     fn cursor_from_str(repr: &str) -> Cursor {
         serde_json::from_str::<Cursor>(&format!("\"{repr}\""))
             .expect("cursor format should deserialize")
     }
 
+    /// Assembles a `ThreadsPage` for pagination tests.
     fn page(
         items: Vec<ThreadItem>,
         next_cursor: Option<Cursor>,
@@ -1172,6 +1301,7 @@ mod tests {
         }
     }
 
+    /// Ensures the preview logic skips non-user items and picks the first user text.
     #[test]
     fn preview_uses_first_message_input_text() {
         let head = vec![
@@ -1208,6 +1338,7 @@ mod tests {
         assert_eq!(preview.as_deref(), Some("real question"));
     }
 
+    /// Verifies that backend ordering is preserved when building rows.
     #[test]
     fn rows_from_items_preserves_backend_order() {
         // Construct two items with different timestamps and real user text.
@@ -1225,11 +1356,13 @@ mod tests {
         };
         let rows = rows_from_items(vec![a, b]);
         assert_eq!(rows.len(), 2);
+
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
         assert!(rows[1].preview.contains('B'));
     }
 
+    /// Ensures we prefer the updated timestamp when present.
     #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
         let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
@@ -1252,6 +1385,7 @@ mod tests {
         assert_eq!(row.updated_at, Some(expected_updated));
     }
 
+    /// Snapshots the column/header list rendering for typical data.
     #[test]
     fn resume_table_snapshot() {
         use crate::custom_terminal::Terminal;
@@ -1326,6 +1460,7 @@ mod tests {
         assert_snapshot!("resume_picker_table", snapshot);
     }
 
+    /// Exercises the end-to-end list rendering pipeline with real rollout files.
     #[tokio::test]
     async fn resume_picker_screen_snapshot() {
         use crate::custom_terminal::Terminal;
@@ -1489,6 +1624,7 @@ mod tests {
         assert_snapshot!("resume_picker_screen", snapshot);
     }
 
+    /// Ensures pagination merges rows without reordering or duplication.
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
@@ -1553,6 +1689,7 @@ mod tests {
         assert_eq!(unique_paths.len(), 4);
     }
 
+    /// Confirms the picker triggers prefetch when the view is underfilled.
     #[test]
     fn ensure_minimum_rows_prefetches_when_underfilled() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1590,6 +1727,7 @@ mod tests {
         assert!(guard[0].search_token.is_none());
     }
 
+    /// Ensures page-up/page-down use the current view size.
     #[tokio::test]
     async fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
@@ -1635,6 +1773,7 @@ mod tests {
         assert_eq!(state.selected, 5);
     }
 
+    /// Keeps the scroll window stable when the selection stays visible.
     #[tokio::test]
     async fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
@@ -1675,6 +1814,7 @@ mod tests {
         assert_eq!(state.selected, state.filtered_rows.len().saturating_sub(2));
     }
 
+    /// Continues searching across pages and stops at scan caps.
     #[test]
     fn set_query_loads_until_match_and_respects_scan_cap() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));

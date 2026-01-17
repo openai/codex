@@ -1,6 +1,6 @@
 //! This file handles all logic related to managing MCP OAuth credentials.
 //! All credentials are stored using the keyring crate which uses os-specific keyring services.
-//! https://crates.io/crates/keyring
+//! <https://crates.io/crates/keyring>
 //! macOS: macOS keychain.
 //! Windows: Windows Credential Manager
 //! Linux: DBus-based Secret Service, the kernel keyutils, and a combo of the two

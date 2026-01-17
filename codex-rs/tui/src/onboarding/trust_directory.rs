@@ -1,3 +1,14 @@
+//! Prompts the user to trust the current directory during onboarding.
+//!
+//! This step renders a short explanation based on whether the directory appears to be a git
+//! repository, then lets the user choose between trusting the project or requiring approval for
+//! edits and commands. The widget owns the selection and error state so the onboarding flow can
+//! decide when the step is complete and surface any configuration failures inline.
+//!
+//! Trust decisions are persisted via `codex_core::config` after resolving the appropriate root
+//! directory. When the current working directory is inside a git repository, the git root is used
+//! so the trust decision applies to the whole project instead of a subdirectory.
+
 use std::path::PathBuf;
 
 use codex_core::config::set_project_trust_level;
@@ -24,22 +35,34 @@ use crate::render::renderable::RenderableExt as _;
 use crate::selection_list::selection_option_row;
 
 use super::onboarding_screen::StepState;
+
+/// Renders the onboarding prompt that records whether a directory is trusted.
 pub(crate) struct TrustDirectoryWidget {
+    /// Location of the Codex config directory where trust settings are stored.
     pub codex_home: PathBuf,
+    /// Current working directory that the prompt is describing.
     pub cwd: PathBuf,
+    /// Whether `cwd` belongs to a git repository, used to tailor the guidance text.
     pub is_git_repo: bool,
+    /// Finalized selection once the user chooses an option.
     pub selection: Option<TrustDirectorySelection>,
+    /// Currently highlighted choice in the UI before the selection is finalized.
     pub highlighted: TrustDirectorySelection,
+    /// Error text to display if writing the trust setting fails.
     pub error: Option<String>,
 }
 
+/// Enumerates the trust decision presented to the user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrustDirectorySelection {
+    /// Allow Codex to operate without explicit approval in this directory.
     Trust,
+    /// Require approval for edits and commands in this directory.
     DontTrust,
 }
 
 impl WidgetRef for &TrustDirectoryWidget {
+    /// Draws the prompt, guidance text, selectable options, and any error message.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let mut column = ColumnRenderable::new();
 
@@ -118,6 +141,7 @@ impl WidgetRef for &TrustDirectoryWidget {
 }
 
 impl KeyboardHandler for TrustDirectoryWidget {
+    /// Updates the highlighted option or commits the selection based on keyboard input.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release {
             return;
@@ -142,6 +166,7 @@ impl KeyboardHandler for TrustDirectoryWidget {
 }
 
 impl StepStateProvider for TrustDirectoryWidget {
+    /// Marks the onboarding step complete once a selection is recorded.
     fn get_step_state(&self) -> StepState {
         match self.selection {
             Some(_) => StepState::Complete,
@@ -151,6 +176,7 @@ impl StepStateProvider for TrustDirectoryWidget {
 }
 
 impl TrustDirectoryWidget {
+    /// Persists the trusted selection and records any error message for the UI.
     fn handle_trust(&mut self) {
         let target =
             resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
@@ -162,6 +188,7 @@ impl TrustDirectoryWidget {
         self.selection = Some(TrustDirectorySelection::Trust);
     }
 
+    /// Persists the untrusted selection and records any error message for the UI.
     fn handle_dont_trust(&mut self) {
         self.highlighted = TrustDirectorySelection::DontTrust;
         let target =
@@ -192,6 +219,7 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    /// Ignores key release events so a press is required to commit the selection.
     #[test]
     fn release_event_does_not_change_selection() {
         let codex_home = TempDir::new().expect("temp home");
@@ -216,6 +244,7 @@ mod tests {
         assert_eq!(widget.selection, Some(TrustDirectorySelection::DontTrust));
     }
 
+    /// Captures the rendered layout for a git repository prompt.
     #[test]
     fn renders_snapshot_for_git_repo() {
         let codex_home = TempDir::new().expect("temp home");

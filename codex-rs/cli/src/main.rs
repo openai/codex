@@ -91,13 +91,13 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// [experimental] Run Codex as an MCP server and manage MCP servers.
+    /// `experimental` Run Codex as an MCP server and manage MCP servers.
     Mcp(McpCli),
 
-    /// [experimental] Run the Codex MCP server (stdio transport).
+    /// `experimental` Run the Codex MCP server (stdio transport).
     McpServer,
 
-    /// [experimental] Run the app server or related tooling.
+    /// `experimental` Run the app server or related tooling.
     AppServer(AppServerCommand),
 
     /// Generate shell completion scripts.
@@ -282,17 +282,17 @@ struct AppServerCommand {
     /// enabled = false
     /// ```
     ///
-    /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
+    /// See <https://developers.openai.com/codex/config-advanced/#metrics> for more details.
     #[arg(long = "analytics-default-enabled")]
     analytics_default_enabled: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
 enum AppServerSubcommand {
-    /// [experimental] Generate TypeScript bindings for the app server protocol.
+    /// `experimental` Generate TypeScript bindings for the app server protocol.
     GenerateTs(GenerateTsCommand),
 
-    /// [experimental] Generate JSON Schema for the app server protocol.
+    /// `experimental` Generate JSON Schema for the app server protocol.
     GenerateJsonSchema(GenerateJsonSchemaCommand),
 }
 

@@ -1,36 +1,57 @@
+//! Manages shell-style history navigation for the chat composer.
+//!
+//! This module keeps track of persistent history entries that are fetched
+//! on-demand, plus the in-session submissions that have not been persisted
+//! yet. It owns the navigation cursor and the last inserted history text so
+//! callers can decide when Up/Down should navigate versus edit the composer.
+//! Rendering and text area mutation live elsewhere; this module only returns
+//! replacement text or issues history fetch requests through [`AppEventSender`].
+
 use std::collections::HashMap;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_core::protocol::Op;
 
-/// State machine that manages shell-style history navigation (Up/Down) inside
-/// the chat composer. This struct is intentionally decoupled from the
-/// rendering widget so the logic remains isolated and easier to test.
+/// Tracks history state and selection for chat-composer navigation.
+///
+/// The history list is the concatenation of persistent entries (fetched by
+/// offset) followed by the in-session submissions. The state machine owns the
+/// navigation cursor and the last text inserted via history so it can decide
+/// when Up/Down should browse rather than edit. Callers apply the returned text
+/// to the composer and forward any history fetch requests to the backend.
 pub(crate) struct ChatComposerHistory {
-    /// Identifier of the history log as reported by `SessionConfiguredEvent`.
+    /// Identifier of the active history log, set by session configuration.
+    ///
+    /// This is echoed in `GetHistoryEntryResponse` to guard against stale
+    /// responses after a session change.
     history_log_id: Option<u64>,
-    /// Number of entries already present in the persistent cross-session
-    /// history file when the session started.
+    /// Count of persisted entries present when the session started.
+    ///
+    /// This value defines the boundary between persisted entries and
+    /// `local_history` in the combined index space.
     history_entry_count: usize,
 
-    /// Messages submitted by the user *during this UI session* (newest at END).
+    /// Messages submitted during this UI session, ordered from oldest to newest.
     local_history: Vec<String>,
 
-    /// Cache of persistent history entries fetched on-demand.
+    /// Cache of persistent history entries keyed by their global offset.
     fetched_history: HashMap<usize, String>,
 
-    /// Current cursor within the combined (persistent + local) history. `None`
-    /// indicates the user is *not* currently browsing history.
+    /// Current cursor within the combined (persistent + local) history.
+    ///
+    /// `None` means the user is not currently browsing history.
     history_cursor: Option<isize>,
 
-    /// The text that was last inserted into the composer as a result of
-    /// history navigation. Used to decide if further Up/Down presses should be
-    /// treated as navigation versus normal cursor movement.
+    /// The text last inserted into the composer via history navigation.
+    ///
+    /// This is used to decide whether Up/Down should keep navigating or return
+    /// to normal editing.
     last_history_text: Option<String>,
 }
 
 impl ChatComposerHistory {
+    /// Build an empty history state with no session metadata.
     pub fn new() -> Self {
         Self {
             history_log_id: None,
@@ -42,7 +63,10 @@ impl ChatComposerHistory {
         }
     }
 
-    /// Update metadata when a new session is configured.
+    /// Reset the state for a newly configured session.
+    ///
+    /// This clears cached entries and local submissions because they are tied
+    /// to the previous log identifier.
     pub fn set_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.history_log_id = Some(log_id);
         self.history_entry_count = entry_count;
@@ -52,8 +76,10 @@ impl ChatComposerHistory {
         self.last_history_text = None;
     }
 
-    /// Record a message submitted by the user in the current session so it can
-    /// be recalled later.
+    /// Record a message submitted by the user so it can be recalled later.
+    ///
+    /// This clears any active navigation state and de-duplicates consecutive
+    /// identical entries.
     pub fn record_local_submission(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -70,14 +96,16 @@ impl ChatComposerHistory {
         self.local_history.push(text.to_string());
     }
 
-    /// Reset navigation tracking so the next Up key resumes from the latest entry.
+    /// Clear navigation tracking so the next Up key resumes from the newest entry.
     pub fn reset_navigation(&mut self) {
         self.history_cursor = None;
         self.last_history_text = None;
     }
 
-    /// Should Up/Down key presses be interpreted as history navigation given
-    /// the current content and cursor position of `textarea`?
+    /// Decide whether Up/Down should navigate history for the current editor state.
+    ///
+    /// Navigation is allowed when the editor is empty, or when the cursor is at
+    /// the start and the editor still contains the last recalled history entry.
     pub fn should_handle_navigation(&self, text: &str, cursor: usize) -> bool {
         if self.history_entry_count == 0 && self.local_history.is_empty() {
             return false;
@@ -97,8 +125,11 @@ impl ChatComposerHistory {
         matches!(&self.last_history_text, Some(prev) if prev == text)
     }
 
-    /// Handle <Up>. Returns true when the key was consumed and the caller
-    /// should request a redraw.
+    /// Handle an Up press and return replacement text if available.
+    ///
+    /// This advances the cursor to the previous entry and returns cached text
+    /// when present. If the entry is persistent and not cached, a fetch request
+    /// is sent and `None` is returned until the response arrives.
     pub fn navigate_up(&mut self, app_event_tx: &AppEventSender) -> Option<String> {
         let total_entries = self.history_entry_count + self.local_history.len();
         if total_entries == 0 {
@@ -115,7 +146,11 @@ impl ChatComposerHistory {
         self.populate_history_at_index(next_idx as usize, app_event_tx)
     }
 
-    /// Handle <Down>.
+    /// Handle a Down press and return replacement text if available.
+    ///
+    /// This advances the cursor toward newer entries. Moving past the newest
+    /// entry exits history browsing and returns an empty string to restore the
+    /// editor to its non-history state.
     pub fn navigate_down(&mut self, app_event_tx: &AppEventSender) -> Option<String> {
         let total_entries = self.history_entry_count + self.local_history.len();
         if total_entries == 0 {
@@ -142,7 +177,11 @@ impl ChatComposerHistory {
         }
     }
 
-    /// Integrate a GetHistoryEntryResponse event.
+    /// Integrate an async history entry response.
+    ///
+    /// The response is cached for future navigation. If it matches the current
+    /// cursor position, the entry is returned so the caller can update the
+    /// editor immediately.
     pub fn on_entry_response(
         &mut self,
         log_id: u64,
@@ -162,10 +201,7 @@ impl ChatComposerHistory {
         None
     }
 
-    // ---------------------------------------------------------------------
-    // Internal helpers
-    // ---------------------------------------------------------------------
-
+    /// Resolve a history index to cached text or trigger an async fetch.
     fn populate_history_at_index(
         &mut self,
         global_idx: usize,
@@ -199,6 +235,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]

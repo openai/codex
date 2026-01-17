@@ -16,7 +16,7 @@ const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
 /// Format a full review findings block as plain text lines.
 ///
 /// - When `selection` is `Some`, each item line includes a checkbox marker:
-///   "[x]" for selected items and "[ ]" for unselected. Missing indices
+///   `"[x]"` for selected items and `"[ ]"` for unselected. Missing indices
 ///   default to selected.
 /// - When `selection` is `None`, the marker is omitted and a simple bullet is
 ///   rendered ("- Title — path:start-end").

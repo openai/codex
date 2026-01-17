@@ -1,3 +1,14 @@
+//! Handles TUI suspend/resume coordination on SIGTSTP.
+//!
+//! This module stores the minimal state needed to suspend the process, restore
+//! the terminal to a usable inline view, and then re-enter the appropriate
+//! rendering mode after resume. It tracks which resume path to use (realign the
+//! inline viewport or restore the alternate screen) and the cursor row to place
+//! before yielding control to the shell.
+//!
+//! `SuspendContext` is designed to be cloned and shared across tasks so the
+//! event stream can trigger suspends without borrowing the main TUI state.
+
 use std::io::Result;
 use std::io::stdout;
 use std::sync::Arc;
@@ -20,6 +31,7 @@ use crate::key_hint;
 
 use super::Terminal;
 
+/// Key binding used to trigger a suspend from the TUI.
 pub const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
 
 /// Coordinates suspend/resume handling so the TUI can restore terminal context after SIGTSTP.
@@ -46,6 +58,7 @@ pub struct SuspendContext {
 }
 
 impl SuspendContext {
+    /// Create a new suspend context with no pending resume action.
     pub(crate) fn new() -> Self {
         Self {
             resume_pending: Arc::new(Mutex::new(None)),
@@ -150,6 +163,7 @@ pub(crate) enum PreparedResumeAction {
 }
 
 impl PreparedResumeAction {
+    /// Apply the prepared resume action to the terminal during a synchronized draw.
     pub(crate) fn apply(self, terminal: &mut Terminal) -> Result<()> {
         match self {
             PreparedResumeAction::RealignViewport(area) => {
@@ -168,7 +182,7 @@ impl PreparedResumeAction {
     }
 }
 
-/// Deliver SIGTSTP after restoring terminal state, then re-applies terminal modes once resumed.
+/// Deliver SIGTSTP after restoring terminal state, then reapply modes after resume.
 fn suspend_process() -> Result<()> {
     super::restore()?;
     unsafe { libc::kill(0, libc::SIGTSTP) };

@@ -1,3 +1,13 @@
+//! Coordinates the multi-step onboarding flow and renders it as a single screen.
+//!
+//! The onboarding screen owns the ordered list of steps (welcome, auth, trust)
+//! and drives their input handling and rendering. Each step owns its own state,
+//! but this module decides which steps are visible, when a step is complete,
+//! and when the overall flow should exit early (for example, when auth is
+//! cancelled). Rendering is height-aware: each step is drawn into a scratch
+//! buffer to determine how many rows it consumes before the real buffer is
+//! updated.
+
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::git_info::get_git_repo_root;
@@ -27,50 +37,79 @@ use color_eyre::eyre::Result;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+/// Enumerates the onboarding steps in their display order.
 #[allow(clippy::large_enum_variant)]
 enum Step {
+    /// Welcome screen shown on entry to the onboarding flow.
     Welcome(WelcomeWidget),
+    /// Authentication mode picker and sign-in flow.
     Auth(AuthModeWidget),
+    /// Directory trust prompt shown for untrusted projects.
     TrustDirectory(TrustDirectoryWidget),
 }
 
+/// Handles keyboard input for onboarding widgets.
 pub(crate) trait KeyboardHandler {
+    /// Consumes a key event for the current widget.
     fn handle_key_event(&mut self, key_event: KeyEvent);
+
+    /// Handles a paste event if the widget accepts pasted input.
     fn handle_paste(&mut self, _pasted: String) {}
 }
 
+/// Indicates whether an onboarding step is visible, active, or finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepState {
+    /// The step should not be rendered or considered for input.
     Hidden,
+    /// The step is active and should receive input.
     InProgress,
+    /// The step is finished and may still be rendered above the active step.
     Complete,
 }
 
+/// Supplies a step's current progress state.
 pub(crate) trait StepStateProvider {
+    /// Reports whether the step is hidden, active, or complete.
     fn get_step_state(&self) -> StepState;
 }
 
+/// Drives the onboarding sequence and routes input to the active step.
 pub(crate) struct OnboardingScreen {
+    /// Frame scheduler used to request redraws after input.
     request_frame: FrameRequester,
+    /// Ordered list of onboarding steps to show.
     steps: Vec<Step>,
+    /// Explicit completion flag used for early exit.
     is_done: bool,
+    /// Whether the onboarding flow should exit the app entirely.
     should_exit: bool,
 }
 
+/// Supplies configuration and dependencies for onboarding.
 pub(crate) struct OnboardingScreenArgs {
+    /// Whether the trust prompt should be shown for this run.
     pub show_trust_screen: bool,
+    /// Whether the login flow should be shown for this run.
     pub show_login_screen: bool,
+    /// Current authentication status used to seed widgets.
     pub login_status: LoginStatus,
+    /// Auth manager used to perform login flows.
     pub auth_manager: Arc<AuthManager>,
+    /// User configuration controlling onboarding behavior.
     pub config: Config,
 }
 
+/// Reports the outcome of the onboarding flow.
 pub(crate) struct OnboardingResult {
+    /// Trust selection for the working directory, if one was shown.
     pub directory_trust_decision: Option<TrustDirectorySelection>,
+    /// Whether the user requested to exit the app during onboarding.
     pub should_exit: bool,
 }
 
 impl OnboardingScreen {
+    /// Constructs a new onboarding flow with the requested steps.
     pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
             show_trust_screen,
@@ -135,6 +174,7 @@ impl OnboardingScreen {
         }
     }
 
+    /// Returns the visible steps up to and including the active step.
     fn current_steps_mut(&mut self) -> Vec<&mut Step> {
         let mut out: Vec<&mut Step> = Vec::new();
         for step in self.steps.iter_mut() {
@@ -150,6 +190,7 @@ impl OnboardingScreen {
         out
     }
 
+    /// Returns the visible steps up to and including the active step.
     fn current_steps(&self) -> Vec<&Step> {
         let mut out: Vec<&Step> = Vec::new();
         for step in self.steps.iter() {
@@ -165,12 +206,14 @@ impl OnboardingScreen {
         out
     }
 
+    /// Reports whether the authentication step is currently active.
     fn is_auth_in_progress(&self) -> bool {
         self.steps.iter().any(|step| {
             matches!(step, Step::Auth(_)) && matches!(step.get_step_state(), StepState::InProgress)
         })
     }
 
+    /// Returns whether onboarding has finished or no active step remains.
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
             || !self
@@ -179,6 +222,7 @@ impl OnboardingScreen {
                 .any(|step| matches!(step.get_step_state(), StepState::InProgress))
     }
 
+    /// Returns the trust selection if the trust step was shown.
     pub fn directory_trust_decision(&self) -> Option<TrustDirectorySelection> {
         self.steps
             .iter()
@@ -192,10 +236,12 @@ impl OnboardingScreen {
             .flatten()
     }
 
+    /// Returns whether the onboarding flow requested app exit.
     pub fn should_exit(&self) -> bool {
         self.should_exit
     }
 
+    /// Reports whether the API key entry sub-state is currently active.
     fn is_api_key_entry_active(&self) -> bool {
         self.steps.iter().any(|step| {
             if let Step::Auth(widget) = step {
@@ -210,6 +256,7 @@ impl OnboardingScreen {
 }
 
 impl KeyboardHandler for OnboardingScreen {
+    /// Handles onboarding-level key bindings and forwards input to steps.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         let is_api_key_entry_active = self.is_api_key_entry_active();
         let should_quit = match key_event {
@@ -254,6 +301,7 @@ impl KeyboardHandler for OnboardingScreen {
         self.request_frame.schedule_frame();
     }
 
+    /// Forwards a paste event to the active step.
     fn handle_paste(&mut self, pasted: String) {
         if pasted.is_empty() {
             return;
@@ -267,6 +315,7 @@ impl KeyboardHandler for OnboardingScreen {
 }
 
 impl WidgetRef for &OnboardingScreen {
+    /// Renders the onboarding steps and sizes each one by rendered height.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         // Render steps top-to-bottom, measuring each step's height dynamically.
@@ -330,6 +379,7 @@ impl WidgetRef for &OnboardingScreen {
 }
 
 impl KeyboardHandler for Step {
+    /// Dispatches key events to the active step widget.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
             Step::Welcome(widget) => widget.handle_key_event(key_event),
@@ -338,6 +388,7 @@ impl KeyboardHandler for Step {
         }
     }
 
+    /// Dispatches paste events to steps that accept pasted input.
     fn handle_paste(&mut self, pasted: String) {
         match self {
             Step::Welcome(_) => {}
@@ -348,6 +399,7 @@ impl KeyboardHandler for Step {
 }
 
 impl StepStateProvider for Step {
+    /// Returns the step's current visibility state.
     fn get_step_state(&self) -> StepState {
         match self {
             Step::Welcome(w) => w.get_step_state(),
@@ -358,6 +410,7 @@ impl StepStateProvider for Step {
 }
 
 impl WidgetRef for Step {
+    /// Renders the step widget into the given buffer.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match self {
             Step::Welcome(widget) => {
@@ -373,6 +426,11 @@ impl WidgetRef for Step {
     }
 }
 
+/// Runs the onboarding event loop until the flow completes or exits.
+///
+/// The loop draws the screen, forwards input to the onboarding controller, and
+/// performs a one-time full clear after ChatGPT login success to reset terminal
+/// styling.
 pub(crate) async fn run_onboarding_app(
     args: OnboardingScreenArgs,
     tui: &mut Tui,

@@ -15,7 +15,7 @@
 //!
 //! Each emitted cell contains **logical markdown lines** plus wrap metadata. The cell wraps those
 //! lines at render time using the current viewport width and returns soft-wrap joiners for
-//! copy/paste fidelity.
+//! copy/paste fidelity. Past cells remain immutable; the controller only emits new ones.
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
@@ -23,11 +23,20 @@ use crate::markdown_render::MarkdownLogicalLine;
 
 use super::StreamState;
 
-/// Controller that manages newline-gated streaming, header emission, and
-/// commit animation across streams.
+/// Drives the newline-gated streaming pipeline for one assistant message.
+///
+/// The controller owns the stream-local state, converts incoming deltas into queued lines, and
+/// emits [`HistoryCell`] instances as those lines are committed. It is not responsible for timing
+/// commit ticks; callers decide when to call [`Self::on_commit_tick`].
 pub(crate) struct StreamController {
+    /// Per-stream state for buffering deltas and queued, committed lines.
     state: StreamState,
+    /// Placeholder for a two-phase drain lifecycle; currently always reset to `false`.
+    ///
+    /// This is kept to mirror upstream stream-control state even though the TUI
+    /// currently drains in a single pass.
     finishing_after_drain: bool,
+    /// Tracks whether the assistant header has been emitted for this stream.
     header_emitted: bool,
 }
 
@@ -98,6 +107,7 @@ impl StreamController {
         (self.emit(step), self.state.is_idle())
     }
 
+    /// Wraps committed logical lines into a history cell, emitting a header only once per stream.
     fn emit(&mut self, lines: Vec<MarkdownLogicalLine>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
@@ -117,6 +127,7 @@ impl StreamController {
 mod tests {
     use super::*;
 
+    /// Convert ratatui lines into plain strings for snapshot-friendly comparisons.
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines
             .iter()
@@ -130,6 +141,7 @@ mod tests {
             .collect()
     }
 
+    /// Confirms commit-tick streaming output matches a full markdown render.
     #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
         let mut ctrl = StreamController::new();

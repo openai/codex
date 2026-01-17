@@ -1,18 +1,26 @@
 //! The bottom pane is the interactive footer of the chat UI.
 //!
-//! The pane owns the [`ChatComposer`] (editable prompt input) and a stack of transient
-//! [`BottomPaneView`]s (popups/modals) that temporarily replace the composer for focused
-//! interactions like selection lists.
+//! The pane owns the [`ChatComposer`] (editable prompt input), a stack of transient
+//! [`BottomPaneView`]s (popups/modals), and the footer-only widgets that live above the composer
+//! (status indicator, unified exec summary, queued messages). Modal views temporarily replace the
+//! composer as the active input surface, but the composer remains alive so draft input returns
+//! unchanged when the modal is dismissed.
 //!
-//! Input routing is layered: `BottomPane` decides which local surface receives a key (view vs
+//! Input routing is layered: `BottomPane` decides which local surface receives a key (view vs.
 //! composer), while higher-level intent such as "interrupt" or "quit" is decided by the parent
 //! widget (`ChatWidget`). This split matters for Ctrl+C/Ctrl+D: the bottom pane gives the active
 //! view the first chance to consume Ctrl+C (typically to dismiss itself), and `ChatWidget` may
 //! treat an unhandled Ctrl+C as an interrupt or as the first press of a double-press quit
 //! shortcut.
 //!
+//! Modal lifecycles also affect status rendering. When a modal is active, status timers are paused
+//! to avoid animating under overlays, and they are resumed when the modal completes. The pane never
+//! owns task lifecycle; it only mirrors task state passed in by the parent and forwards interrupts
+//! when the UI affordance is visible.
+//!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
-//! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+//! hint and paste-burst flushing. The pane schedules redraws so those hints can expire or flush
+//! even when the UI is otherwise idle.
 use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
@@ -85,7 +93,9 @@ pub(crate) const DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED: bool = false;
 /// not handled locally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
+    /// The key was handled by the active surface.
     Handled,
+    /// The key was not handled and should be interpreted by the caller.
     NotHandled,
 }
 
@@ -104,44 +114,105 @@ pub(crate) use list_selection_view::SelectionItem;
 /// This is the owning container for the prompt input (`ChatComposer`) and the view stack
 /// (`BottomPaneView`). It performs local input routing and renders time-based hints, while leaving
 /// process-level decisions (quit, interrupt, shutdown) to `ChatWidget`.
+///
+/// The pane also owns footer-level status UI (interrupt hints, unified exec summaries, queued
+/// message banners) so these elements remain consistent regardless of which view is active.
 pub(crate) struct BottomPane {
-    /// Composer is retained even when a BottomPaneView is displayed so the
-    /// input state is retained when the view is closed.
+    /// Composer retained while modal views are active so draft input is restored on dismissal.
     composer: ChatComposer,
 
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
+    ///
+    /// The top-most view is the active receiver of input and rendering.
     view_stack: Vec<Box<dyn BottomPaneView>>,
 
+    /// Sender for app-level events emitted by bottom-pane widgets.
     app_event_tx: AppEventSender,
+
+    /// Frame scheduler used for time-based redraws and delayed hint expiration.
     frame_requester: FrameRequester,
 
+    /// True when the bottom pane should accept user input.
+    ///
+    /// This is forwarded to the composer and influences which hints are shown.
     has_input_focus: bool,
+
+    /// True while a task is actively running in the session.
+    ///
+    /// This is owned by the parent widget and controls whether status UI is shown.
     is_task_running: bool,
+
+    /// Whether to show the Esc backtrack hint in the footer.
+    ///
+    /// This is kept in sync with the composer so footer hints remain consistent.
     esc_backtrack_hint: bool,
+
+    /// Whether animation effects are enabled for this session.
+    ///
+    /// This is passed to animated widgets such as the status indicator.
     animations_enabled: bool,
 
     /// Inline status indicator shown above the composer while a task is running.
+    ///
+    /// This is created lazily and updated as the task transitions through phases. Modal overlays
+    /// pause its timer so it does not animate behind popups.
     status: Option<StatusIndicatorWidget>,
+
     /// Unified exec session summary shown above the composer.
+    ///
+    /// This aggregates related exec commands so the footer stays compact while tasks run.
     unified_exec_footer: UnifiedExecFooter,
+
     /// Queued user messages to show above the composer while a turn is running.
+    ///
+    /// These are rendered as a temporary banner so the user knows what will be submitted next.
     queued_user_messages: QueuedUserMessages,
+
+    /// Current context window usage as a percentage, if known.
+    ///
+    /// This is sourced from backend usage snapshots and displayed in the footer.
     context_window_percent: Option<i64>,
+
+    /// Current context window usage in tokens, if known.
+    ///
+    /// This is paired with the percentage to show absolute usage.
     context_window_used_tokens: Option<i64>,
 }
 
+/// Construction parameters for [`BottomPane`].
+///
+/// This bundles input configuration, placeholder text, and shared handles needed to wire the
+/// composer and view stack consistently.
 pub(crate) struct BottomPaneParams {
+    /// Sender for app-level events emitted by bottom-pane widgets.
     pub(crate) app_event_tx: AppEventSender,
+
+    /// Frame scheduler used for time-based redraws.
     pub(crate) frame_requester: FrameRequester,
+
+    /// Whether the bottom pane should accept user input.
     pub(crate) has_input_focus: bool,
+
+    /// Whether the terminal supports enhanced keyboard flags.
     pub(crate) enhanced_keys_supported: bool,
+
+    /// Placeholder text displayed when the composer is empty.
     pub(crate) placeholder_text: String,
+
+    /// Whether to disable paste burst detection.
     pub(crate) disable_paste_burst: bool,
+
+    /// Whether animation effects are enabled for this session.
     pub(crate) animations_enabled: bool,
+
+    /// Skills made available for `@`-mention completion.
     pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
 impl BottomPane {
+    /// Construct a new bottom pane with an initialized composer and empty view stack.
+    ///
+    /// Skill mentions are applied up front so the composer can offer completions immediately.
     pub fn new(params: BottomPaneParams) -> Self {
         let BottomPaneParams {
             app_event_tx,
@@ -179,43 +250,61 @@ impl BottomPane {
         }
     }
 
+    /// Update the skill list used for `@` mention completion.
+    ///
+    /// This refreshes the composer state and schedules a redraw.
     pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.composer.set_skill_mentions(skills);
         self.request_redraw();
     }
 
+    /// Enable or disable steer mode in the composer.
+    ///
+    /// This toggles additional composer affordances without touching view state.
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.composer.set_steer_enabled(enabled);
     }
 
+    /// Return the status widget if one is currently active.
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
     }
 
+    /// Return the active skill list, if configured.
     pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
         self.composer.skills()
     }
 
+    /// Return the cached context window percent for tests.
     #[cfg(test)]
     pub(crate) fn context_window_percent(&self) -> Option<i64> {
         self.context_window_percent
     }
 
+    /// Return the cached context window token count for tests.
     #[cfg(test)]
     pub(crate) fn context_window_used_tokens(&self) -> Option<i64> {
         self.context_window_used_tokens
     }
 
+    /// Return the currently active view, if any.
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
     }
 
+    /// Push a new view onto the view stack and schedule a redraw.
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.view_stack.push(view);
         self.request_redraw();
     }
 
     /// Forward a key event to the active view or the composer.
+    ///
+    /// The routing flow is:
+    /// - If a modal view is active, it gets the key first and may complete itself.
+    /// - Otherwise, Esc may trigger an interrupt while a task is running.
+    /// - Finally, the key is forwarded to the composer, which may request redraws or delayed
+    ///   paste-burst flushing.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if let Some(view) = self.view_stack.last_mut() {
@@ -286,6 +375,10 @@ impl BottomPane {
         }
     }
 
+    /// Forward a paste event to the active view or the composer.
+    ///
+    /// This requests a redraw when the active surface reports changes and closes a modal when it
+    /// marks itself complete.
     pub fn handle_paste(&mut self, pasted: String) {
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
@@ -303,6 +396,7 @@ impl BottomPane {
         }
     }
 
+    /// Insert raw text into the composer at the current cursor position.
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
         self.request_redraw();
@@ -314,6 +408,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Enable or disable the composer input and optionally update its placeholder.
     #[allow(dead_code)]
     pub(crate) fn set_composer_input_enabled(
         &mut self,
@@ -324,6 +419,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Clear composer contents in response to a Ctrl+C press.
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         self.composer.clear_for_ctrl_c();
         self.request_redraw();
@@ -334,15 +430,18 @@ impl BottomPane {
         self.composer.current_text()
     }
 
+    /// Return the composer text, including any queued submission.
     pub(crate) fn composer_text_with_pending(&self) -> String {
         self.composer.current_text_with_pending()
     }
 
+    /// Apply an edit produced by the external editor workflow.
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.composer.apply_external_edit(text);
         self.request_redraw();
     }
 
+    /// Override footer hint text until the override is cleared.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
         self.request_redraw();
@@ -365,6 +464,9 @@ impl BottomPane {
     /// allowed), while the bottom pane owns rendering. We also schedule a redraw
     /// after [`QUIT_SHORTCUT_TIMEOUT`] so the hint disappears even if the user
     /// stops typing and no other events trigger a draw.
+    ///
+    /// The expiration timer uses the current Tokio runtime when available and falls back to a
+    /// thread-based timer in tests.
     pub(crate) fn show_quit_shortcut_hint(&mut self, key: KeyBinding) {
         if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
             return;
@@ -395,22 +497,26 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Return whether the quit-shortcut hint is currently visible (tests only).
     #[cfg(test)]
     pub(crate) fn quit_shortcut_hint_visible(&self) -> bool {
         self.composer.quit_shortcut_hint_visible()
     }
 
+    /// Return whether the status indicator is currently visible (tests only).
     #[cfg(test)]
     pub(crate) fn status_indicator_visible(&self) -> bool {
         self.status.is_some()
     }
 
+    /// Show the Esc backtrack hint and ensure the composer footer updates.
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = true;
         self.composer.set_esc_backtrack_hint(true);
         self.request_redraw();
     }
 
+    /// Clear the Esc backtrack hint if it is currently shown.
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         if self.esc_backtrack_hint {
             self.esc_backtrack_hint = false;
@@ -421,6 +527,11 @@ impl BottomPane {
 
     // esc_backtrack_hint_visible removed; hints are controlled internally.
 
+    /// Update task-running state and adjust footer/status UI accordingly.
+    ///
+    /// This updates the composer, lazily creates the status widget when entering a running state,
+    /// and hides the indicator once the task completes. Modal overlays may temporarily pause the
+    /// status timer but do not change the running state.
     pub fn set_task_running(&mut self, running: bool) {
         let was_running = self.is_task_running;
         self.is_task_running = running;
@@ -453,6 +564,7 @@ impl BottomPane {
         }
     }
 
+    /// Ensure the status indicator exists without changing task-running state.
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
             self.status = Some(StatusIndicatorWidget::new(
@@ -464,6 +576,7 @@ impl BottomPane {
         }
     }
 
+    /// Show or hide the interrupt hint within the status widget.
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
         if let Some(status) = self.status.as_mut() {
             status.set_interrupt_hint_visible(visible);
@@ -471,6 +584,9 @@ impl BottomPane {
         }
     }
 
+    /// Update context window usage and forward it to the composer footer.
+    ///
+    /// Updates are cached locally so redundant redraws can be avoided.
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
         if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
         {
@@ -491,11 +607,16 @@ impl BottomPane {
     }
 
     /// Update the queued messages preview shown above the composer.
+    ///
+    /// These messages are only rendered while the pane is visible and a turn is active.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages.messages = queued;
         self.request_redraw();
     }
 
+    /// Update the unified exec footer with the current process summaries.
+    ///
+    /// Returns early if the summary is unchanged to avoid redundant redraws.
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
             self.request_redraw();
@@ -508,10 +629,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Return true when the composer is empty and has no draft content.
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }
 
+    /// Return true when a task is currently running.
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
     }
@@ -537,11 +660,16 @@ impl BottomPane {
         self.can_launch_external_editor()
     }
 
+    /// Push a view onto the stack so it becomes the active input surface.
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
     }
 
     /// Called when the agent requests user approval.
+    ///
+    /// If an active view can consume the request (for example, to update itself), it does so and
+    /// no new modal is shown. Otherwise this creates a new modal overlay and pauses the status
+    /// indicator timer so it does not animate behind the modal.
     pub fn push_approval_request(&mut self, request: ApprovalRequest, features: &Features) {
         let request = if let Some(view) = self.view_stack.last_mut() {
             match view.try_consume_approval_request(request) {
@@ -561,45 +689,59 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
+    /// Run any cleanup after a modal view completes.
+    ///
+    /// Currently this only resumes the status timer, but it is centralized so future modal-related
+    /// cleanup happens in one place.
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
     }
 
+    /// Pause the status indicator timer while a modal view is active.
     fn pause_status_timer_for_modal(&mut self) {
         if let Some(status) = self.status.as_mut() {
             status.pause_timer();
         }
     }
 
+    /// Resume the status indicator timer after a modal view is dismissed.
     fn resume_status_timer_after_modal(&mut self) {
         if let Some(status) = self.status.as_mut() {
             status.resume_timer();
         }
     }
 
-    /// Height (terminal rows) required by the current bottom pane.
+    /// Request an immediate redraw via the frame requester.
     pub(crate) fn request_redraw(&self) {
         self.frame_requester.schedule_frame();
     }
 
+    /// Request a redraw after the provided delay.
     pub(crate) fn request_redraw_in(&self, dur: Duration) {
         self.frame_requester.schedule_frame_in(dur);
     }
 
     // --- History helpers ---
 
+    /// Update history metadata used by the composer for navigation.
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.composer.set_history_metadata(log_id, entry_count);
     }
 
+    /// Flush any pending paste burst if the timeout has elapsed.
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
         self.composer.flush_paste_burst_if_due()
     }
 
+    /// Return true if the composer is currently capturing a paste burst.
     pub(crate) fn is_in_paste_burst(&self) -> bool {
         self.composer.is_in_paste_burst()
     }
 
+    /// Apply a response for a history entry and redraw if it changes the buffer.
+    ///
+    /// The composer owns the history buffer; this method forwards the data and mirrors redraw
+    /// requests.
     pub(crate) fn on_history_entry_response(
         &mut self,
         log_id: u64,
@@ -615,11 +757,17 @@ impl BottomPane {
         }
     }
 
+    /// Forward file search results to the composer for highlighting/autocomplete.
+    ///
+    /// The composer uses these matches to decorate `@`-mentions and file previews.
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }
 
+    /// Attach an image to the composer if no modal view is active.
+    ///
+    /// Modal views take exclusive input focus, so attachments are ignored while they are visible.
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
         if self.view_stack.is_empty() {
             self.composer.attach_image(path);
@@ -627,10 +775,15 @@ impl BottomPane {
         }
     }
 
+    /// Drain recently submitted image paths from the composer.
     pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         self.composer.take_recent_submission_images()
     }
 
+    /// Build the renderable tree for the active view or composer layout.
+    ///
+    /// When no modal is active, the layout stacks status/footer widgets above the composer and
+    /// inserts a spacer row so the composer is visually separated from any banners.
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
             RenderableItem::Borrowed(view)
@@ -647,6 +800,7 @@ impl BottomPane {
                 || !self.unified_exec_footer.is_empty()
                 || !self.queued_user_messages.messages.is_empty()
             {
+                // Keep a consistent visual gap between banners and the composer.
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
@@ -658,12 +812,17 @@ impl BottomPane {
 }
 
 impl Renderable for BottomPane {
+    /// Render the bottom pane into the provided buffer.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
     }
+
+    /// Return the number of rows needed to render the bottom pane at the given width.
     fn desired_height(&self, width: u16) -> u16 {
         self.as_renderable().desired_height(width)
     }
+
+    /// Return the current cursor position, if any, within the provided area.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
     }
@@ -678,6 +837,7 @@ mod tests {
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
 
+    /// Convert a buffer into a text snapshot for asserting layouts.
     fn snapshot_buffer(buf: &Buffer) -> String {
         let mut lines = Vec::new();
         for y in 0..buf.area().height {
@@ -690,12 +850,14 @@ mod tests {
         lines.join("\n")
     }
 
+    /// Render the pane into a buffer and return its text snapshot.
     fn render_snapshot(pane: &BottomPane, area: Rect) -> String {
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
         snapshot_buffer(&buf)
     }
 
+    /// Build a sample exec approval request for modal tests.
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "1".to_string(),
@@ -705,6 +867,7 @@ mod tests {
         }
     }
 
+    /// Ensure Ctrl+C dismisses modals without surfacing the quit hint.
     #[test]
     fn ctrl_c_on_modal_consumes_without_showing_quit_hint() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -728,6 +891,7 @@ mod tests {
 
     // live ring removed; related tests deleted.
 
+    /// Verify that the transcript overlay is not shown above approval modals.
     #[test]
     fn overlay_not_shown_above_approval_modal() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -762,6 +926,7 @@ mod tests {
         );
     }
 
+    /// Ensure the composer reappears after a denied approval while running.
     #[test]
     fn composer_shown_after_denied_while_task_running() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -830,6 +995,7 @@ mod tests {
         );
     }
 
+    /// Check that the status indicator stays visible during command execution.
     #[test]
     fn status_indicator_visible_during_command_execution() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -857,6 +1023,7 @@ mod tests {
         assert!(bufs.contains("• Working"), "expected Working header");
     }
 
+    /// Snapshot the layout when status and composer fill the available height.
     #[test]
     fn status_and_composer_fill_height_without_bottom_padding() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -888,6 +1055,7 @@ mod tests {
         );
     }
 
+    /// Snapshot the layout for queued messages without the status indicator.
     #[test]
     fn queued_messages_visible_when_status_hidden_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -916,6 +1084,7 @@ mod tests {
         );
     }
 
+    /// Snapshot the layout when both status and queued messages are present.
     #[test]
     fn status_and_queued_messages_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();

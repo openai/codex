@@ -17,7 +17,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 pub struct ConfigProfile {
     pub model: Option<String>,
     /// The key in the `model_providers` map identifying the
-    /// [`ModelProviderInfo`] to use.
+    /// [`crate::model_provider_info::ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,

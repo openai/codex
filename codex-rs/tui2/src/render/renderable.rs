@@ -1,3 +1,10 @@
+//! Lightweight layout primitives for composing renderable widgets.
+//!
+//! The types in this module provide a small abstraction over `ratatui` widgets
+//! so view code can combine renderable items, compute desired heights, and
+//! surface cursor positions in a consistent way. These helpers do not own any
+//! global state; they only wrap child renderables and perform rectangle math.
+
 use std::sync::Arc;
 
 use ratatui::buffer::Buffer;
@@ -10,16 +17,23 @@ use ratatui::widgets::WidgetRef;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 
+/// Rendering abstraction that pairs drawing with sizing and cursor placement.
 pub trait Renderable {
+    /// Draws the item into the provided buffer region.
     fn render(&self, area: Rect, buf: &mut Buffer);
+    /// Returns the preferred height for the item at the given width.
     fn desired_height(&self, width: u16) -> u16;
+    /// Returns the cursor position, if the item owns one.
     fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
         None
     }
 }
 
+/// Owned or borrowed renderable value used by layout containers.
 pub enum RenderableItem<'a> {
+    /// Renderable stored by ownership.
     Owned(Box<dyn Renderable + 'a>),
+    /// Renderable stored by shared reference.
     Borrowed(&'a dyn Renderable),
 }
 
@@ -46,12 +60,14 @@ impl<'a> Renderable for RenderableItem<'a> {
     }
 }
 
+/// Wraps an owned renderable in a `RenderableItem`.
 impl<'a> From<Box<dyn Renderable + 'a>> for RenderableItem<'a> {
     fn from(value: Box<dyn Renderable + 'a>) -> Self {
         RenderableItem::Owned(value)
     }
 }
 
+/// Converts any renderable into a boxed trait object.
 impl<'a, R> From<R> for Box<dyn Renderable + 'a>
 where
     R: Renderable + 'a,
@@ -61,6 +77,7 @@ where
     }
 }
 
+/// Treats the unit type as an empty renderable.
 impl Renderable for () {
     fn render(&self, _area: Rect, _buf: &mut Buffer) {}
     fn desired_height(&self, _width: u16) -> u16 {
@@ -68,6 +85,7 @@ impl Renderable for () {
     }
 }
 
+/// Treats a string slice as a single-line renderable.
 impl Renderable for &str {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.render_ref(area, buf);
@@ -77,6 +95,7 @@ impl Renderable for &str {
     }
 }
 
+/// Treats an owned string as a single-line renderable.
 impl Renderable for String {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.render_ref(area, buf);
@@ -86,6 +105,7 @@ impl Renderable for String {
     }
 }
 
+/// Treats a span as a single-line renderable.
 impl<'a> Renderable for Span<'a> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.render_ref(area, buf);
@@ -95,6 +115,7 @@ impl<'a> Renderable for Span<'a> {
     }
 }
 
+/// Treats a line as a single-line renderable.
 impl<'a> Renderable for Line<'a> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         WidgetRef::render_ref(self, area, buf);
@@ -104,6 +125,7 @@ impl<'a> Renderable for Line<'a> {
     }
 }
 
+/// Treats a paragraph as a renderable with wrapped line height.
 impl<'a> Renderable for Paragraph<'a> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.render_ref(area, buf);
@@ -113,6 +135,7 @@ impl<'a> Renderable for Paragraph<'a> {
     }
 }
 
+/// Allows optional renderables to take zero height and skip rendering.
 impl<R: Renderable> Renderable for Option<R> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if let Some(renderable) = self {
@@ -129,6 +152,7 @@ impl<R: Renderable> Renderable for Option<R> {
     }
 }
 
+/// Delegates rendering and sizing through an `Arc`.
 impl<R: Renderable> Renderable for Arc<R> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_ref().render(area, buf);
@@ -138,7 +162,9 @@ impl<R: Renderable> Renderable for Arc<R> {
     }
 }
 
+/// Column layout that stacks renderables vertically.
 pub struct ColumnRenderable<'a> {
+    /// Ordered list of child renderables.
     children: Vec<RenderableItem<'a>>,
 }
 
@@ -183,10 +209,12 @@ impl Renderable for ColumnRenderable<'_> {
 }
 
 impl<'a> ColumnRenderable<'a> {
+    /// Creates an empty column.
     pub fn new() -> Self {
         Self { children: vec![] }
     }
 
+    /// Creates a column from an iterator of renderable items.
     pub fn with<I, T>(children: I) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -197,11 +225,13 @@ impl<'a> ColumnRenderable<'a> {
         }
     }
 
+    /// Pushes an owned renderable onto the end of the column.
     pub fn push(&mut self, child: impl Into<Box<dyn Renderable + 'a>>) {
         self.children.push(RenderableItem::Owned(child.into()));
     }
 
     #[allow(dead_code)]
+    /// Pushes a borrowed renderable onto the end of the column.
     pub fn push_ref<R>(&mut self, child: &'a R)
     where
         R: Renderable + 'a,
@@ -211,12 +241,17 @@ impl<'a> ColumnRenderable<'a> {
     }
 }
 
+/// A flex child entry that carries its flex factor alongside the renderable.
 pub struct FlexChild<'a> {
+    /// Flex factor used when distributing remaining space.
     flex: i32,
+    /// Renderable for this child.
     child: RenderableItem<'a>,
 }
 
+/// Column layout that distributes remaining space to flexible children.
 pub struct FlexRenderable<'a> {
+    /// Children ordered from top to bottom.
     children: Vec<FlexChild<'a>>,
 }
 
@@ -225,10 +260,12 @@ pub struct FlexRenderable<'a> {
 /// Children with flex factor > 0 will be allocated the remaining space after the non-flex children,
 /// proportional to the flex factor.
 impl<'a> FlexRenderable<'a> {
+    /// Creates an empty flex column.
     pub fn new() -> Self {
         Self { children: vec![] }
     }
 
+    /// Pushes a child with the given flex factor.
     pub fn push(&mut self, flex: i32, child: impl Into<RenderableItem<'a>>) {
         self.children.push(FlexChild {
             flex,
@@ -238,7 +275,7 @@ impl<'a> FlexRenderable<'a> {
 
     /// Loosely inspired by Flutter's Flex widget.
     ///
-    /// Ref https://github.com/flutter/flutter/blob/3fd81edbf1e015221e143c92b2664f4371bdc04a/packages/flutter/lib/src/rendering/flex.dart#L1205-L1209
+    /// See <https://github.com/flutter/flutter/blob/3fd81edbf1e015221e143c92b2664f4371bdc04a/packages/flutter/lib/src/rendering/flex.dart#L1205-L1209>.
     fn allocate(&self, area: Rect) -> Vec<Rect> {
         let mut allocated_rects = Vec::with_capacity(self.children.len());
         let mut child_sizes = vec![0; self.children.len()];
@@ -266,8 +303,7 @@ impl<'a> FlexRenderable<'a> {
             let space_per_flex = free_space / total_flex as u16;
             for (i, FlexChild { flex, child }) in self.children.iter().enumerate() {
                 if *flex > 0 {
-                    // Last flex child gets all the remaining space, to prevent a rounding error
-                    // from not allocating all the space.
+                    // Last flex child receives any remainder to avoid rounding loss.
                     let max_child_extent = if i == last_flex_child_idx {
                         free_space - allocated_flex_space
                     } else {
@@ -315,7 +351,9 @@ impl<'a> Renderable for FlexRenderable<'a> {
     }
 }
 
+/// Row layout that assigns fixed widths to each child.
 pub struct RowRenderable<'a> {
+    /// Children and their requested widths.
     children: Vec<(u16, RenderableItem<'a>)>,
 }
 
@@ -366,16 +404,19 @@ impl Renderable for RowRenderable<'_> {
 }
 
 impl<'a> RowRenderable<'a> {
+    /// Creates an empty row.
     pub fn new() -> Self {
         Self { children: vec![] }
     }
 
+    /// Pushes an owned child with a fixed width.
     pub fn push(&mut self, width: u16, child: impl Into<Box<dyn Renderable>>) {
         self.children
             .push((width, RenderableItem::Owned(child.into())));
     }
 
     #[allow(dead_code)]
+    /// Pushes a borrowed child with a fixed width.
     pub fn push_ref<R>(&mut self, width: u16, child: &'a R)
     where
         R: Renderable + 'a,
@@ -385,8 +426,11 @@ impl<'a> RowRenderable<'a> {
     }
 }
 
+/// Renderable that applies padding before delegating to a child.
 pub struct InsetRenderable<'a> {
+    /// Renderable child to inset.
     child: RenderableItem<'a>,
+    /// Insets to apply around the child.
     insets: Insets,
 }
 
@@ -406,6 +450,7 @@ impl<'a> Renderable for InsetRenderable<'a> {
 }
 
 impl<'a> InsetRenderable<'a> {
+    /// Wraps a renderable in an inset container.
     pub fn new(child: impl Into<RenderableItem<'a>>, insets: Insets) -> Self {
         Self {
             child: child.into(),
@@ -414,7 +459,9 @@ impl<'a> InsetRenderable<'a> {
     }
 }
 
+/// Extension helpers for wrapping renderables with layout adapters.
 pub trait RenderableExt<'a> {
+    /// Wraps the renderable in an inset container.
     fn inset(self, insets: Insets) -> RenderableItem<'a>;
 }
 

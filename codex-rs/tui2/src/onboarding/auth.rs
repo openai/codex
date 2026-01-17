@@ -1,3 +1,13 @@
+//! Sign-in flow UI for onboarding.
+//!
+//! This module renders the authentication step of onboarding and drives the state transitions
+//! between ChatGPT login, device-code login, and API key entry. It owns only the UI state and
+//! dispatches to the core login helpers; persistence and network behavior live in `codex-core`
+//! and `codex-login`.
+//!
+//! The widget maintains a small state machine (`SignInState`) and uses a shared `FrameRequester`
+//! to keep the UI responsive while async login tasks run in the background.
+
 #![allow(clippy::unwrap_used)]
 
 use codex_core::AuthManager;
@@ -47,42 +57,66 @@ use super::onboarding_screen::StepState;
 
 mod headless_chatgpt_login;
 
+/// UI state machine for the sign-in flow.
 #[derive(Clone)]
 pub(crate) enum SignInState {
+    /// Awaiting the user to select a sign-in option.
     PickMode,
+    /// Browser-based ChatGPT login is in progress.
     ChatGptContinueInBrowser(ContinueInBrowserState),
+    /// Device-code ChatGPT login is in progress.
     ChatGptDeviceCode(ContinueWithDeviceCodeState),
+    /// Show a one-time success message before completion.
     ChatGptSuccessMessage,
+    /// ChatGPT login is complete.
     ChatGptSuccess,
+    /// API key input field is active.
     ApiKeyEntry(ApiKeyInputState),
+    /// API key login completed successfully.
     ApiKeyConfigured,
 }
 
+/// User-selectable authentication modes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SignInOption {
+    /// ChatGPT browser login flow.
     ChatGpt,
+    /// ChatGPT device-code flow.
     DeviceCode,
+    /// Direct API key entry flow.
     ApiKey,
 }
 
+/// Error text shown when API key login is not allowed.
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
 
+/// Mutable state for API key entry.
 #[derive(Clone, Default)]
 pub(crate) struct ApiKeyInputState {
+    /// Current text in the API key field.
     value: String,
+
+    /// Whether the value was pre-filled from `OPENAI_API_KEY`.
     prepopulated_from_env: bool,
 }
 
+/// State for the "continue in browser" ChatGPT login flow.
 #[derive(Clone)]
-/// Used to manage the lifecycle of SpawnedLogin and ensure it gets cleaned up.
 pub(crate) struct ContinueInBrowserState {
+    /// The auth URL the user should open.
     auth_url: String,
+
+    /// Handle used to shut down the login server when leaving the flow.
     shutdown_flag: Option<ShutdownHandle>,
 }
 
+/// State for the device-code login flow.
 #[derive(Clone)]
 pub(crate) struct ContinueWithDeviceCodeState {
+    /// The device code issued by the login server, when available.
     device_code: Option<DeviceCode>,
+
+    /// Cancellation signal for the in-flight device code request.
     cancel: Option<Arc<Notify>>,
 }
 
@@ -95,6 +129,7 @@ impl Drop for ContinueInBrowserState {
 }
 
 impl KeyboardHandler for AuthModeWidget {
+    /// Handle navigation and selection keys for the auth screen.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.handle_api_key_entry_key_event(&key_event) {
             return;
@@ -157,30 +192,55 @@ impl KeyboardHandler for AuthModeWidget {
     }
 }
 
+/// Renders and drives the authentication mode picker and sub-flows.
 #[derive(Clone)]
 pub(crate) struct AuthModeWidget {
+    /// Schedules redraws when async state changes.
     pub request_frame: FrameRequester,
+
+    /// Currently highlighted option in the picker.
     pub highlighted_mode: SignInOption,
+
+    /// Optional error message displayed in the footer.
     pub error: Option<String>,
+
+    /// Shared sign-in state to coordinate async login tasks.
     pub sign_in_state: Arc<RwLock<SignInState>>,
+
+    /// Location for writing auth files.
     pub codex_home: PathBuf,
+
+    /// Where to store credentials for CLI logins.
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+
+    /// Current global login status.
     pub login_status: LoginStatus,
+
+    /// Auth manager used to refresh credentials after login.
     pub auth_manager: Arc<AuthManager>,
+
+    /// Workspace scoping for forced ChatGPT login flows.
     pub forced_chatgpt_workspace_id: Option<String>,
+
+    /// Forced login method, if the workspace restricts options.
     pub forced_login_method: Option<ForcedLoginMethod>,
+
+    /// Whether shimmer animations should be used.
     pub animations_enabled: bool,
 }
 
 impl AuthModeWidget {
+    /// Returns true when API key login is permitted by workspace policy.
     fn is_api_login_allowed(&self) -> bool {
         !matches!(self.forced_login_method, Some(ForcedLoginMethod::Chatgpt))
     }
 
+    /// Returns true when ChatGPT login is permitted by workspace policy.
     fn is_chatgpt_login_allowed(&self) -> bool {
         !matches!(self.forced_login_method, Some(ForcedLoginMethod::Api))
     }
 
+    /// Return the options displayed in the picker in UI order.
     fn displayed_sign_in_options(&self) -> Vec<SignInOption> {
         let mut options = vec![SignInOption::ChatGpt];
         if self.is_chatgpt_login_allowed() {
@@ -192,6 +252,7 @@ impl AuthModeWidget {
         options
     }
 
+    /// Return the options that can be highlighted and selected.
     fn selectable_sign_in_options(&self) -> Vec<SignInOption> {
         let mut options = Vec::new();
         if self.is_chatgpt_login_allowed() {
@@ -204,6 +265,7 @@ impl AuthModeWidget {
         options
     }
 
+    /// Move the picker highlight up or down, wrapping at the ends.
     fn move_highlight(&mut self, delta: isize) {
         let options = self.selectable_sign_in_options();
         if options.is_empty() {
@@ -219,6 +281,7 @@ impl AuthModeWidget {
         self.highlighted_mode = options[next_index];
     }
 
+    /// Select the displayed option by its UI index.
     fn select_option_by_index(&mut self, index: usize) {
         let options = self.displayed_sign_in_options();
         if let Some(option) = options.get(index).copied() {
@@ -226,6 +289,7 @@ impl AuthModeWidget {
         }
     }
 
+    /// Handle a user selection of a specific sign-in option.
     fn handle_sign_in_option(&mut self, option: SignInOption) {
         match option {
             SignInOption::ChatGpt => {
@@ -248,6 +312,7 @@ impl AuthModeWidget {
         }
     }
 
+    /// Reset state and show an error when API login is blocked.
     fn disallow_api_login(&mut self) {
         self.highlighted_mode = SignInOption::ChatGpt;
         self.error = Some(API_KEY_DISABLED_MESSAGE.to_string());
@@ -255,6 +320,7 @@ impl AuthModeWidget {
         self.request_frame.schedule_frame();
     }
 
+    /// Render the sign-in mode picker.
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
@@ -357,6 +423,7 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    /// Render the browser login screen with the auth URL and status.
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
         let mut spans = vec!["  ".into()];
         if self.animations_enabled {
@@ -394,6 +461,7 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    /// Render the post-login success primer for ChatGPT sign-in.
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
             "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
@@ -425,6 +493,7 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    /// Render the terminal success state for ChatGPT login.
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
             "✓ Signed in with your ChatGPT account"
@@ -437,6 +506,7 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    /// Render the confirmation state for API key login.
     fn render_api_key_configured(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
             "✓ API key configured".fg(Color::Green).into(),
@@ -449,6 +519,7 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    /// Render the API key entry form.
     fn render_api_key_entry(&self, area: Rect, buf: &mut Buffer, state: &ApiKeyInputState) {
         let [intro_area, input_area, footer_area] = Layout::vertical([
             Constraint::Min(4),
@@ -508,6 +579,7 @@ impl AuthModeWidget {
             .render(footer_area, buf);
     }
 
+    /// Handle keyboard input while the API key entry field is active.
     fn handle_api_key_entry_key_event(&mut self, key_event: &KeyEvent) -> bool {
         let mut should_save: Option<String> = None;
         let mut should_request_frame = false;
@@ -570,6 +642,7 @@ impl AuthModeWidget {
         true
     }
 
+    /// Handle pasted input for the API key entry field.
     fn handle_api_key_entry_paste(&mut self, pasted: String) -> bool {
         let trimmed = pasted.trim();
         if trimmed.is_empty() {
@@ -594,6 +667,7 @@ impl AuthModeWidget {
         true
     }
 
+    /// Enter the API key entry flow, pre-filling from environment if available.
     fn start_api_key_entry(&mut self) {
         if !self.is_api_login_allowed() {
             self.disallow_api_login();
@@ -624,6 +698,7 @@ impl AuthModeWidget {
         self.request_frame.schedule_frame();
     }
 
+    /// Persist the API key and update login state.
     fn save_api_key(&mut self, api_key: String) {
         if !self.is_api_login_allowed() {
             self.disallow_api_login();
@@ -660,6 +735,7 @@ impl AuthModeWidget {
         self.request_frame.schedule_frame();
     }
 
+    /// Return true if we are already signed in via ChatGPT and can skip login.
     fn handle_existing_chatgpt_login(&mut self) -> bool {
         if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT)) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
@@ -670,6 +746,7 @@ impl AuthModeWidget {
         }
     }
 
+    /// Kicks off the ChatGPT auth flow and keeps the UI state consistent.
     fn start_chatgpt_login(&mut self) {
         // If we're already authenticated with ChatGPT, don't start a new login –
         // just proceed to the success message flow.
@@ -725,6 +802,7 @@ impl AuthModeWidget {
         }
     }
 
+    /// Start the device-code login flow.
     fn start_device_code_login(&mut self) {
         if self.handle_existing_chatgpt_login() {
             return;
@@ -742,6 +820,7 @@ impl AuthModeWidget {
 }
 
 impl StepStateProvider for AuthModeWidget {
+    /// Report whether the onboarding step is complete based on sign-in state.
     fn get_step_state(&self) -> StepState {
         let sign_in_state = self.sign_in_state.read().unwrap();
         match &*sign_in_state {
@@ -756,6 +835,7 @@ impl StepStateProvider for AuthModeWidget {
 }
 
 impl WidgetRef for AuthModeWidget {
+    /// Render the current auth state into the provided buffer.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let sign_in_state = self.sign_in_state.read().unwrap();
         match &*sign_in_state {

@@ -1,3 +1,19 @@
+//! Bespoke event-to-protocol handling for the app server.
+//!
+//! This module sits on the boundary between core `Event` streams and the
+//! app-server JSON-RPC protocol. It translates `codex-core` events into
+//! protocol-specific notifications, and issues approval requests for actions
+//! that require user consent (exec, patch, file changes, MCP elicitation).
+//!
+//! The implementation is deliberately "bespoke": it handles a handful of
+//! protocol behaviors that haven't been fully encoded in core types yet,
+//! including V1/V2 compatibility shims, rollout reconstruction for rollback,
+//! and glue for approval request/response flows.
+//!
+//! Correctness depends on keeping turn summary state (`TurnSummaryStore`) in
+//! sync with emitted notifications, especially for in-flight file changes and
+//! errors, so downstream clients observe consistent turn lifecycles.
+
 use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::PendingInterrupts;
 use crate::codex_message_processor::PendingRollbacks;
@@ -90,8 +106,17 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
 
+/// JSON payloads returned by approval requests.
 type JsonValue = serde_json::Value;
 
+/// Dispatch a core `Event` into app-server side effects.
+///
+/// This is the central event handler for the app server:
+/// - Maps core events into app-server notifications.
+/// - Spawns approval request/response tasks for exec and patch flows.
+/// - Updates turn summary state used to emit terminal `TurnCompleted` events.
+///
+/// V1/V2 protocol differences are handled inline by branching on `api_version`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -1016,6 +1041,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     }
 }
 
+/// Emit a V2 turn-diff notification when supported by the API version.
 async fn handle_turn_diff(
     conversation_id: ThreadId,
     event_turn_id: &str,
@@ -1035,6 +1061,7 @@ async fn handle_turn_diff(
     }
 }
 
+/// Emit a V2 plan update notification for the provided plan change.
 async fn handle_turn_plan_update(
     conversation_id: ThreadId,
     event_turn_id: &str,
@@ -1059,6 +1086,7 @@ async fn handle_turn_plan_update(
     }
 }
 
+/// Send a `TurnCompleted` notification with the given status/error.
 async fn emit_turn_completed_with_status(
     conversation_id: ThreadId,
     event_turn_id: String,
@@ -1080,6 +1108,7 @@ async fn emit_turn_completed_with_status(
         .await;
 }
 
+/// Mark a file change item as completed and emit the completion notification.
 async fn complete_file_change_item(
     conversation_id: ThreadId,
     item_id: String,
@@ -1112,6 +1141,7 @@ async fn complete_file_change_item(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Emit a completed command execution item with the provided status.
 async fn complete_command_execution_item(
     conversation_id: ThreadId,
     turn_id: String,
@@ -1144,6 +1174,7 @@ async fn complete_command_execution_item(
         .await;
 }
 
+/// Emit a raw response item notification only for V2 clients.
 async fn maybe_emit_raw_response_item_completed(
     api_version: ApiVersion,
     conversation_id: ThreadId,
@@ -1165,6 +1196,7 @@ async fn maybe_emit_raw_response_item_completed(
         .await;
 }
 
+/// Drain the stored turn summary for a thread, returning a default if absent.
 async fn find_and_remove_turn_summary(
     conversation_id: ThreadId,
     turn_summary_store: &TurnSummaryStore,
@@ -1173,6 +1205,7 @@ async fn find_and_remove_turn_summary(
     map.remove(&conversation_id).unwrap_or_default()
 }
 
+/// Emit a completed/failed turn notification based on stored summary state.
 async fn handle_turn_complete(
     conversation_id: ThreadId,
     event_turn_id: String,
@@ -1189,6 +1222,7 @@ async fn handle_turn_complete(
     emit_turn_completed_with_status(conversation_id, event_turn_id, status, error, outgoing).await;
 }
 
+/// Emit an interrupted turn notification and clear stored summary state.
 async fn handle_turn_interrupted(
     conversation_id: ThreadId,
     event_turn_id: String,
@@ -1207,6 +1241,7 @@ async fn handle_turn_interrupted(
     .await;
 }
 
+/// Fail a pending rollback request with an invalid-request error.
 async fn handle_thread_rollback_failed(
     conversation_id: ThreadId,
     message: String,
@@ -1232,6 +1267,7 @@ async fn handle_thread_rollback_failed(
     }
 }
 
+/// Emit token-usage and rate-limit notifications from a token count event.
 async fn handle_token_count_event(
     conversation_id: ThreadId,
     turn_id: String,
@@ -1260,6 +1296,7 @@ async fn handle_token_count_event(
     }
 }
 
+/// Record the latest error in the turn summary store for completion handling.
 async fn handle_error(
     conversation_id: ThreadId,
     error: TurnError,
@@ -1269,6 +1306,7 @@ async fn handle_error(
     map.entry(conversation_id).or_default().last_error = Some(error);
 }
 
+/// Translate a patch approval response into a core `Op::PatchApproval`.
 async fn on_patch_approval_response(
     event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
@@ -1311,6 +1349,7 @@ async fn on_patch_approval_response(
     }
 }
 
+/// Translate an exec approval response into a core `Op::ExecApproval`.
 async fn on_exec_approval_response(
     event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
@@ -1347,8 +1386,10 @@ async fn on_exec_approval_response(
     }
 }
 
+/// Fallback message used when a review output is empty or malformed.
 const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
 
+/// Render review output into a human-readable string for thread items.
 fn render_review_output_text(output: &ReviewOutputEvent) -> String {
     let mut sections = Vec::new();
     let explanation = output.overall_explanation.trim();
@@ -1369,6 +1410,7 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
     }
 }
 
+/// Convert core file changes into protocol-facing update entries.
 fn convert_patch_changes(changes: &HashMap<PathBuf, CoreFileChange>) -> Vec<FileUpdateChange> {
     let mut converted: Vec<FileUpdateChange> = changes
         .iter()
@@ -1382,6 +1424,7 @@ fn convert_patch_changes(changes: &HashMap<PathBuf, CoreFileChange>) -> Vec<File
     converted
 }
 
+/// Map a core patch change kind into the V2 protocol representation.
 fn map_patch_change_kind(change: &CoreFileChange) -> V2PatchChangeKind {
     match change {
         CoreFileChange::Add { .. } => V2PatchChangeKind::Add,
@@ -1392,6 +1435,7 @@ fn map_patch_change_kind(change: &CoreFileChange) -> V2PatchChangeKind {
     }
 }
 
+/// Build a displayable diff string for a file change entry.
 fn format_file_change_diff(change: &CoreFileChange) -> String {
     match change {
         CoreFileChange::Add { content } => content.clone(),
@@ -1409,6 +1453,7 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
     }
 }
 
+/// Map a file change approval decision into core review semantics.
 fn map_file_change_approval_decision(
     decision: FileChangeApprovalDecision,
 ) -> (ReviewDecision, Option<PatchApplyStatus>) {
@@ -1425,6 +1470,7 @@ fn map_file_change_approval_decision(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Handle a file-change approval response and emit any completion events.
 async fn on_file_change_request_approval_response(
     event_turn_id: String,
     conversation_id: ThreadId,
@@ -1483,6 +1529,7 @@ async fn on_file_change_request_approval_response(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Handle a command-approval response and emit any completion events.
 async fn on_command_execution_request_approval_response(
     event_turn_id: String,
     conversation_id: ThreadId,
@@ -1563,7 +1610,7 @@ async fn on_command_execution_request_approval_response(
     }
 }
 
-/// similar to handle_mcp_tool_call_begin in exec
+/// Construct a protocol notification for an MCP tool call begin event.
 async fn construct_mcp_tool_call_notification(
     begin_event: McpToolCallBeginEvent,
     thread_id: String,
@@ -1586,7 +1633,7 @@ async fn construct_mcp_tool_call_notification(
     }
 }
 
-/// similar to handle_mcp_tool_call_end in exec
+/// Construct a protocol notification for an MCP tool call end event.
 async fn construct_mcp_tool_call_end_notification(
     end_event: McpToolCallEndEvent,
     thread_id: String,
@@ -1660,10 +1707,12 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
 
+    /// Build an empty turn summary store for tests.
     fn new_turn_summary_store() -> TurnSummaryStore {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
+    /// Maps session-scoped file-change approval to the expected review decision.
     #[test]
     fn file_change_accept_for_session_maps_to_approved_for_session() {
         let (decision, completion_status) =
@@ -1672,6 +1721,7 @@ mod tests {
         assert_eq!(completion_status, None);
     }
 
+    /// Persists the most recent turn error in the summary store.
     #[tokio::test]
     async fn test_handle_error_records_message() -> Result<()> {
         let conversation_id = ThreadId::new();
@@ -1700,6 +1750,7 @@ mod tests {
         Ok(())
     }
 
+    /// Emits a completed turn with no error when no error was recorded.
     #[tokio::test]
     async fn test_handle_turn_complete_emits_completed_without_error() -> Result<()> {
         let conversation_id = ThreadId::new();
@@ -1732,6 +1783,7 @@ mod tests {
         Ok(())
     }
 
+    /// Emits an interrupted turn without attaching the stored error.
     #[tokio::test]
     async fn test_handle_turn_interrupted_emits_interrupted_with_error() -> Result<()> {
         let conversation_id = ThreadId::new();
@@ -1774,6 +1826,7 @@ mod tests {
         Ok(())
     }
 
+    /// Emits a failed turn with the stored error payload.
     #[tokio::test]
     async fn test_handle_turn_complete_emits_failed_with_error() -> Result<()> {
         let conversation_id = ThreadId::new();
@@ -1823,6 +1876,7 @@ mod tests {
         Ok(())
     }
 
+    /// Sends a v2 turn-plan update notification with translated steps.
     #[tokio::test]
     async fn test_handle_turn_plan_update_emits_notification_for_v2() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -1873,6 +1927,7 @@ mod tests {
         Ok(())
     }
 
+    /// Emits token-usage and rate-limit notifications when info is present.
     #[tokio::test]
     async fn test_handle_token_count_event_emits_usage_and_rate_limits() -> Result<()> {
         let conversation_id = ThreadId::new();
@@ -1958,6 +2013,7 @@ mod tests {
         Ok(())
     }
 
+    /// Avoids sending notifications when token usage info is missing.
     #[tokio::test]
     async fn test_handle_token_count_event_without_usage_info() -> Result<()> {
         let conversation_id = ThreadId::new();
@@ -1983,6 +2039,7 @@ mod tests {
         Ok(())
     }
 
+    /// Builds a begin notification that includes MCP tool-call arguments.
     #[tokio::test]
     async fn test_construct_mcp_tool_call_begin_notification_with_args() {
         let begin_event = McpToolCallBeginEvent {
@@ -2021,6 +2078,7 @@ mod tests {
         assert_eq!(notification, expected);
     }
 
+    /// Handles turn-complete notifications correctly across multiple threads.
     #[tokio::test]
     async fn test_handle_turn_complete_emits_error_multiple_turns() -> Result<()> {
         // Conversation A will have two turns; Conversation B will have one turn.
@@ -2141,6 +2199,7 @@ mod tests {
         Ok(())
     }
 
+    /// Builds a begin notification with null arguments when absent.
     #[tokio::test]
     async fn test_construct_mcp_tool_call_begin_notification_without_args() {
         let begin_event = McpToolCallBeginEvent {
@@ -2179,6 +2238,7 @@ mod tests {
         assert_eq!(notification, expected);
     }
 
+    /// Builds a successful MCP tool-call completion notification.
     #[tokio::test]
     async fn test_construct_mcp_tool_call_end_notification_success() {
         let content = vec![ContentBlock::TextContent(TextContent {
@@ -2233,6 +2293,7 @@ mod tests {
         assert_eq!(notification, expected);
     }
 
+    /// Builds a failed MCP tool-call completion notification.
     #[tokio::test]
     async fn test_construct_mcp_tool_call_end_notification_error() {
         let end_event = McpToolCallEndEvent {
@@ -2275,6 +2336,7 @@ mod tests {
         assert_eq!(notification, expected);
     }
 
+    /// Emits turn diff notifications for v2 clients.
     #[tokio::test]
     async fn test_handle_turn_diff_emits_v2_notification() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -2311,6 +2373,7 @@ mod tests {
         Ok(())
     }
 
+    /// Skips turn diff notifications for v1 clients.
     #[tokio::test]
     async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);

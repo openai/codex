@@ -6,7 +6,8 @@
 //! Internally it spawns a [`FrameScheduler`] task that coalesces many requests
 //! into a single notification on a broadcast channel used by the main TUI event
 //! loop. This keeps animations and status updates smooth without redrawing more
-//! often than necessary.
+//! often than necessary, and the scheduler shuts down automatically once all
+//! requesters are dropped.
 //!
 //! This follows the actor-style design from
 //! [“Actors with Tokio”](https://ryhl.io/blog/actors-with-tokio/), with a
@@ -23,12 +24,15 @@ use super::frame_rate_limiter::FrameRateLimiter;
 /// A requester for scheduling future frame draws on the TUI event loop.
 ///
 /// This is the handler side of an actor/handler pair with `FrameScheduler`, which coalesces
-/// multiple frame requests into a single draw operation.
+/// multiple frame requests into a single draw operation. Calls to
+/// [`FrameRequester::schedule_frame`] and [`FrameRequester::schedule_frame_in`] enqueue
+/// desired draw instants; the scheduler handles rate limiting and dispatch.
 ///
 /// Clones of this type can be freely shared across tasks to make it possible to trigger frame draws
 /// from anywhere in the TUI code.
 #[derive(Clone, Debug)]
 pub struct FrameRequester {
+    /// Queue of requested draw deadlines sent to the scheduler task.
     frame_schedule_tx: mpsc::UnboundedSender<Instant>,
 }
 
@@ -74,8 +78,11 @@ impl FrameRequester {
 /// To avoid wasted redraw work, draw notifications are clamped to a maximum of 60 FPS (see
 /// [`FrameRateLimiter`]).
 struct FrameScheduler {
+    /// Receives requested draw instants from all `FrameRequester` clones.
     receiver: mpsc::UnboundedReceiver<Instant>,
+    /// Broadcast channel used to notify the event loop to draw.
     draw_tx: broadcast::Sender<()>,
+    /// Tracks the last draw to enforce the minimum frame interval.
     rate_limiter: FrameRateLimiter,
 }
 
@@ -133,6 +140,7 @@ mod tests {
     use tokio::time;
     use tokio_util::time::FutureExt;
 
+    /// Emits exactly one draw notification for an immediate request.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_schedule_frame_immediate_triggers_once() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
@@ -156,6 +164,7 @@ mod tests {
         assert!(second.is_err(), "unexpected extra draw received");
     }
 
+    /// Delivers a draw only after the requested delay elapses.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_schedule_frame_in_triggers_at_delay() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
@@ -182,6 +191,7 @@ mod tests {
         assert!(second.is_err(), "unexpected extra draw received");
     }
 
+    /// Coalesces multiple immediate requests into a single draw.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_coalesces_multiple_requests_into_single_draw() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
@@ -208,6 +218,7 @@ mod tests {
         assert!(second.is_err(), "unexpected extra draw received");
     }
 
+    /// Coalesces mixed immediate and delayed requests to the earliest deadline.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_coalesces_mixed_immediate_and_delayed_requests() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
@@ -231,6 +242,7 @@ mod tests {
         assert!(second.is_err(), "unexpected extra draw received");
     }
 
+    /// Enforces the 60 FPS minimum interval between draws.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_limits_draw_notifications_to_60fps() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
@@ -262,6 +274,7 @@ mod tests {
         assert!(second.is_ok(), "broadcast closed unexpectedly");
     }
 
+    /// Clamps near-term delayed draws so they honor the minimum interval.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_rate_limit_clamps_early_delayed_requests() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
@@ -294,6 +307,7 @@ mod tests {
         assert!(second.is_ok(), "broadcast closed unexpectedly");
     }
 
+    /// Allows later delayed draws to fire on time once the interval passes.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_rate_limit_does_not_delay_future_draws() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
@@ -323,6 +337,7 @@ mod tests {
         assert!(second.is_ok(), "broadcast closed unexpectedly");
     }
 
+    /// Picks the earliest deadline when multiple delayed requests arrive.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_multiple_delayed_requests_coalesce_to_earliest() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);

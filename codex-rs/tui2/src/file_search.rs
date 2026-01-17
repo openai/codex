@@ -31,13 +31,16 @@ use std::time::Duration;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
+/// Maximum number of file search results to return per query.
 const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
+/// Number of worker threads used by the file search backend.
 const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 /// How long to wait after a keystroke before firing the first search when none
 /// is currently running. Keeps early queries more meaningful.
 const FILE_SEARCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
+/// Poll interval used to wait for the active search to finish after debounce.
 const ACTIVE_SEARCH_COMPLETE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// State machine for file-search orchestration.
@@ -45,10 +48,13 @@ pub(crate) struct FileSearchManager {
     /// Unified state guarded by one mutex.
     state: Arc<Mutex<SearchState>>,
 
+    /// Root directory to search within.
     search_dir: PathBuf,
+    /// App event sender used to deliver results.
     app_tx: AppEventSender,
 }
 
+/// Shared mutable state for debounced file searches.
 struct SearchState {
     /// Latest query typed by user (updated every keystroke).
     latest_query: String,
@@ -60,12 +66,16 @@ struct SearchState {
     active_search: Option<ActiveSearch>,
 }
 
+/// Tracks a running search and its cancellation token.
 struct ActiveSearch {
+    /// Query string being searched.
     query: String,
+    /// Cancellation token polled by the search worker.
     cancellation_token: Arc<AtomicBool>,
 }
 
 impl FileSearchManager {
+    /// Create a new file search manager rooted at `search_dir`.
     pub fn new(search_dir: PathBuf, tx: AppEventSender) -> Self {
         Self {
             state: Arc::new(Mutex::new(SearchState {
@@ -155,6 +165,7 @@ impl FileSearchManager {
         });
     }
 
+    /// Spawn the file search worker and deliver results back to the UI.
     fn spawn_file_search(
         query: String,
         search_dir: PathBuf,

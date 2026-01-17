@@ -1,3 +1,22 @@
+//! Scrollable selection list overlay with optional search and footer content.
+//!
+//! This module defines the data structures and renderer for a generic
+//! bottom-pane selection popup. It owns transient selection state, applies an
+//! optional search filter, and dispatches the selected item's actions via
+//! [`AppEventSender`]. The view is responsible for visual layout (header,
+//! search row, list rows, footer) and for keeping the highlighted row visible
+//! as the user navigates.
+//!
+//! It does not interpret the meaning of items or persist selection; callers
+//! provide [`SelectionItem`]s and handle the emitted side effects in their
+//! action closures. Correctness relies on keeping `filtered_indices` aligned
+//! with the `items` vector and on recomputing selection after filtering.
+//!
+//! Selection state is tracked in terms of the filtered (visible) indices, so
+//! callers must re-run filtering whenever the query or item set changes. The
+//! view treats number key shortcuts as direct selection only when search is
+//! disabled, so digits remain available for search input.
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -31,35 +50,66 @@ use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
 use unicode_width::UnicodeWidthStr;
 
-/// One selectable item in the generic selection list.
+/// Action invoked when a selection item is accepted.
+///
+/// Actions receive the shared [`AppEventSender`] so they can enqueue app-level
+/// effects without owning UI state.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
+/// One selectable item rendered by [`ListSelectionView`].
+///
+/// The item owns its display text and optional metadata (shortcuts, current
+/// markers, search text). Action closures run when the item is accepted.
 #[derive(Default)]
 pub(crate) struct SelectionItem {
+    /// Primary label shown in the list.
     pub name: String,
+    /// Optional key hint displayed alongside the label.
     pub display_shortcut: Option<KeyBinding>,
+    /// Secondary description shown when not selected.
     pub description: Option<String>,
+    /// Alternate description shown when this row is selected.
     pub selected_description: Option<String>,
+    /// Marks the row as representing the current choice.
     pub is_current: bool,
+    /// Marks the row as the default choice when no current selection exists.
     pub is_default: bool,
+    /// Actions to run when the item is accepted.
     pub actions: Vec<SelectionAction>,
+    /// Whether accepting this item should close the popup.
     pub dismiss_on_select: bool,
+    /// Search text used when filtering is enabled.
     pub search_value: Option<String>,
 }
 
+/// Configuration used to construct a [`ListSelectionView`].
+///
+/// The header content is rendered above any title/subtitle lines, and the
+/// optional `initial_selected_idx` is expressed in terms of the full `items`
+/// vector, not the filtered list.
 pub(crate) struct SelectionViewParams {
+    /// Optional title line rendered in the header.
     pub title: Option<String>,
+    /// Optional subtitle line rendered beneath the title.
     pub subtitle: Option<String>,
+    /// Optional footer note rendered above the hint line.
     pub footer_note: Option<Line<'static>>,
+    /// Optional footer hint rendered at the bottom of the popup.
     pub footer_hint: Option<Line<'static>>,
+    /// Selection items displayed in the list.
     pub items: Vec<SelectionItem>,
+    /// Whether the list supports free-text filtering.
     pub is_searchable: bool,
+    /// Placeholder shown when the search query is empty.
     pub search_placeholder: Option<String>,
+    /// Optional extra header content rendered above the title/subtitle.
     pub header: Box<dyn Renderable>,
+    /// Optional starting selection index in the full `items` list.
     pub initial_selected_idx: Option<usize>,
 }
 
 impl Default for SelectionViewParams {
+    /// Creates empty parameters with no title, items, or search behavior.
     fn default() -> Self {
         Self {
             title: None,
@@ -75,23 +125,44 @@ impl Default for SelectionViewParams {
     }
 }
 
+/// Renders and manages a selectable list with optional search filtering.
+///
+/// The view stores item state, filtered indices, and a scroll position. It
+/// dispatches the selected item's actions and tracks the last accepted index
+/// so callers can query which item was chosen after dismissal. Selection is
+/// tracked in terms of visible indices, so any change to the filtered list
+/// must be followed by `apply_filter` to keep indices coherent.
 pub(crate) struct ListSelectionView {
+    /// Optional footer note rendered above the hint.
     footer_note: Option<Line<'static>>,
+    /// Optional footer hint rendered at the bottom.
     footer_hint: Option<Line<'static>>,
+    /// All available selection items.
     items: Vec<SelectionItem>,
+    /// Scroll state for the currently visible list rows.
     state: ScrollState,
+    /// Whether the view has completed and should be dismissed.
     complete: bool,
+    /// Event channel used by item actions.
     app_event_tx: AppEventSender,
+    /// Whether the list supports free-text search filtering.
     is_searchable: bool,
+    /// Current search query text.
     search_query: String,
+    /// Placeholder text shown when the search query is empty.
     search_placeholder: Option<String>,
+    /// Indices into `items` that are currently visible.
     filtered_indices: Vec<usize>,
+    /// The last accepted index in the `items` vector.
     last_selected_actual_idx: Option<usize>,
+    /// Header renderer for the popup above the list.
     header: Box<dyn Renderable>,
+    /// Initial selection index supplied by the caller.
     initial_selected_idx: Option<usize>,
 }
 
 impl ListSelectionView {
+    /// Builds a list view from configuration parameters and an event sender.
     pub fn new(params: SelectionViewParams, app_event_tx: AppEventSender) -> Self {
         let mut header = params.header;
         if params.title.is_some() || params.subtitle.is_some() {
@@ -126,14 +197,21 @@ impl ListSelectionView {
         s
     }
 
+    /// Returns the number of currently visible (filtered) rows.
     fn visible_len(&self) -> usize {
         self.filtered_indices.len()
     }
 
+    /// Returns the maximum rows to show given the popup row limit.
     fn max_visible_rows(len: usize) -> usize {
         MAX_POPUP_ROWS.min(len.max(1))
     }
 
+    /// Recomputes the filtered indices and clamps the selection accordingly.
+    ///
+    /// Selection attempts to preserve the previously selected actual index when
+    /// possible, then falls back to any `is_current` item, then to the caller's
+    /// initial selection, and finally to the first visible row.
     fn apply_filter(&mut self) {
         let previously_selected = self
             .state
@@ -184,6 +262,10 @@ impl ListSelectionView {
         self.state.ensure_visible(len, visible);
     }
 
+    /// Builds display rows for the current filtered view.
+    ///
+    /// This applies selection prefixes, numbering (when search is disabled), and
+    /// wraps the selected description in preference to the standard description.
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
         self.filtered_indices
             .iter()
@@ -228,6 +310,7 @@ impl ListSelectionView {
             .collect()
     }
 
+    /// Moves the selection upward and keeps it within the visible window.
     fn move_up(&mut self) {
         let len = self.visible_len();
         self.state.move_up_wrap(len);
@@ -235,6 +318,7 @@ impl ListSelectionView {
         self.state.ensure_visible(len, visible);
     }
 
+    /// Moves the selection downward and keeps it within the visible window.
     fn move_down(&mut self) {
         let len = self.visible_len();
         self.state.move_down_wrap(len);
@@ -242,6 +326,9 @@ impl ListSelectionView {
         self.state.ensure_visible(len, visible);
     }
 
+    /// Accepts the current selection, running actions and updating completion.
+    ///
+    /// If no valid row is selected, the popup completes without invoking any actions.
     fn accept(&mut self) {
         if let Some(idx) = self.state.selected_idx
             && let Some(actual_idx) = self.filtered_indices.get(idx)
@@ -260,21 +347,25 @@ impl ListSelectionView {
     }
 
     #[cfg(test)]
+    /// Sets the search query and updates the filtered list for testing.
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
         self.apply_filter();
     }
 
+    /// Returns and clears the last accepted actual index.
     pub(crate) fn take_last_selected_index(&mut self) -> Option<usize> {
         self.last_selected_actual_idx.take()
     }
 
+    /// Returns the width available for list rows within the popup.
     fn rows_width(total_width: u16) -> u16 {
         total_width.saturating_sub(2)
     }
 }
 
 impl BottomPaneView for ListSelectionView {
+    /// Handles navigation, selection, and search input for the list.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             // Some terminals (or configurations) send Control key chords as
@@ -367,10 +458,12 @@ impl BottomPaneView for ListSelectionView {
         }
     }
 
+    /// Reports whether the list popup has completed.
     fn is_complete(&self) -> bool {
         self.complete
     }
 
+    /// Cancels the popup without choosing an item.
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.complete = true;
         CancellationEvent::Handled
@@ -378,6 +471,10 @@ impl BottomPaneView for ListSelectionView {
 }
 
 impl Renderable for ListSelectionView {
+    /// Computes the total height needed to render the header, list, and footer.
+    ///
+    /// This mirrors the same wrapping logic used at render time so callers can
+    /// size the popup without recomputing layout rules.
     fn desired_height(&self, width: u16) -> u16 {
         // Measure wrapped height for up to MAX_POPUP_ROWS items at the given width.
         // Build the same display rows used by the renderer so wrapping math matches.
@@ -407,6 +504,10 @@ impl Renderable for ListSelectionView {
         height
     }
 
+    /// Renders the header, optional search line, list rows, and footer content.
+    ///
+    /// The header may be elided when it exceeds the available height, in which
+    /// case an instruction line hints at using the full-screen view.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || area.width == 0 {
             return;
@@ -529,6 +630,7 @@ impl Renderable for ListSelectionView {
     }
 }
 
+/// Snapshot coverage for list selection layout and filtering behavior.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,6 +640,7 @@ mod tests {
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
 
+    /// Builds a minimal selection view with optional subtitle content.
     fn make_selection_view(subtitle: Option<&str>) -> ListSelectionView {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -569,10 +672,12 @@ mod tests {
         )
     }
 
+    /// Renders the view using the default snapshot width.
     fn render_lines(view: &ListSelectionView) -> String {
         render_lines_with_width(view, 48)
     }
 
+    /// Renders the view at a custom width for snapshot assertions.
     fn render_lines_with_width(view: &ListSelectionView, width: u16) -> String {
         let height = view.desired_height(width);
         let area = Rect::new(0, 0, width, height);
@@ -596,6 +701,7 @@ mod tests {
         lines.join("\n")
     }
 
+    /// Ensures spacing when there is no subtitle.
     #[test]
     fn renders_blank_line_between_title_and_items_without_subtitle() {
         let view = make_selection_view(None);
@@ -605,12 +711,14 @@ mod tests {
         );
     }
 
+    /// Ensures spacing when both title and subtitle are present.
     #[test]
     fn renders_blank_line_between_subtitle_and_items() {
         let view = make_selection_view(Some("Switch between Codex approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
     }
 
+    /// Verifies footer notes wrap when the view is narrow.
     #[test]
     fn snapshot_footer_note_wraps() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -643,6 +751,7 @@ mod tests {
         );
     }
 
+    /// Renders the search row when the list is searchable.
     #[test]
     fn renders_search_query_line_when_enabled() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -674,6 +783,7 @@ mod tests {
         );
     }
 
+    /// Ensures long entries wrap under the numbered prefix without truncation.
     #[test]
     fn wraps_long_option_without_overflowing_columns() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -715,6 +825,7 @@ mod tests {
         );
     }
 
+    /// Checks that changing width does not drop list rows.
     #[test]
     fn width_changes_do_not_hide_rows() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -769,6 +880,7 @@ mod tests {
         );
     }
 
+    /// Ensures narrow widths still render all rows.
     #[test]
     fn narrow_width_keeps_all_rows_visible() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -797,6 +909,7 @@ mod tests {
         );
     }
 
+    /// Snapshot of the model picker layout at width 80.
     #[test]
     fn snapshot_model_picker_width_80() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -844,6 +957,7 @@ mod tests {
         );
     }
 
+    /// Snapshot of narrow layout preserving all rows.
     #[test]
     fn snapshot_narrow_width_preserves_third_option() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();

@@ -1,10 +1,22 @@
+//! Terminal palette helpers and default color probing.
+//!
+//! This module converts RGB targets into the closest available terminal color
+//! and exposes the current default foreground/background colors when the
+//! platform can query them. Consumers use the palette version counter to
+//! invalidate cached rendering that bakes in those defaults.
+
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+/// Monotonic counter that tracks palette refresh attempts.
 static DEFAULT_PALETTE_VERSION: AtomicU64 = AtomicU64::new(0);
 
+/// Increments the palette version to signal cached renderers to refresh.
+///
+/// The version advances even if the underlying query could not return defaults,
+/// because a refresh attempt still invalidates any cached styling assumptions.
 fn bump_palette_version() {
     DEFAULT_PALETTE_VERSION.fetch_add(1, Ordering::Relaxed);
 }
@@ -33,37 +45,47 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
     }
 }
 
+/// Requeries default terminal colors and bumps the palette version.
 pub fn requery_default_colors() {
     imp::requery_default_colors();
     bump_palette_version();
 }
 
+/// Default terminal colors when the platform can query them.
 #[derive(Clone, Copy)]
 pub struct DefaultColors {
+    /// Default foreground color as an RGB tuple.
     fg: (u8, u8, u8),
+
+    /// Default background color as an RGB tuple.
     bg: (u8, u8, u8),
 }
 
+/// Returns the cached default colors, querying the terminal on first use.
 pub fn default_colors() -> Option<DefaultColors> {
     imp::default_colors()
 }
 
+/// Returns the cached default foreground color, if available.
 pub fn default_fg() -> Option<(u8, u8, u8)> {
     default_colors().map(|c| c.fg)
 }
 
+/// Returns the cached default background color, if available.
 pub fn default_bg() -> Option<(u8, u8, u8)> {
     default_colors().map(|c| c.bg)
 }
 
-/// Returns a monotonic counter that increments whenever `requery_default_colors()` runs
-/// successfully so cached renderers can know when their styling assumptions (e.g.
-/// background colors baked into cached transcript rows) are stale and need invalidation.
+/// Returns a monotonic counter that increments whenever `requery_default_colors()` runs.
+///
+/// Cached renderers use this to detect when styling assumptions (such as default
+/// background colors baked into cached transcript rows) may be stale.
 #[allow(dead_code)]
 pub fn palette_version() -> u64 {
     DEFAULT_PALETTE_VERSION.load(Ordering::Relaxed)
 }
 
+/// Unix-specific implementation for querying terminal defaults.
 #[cfg(all(unix, not(test)))]
 mod imp {
     use super::DefaultColors;
@@ -73,8 +95,12 @@ mod imp {
     use std::sync::Mutex;
     use std::sync::OnceLock;
 
+    /// Cache entry that records whether we attempted a query and the last value.
     struct Cache<T> {
+        /// Whether a query has been attempted.
         attempted: bool,
+
+        /// Cached value from the last successful query.
         value: Option<T>,
     }
 
@@ -88,6 +114,7 @@ mod imp {
     }
 
     impl<T: Copy> Cache<T> {
+        /// Returns the cached value, performing the query on first access.
         fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
             if !self.attempted {
                 self.value = init();
@@ -96,6 +123,7 @@ mod imp {
             self.value
         }
 
+        /// Refreshes the cached value by re-running the query.
         fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
             self.value = init();
             self.attempted = true;
@@ -103,17 +131,20 @@ mod imp {
         }
     }
 
+    /// Shared cache for default foreground/background queries.
     fn default_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
         static CACHE: OnceLock<Mutex<Cache<DefaultColors>>> = OnceLock::new();
         CACHE.get_or_init(|| Mutex::new(Cache::default()))
     }
 
+    /// Returns cached defaults, querying the terminal on first use.
     pub(super) fn default_colors() -> Option<DefaultColors> {
         let cache = default_colors_cache();
         let mut cache = cache.lock().ok()?;
         cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
     }
 
+    /// Requeries terminal defaults if the cache is in a healthy state.
     pub(super) fn requery_default_colors() {
         if let Ok(mut cache) = default_colors_cache().lock() {
             // Don't try to refresh if the cache is already attempted and failed.
@@ -124,12 +155,14 @@ mod imp {
         }
     }
 
+    /// Queries the terminal for its default foreground/background colors.
     fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
         let fg = query_foreground_color()?.and_then(color_to_tuple);
         let bg = query_background_color()?.and_then(color_to_tuple);
         Ok(fg.zip(bg).map(|(fg, bg)| DefaultColors { fg, bg }))
     }
 
+    /// Converts crossterm colors into RGB tuples when available.
     fn color_to_tuple(color: CrosstermColor) -> Option<(u8, u8, u8)> {
         match color {
             CrosstermColor::Rgb { r, g, b } => Some((r, g, b)),
@@ -138,26 +171,32 @@ mod imp {
     }
 }
 
+/// Fallback implementation for platforms that cannot query defaults.
 #[cfg(not(all(unix, not(test))))]
 mod imp {
     use super::DefaultColors;
 
+    /// Returns no defaults because the platform does not support querying.
     pub(super) fn default_colors() -> Option<DefaultColors> {
         None
     }
 
+    /// No-op refresh for unsupported platforms.
     pub(super) fn requery_default_colors() {}
 }
 
-/// The subset of Xterm colors that are usually consistent across terminals.
+/// Returns the subset of Xterm colors that are usually consistent across terminals.
+///
+/// The first 16 palette slots are theme-dependent, so they are skipped.
 fn xterm_fixed_colors() -> impl Iterator<Item = (usize, (u8, u8, u8))> {
     XTERM_COLORS.into_iter().enumerate().skip(16)
 }
 
-// Xterm colors; derived from https://ss64.com/bash/syntax-colors.html
+/// Xterm 256-color palette approximations used for 256-color terminals.
+///
+/// The first 16 entries are theme-dependent and included only as placeholders.
+/// Derived from <https://ss64.com/bash/syntax-colors.html>.
 pub const XTERM_COLORS: [(u8, u8, u8); 256] = [
-    // The first 16 colors vary based on terminal theme, so these are likely not the actual colors
-    // that are displayed when using these indices.
     (0, 0, 0),       //   0 Black (SYSTEM)
     (128, 0, 0),     //   1 Maroon (SYSTEM)
     (0, 128, 0),     //   2 Green (SYSTEM)

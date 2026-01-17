@@ -1,3 +1,10 @@
+//! Shared formatting helpers for the status card.
+//!
+//! These helpers normalize display strings (models, agents, directories, token
+//! counts) so the status card can render consistent, width-aware summaries. The
+//! functions focus on presentation and light normalization; they do not mutate
+//! config, cache results, or perform network I/O.
+
 use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use chrono::DateTime;
@@ -12,10 +19,15 @@ use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
 
+/// Returns a simplified, display-friendly path string for agents metadata.
 fn normalize_agents_display_path(path: &Path) -> String {
     dunce::simplified(path).display().to_string()
 }
 
+/// Returns the model display name plus compact detail tags.
+///
+/// Details are derived from config summary entries so the status card can
+/// surface reasoning settings without duplicating the entire configuration.
 pub(crate) fn compose_model_display(
     model_name: &str,
     entries: &[(&str, String)],
@@ -36,6 +48,10 @@ pub(crate) fn compose_model_display(
     (model_name.to_string(), details)
 }
 
+/// Builds the comma-separated list of agent metadata files for the status card.
+///
+/// Paths are rendered relative to the working directory when possible, falling
+/// back to a simplified absolute display for out-of-tree files.
 pub(crate) fn compose_agents_summary(config: &Config) -> String {
     match discover_project_doc_paths(config) {
         Ok(paths) => {
@@ -49,6 +65,8 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
                     if parent == config.cwd {
                         file_name.clone()
                     } else {
+                        // Walk upward from the working directory to see if the
+                        // file's parent is an ancestor, producing "../" prefixes.
                         let mut cur = config.cwd.as_path();
                         let mut ups = 0usize;
                         let mut reached = false;
@@ -84,6 +102,10 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
     }
 }
 
+/// Builds the account row for the status card based on auth and plan data.
+///
+/// ChatGPT logins return optional email and plan details, while API key auth is
+/// represented by a single marker value.
 pub(crate) fn compose_account_display(
     auth_manager: &AuthManager,
     plan: Option<PlanType>,
@@ -102,6 +124,10 @@ pub(crate) fn compose_account_display(
     }
 }
 
+/// Formats token counts as compact human-readable strings (K/M/B/T).
+///
+/// Values are rounded to 0-2 decimals depending on magnitude, with trailing
+/// zeros trimmed to keep the output short.
 pub(crate) fn format_tokens_compact(value: i64) -> String {
     let value = value.max(0);
     if value == 0 {
@@ -143,6 +169,10 @@ pub(crate) fn format_tokens_compact(value: i64) -> String {
     format!("{formatted}{suffix}")
 }
 
+/// Formats a directory path, optionally truncating to fit the given width.
+///
+/// The home directory is rendered as `~`, and long paths are center-truncated
+/// using display width to keep glyph alignment intact.
 pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize>) -> String {
     let formatted = if let Some(rel) = relativize_to_home(directory) {
         if rel.as_os_str().is_empty() {
@@ -166,6 +196,9 @@ pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize
     formatted
 }
 
+/// Formats a reset timestamp, including the day when it differs from capture.
+///
+/// The date is omitted when the reset occurs on the same local day as capture.
 pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
     let time = dt.format("%H:%M").to_string();
     if dt.date_naive() == captured_at.date_naive() {
@@ -175,6 +208,9 @@ pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<
     }
 }
 
+/// Uppercases the first character and lowercases the rest.
+///
+/// This is a light normalization helper for plan names already in ASCII.
 pub(crate) fn title_case(s: &str) -> String {
     if s.is_empty() {
         return String::new();

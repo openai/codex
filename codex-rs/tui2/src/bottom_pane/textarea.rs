@@ -1,3 +1,16 @@
+//! Minimal multi-line text editor used by bottom-pane input widgets.
+//!
+//! The text area owns an editable string, cursor state, and a cache of wrapped
+//! lines for rendering. It handles common terminal key bindings (including
+//! control-key fallbacks and word-wise navigation) and protects atomic "elements"
+//! such as placeholders from partial edits by treating them as indivisible
+//! ranges. Cursor movement is clamped to UTF-8 boundaries outside those
+//! elements so edits never split placeholders. Rendering is line-wrapped using
+//! the same algorithm as other bottom pane views and honors a scroll offset
+//! stored in [`TextAreaState`]. The editor also maintains a kill buffer for
+//! Emacs-style delete/yank commands and highlights element ranges during
+//! rendering so placeholders remain visually distinct.
+
 use crate::key_hint::is_altgr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -15,40 +28,72 @@ use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Characters treated as word boundaries for word-wise navigation and deletion.
 const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 
+/// Returns whether a character should be considered a word separator.
 fn is_word_separator(ch: char) -> bool {
     WORD_SEPARATORS.contains(ch)
 }
 
+/// Atomic range of text that should be edited as a single unit.
 #[derive(Debug, Clone)]
 struct TextElement {
+    /// Byte range of the element payload within `text`.
+    ///
+    /// Ranges are expected to align to UTF-8 boundaries and must not overlap.
     range: Range<usize>,
 }
 
+/// Editable text buffer with cursor, wrapping cache, and atomic element support.
+///
+/// The text area is responsible for cursor movement, text insertion/deletion,
+/// and preserving the integrity of atomic elements (such as placeholders)
+/// during edits. Cursor positions are byte offsets that are always clamped to
+/// UTF-8 boundaries outside any element, and element ranges are kept sorted to
+/// simplify navigation and rendering. Rendering relies on wrapped line ranges
+/// cached per width to keep cursor positioning and scrolling consistent with
+/// the UI layout.
 #[derive(Debug)]
 pub(crate) struct TextArea {
+    /// Full text buffer, including newlines.
     text: String,
+    /// Cursor position in byte offsets within `text`.
     cursor_pos: usize,
+    /// Cached wrapped lines for a given width.
     wrap_cache: RefCell<Option<WrapCache>>,
+    /// Preferred display column for vertical cursor movement.
     preferred_col: Option<usize>,
+    /// Atomic elements that should not be split by edits.
     elements: Vec<TextElement>,
+    /// Kill buffer used by Emacs-style kill/yank commands.
     kill_buffer: String,
 }
 
+/// Cached wrapping information for a specific terminal width.
 #[derive(Debug, Clone)]
 struct WrapCache {
+    /// Width used to compute the cached line ranges.
     width: u16,
+    /// Byte ranges of each wrapped line in `text`.
+    ///
+    /// The ranges include any trailing newline so renderers can decide whether
+    /// to display or trim it.
     lines: Vec<Range<usize>>,
 }
 
+/// Scroll state for a rendered [`TextArea`].
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct TextAreaState {
     /// Index into wrapped lines of the first visible line.
+    ///
+    /// This index is updated by rendering methods so callers can persist it
+    /// across frames.
     scroll: u16,
 }
 
 impl TextArea {
+    /// Creates an empty text area with no elements or selection state.
     pub fn new() -> Self {
         Self {
             text: String::new(),
@@ -60,6 +105,7 @@ impl TextArea {
         }
     }
 
+    /// Replaces the entire buffer and resets cursor, elements, and caches.
     pub fn set_text(&mut self, text: &str) {
         self.text = text.to_string();
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
@@ -70,14 +116,17 @@ impl TextArea {
         self.kill_buffer.clear();
     }
 
+    /// Returns the full text buffer.
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    /// Inserts text at the current cursor position.
     pub fn insert_str(&mut self, text: &str) {
         self.insert_str_at(self.cursor_pos, text);
     }
 
+    /// Inserts text at the given position, clamping to element boundaries.
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
         let pos = self.clamp_pos_for_insertion(pos);
         self.text.insert_str(pos, text);
@@ -89,11 +138,13 @@ impl TextArea {
         self.preferred_col = None;
     }
 
+    /// Replaces a range with new text, expanding to element boundaries.
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, text: &str) {
         let range = self.expand_range_to_element_boundaries(range);
         self.replace_range_raw(range, text);
     }
 
+    /// Replaces a range without expanding it to element boundaries.
     fn replace_range_raw(&mut self, range: std::ops::Range<usize>, text: &str) {
         assert!(range.start <= range.end);
         let start = range.start.clamp(0, self.text.len());
@@ -127,20 +178,24 @@ impl TextArea {
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
     }
 
+    /// Returns the current cursor position in bytes.
     pub fn cursor(&self) -> usize {
         self.cursor_pos
     }
 
+    /// Moves the cursor to a new byte position, clamped to valid boundaries.
     pub fn set_cursor(&mut self, pos: usize) {
         self.cursor_pos = pos.clamp(0, self.text.len());
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
         self.preferred_col = None;
     }
 
+    /// Returns the number of wrapped lines needed to render at the given width.
     pub fn desired_height(&self, width: u16) -> u16 {
         self.wrapped_lines(width).len() as u16
     }
 
+    /// Computes the cursor position without supplying a scroll state.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.cursor_pos_with_state(area, TextAreaState::default())
@@ -160,15 +215,18 @@ impl TextArea {
         Some((area.x + col, area.y + screen_row))
     }
 
+    /// Returns true if the buffer is empty.
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
 
+    /// Returns the display column of the cursor within its logical line.
     fn current_display_col(&self) -> usize {
         let bol = self.beginning_of_current_line();
         self.text[bol..self.cursor_pos].width()
     }
 
+    /// Finds the wrapped line index that contains the given position.
     fn wrapped_line_index_by_start(lines: &[Range<usize>], pos: usize) -> Option<usize> {
         // partition_point returns the index of the first element for which
         // the predicate is false, i.e. the count of elements with start <= pos.
@@ -176,6 +234,7 @@ impl TextArea {
         if idx == 0 { None } else { Some(idx - 1) }
     }
 
+    /// Moves the cursor to the closest grapheme at the desired display column.
     fn move_to_display_col_on_line(
         &mut self,
         line_start: usize,
@@ -196,23 +255,34 @@ impl TextArea {
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
     }
 
+    /// Returns the byte offset of the start of the line containing `pos`.
     fn beginning_of_line(&self, pos: usize) -> usize {
         self.text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0)
     }
+
+    /// Returns the byte offset of the start of the current line.
     fn beginning_of_current_line(&self) -> usize {
         self.beginning_of_line(self.cursor_pos)
     }
 
+    /// Returns the byte offset of the end of the line containing `pos`.
     fn end_of_line(&self, pos: usize) -> usize {
         self.text[pos..]
             .find('\n')
             .map(|i| i + pos)
             .unwrap_or(self.text.len())
     }
+
+    /// Returns the byte offset of the end of the current line.
     fn end_of_current_line(&self) -> usize {
         self.end_of_line(self.cursor_pos)
     }
 
+    /// Applies a key event to the editor, including navigation and editing.
+    ///
+    /// The handler merges terminal-specific control fallbacks with Emacs-style
+    /// editing shortcuts, then falls back to literal character insertion when
+    /// appropriate.
     pub fn input(&mut self, event: KeyEvent) {
         match event {
             // Some terminals (or configurations) send Control key chords as
@@ -451,7 +521,10 @@ impl TextArea {
         }
     }
 
-    // ####### Input Functions #######
+    /// Deletes up to `n` grapheme clusters before the cursor.
+    ///
+    /// Deletion respects atomic element boundaries so placeholders are removed
+    /// as a unit instead of being split.
     pub fn delete_backward(&mut self, n: usize) {
         if n == 0 || self.cursor_pos == 0 {
             return;
@@ -466,6 +539,10 @@ impl TextArea {
         self.replace_range(target..self.cursor_pos, "");
     }
 
+    /// Deletes up to `n` grapheme clusters after the cursor.
+    ///
+    /// Deletion respects atomic element boundaries so placeholders are removed
+    /// as a unit instead of being split.
     pub fn delete_forward(&mut self, n: usize) {
         if n == 0 || self.cursor_pos >= self.text.len() {
             return;
@@ -480,6 +557,7 @@ impl TextArea {
         self.replace_range(self.cursor_pos..target, "");
     }
 
+    /// Deletes the word immediately before the cursor.
     pub fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
         self.kill_range(start..self.cursor_pos);
@@ -497,6 +575,7 @@ impl TextArea {
         }
     }
 
+    /// Deletes to the end of the current line, including a trailing newline.
     pub fn kill_to_end_of_line(&mut self) {
         let eol = self.end_of_current_line();
         let range = if self.cursor_pos == eol {
@@ -514,6 +593,7 @@ impl TextArea {
         }
     }
 
+    /// Deletes to the beginning of the current line, preserving the newline.
     pub fn kill_to_beginning_of_line(&mut self) {
         let bol = self.beginning_of_current_line();
         let range = if self.cursor_pos == bol {
@@ -527,6 +607,7 @@ impl TextArea {
         }
     }
 
+    /// Inserts the current kill buffer at the cursor.
     pub fn yank(&mut self) {
         if self.kill_buffer.is_empty() {
             return;
@@ -535,6 +616,7 @@ impl TextArea {
         self.insert_str(&text);
     }
 
+    /// Removes a range and stores it in the kill buffer.
     fn kill_range(&mut self, range: Range<usize>) {
         let range = self.expand_range_to_element_boundaries(range);
         if range.start >= range.end {
@@ -562,6 +644,10 @@ impl TextArea {
         self.preferred_col = None;
     }
 
+    /// Moves the cursor one visual line up, preserving the preferred column.
+    ///
+    /// When wrapping metadata is available, navigation moves across wrapped
+    /// lines; otherwise it falls back to logical line boundaries.
     pub fn move_cursor_up(&mut self) {
         // If we have a wrapping cache, prefer navigating across wrapped (visual) lines.
         if let Some((target_col, maybe_line)) = {
@@ -625,6 +711,10 @@ impl TextArea {
         }
     }
 
+    /// Moves the cursor one visual line down, preserving the preferred column.
+    ///
+    /// When wrapping metadata is available, navigation moves across wrapped
+    /// lines; otherwise it falls back to logical line boundaries.
     pub fn move_cursor_down(&mut self) {
         // If we have a wrapping cache, prefer navigating across wrapped (visual) lines.
         if let Some((target_col, move_to_last)) = {
@@ -693,6 +783,7 @@ impl TextArea {
         }
     }
 
+    /// Moves the cursor to the start of the current line.
     pub fn move_cursor_to_beginning_of_line(&mut self, move_up_at_bol: bool) {
         let bol = self.beginning_of_current_line();
         if move_up_at_bol && self.cursor_pos == bol {
@@ -703,6 +794,7 @@ impl TextArea {
         self.preferred_col = None;
     }
 
+    /// Moves the cursor to the end of the current line.
     pub fn move_cursor_to_end_of_line(&mut self, move_down_at_eol: bool) {
         let eol = self.end_of_current_line();
         if move_down_at_eol && self.cursor_pos == eol {
@@ -713,8 +805,7 @@ impl TextArea {
         }
     }
 
-    // ===== Text elements support =====
-
+    /// Returns the payload strings for all tracked elements.
     pub fn element_payloads(&self) -> Vec<String> {
         self.elements
             .iter()
@@ -722,6 +813,7 @@ impl TextArea {
             .collect()
     }
 
+    /// Returns the element payload that starts at the given byte position.
     pub fn element_payload_starting_at(&self, pos: usize) -> Option<String> {
         let pos = pos.min(self.text.len());
         let elem = self.elements.iter().find(|e| e.range.start == pos)?;
@@ -797,6 +889,7 @@ impl TextArea {
         true
     }
 
+    /// Inserts text as an atomic element and places the cursor after it.
     pub fn insert_element(&mut self, text: &str) {
         let start = self.clamp_pos_for_insertion(self.cursor_pos);
         self.insert_str_at(start, text);
@@ -806,18 +899,21 @@ impl TextArea {
         self.set_cursor(end);
     }
 
+    /// Records a new element range and keeps the element list ordered.
     fn add_element(&mut self, range: Range<usize>) {
         let elem = TextElement { range };
         self.elements.push(elem);
         self.elements.sort_by_key(|e| e.range.start);
     }
 
+    /// Finds the index of the element that strictly contains `pos`.
     fn find_element_containing(&self, pos: usize) -> Option<usize> {
         self.elements
             .iter()
             .position(|e| pos > e.range.start && pos < e.range.end)
     }
 
+    /// Clamps a position to the nearest valid UTF-8 character boundary.
     fn clamp_pos_to_char_boundary(&self, pos: usize) -> usize {
         let pos = pos.min(self.text.len());
         if self.text.is_char_boundary(pos) {
@@ -838,6 +934,7 @@ impl TextArea {
         }
     }
 
+    /// Clamps a position to a character boundary outside any element.
     fn clamp_pos_to_nearest_boundary(&self, pos: usize) -> usize {
         let pos = self.clamp_pos_to_char_boundary(pos);
         if let Some(idx) = self.find_element_containing(pos) {
@@ -854,6 +951,7 @@ impl TextArea {
         }
     }
 
+    /// Clamps a position for insertion, snapping to element edges.
     fn clamp_pos_for_insertion(&self, pos: usize) -> usize {
         let pos = self.clamp_pos_to_char_boundary(pos);
         // Do not allow inserting into the middle of an element
@@ -872,6 +970,7 @@ impl TextArea {
         }
     }
 
+    /// Expands a range to fully include any overlapping elements.
     fn expand_range_to_element_boundaries(&self, mut range: Range<usize>) -> Range<usize> {
         // Expand to include any intersecting elements fully
         loop {
@@ -894,6 +993,7 @@ impl TextArea {
         range
     }
 
+    /// Shifts element ranges to account for an insertion or deletion.
     fn shift_elements(&mut self, at: usize, removed: usize, inserted: usize) {
         // Generic shift: for pure insert, removed = 0; for delete, inserted = 0.
         let end = at + removed;
@@ -919,10 +1019,12 @@ impl TextArea {
         }
     }
 
+    /// Updates element ranges after replacing a span of text.
     fn update_elements_after_replace(&mut self, start: usize, end: usize, inserted_len: usize) {
         self.shift_elements(start, end.saturating_sub(start), inserted_len);
     }
 
+    /// Returns the previous cursor boundary, respecting elements and graphemes.
     fn prev_atomic_boundary(&self, pos: usize) -> usize {
         if pos == 0 {
             return 0;
@@ -949,6 +1051,7 @@ impl TextArea {
         }
     }
 
+    /// Returns the next cursor boundary, respecting elements and graphemes.
     fn next_atomic_boundary(&self, pos: usize) -> usize {
         if pos >= self.text.len() {
             return self.text.len();
@@ -975,6 +1078,7 @@ impl TextArea {
         }
     }
 
+    /// Returns the start index of the previous word relative to the cursor.
     pub(crate) fn beginning_of_previous_word(&self) -> usize {
         let prefix = &self.text[..self.cursor_pos];
         let Some((first_non_ws_idx, ch)) = prefix
@@ -996,6 +1100,7 @@ impl TextArea {
         self.adjust_pos_out_of_elements(start, true)
     }
 
+    /// Returns the end index of the next word relative to the cursor.
     pub(crate) fn end_of_next_word(&self) -> usize {
         let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
         else {
@@ -1017,6 +1122,7 @@ impl TextArea {
         self.adjust_pos_out_of_elements(end, false)
     }
 
+    /// Adjusts a position to the nearest element boundary if it falls inside one.
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
         if let Some(idx) = self.find_element_containing(pos) {
             let e = &self.elements[idx];
@@ -1030,6 +1136,10 @@ impl TextArea {
         }
     }
 
+    /// Returns wrapped line ranges for the given width, rebuilding the cache as needed.
+    ///
+    /// The cache uses the same wrapping algorithm as other bottom-pane widgets
+    /// so cursor placement and scrolling line up with rendered text.
     #[expect(clippy::unwrap_used)]
     fn wrapped_lines(&self, width: u16) -> Ref<'_, Vec<Range<usize>>> {
         // Ensure cache is ready (potentially mutably borrow, then drop)
@@ -1087,6 +1197,7 @@ impl TextArea {
 }
 
 impl WidgetRef for &TextArea {
+    /// Renders the text area without applying scroll state.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.wrapped_lines(area.width);
         self.render_lines(area, buf, &lines, 0..lines.len());
@@ -1096,6 +1207,7 @@ impl WidgetRef for &TextArea {
 impl StatefulWidgetRef for &TextArea {
     type State = TextAreaState;
 
+    /// Renders the text area while updating and honoring scroll state.
     fn render_ref(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let lines = self.wrapped_lines(area.width);
         let scroll = self.effective_scroll(area.height, &lines, state.scroll);
@@ -1108,6 +1220,7 @@ impl StatefulWidgetRef for &TextArea {
 }
 
 impl TextArea {
+    /// Renders a subset of wrapped lines into the given buffer.
     fn render_lines(
         &self,
         area: Rect,
@@ -1118,6 +1231,7 @@ impl TextArea {
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
+            // `wrap_ranges` includes the trailing newline, so skip it for display.
             let line_range = r.start..r.end - 1;
             // Draw base line with default style.
             buf.set_string(area.x, y, &self.text[line_range.clone()], Style::default());

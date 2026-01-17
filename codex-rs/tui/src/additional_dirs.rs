@@ -1,3 +1,9 @@
+//! Warning helpers for additional writable directories.
+//!
+//! The TUI needs to explain why `--add-dir` roots might be ignored under a
+//! read-only sandbox. This module formats those warnings without owning any
+//! UI presentation logic.
+
 use codex_core::protocol::SandboxPolicy;
 use std::path::PathBuf;
 
@@ -20,6 +26,7 @@ pub fn add_dir_warning_message(
     }
 }
 
+/// Format the read-only warning for the given additional directories.
 fn format_warning(additional_dirs: &[PathBuf]) -> String {
     let joined_paths = additional_dirs
         .iter()

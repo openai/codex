@@ -2,6 +2,8 @@
 //!
 //! Widgets sometimes call `FrameRequester::schedule_frame()` more frequently than a user can
 //! perceive. This limiter clamps draw notifications to a maximum of 60 FPS to avoid wasted work.
+//! It is applied by the frame scheduler so transient bursts still resolve to the next permissible
+//! deadline rather than dropping draw requests entirely.
 //!
 //! This is intentionally a small, pure helper so it can be unit-tested in isolation and used by
 //! the async frame scheduler without adding complexity to the app/event loop.
@@ -15,6 +17,7 @@ pub(super) const MIN_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667)
 /// Remembers the most recent emitted draw, allowing deadlines to be clamped forward.
 #[derive(Debug, Default)]
 pub(super) struct FrameRateLimiter {
+    /// Timestamp of the last emitted draw notification, if any.
     last_emitted_at: Option<Instant>,
 }
 
@@ -41,6 +44,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// Confirms the first deadline passes through without clamping.
     #[test]
     fn default_does_not_clamp() {
         let t0 = Instant::now();
@@ -48,6 +52,7 @@ mod tests {
         assert_eq!(limiter.clamp_deadline(t0), t0);
     }
 
+    /// Ensures deadlines earlier than the 60 FPS window are pushed forward.
     #[test]
     fn clamps_to_min_interval_since_last_emit() {
         let t0 = Instant::now();

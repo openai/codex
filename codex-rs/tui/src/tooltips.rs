@@ -1,9 +1,18 @@
+//! Tooltip selection and announcement fetching.
+//!
+//! This module provides random tooltip selection from a bundled list and an
+//! optional announcement tip fetched from a remote TOML document. The remote
+//! announcement is cached and filtered by version and date so it can be shown
+//! opportunistically without blocking startup.
+
 use codex_core::features::FEATURES;
 use lazy_static::lazy_static;
 use rand::Rng;
 
+/// Remote TOML file used to fetch announcement tooltips.
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
+/// Bundled tooltip list loaded at compile time.
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
 lazy_static! {
@@ -20,6 +29,7 @@ lazy_static! {
     };
 }
 
+/// Returns beta feature tooltips extracted from feature specs.
 fn beta_tooltips() -> Vec<&'static str> {
     FEATURES
         .iter()
@@ -27,7 +37,9 @@ fn beta_tooltips() -> Vec<&'static str> {
         .collect()
 }
 
-/// Pick a random tooltip to show to the user when starting Codex.
+/// Picks a random tooltip to show to the user when starting Codex.
+///
+/// If an announcement tip is cached and valid, it takes precedence.
 pub(crate) fn random_tooltip() -> Option<String> {
     if let Some(announcement) = announcement::fetch_announcement_tip() {
         return Some(announcement);
@@ -36,6 +48,7 @@ pub(crate) fn random_tooltip() -> Option<String> {
     pick_tooltip(&mut rng).map(str::to_string)
 }
 
+/// Picks a tooltip from the combined list using the provided RNG.
 fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
     if ALL_TOOLTIPS.is_empty() {
         None
@@ -46,6 +59,7 @@ fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
     }
 }
 
+/// Announcement-tip fetching and parsing utilities.
 pub(crate) mod announcement {
     use crate::tooltips::ANNOUNCEMENT_TIP_URL;
     use crate::version::CODEX_CLI_VERSION;
@@ -59,12 +73,12 @@ pub(crate) mod announcement {
 
     static ANNOUNCEMENT_TIP: OnceLock<Option<String>> = OnceLock::new();
 
-    /// Prewarm the cache of the announcement tip.
+    /// Prewarms the cache of the announcement tip on a background thread.
     pub(crate) fn prewarm() {
         let _ = thread::spawn(|| ANNOUNCEMENT_TIP.get_or_init(init_announcement_tip_in_thread));
     }
 
-    /// Fetch the announcement tip, return None if the prewarm is not done yet.
+    /// Fetches the announcement tip if cached, returning `None` when unavailable.
     pub(crate) fn fetch_announcement_tip() -> Option<String> {
         ANNOUNCEMENT_TIP
             .get()
@@ -73,29 +87,44 @@ pub(crate) mod announcement {
             .and_then(|raw| parse_announcement_tip_toml(&raw))
     }
 
+    /// Raw announcement record as decoded from TOML.
     #[derive(Debug, Deserialize)]
     struct AnnouncementTipRaw {
+        /// Tooltip text to display.
         content: String,
+        /// Inclusive start date for display, if provided.
         from_date: Option<String>,
+        /// Exclusive end date for display, if provided.
         to_date: Option<String>,
+        /// Optional regex used to match CLI versions.
         version_regex: Option<String>,
+        /// Optional application filter (defaults to "cli").
         target_app: Option<String>,
     }
 
+    /// Wrapper for TOML documents that embed `announcements`.
     #[derive(Debug, Deserialize)]
     struct AnnouncementTipDocument {
+        /// List of announcement entries.
         announcements: Vec<AnnouncementTipRaw>,
     }
 
+    /// Parsed announcement record with compiled filters.
     #[derive(Debug)]
     struct AnnouncementTip {
+        /// Tooltip text to display.
         content: String,
+        /// Inclusive start date for display, if provided.
         from_date: Option<NaiveDate>,
+        /// Exclusive end date for display, if provided.
         to_date: Option<NaiveDate>,
+        /// Optional regex used to match CLI versions.
         version_regex: Option<Regex>,
+        /// Normalized target app for matching.
         target_app: String,
     }
 
+    /// Initializes the cached announcement tip via a background thread.
     fn init_announcement_tip_in_thread() -> Option<String> {
         thread::spawn(blocking_init_announcement_tip)
             .join()
@@ -103,6 +132,7 @@ pub(crate) mod announcement {
             .flatten()
     }
 
+    /// Fetches the raw announcement tip document with a short timeout.
     fn blocking_init_announcement_tip() -> Option<String> {
         let response = reqwest::blocking::Client::new()
             .get(ANNOUNCEMENT_TIP_URL)
@@ -112,6 +142,7 @@ pub(crate) mod announcement {
         response.error_for_status().ok()?.text().ok()
     }
 
+    /// Parses a TOML document and selects the latest matching announcement.
     pub(crate) fn parse_announcement_tip_toml(text: &str) -> Option<String> {
         let announcements = toml::from_str::<AnnouncementTipDocument>(text)
             .map(|doc| doc.announcements)
@@ -135,6 +166,7 @@ pub(crate) mod announcement {
     }
 
     impl AnnouncementTip {
+        /// Parses a raw record into a validated announcement tip.
         fn from_raw(raw: AnnouncementTipRaw) -> Option<Self> {
             let content = raw.content.trim();
             if content.is_empty() {
@@ -163,12 +195,14 @@ pub(crate) mod announcement {
             })
         }
 
+        /// Returns true when the CLI version matches this tip's constraints.
         fn version_matches(&self, version: &str) -> bool {
             self.version_regex
                 .as_ref()
                 .is_none_or(|regex| regex.is_match(version))
         }
 
+        /// Returns true when today's date falls within the configured window.
         fn date_matches(&self, today: NaiveDate) -> bool {
             if let Some(from) = self.from_date
                 && today < from

@@ -1,29 +1,17 @@
 //! Transcript-selection copy UX helpers.
 //!
-//! # Background
+//! TUI2 owns a logical transcript viewport (with history that can live outside the visible
+//! buffer) plus its own selection model. Terminal-native selection/copy does not work reliably in
+//! this setup because selections can extend outside the viewport, the gutter should not be copied,
+//! and terminals may intercept copy shortcuts before the app sees them.
 //!
-//! TUI2 owns a logical transcript viewport (with history that can live outside the visible buffer),
-//! plus its own selection model. Terminal-native selection/copy does not work reliably in this
-//! setup because:
+//! This module centralizes the effective "copy selection" shortcut, key matching for triggering
+//! copy (including terminal quirks), and the on-screen "⧉ copy …" pill rendered near the selection.
+//! VS Code's integrated terminal typically captures `Ctrl+Shift+C` for its own copy behavior and
+//! does not forward the keypress, so we advertise and accept `Ctrl+Y` there.
 //!
-//! - The selection can extend outside the current viewport, while terminal selection can't.
-//! - We want to exclude non-content regions (like the left gutter) from copied text.
-//! - The terminal may intercept some keybindings before the app ever sees them.
-//!
-//! This module centralizes:
-//!
-//! - The effective "copy selection" shortcut (so the footer and affordance stay in sync).
-//! - Key matching for triggering copy (with terminal quirks handled in one place).
-//! - A small on-screen clickable "⧉ copy …" pill rendered near the current selection.
-//!
-//! # VS Code shortcut rationale
-//!
-//! VS Code's integrated terminal commonly captures `Ctrl+Shift+C` for its own copy behavior and
-//! does not forward the keypress to applications running inside the terminal. Since we can't
-//! observe it via crossterm, we advertise and accept `Ctrl+Y` in that environment.
-//!
-//! Clipboard text reconstruction (preserving indentation, joining soft-wrapped
-//! prose, and emitting Markdown source markers) lives in `transcript_copy`.
+//! Clipboard text reconstruction (preserving indentation, joining soft-wrapped prose, and
+//! emitting Markdown source markers) lives in `transcript_copy`.
 
 use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
@@ -44,10 +32,12 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// The shortcut we advertise and accept for "copy selection".
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CopySelectionShortcut {
+    /// Use `Ctrl+Shift+C` as the advertised and accepted shortcut.
     CtrlShiftC,
+    /// Use `Ctrl+Y` as the advertised and accepted shortcut.
     CtrlY,
 }
 
@@ -67,6 +57,7 @@ pub(crate) fn detect_copy_selection_shortcut() -> CopySelectionShortcut {
     CopySelectionShortcut::CtrlShiftC
 }
 
+/// Map the shortcut variant to a renderable key binding label.
 pub(crate) fn key_binding_for(shortcut: CopySelectionShortcut) -> KeyBinding {
     match shortcut {
         CopySelectionShortcut::CtrlShiftC => key_hint::ctrl_shift(KeyCode::Char('c')),
@@ -105,8 +96,11 @@ pub(crate) fn is_copy_selection_key(
 /// This tracks a `Rect` for hit-testing so we can treat the pill as a clickable button.
 #[derive(Debug)]
 pub(crate) struct TranscriptCopyUi {
+    /// The active shortcut to advertise and match against incoming key events.
     shortcut: CopySelectionShortcut,
+    /// Whether the user is actively dragging a selection.
     dragging: bool,
+    /// Last rendered pill location for mouse hit-testing.
     affordance_rect: Option<Rect>,
 }
 
@@ -120,18 +114,22 @@ impl TranscriptCopyUi {
         }
     }
 
+    /// Return the keybinding label to render in the copy pill.
     pub(crate) fn key_binding(&self) -> KeyBinding {
         key_binding_for(self.shortcut)
     }
 
+    /// Return `true` if the given keypress should trigger a copy action.
     pub(crate) fn is_copy_key(&self, ch: char, modifiers: KeyModifiers) -> bool {
         is_copy_selection_key(self.shortcut, ch, modifiers)
     }
 
+    /// Set whether the user is actively dragging a selection.
     pub(crate) fn set_dragging(&mut self, dragging: bool) {
         self.dragging = dragging;
     }
 
+    /// Clear the cached hit-test rectangle so clicks are ignored.
     pub(crate) fn clear_affordance(&mut self) {
         self.affordance_rect = None;
     }
@@ -313,6 +311,7 @@ impl TranscriptCopyUi {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
 
     fn buf_to_string(buf: &Buffer, area: Rect) -> String {

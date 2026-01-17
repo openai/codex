@@ -101,12 +101,17 @@ pub(crate) struct TranscriptLinesWithJoiners {
     pub(crate) joiner_before: Vec<Option<String>>,
 }
 
-/// Represents an event to display in the conversation history. Returns its
-/// `Vec<Line<'static>>` representation to make it easier to display in a
-/// scrollable list.
+/// Represents a unit of conversation history that can render itself for the UI.
+///
+/// Each cell owns the data needed to render a discrete event in the chat
+/// transcript. The TUI renders these cells into a scrolling list and may ask
+/// for alternate transcript output (for the overlay) or a time-based animation
+/// tick when a cell's visual output depends on elapsed time.
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
+    /// Returns the lines to render in the main chat viewport for the given width.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
+    /// Returns the wrapped height of `display_lines` for layout decisions.
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines(width)))
             .wrap(Wrap { trim: false })
@@ -115,6 +120,10 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
             .unwrap_or(0)
     }
 
+    /// Returns the lines to render in the transcript overlay for the given width.
+    ///
+    /// The default mirrors `display_lines`, but cells can override this to omit
+    /// view-only content or adjust formatting for the transcript.
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.display_lines(width)
     }
@@ -145,6 +154,7 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         }
     }
 
+    /// Returns the wrapped height of `transcript_lines` for transcript layout.
     fn desired_transcript_height(&self, width: u16) -> u16 {
         let lines = self.transcript_lines(width);
         // Workaround for ratatui bug: if there's only one line and it's whitespace-only, ratatui gives 2 lines.
@@ -164,6 +174,7 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
             .unwrap_or(0)
     }
 
+    /// Returns whether this cell continues a streaming message from the previous line.
     fn is_stream_continuation(&self) -> bool {
         false
     }
@@ -184,6 +195,7 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 }
 
 impl Renderable for Box<dyn HistoryCell> {
+    /// Renders the history cell by scrolling to the visible tail when needed.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.display_lines(area.width);
         let y = if area.height == 0 {
@@ -196,23 +208,28 @@ impl Renderable for Box<dyn HistoryCell> {
             .scroll((y, 0))
             .render(area, buf);
     }
+    /// Returns the desired height using the underlying `HistoryCell` implementation.
     fn desired_height(&self, width: u16) -> u16 {
         HistoryCell::desired_height(self.as_ref(), width)
     }
 }
 
 impl dyn HistoryCell {
+    /// Downcasts the cell to `Any` for type-erased inspection.
     pub(crate) fn as_any(&self) -> &dyn Any {
         self
     }
 
+    /// Downcasts the cell to `Any` for mutable type-erased inspection.
     pub(crate) fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
 
+/// Renders a user-authored message with the live-prefix styling.
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
+    /// Raw user-entered content to render in the transcript.
     pub message: String,
 }
 
@@ -259,14 +276,19 @@ impl HistoryCell for UserHistoryCell {
     }
 }
 
+/// Renders a condensed, dimmed summary of a reasoning block.
 #[derive(Debug)]
 pub(crate) struct ReasoningSummaryCell {
+    /// Markdown header extracted from a reasoning summary, if present.
     _header: String,
+    /// Summary content rendered as dim, italicized markdown.
     content: String,
+    /// Whether the cell should render only in transcript view.
     transcript_only: bool,
 }
 
 impl ReasoningSummaryCell {
+    /// Creates a reasoning summary cell from its parsed header/content.
     pub(crate) fn new(header: String, content: String, transcript_only: bool) -> Self {
         Self {
             _header: header,
@@ -275,10 +297,12 @@ impl ReasoningSummaryCell {
         }
     }
 
+    /// Formats the summary as dim, wrapped markdown lines.
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines_with_joiners(width).lines
     }
 
+    /// Formats the summary with joiner metadata for transcript copy.
     fn lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
         let mut lines: Vec<Line<'static>> = Vec::new();
         append_markdown(
@@ -516,12 +540,15 @@ impl HistoryCell for AgentMessageCell {
     }
 }
 
+/// Re-emits preformatted lines with no additional wrapping.
 #[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
+    /// Lines to render verbatim in the history list.
     lines: Vec<Line<'static>>,
 }
 
 impl PlainHistoryCell {
+    /// Creates a history cell that reuses the provided lines verbatim.
     pub(crate) fn new(lines: Vec<Line<'static>>) -> Self {
         Self { lines }
     }
@@ -533,15 +560,19 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+/// Displays the "update available" notice when a newer CLI is detected.
 #[cfg_attr(debug_assertions, allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct UpdateAvailableHistoryCell {
+    /// Latest version string discovered by the update checker.
     latest_version: String,
+    /// Optional upgrade action to show in the hint line.
     update_action: Option<UpdateAction>,
 }
 
 #[cfg_attr(debug_assertions, allow(dead_code))]
 impl UpdateAvailableHistoryCell {
+    /// Creates an update notice with optional CLI upgrade guidance.
     pub(crate) fn new(latest_version: String, update_action: Option<UpdateAction>) -> Self {
         Self {
             latest_version,
@@ -587,14 +618,19 @@ impl HistoryCell for UpdateAvailableHistoryCell {
     }
 }
 
+/// Wraps `Text` and prefixes its wrapped lines with custom per-line prefixes.
 #[derive(Debug)]
 pub(crate) struct PrefixedWrappedHistoryCell {
+    /// Text payload to wrap into display lines.
     text: Text<'static>,
+    /// Prefix used for the first wrapped line.
     initial_prefix: Line<'static>,
+    /// Prefix used for subsequent wrapped lines.
     subsequent_prefix: Line<'static>,
 }
 
 impl PrefixedWrappedHistoryCell {
+    /// Builds a prefixed wrapper that controls first vs subsequent indents.
     pub(crate) fn new(
         text: impl Into<Text<'static>>,
         initial_prefix: impl Into<Line<'static>>,
@@ -636,6 +672,7 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
     }
 }
 
+/// Truncates a full command into a short, single-line snippet.
 fn truncate_exec_snippet(full_cmd: &str) -> String {
     let mut snippet = match full_cmd.split_once('\n') {
         Some((first, _)) => format!("{first} ..."),
@@ -645,11 +682,13 @@ fn truncate_exec_snippet(full_cmd: &str) -> String {
     snippet
 }
 
+/// Returns a display-friendly snippet for a shell command vector.
 fn exec_snippet(command: &[String]) -> String {
     let full_cmd = strip_bash_lc_and_escape(command);
     truncate_exec_snippet(&full_cmd)
 }
 
+/// Builds the approval decision line for exec review events.
 pub fn new_approval_decision_cell(
     command: Vec<String>,
     decision: codex_core::protocol::ReviewDecision,
@@ -736,9 +775,12 @@ pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
     }
 }
 
+/// Renders a diff summary for a pending patch or patch application.
 #[derive(Debug)]
 pub(crate) struct PatchHistoryCell {
+    /// Map of file changes keyed by path.
     changes: HashMap<PathBuf, FileChange>,
+    /// Working directory used for display path relativization.
     cwd: PathBuf,
 }
 
@@ -748,8 +790,10 @@ impl HistoryCell for PatchHistoryCell {
     }
 }
 
+/// Marker cell used when an MCP tool returns image output.
 #[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
+    /// Decoded image payload for future image-specific rendering.
     _image: DynamicImage,
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
@@ -758,8 +802,10 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     }
 }
 
+/// Upper bound for the session header card's inner width.
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
+/// Computes the inner content width for a bordered card, if space allows.
 pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
     if width < 4 {
         return None;
@@ -785,6 +831,7 @@ pub(crate) fn with_border_with_inner_width(
     with_border_internal(lines, Some(inner_width))
 }
 
+/// Computes the padded bordered output for a set of lines.
 fn with_border_internal(
     lines: Vec<Line<'static>>,
     forced_inner_width: Option<usize>,
@@ -834,12 +881,15 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
     format!("{emoji}\u{200A}")
 }
 
+/// Renders a short tooltip snippet in the transcript.
 #[derive(Debug)]
 struct TooltipHistoryCell {
+    /// Tooltip message already formatted as markdown.
     tip: String,
 }
 
 impl TooltipHistoryCell {
+    /// Wraps a tooltip string for display.
     fn new(tip: String) -> Self {
         Self { tip }
     }
@@ -863,6 +913,7 @@ impl HistoryCell for TooltipHistoryCell {
     }
 }
 
+/// Wraps the session header and optional follow-up lines into one cell.
 #[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
@@ -880,6 +931,7 @@ impl HistoryCell for SessionInfoCell {
     }
 }
 
+/// Builds the session header cell and associated helper text.
 pub(crate) fn new_session_info(
     config: &Config,
     requested_model: &str,
@@ -955,20 +1007,28 @@ pub(crate) fn new_session_info(
     SessionInfoCell(CompositeHistoryCell { parts })
 }
 
+/// Creates a new user-entered message cell.
 pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
     UserHistoryCell { message }
 }
 
+/// Renders the top-of-session header card shown in the transcript.
 #[derive(Debug)]
 pub(crate) struct SessionHeaderHistoryCell {
+    /// CLI version string shown in the header title line.
     version: &'static str,
+    /// Model name presented in the header.
     model: String,
+    /// Style override for the model name.
     model_style: Style,
+    /// Reasoning effort label, when the model supports it.
     reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Working directory displayed under the model line.
     directory: PathBuf,
 }
 
 impl SessionHeaderHistoryCell {
+    /// Creates a header cell with the provided model styling.
     pub(crate) fn new(
         model: String,
         model_style: Style,
@@ -979,6 +1039,7 @@ impl SessionHeaderHistoryCell {
         Self::new_with_style(model, model_style, reasoning_effort, directory, version)
     }
 
+    /// Creates a header cell that applies a custom style to the model name.
     pub(crate) fn new_with_style(
         model: String,
         model_style: Style,
@@ -995,10 +1056,12 @@ impl SessionHeaderHistoryCell {
         }
     }
 
+    /// Formats the session directory, optionally truncating to fit a width.
     fn format_directory(&self, max_width: Option<usize>) -> String {
         Self::format_directory_inner(&self.directory, max_width)
     }
 
+    /// Formats the directory path using a `~` home prefix and truncation.
     fn format_directory_inner(directory: &Path, max_width: Option<usize>) -> String {
         let formatted = if let Some(rel) = relativize_to_home(directory) {
             if rel.as_os_str().is_empty() {
@@ -1022,6 +1085,7 @@ impl SessionHeaderHistoryCell {
         formatted
     }
 
+    /// Maps reasoning effort config into a human-readable label.
     fn reasoning_label(&self) -> Option<&'static str> {
         self.reasoning_effort.map(|effort| match effort {
             ReasoningEffortConfig::Minimal => "minimal",
@@ -1090,12 +1154,15 @@ impl HistoryCell for SessionHeaderHistoryCell {
     }
 }
 
+/// Renders multiple history cells as a single composite entry.
 #[derive(Debug)]
 pub(crate) struct CompositeHistoryCell {
+    /// Ordered child cells that make up this composite entry.
     parts: Vec<Box<dyn HistoryCell>>,
 }
 
 impl CompositeHistoryCell {
+    /// Creates a composite history entry from the provided child cells.
     pub(crate) fn new(parts: Vec<Box<dyn HistoryCell>>) -> Self {
         Self { parts }
     }
@@ -1119,17 +1186,25 @@ impl HistoryCell for CompositeHistoryCell {
     }
 }
 
+/// Renders an MCP tool call and its eventual output or error.
 #[derive(Debug)]
 pub(crate) struct McpToolCallCell {
+    /// Unique call identifier used for correlation and completion.
     call_id: String,
+    /// Tool invocation metadata (server, tool, arguments).
     invocation: McpInvocation,
+    /// Start time used for elapsed-time display and animation ticks.
     start_time: Instant,
+    /// Total duration once the call completes.
     duration: Option<Duration>,
+    /// Tool output or failure message, once available.
     result: Option<Result<mcp_types::CallToolResult, String>>,
+    /// Whether time-based animations are enabled in the UI.
     animations_enabled: bool,
 }
 
 impl McpToolCallCell {
+    /// Creates an in-flight MCP tool call cell.
     pub(crate) fn new(
         call_id: String,
         invocation: McpInvocation,
@@ -1145,10 +1220,12 @@ impl McpToolCallCell {
         }
     }
 
+    /// Returns the stable call identifier for matching updates.
     pub(crate) fn call_id(&self) -> &str {
         &self.call_id
     }
 
+    /// Marks the tool call as complete and returns an optional image cell.
     pub(crate) fn complete(
         &mut self,
         duration: Duration,
@@ -1161,6 +1238,7 @@ impl McpToolCallCell {
         image_cell
     }
 
+    /// Returns success state once the tool call has completed.
     fn success(&self) -> Option<bool> {
         match self.result.as_ref() {
             Some(Ok(result)) => Some(!result.is_error.unwrap_or(false)),
@@ -1169,12 +1247,14 @@ impl McpToolCallCell {
         }
     }
 
+    /// Records an interrupted call result using the elapsed time so far.
     pub(crate) fn mark_failed(&mut self) {
         let elapsed = self.start_time.elapsed();
         self.duration = Some(elapsed);
         self.result = Some(Err("interrupted".to_string()));
     }
 
+    /// Formats a content block into a displayable string snippet.
     fn render_content_block(block: &mcp_types::ContentBlock, width: usize) -> String {
         match block {
             mcp_types::ContentBlock::TextContent(text) => {
@@ -1295,6 +1375,7 @@ impl HistoryCell for McpToolCallCell {
     }
 }
 
+/// Creates an in-flight MCP tool call cell that animates while running.
 pub(crate) fn new_active_mcp_tool_call(
     call_id: String,
     invocation: McpInvocation,
@@ -1303,6 +1384,7 @@ pub(crate) fn new_active_mcp_tool_call(
     McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
+/// Renders a "searched" history cell for web tool usage.
 pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
     let text: Text<'static> = Line::from(vec!["Searched".bold(), " ".into(), query.into()]).into();
     PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
@@ -1348,17 +1430,22 @@ fn try_new_completed_mcp_tool_call_with_image_output(
     }
 }
 
+/// Renders a yellow warning line in the transcript.
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
 }
 
+/// Renders a structured deprecation warning with an optional detail line.
 #[derive(Debug)]
 pub(crate) struct DeprecationNoticeCell {
+    /// Short summary of the deprecation.
     summary: String,
+    /// Optional follow-up detail describing what to do next.
     details: Option<String>,
 }
 
+/// Creates a deprecation notice cell for the transcript.
 pub(crate) fn new_deprecation_notice(
     summary: String,
     details: Option<String>,
@@ -1569,6 +1656,8 @@ pub(crate) fn new_mcp_tools_output(
 
     PlainHistoryCell { lines }
 }
+
+/// Renders an informational event with an optional dim hint.
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
     let mut line = vec!["• ".dim(), message.into()];
     if let Some(hint) = hint {
@@ -1579,6 +1668,7 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
+/// Renders a red error line for a user-facing event.
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
@@ -1593,9 +1683,12 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
+/// Renders a plan update with optional explanation and step statuses.
 #[derive(Debug)]
 pub(crate) struct PlanUpdateCell {
+    /// Optional explanation string shown above the steps.
     explanation: Option<String>,
+    /// Ordered plan items to display as a checklist.
     plan: Vec<PlanItemArg>,
 }
 
@@ -1666,6 +1759,7 @@ pub(crate) fn new_patch_event(
     }
 }
 
+/// Renders the stderr from a failed patch apply as a history cell.
 pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -1692,6 +1786,7 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+/// Renders the history entry for an image view tool call.
 pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistoryCell {
     let display_path = display_path_for(&path, cwd);
 
@@ -1703,6 +1798,7 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
+/// Parses a reasoning buffer into a summary cell with optional header stripping.
 pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
     // Experimental format is following:
     // ** header **
@@ -1735,13 +1831,14 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
     ))
 }
 
-#[derive(Debug)]
 /// A visual divider between turns, optionally showing how long the assistant "worked for".
 ///
 /// This separator is only emitted for turns that performed concrete work (e.g., running commands,
 /// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
 /// divider.
+#[derive(Debug)]
 pub struct FinalMessageSeparator {
+    /// Total elapsed time for the completed turn, when tracked.
     elapsed_seconds: Option<u64>,
 }
 impl FinalMessageSeparator {
@@ -1771,6 +1868,7 @@ impl HistoryCell for FinalMessageSeparator {
     }
 }
 
+/// Formats an MCP tool invocation into a compact `server.tool(args)` line.
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     let args_str = invocation
         .arguments

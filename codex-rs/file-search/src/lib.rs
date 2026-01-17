@@ -1,3 +1,13 @@
+//! Fuzzy file search used by the CLI and TUI.
+//!
+//! This crate walks a directory tree, scores file paths with `nucleo_matcher`,
+//! and returns the highest-ranked matches. The search runs in parallel using
+//! `ignore::WalkParallel`, with each worker maintaining its own local heap of
+//! best matches; results are merged after traversal.
+//!
+//! Cancellation is cooperative: workers periodically check a shared flag so
+//! callers can stop long searches without tearing down threads.
+
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use nucleo_matcher::Matcher;
@@ -50,16 +60,29 @@ pub fn file_name_from_path(path: &str) -> String {
 
 #[derive(Debug)]
 pub struct FileSearchResults {
+    /// Top matches, already sorted by score and name for stable output.
     pub matches: Vec<FileMatch>,
+    /// Total number of files that matched the query before truncation.
     pub total_match_count: usize,
 }
 
+/// Reporting interface used by the CLI wrapper.
+///
+/// `run_main` emits matches as it streams them and uses the warning hooks to
+/// explain truncation or missing search patterns.
 pub trait Reporter {
+    /// Emit a single matched file.
     fn report_match(&self, file_match: &FileMatch);
+    /// Warn that some matches were omitted due to the limit.
     fn warn_matches_truncated(&self, total_match_count: usize, shown_match_count: usize);
+    /// Warn that no search pattern was provided.
     fn warn_no_search_pattern(&self, search_directory: &Path);
 }
 
+/// CLI entry point that resolves arguments, runs the search, and reports output.
+///
+/// When no pattern is provided, this prints a directory listing to stderr/stdout
+/// (platform-specific) and returns successfully.
 pub async fn run_main<T: Reporter>(
     Cli {
         pattern,
@@ -129,8 +152,11 @@ pub async fn run_main<T: Reporter>(
     Ok(())
 }
 
-/// The worker threads will periodically check `cancel_flag` to see if they
-/// should stop processing files.
+/// Run a fuzzy search over files rooted at `search_directory`.
+///
+/// The worker threads periodically check `cancel_flag` to see if they should
+/// stop processing files. `respect_gitignore` controls whether git ignore rules
+/// are applied by the walker.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     pattern_text: &str,

@@ -1,3 +1,9 @@
+//! Update checking and version caching for the CLI.
+//!
+//! This module fetches the latest available version, caches it on disk, and
+//! exposes helpers to decide whether to show an update prompt. Network checks
+//! are performed asynchronously to avoid blocking startup.
+
 #![cfg(not(debug_assertions))]
 
 use crate::update_action;
@@ -14,6 +20,7 @@ use std::path::PathBuf;
 
 use crate::version::CODEX_CLI_VERSION;
 
+/// Returns the latest available version if it is newer than the current CLI.
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     if !config.check_for_update_on_startup {
         return None;
@@ -45,35 +52,49 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     })
 }
 
+/// Cached version information stored on disk.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VersionInfo {
+    /// Latest available version string.
     latest_version: String,
     // ISO-8601 timestamp (RFC3339)
+    /// Last time the version check ran.
     last_checked_at: DateTime<Utc>,
     #[serde(default)]
+    /// Version dismissed by the user, if any.
     dismissed_version: Option<String>,
 }
 
+/// Filename used to store the version cache.
 const VERSION_FILENAME: &str = "version.json";
-// We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
+/// Homebrew cask source used to determine the latest version.
+///
+/// We use the latest version from the cask when installation is via Homebrew, because casks can
+/// lag behind the latest GitHub release.
 const HOMEBREW_CASK_URL: &str =
     "https://raw.githubusercontent.com/Homebrew/homebrew-cask/HEAD/Casks/c/codex.rb";
+/// GitHub API endpoint for the latest release tag.
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
 
+/// Subset of GitHub release metadata needed for version extraction.
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
+    /// Tag name associated with the latest release (for example `rust-vX.Y.Z`).
     tag_name: String,
 }
 
+/// Returns the on-disk path used to cache version info.
 fn version_filepath(config: &Config) -> PathBuf {
     config.codex_home.join(VERSION_FILENAME)
 }
 
+/// Loads cached version info from disk.
 fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     let contents = std::fs::read_to_string(version_file)?;
     Ok(serde_json::from_str(&contents)?)
 }
 
+/// Refreshes the cached latest version from the network.
 async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     let latest_version = match update_action::get_update_action() {
         Some(UpdateAction::BrewUpgrade) => {
@@ -116,6 +137,7 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Returns true when `latest` parses and is greater than `current`.
 fn is_newer(latest: &str, current: &str) -> Option<bool> {
     match (parse_version(latest), parse_version(current)) {
         (Some(l), Some(c)) => Some(l > c),
@@ -123,6 +145,7 @@ fn is_newer(latest: &str, current: &str) -> Option<bool> {
     }
 }
 
+/// Extracts the version string from a Homebrew cask file.
 fn extract_version_from_cask(cask_contents: &str) -> anyhow::Result<String> {
     cask_contents
         .lines()
@@ -135,6 +158,7 @@ fn extract_version_from_cask(cask_contents: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("Failed to find version in Homebrew cask file"))
 }
 
+/// Extracts a version from a release tag of the form `rust-vX.Y.Z`.
 fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
     latest_tag_name
         .strip_prefix("rust-v")
@@ -177,6 +201,7 @@ pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<(
     Ok(())
 }
 
+/// Parses a semver-like string into a `(major, minor, patch)` tuple.
 fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let mut iter = v.trim().split('.');
     let maj = iter.next()?.parse::<u64>().ok()?;

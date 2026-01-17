@@ -1,20 +1,32 @@
+//! Formatting helpers for status card rows and spans.
+//!
+//! This module aligns labels, indents wrapped values, and truncates `Line` values
+//! using display widths so the status card remains readable in narrow layouts.
+
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+/// Precomputes label widths and indentation used by status card fields.
 #[derive(Debug, Clone)]
 pub(crate) struct FieldFormatter {
+    /// Prefix inserted before each label.
     indent: &'static str,
+    /// Maximum display width across all labels.
     label_width: usize,
+    /// Column where values begin (indent + label + colon + spacing).
     value_offset: usize,
+    /// Cached indentation used for wrapped value lines.
     value_indent: String,
 }
 
 impl FieldFormatter {
+    /// Base indent used before labels.
     pub(crate) const INDENT: &'static str = " ";
 
+    /// Builds a formatter using the maximum label width from the provided labels.
     pub(crate) fn from_labels<S>(labels: impl IntoIterator<Item = S>) -> Self
     where
         S: AsRef<str>,
@@ -35,6 +47,7 @@ impl FieldFormatter {
         }
     }
 
+    /// Builds a single line containing the formatted label and value spans.
     pub(crate) fn line(
         &self,
         label: &'static str,
@@ -43,6 +56,7 @@ impl FieldFormatter {
         Line::from(self.full_spans(label, value_spans))
     }
 
+    /// Builds a continuation line aligned to the value column.
     pub(crate) fn continuation(&self, mut spans: Vec<Span<'static>>) -> Line<'static> {
         let mut all_spans = Vec::with_capacity(spans.len() + 1);
         all_spans.push(Span::from(self.value_indent.clone()).dim());
@@ -50,10 +64,12 @@ impl FieldFormatter {
         Line::from(all_spans)
     }
 
+    /// Returns the maximum width available for values inside a bordered card.
     pub(crate) fn value_width(&self, available_inner_width: usize) -> usize {
         available_inner_width.saturating_sub(self.value_offset)
     }
 
+    /// Returns the formatted label span followed by the provided value spans.
     pub(crate) fn full_spans(
         &self,
         label: &str,
@@ -65,6 +81,7 @@ impl FieldFormatter {
         spans
     }
 
+    /// Builds the label span with padding so values align in a column.
     fn label_span(&self, label: &str) -> Span<'static> {
         let mut buf = String::with_capacity(self.value_offset);
         buf.push_str(self.indent);
@@ -82,6 +99,7 @@ impl FieldFormatter {
     }
 }
 
+/// Adds a label to the ordered list if it has not been seen before.
 pub(crate) fn push_label(labels: &mut Vec<String>, seen: &mut BTreeSet<String>, label: &str) {
     if seen.contains(label) {
         return;
@@ -92,12 +110,17 @@ pub(crate) fn push_label(labels: &mut Vec<String>, seen: &mut BTreeSet<String>, 
     labels.push(owned);
 }
 
+/// Computes the display width of a line by summing its spans.
 pub(crate) fn line_display_width(line: &Line<'static>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
 }
 
+/// Truncates a line to the requested display width without adding ellipses.
+///
+/// Styling is preserved on the spans that remain; truncation happens at a
+/// character boundary using display width.
 pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());

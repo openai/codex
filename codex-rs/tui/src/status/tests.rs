@@ -1,3 +1,10 @@
+//! Snapshot and invariant tests for the status card rendering pipeline.
+//!
+//! These tests build deterministic `Config`, `AuthManager`, and usage inputs, render the status
+//! output via `new_status_output`, and assert against the rendered lines. The helpers normalize
+//! platform quirks (like Windows path separators) and scrub workspace paths so snapshots stay
+//! stable across machines.
+
 use super::new_status_output;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
@@ -22,6 +29,7 @@ use ratatui::prelude::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+/// Builds a minimal `Config` rooted at a temporary Codex home directory.
 async fn test_config(temp_home: &TempDir) -> Config {
     ConfigBuilder::default()
         .codex_home(temp_home.path().to_path_buf())
@@ -30,6 +38,7 @@ async fn test_config(temp_home: &TempDir) -> Config {
         .expect("load config")
 }
 
+/// Constructs an `AuthManager` that mirrors the test config's storage settings.
 fn test_auth_manager(config: &Config) -> AuthManager {
     AuthManager::new(
         config.codex_home.clone(),
@@ -38,6 +47,7 @@ fn test_auth_manager(config: &Config) -> AuthManager {
     )
 }
 
+/// Creates `TokenUsageInfo` using offline model metadata and a mirrored usage snapshot.
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
     let context_window =
         ModelsManager::construct_model_info_offline(model_slug, config).context_window;
@@ -48,6 +58,7 @@ fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> Toke
     }
 }
 
+/// Flattens styled lines into plain strings for snapshot and substring assertions.
 fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
     lines
         .iter()
@@ -60,6 +71,7 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
         .collect()
 }
 
+/// Scrubs the rendered directory line to keep snapshots stable across workspaces.
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
@@ -83,12 +95,14 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// Converts a local timestamp plus an offset into a UTC epoch-seconds value.
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {
     (*captured_at + ChronoDuration::seconds(seconds))
         .with_timezone(&Utc)
         .timestamp()
 }
 
+/// Renders a full snapshot with reasoning details and sandbox policy information.
 #[tokio::test]
 async fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");
@@ -163,6 +177,7 @@ async fn status_snapshot_includes_reasoning_details() {
     assert_snapshot!(sanitized);
 }
 
+/// Ensures forked-from session metadata is rendered in the status header snapshot.
 #[tokio::test]
 async fn status_snapshot_includes_forked_from() {
     let temp_home = TempDir::new().expect("temp home");
@@ -214,6 +229,7 @@ async fn status_snapshot_includes_forked_from() {
     assert_snapshot!(sanitized);
 }
 
+/// Captures a monthly-rate limit window snapshot to verify long-window formatting.
 #[tokio::test]
 async fn status_snapshot_includes_monthly_limit() {
     let temp_home = TempDir::new().expect("temp home");
@@ -271,6 +287,7 @@ async fn status_snapshot_includes_monthly_limit() {
     assert_snapshot!(sanitized);
 }
 
+/// Asserts the credits line shows an unlimited balance when the snapshot is unlimited.
 #[tokio::test]
 async fn status_snapshot_shows_unlimited_credits() {
     let temp_home = TempDir::new().expect("temp home");
@@ -315,6 +332,7 @@ async fn status_snapshot_shows_unlimited_credits() {
     );
 }
 
+/// Verifies that positive credit balances are rounded and displayed in the credits line.
 #[tokio::test]
 async fn status_snapshot_shows_positive_credits() {
     let temp_home = TempDir::new().expect("temp home");
@@ -359,6 +377,7 @@ async fn status_snapshot_shows_positive_credits() {
     );
 }
 
+/// Ensures a zero credit balance suppresses the credits line entirely.
 #[tokio::test]
 async fn status_snapshot_hides_zero_credits() {
     let temp_home = TempDir::new().expect("temp home");
@@ -401,6 +420,7 @@ async fn status_snapshot_hides_zero_credits() {
     );
 }
 
+/// Ensures `has_credits = false` suppresses the credits line even if unlimited is set.
 #[tokio::test]
 async fn status_snapshot_hides_when_has_no_credits_flag() {
     let temp_home = TempDir::new().expect("temp home");
@@ -443,6 +463,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
     );
 }
 
+/// Confirms cached token counts are omitted from the status token usage display.
 #[tokio::test]
 async fn status_card_token_usage_excludes_cached_tokens() {
     let temp_home = TempDir::new().expect("temp home");
@@ -486,6 +507,7 @@ async fn status_card_token_usage_excludes_cached_tokens() {
     );
 }
 
+/// Verifies that narrow-width rendering truncates output deterministically in snapshots.
 #[tokio::test]
 async fn status_snapshot_truncates_in_narrow_terminal() {
     let temp_home = TempDir::new().expect("temp home");
@@ -546,6 +568,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     assert_snapshot!(sanitized);
 }
 
+/// Snapshots the fallback message shown when rate-limit data is missing.
 #[tokio::test]
 async fn status_snapshot_shows_missing_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
@@ -591,6 +614,7 @@ async fn status_snapshot_shows_missing_limits_message() {
     assert_snapshot!(sanitized);
 }
 
+/// Captures a snapshot with both credits and rate limits to validate the combined layout.
 #[tokio::test]
 async fn status_snapshot_includes_credits_and_limits() {
     let temp_home = TempDir::new().expect("temp home");
@@ -655,6 +679,7 @@ async fn status_snapshot_includes_credits_and_limits() {
     assert_snapshot!(sanitized);
 }
 
+/// Snapshots the message shown when rate-limit windows are empty but present.
 #[tokio::test]
 async fn status_snapshot_shows_empty_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
@@ -707,6 +732,7 @@ async fn status_snapshot_shows_empty_limits_message() {
     assert_snapshot!(sanitized);
 }
 
+/// Verifies the stale-rate-limit warning when the display is older than the current time.
 #[tokio::test]
 async fn status_snapshot_shows_stale_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
@@ -768,6 +794,7 @@ async fn status_snapshot_shows_stale_limits_message() {
     assert_snapshot!(sanitized);
 }
 
+/// Ensures cached limit data does not surface credits when `has_credits` is false.
 #[tokio::test]
 async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let temp_home = TempDir::new().expect("temp home");
@@ -833,6 +860,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     assert_snapshot!(sanitized);
 }
 
+/// Ensures the context window display uses the most recent usage snapshot, not totals.
 #[tokio::test]
 async fn status_context_window_uses_last_usage() {
     let temp_home = TempDir::new().expect("temp home");

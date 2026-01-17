@@ -9,6 +9,11 @@
 //! cached, render-only live tail derived from the current active cell so in-flight tool calls are
 //! visible immediately.
 //!
+//! `ChatWidget` is the primary coordinator between the bottom pane, the protocol event stream,
+//! and app-level event requests. It never runs the agent itself; instead it translates user intent
+//! into `Op` submissions and reflects backend state changes back into UI state that drives
+//! rendering and overlays.
+//!
 //! The transcript overlay is kept in sync by `App::overlay_forward_event`, which syncs a live tail
 //! during draws using `active_cell_transcript_key()` and `active_cell_transcript_lines()`. The
 //! cache key is designed to change when the active cell mutates in place or when its transcript
@@ -20,6 +25,10 @@
 //! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
 //! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
 //! `update_task_running_state`.
+//!
+//! Additional responsibilities handled here include rate-limit polling and prompts, review-mode
+//! entry/exit, notifications, and queueing user input while a turn is in progress so the UI stays
+//! responsive without violating turn ordering.
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -178,41 +187,75 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
+/// Title shown in the local shell command helper popup.
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
+
+/// Example line shown in the local shell command helper popup.
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
-// Track information about an in-flight exec command.
+
+/// Tracks information about an in-flight exec command.
+///
+/// The fields are cached at command start so the transcript can render consistent labels even if
+/// later events arrive out of order or without full metadata.
 struct RunningCommand {
+    /// Full argv for the running command, as emitted by the backend.
     command: Vec<String>,
+
+    /// Parsed command tokens for rendering, matched to `command`.
     parsed_cmd: Vec<ParsedCommand>,
+
+    /// Origin of the command (shell, patch, MCP, etc.) for transcript labeling.
     source: ExecCommandSource,
 }
 
+/// Captures a unified exec wait message for de-duplication.
+///
+/// Unified exec emits periodic wait updates; this struct keeps the last display string so the UI
+/// can suppress identical repeats.
 struct UnifiedExecWaitState {
+    /// Last-emitted waiting message, used to suppress duplicates.
     command_display: String,
 }
 
 impl UnifiedExecWaitState {
+    /// Create a de-duplication state for the given display string.
     fn new(command_display: String) -> Self {
         Self { command_display }
     }
 
+    /// Return true if the display string matches the last-emitted wait message.
     fn is_duplicate(&self, command_display: &str) -> bool {
         self.command_display == command_display
     }
 }
 
+/// Percentage thresholds that trigger rate-limit warnings.
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+
+/// Default model used for the NUX prompt when prompting to switch models.
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
+
+/// Usage percentage at which the rate-limit switch prompt should appear.
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
+
+/// Placeholder model label shown before session configuration completes.
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 
+/// Tracks which rate-limit warnings have already been surfaced.
+///
+/// This prevents duplicate warnings across successive snapshots as usage crosses the same
+/// thresholds within a single session.
 #[derive(Default)]
 struct RateLimitWarningState {
+    /// Highest secondary warning index already emitted.
     secondary_index: usize,
+
+    /// Highest primary warning index already emitted.
     primary_index: usize,
 }
 
 impl RateLimitWarningState {
+    /// Compute any new warnings given the latest snapshot percentages.
     fn take_warnings(
         &mut self,
         secondary_used_percent: Option<f64>,
@@ -271,11 +314,24 @@ impl RateLimitWarningState {
     }
 }
 
+/// Format a rate-limit window length (in minutes) into a compact label.
+///
+/// This applies a small rounding bias so near-boundary windows (for example, 4h59m vs 5h) map to
+/// a stable label instead of oscillating between buckets as snapshots arrive.
 pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
+    /// Number of minutes in an hour.
     const MINUTES_PER_HOUR: i64 = 60;
+
+    /// Number of minutes in a day.
     const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
+
+    /// Number of minutes in a week.
     const MINUTES_PER_WEEK: i64 = 7 * MINUTES_PER_DAY;
+
+    /// Number of minutes in a 30-day month.
     const MINUTES_PER_MONTH: i64 = 30 * MINUTES_PER_DAY;
+
+    /// Bias added to avoid thrashing near window boundaries.
     const ROUNDING_BIAS_MINUTES: i64 = 3;
 
     let windows_minutes = windows_minutes.max(0);
@@ -294,20 +350,45 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
 }
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
+///
+/// This struct bundles state that must be consistent between new-session and resume/fork flows,
+/// including configuration snapshots, initial prompt overrides, and shared service handles.
 pub(crate) struct ChatWidgetInit {
+    /// Session config snapshot applied to the widget.
     pub(crate) config: Config,
+
+    /// Frame scheduler for time-based redraws.
     pub(crate) frame_requester: FrameRequester,
+
+    /// Sender for app-level events emitted by the widget.
     pub(crate) app_event_tx: AppEventSender,
+
+    /// Optional initial prompt text supplied on startup.
     pub(crate) initial_prompt: Option<String>,
+
+    /// Optional initial image paths supplied on startup.
     pub(crate) initial_images: Vec<PathBuf>,
+
+    /// Whether the terminal supports enhanced keyboard flags.
     pub(crate) enhanced_keys_supported: bool,
+
+    /// Shared auth manager for login and token refresh.
     pub(crate) auth_manager: Arc<AuthManager>,
+
+    /// Models manager for resolving model metadata and lists.
     pub(crate) models_manager: Arc<ModelsManager>,
+
+    /// Feedback sink used by `/feedback`.
     pub(crate) feedback: codex_feedback::CodexFeedback,
+
+    /// Whether this is the first run of the TUI on this machine.
     pub(crate) is_first_run: bool,
+
+    /// Optional model override for the initial session.
     pub(crate) model: Option<String>,
 }
 
+/// State machine for deciding when to show the rate-limit switch prompt.
 #[derive(Default)]
 enum RateLimitSwitchPromptState {
     #[default]
@@ -325,14 +406,37 @@ enum RateLimitSwitchPromptState {
 /// It is not responsible for running the agent itself; it reflects progress by updating UI state
 /// and by sending requests back to codex-core.
 ///
+/// At a high level it: (1) routes incoming protocol events to focused handlers, (2) maintains the
+/// streaming/active-cell transcript state, (3) coordinates bottom-pane overlays and queued input,
+/// and (4) emits notifications, rate-limit prompts, and review-mode transitions. It also owns the
+/// per-session configuration overrides (model, approvals, sandbox policy) that are applied via the
+/// UI and must be reflected back into outgoing ops.
+///
 /// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
+///
+/// Long-running or streaming operations may produce interleaved protocol events; this type
+/// preserves ordering by deferring interruptive UI changes while a write cycle is active, then
+/// drains those changes once the active cell stabilizes.
 pub(crate) struct ChatWidget {
+    /// Sender for app-level events requested by the widget.
     app_event_tx: AppEventSender,
+
+    /// Channel for submitting protocol ops to the active Codex thread.
     codex_op_tx: UnboundedSender<Op>,
+
+    /// Bottom pane responsible for input and modal UI.
+    ///
+    /// This owns the composer state and modal overlays while `ChatWidget` orchestrates the
+    /// higher-level event flow.
     bottom_pane: BottomPane,
+
+    /// In-flight history cell that is still streaming or being updated.
+    ///
+    /// This is flushed into the transcript when a new visible cell arrives or the turn ends.
     active_cell: Option<Box<dyn HistoryCell>>,
+
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     ///
     /// The transcript overlay appends a cached "live tail" for the current active cell. Most
@@ -343,85 +447,157 @@ pub(crate) struct ChatWidget {
     /// flushing. It is intentionally allowed to wrap, which implies a rare one-time cache collision
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
+
+    /// Session config snapshot used for rendering and request defaults.
     config: Config,
+
+    /// Active model slug for display and prompts.
     model: Option<String>,
+
+    /// Shared auth manager for token refresh and login flows.
     auth_manager: Arc<AuthManager>,
+
+    /// Models manager for resolving model metadata and availability.
     models_manager: Arc<ModelsManager>,
+
+    /// Header model/status banner shown at the top of the transcript.
     session_header: SessionHeader,
+
+    /// Initial user message to submit on session start, if provided.
     initial_user_message: Option<UserMessage>,
+
+    /// Most recent token usage information from the backend.
     token_info: Option<TokenUsageInfo>,
+
+    /// Cached rate-limit snapshot display for `/status`.
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
+
+    /// Current plan type, if known, for UI affordances.
     plan_type: Option<PlanType>,
+
+    /// State machine tracking rate-limit warning thresholds.
+    ///
+    /// This is updated whenever a snapshot arrives and ensures warnings are only emitted once per
+    /// threshold.
     rate_limit_warnings: RateLimitWarningState,
+
+    /// State machine for the rate-limit switch prompt flow.
+    ///
+    /// This gates whether the model-switch prompt should be shown after high-usage snapshots.
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
+
+    /// Background task polling rate limits, if active.
     rate_limit_poller: Option<JoinHandle<()>>,
-    // Stream lifecycle controller
+
+    /// Stream lifecycle controller for the current assistant response.
+    ///
+    /// This is used to cancel or finalize streaming output when interrupts or errors occur.
     stream_controller: Option<StreamController>,
+
+    /// Exec commands keyed by event id while they are running.
+    ///
+    /// Stored metadata is used to label transcript rows until the completion event arrives.
     running_commands: HashMap<String, RunningCommand>,
+
+    /// Exec call ids suppressed from transcript rendering (e.g., unified exec grouping).
     suppressed_exec_calls: HashSet<String>,
+
+    /// Last unified-exec wait message emitted, for de-duplication.
     last_unified_wait: Option<UnifiedExecWaitState>,
+
+    /// True when the UI is waiting to emit a task-complete summary.
     task_complete_pending: bool,
+
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
+
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
-    // Queue of interruptive UI events deferred during an active write cycle
+
+    /// Queue of interruptive UI events deferred during an active write cycle.
+    ///
+    /// This preserves event ordering when streaming output is mutating history cells.
     interrupts: InterruptManager,
-    // Accumulates the current reasoning block text to extract a header
+
+    /// Accumulates the current reasoning block text to extract a header.
     reasoning_buffer: String,
-    // Accumulates full reasoning content for transcript-only recording
+
+    /// Accumulates full reasoning content for transcript-only recording.
     full_reasoning_buffer: String,
-    // Current status header shown in the status indicator.
+
+    /// Current status header shown in the status indicator.
     current_status_header: String,
-    // Previous status header to restore after a transient stream retry.
+
+    /// Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
+
+    /// Current conversation id once the session is configured.
     conversation_id: Option<ThreadId>,
+
+    /// Parent conversation id when the session was forked.
     forked_from: Option<ThreadId>,
+
+    /// Frame scheduler used to request redraws.
     frame_requester: FrameRequester,
-    // Whether to include the initial welcome banner on session configured
+
+    /// Whether to include the initial welcome banner on session configured.
     show_welcome_banner: bool,
-    // When resuming an existing session (selected via resume picker), avoid an
-    // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
+
+    /// When resuming an existing session (selected via resume picker), avoid an
+    /// immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
     suppress_session_configured_redraw: bool,
-    // User messages queued while a turn is in progress
+
+    /// User messages queued while a turn is in progress.
+    ///
+    /// These are drained one at a time when a turn completes to preserve ordering.
     queued_user_messages: VecDeque<UserMessage>,
-    // Pending notification to show when unfocused on next Draw
+
+    /// Pending notification to show when unfocused on next Draw.
     pending_notification: Option<Notification>,
+
     /// When `Some`, the user has pressed a quit shortcut and the second press
     /// must occur before `quit_shortcut_expires_at`.
     quit_shortcut_expires_at: Option<Instant>,
+
     /// Tracks which quit shortcut key was pressed first.
     ///
     /// We require the second press to match this key so `Ctrl+C` followed by
     /// `Ctrl+D` (or vice versa) doesn't quit accidentally.
     quit_shortcut_key: Option<KeyBinding>,
-    // Simple review mode flag; used to adjust layout and banners.
+
+    /// Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
-    // Snapshot of token usage to restore after review mode exits.
+
+    /// Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
-    // Whether the next streamed assistant content should be preceded by a final message separator.
-    //
-    // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
-    // The separator itself is only rendered if the turn recorded "work" activity (see
-    // `had_work_activity`).
+
+    /// Whether the next streamed assistant content should be preceded by a final message separator.
+    ///
+    /// This is set whenever we insert a visible history cell that conceptually belongs to a turn.
+    /// The separator itself is only rendered if the turn recorded "work" activity (see
+    /// `had_work_activity`).
     needs_final_message_separator: bool,
-    // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
-    //
-    // This gates rendering of the "Worked for …" separator so purely conversational turns don't
-    // show an empty divider. It is reset when the separator is emitted.
+
+    /// Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
+    ///
+    /// This gates rendering of the "Worked for …" separator so purely conversational turns don't
+    /// show an empty divider. It is reset when the separator is emitted.
     had_work_activity: bool,
 
+    /// Last rendered terminal width used for layout-dependent caching.
     last_rendered_width: std::cell::Cell<Option<usize>>,
-    // Feedback sink for /feedback
+
+    /// Feedback sink for `/feedback`.
     feedback: codex_feedback::CodexFeedback,
-    // Current session rollout path (if known)
+
+    /// Current session rollout path (if known).
     current_rollout_path: Option<PathBuf>,
 }
 
@@ -438,9 +614,11 @@ pub(crate) struct ActiveCellTranscriptKey {
     /// revision gives a cheap way to say "same active cell, but its transcript output is different
     /// now". Callers bump it on any mutation that can affect `HistoryCell::transcript_lines`.
     pub(crate) revision: u64,
+
     /// Whether the active cell continues the prior stream, which affects
     /// spacing between transcript blocks.
     pub(crate) is_stream_continuation: bool,
+
     /// Optional animation tick for time-dependent transcript output.
     ///
     /// When this changes, the overlay recomputes the cached tail even if the revision and width
@@ -449,12 +627,17 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
+/// Bundles the user text and attached images for a single submission.
 struct UserMessage {
+    /// Raw message text as entered in the composer.
     text: String,
+
+    /// File paths for image attachments included with the message.
     image_paths: Vec<PathBuf>,
 }
 
 impl From<String> for UserMessage {
+    /// Build a text-only user message from an owned string.
     fn from(text: String) -> Self {
         Self {
             text,
@@ -464,6 +647,7 @@ impl From<String> for UserMessage {
 }
 
 impl From<&str> for UserMessage {
+    /// Build a text-only user message from a borrowed string.
     fn from(text: &str) -> Self {
         Self {
             text: text.to_string(),
@@ -472,6 +656,7 @@ impl From<&str> for UserMessage {
     }
 }
 
+/// Combine text and images into an initial message, or return `None` if empty.
 fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
     if text.is_empty() && image_paths.is_empty() {
         None
@@ -489,6 +674,8 @@ impl ChatWidget {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
     }
+
+    /// Finalize the active stream and insert its cell, if present.
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -511,13 +698,14 @@ impl ChatWidget {
         self.set_status(header, None);
     }
 
+    /// Restore the pre-retry status header after a transient retry completes.
     fn restore_retry_status_header_if_present(&mut self) {
         if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
         }
     }
 
-    // --- Small event handlers ---
+    /// Handle the session configuration event and seed initial UI state.
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
@@ -540,6 +728,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
+
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
         self.submit_op(Op::ListSkills {
@@ -554,15 +743,18 @@ impl ChatWidget {
         }
     }
 
+    /// Update the bottom pane with a new skills list.
     fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.bottom_pane.set_skills(skills);
     }
 
+    /// Filter the skills list for the active cwd and update the bottom pane.
     fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
         let skills = skills_for_cwd(&self.config.cwd, &response.skills);
         self.set_skills(Some(skills));
     }
 
+    /// Open the feedback note overlay for the given category.
     pub(crate) fn open_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
@@ -586,6 +778,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Open the feedback upload consent prompt for the given category.
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
@@ -596,6 +789,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Handle a finalized agent message event.
     fn on_agent_message(&mut self, message: String) {
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
@@ -607,10 +801,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Handle a partial agent message delta during streaming.
     fn on_agent_message_delta(&mut self, delta: String) {
         self.handle_streaming_delta(delta);
     }
 
+    /// Handle a reasoning delta by updating the status header and transcript buffers.
     fn on_agent_reasoning_delta(&mut self, delta: String) {
         // For reasoning deltas, do not stream to history. Accumulate the
         // current reasoning block and extract the first bold element
@@ -621,11 +817,13 @@ impl ChatWidget {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.set_status_header(header);
         } else {
+
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
         self.request_redraw();
     }
 
+    /// Finalize the current reasoning block and flush transcript-only history.
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
@@ -639,6 +837,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Break the reasoning block to preserve transcript boundaries between sections.
     fn on_reasoning_section_break(&mut self) {
         // Start a new reasoning block for header extraction and accumulate transcript.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
@@ -646,8 +845,7 @@ impl ChatWidget {
         self.reasoning_buffer.clear();
     }
 
-    // Raw reasoning uses the same flow as summarized reasoning
-
+    /// Mark the start of a new agent turn and reset per-turn UI state.
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
         self.bottom_pane.clear_quit_shortcut_hint();
@@ -662,9 +860,15 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Finalize UI state for the end of a turn and handle queued messages.
+    ///
+    /// This flushes any pending stream, clears per-turn transient state (exec tracking, headers,
+    /// running flags), then submits at most one queued user message and emits a completion
+    /// notification before checking for rate-limit prompts.
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
+
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
         self.update_task_running_state();
@@ -675,6 +879,7 @@ impl ChatWidget {
 
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
+
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
@@ -683,6 +888,7 @@ impl ChatWidget {
         self.maybe_show_pending_rate_limit_prompt();
     }
 
+    /// Update token-usage state and refresh the context window display.
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         match info {
             Some(info) => self.apply_token_info(info),
@@ -693,6 +899,7 @@ impl ChatWidget {
         }
     }
 
+    /// Apply token usage metrics to UI state and cache them.
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
         let percent = self.context_remaining_percent(&info);
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
@@ -700,6 +907,7 @@ impl ChatWidget {
         self.token_info = Some(info);
     }
 
+    /// Compute the remaining context percentage from the latest usage info.
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
         info.model_context_window.map(|window| {
             info.last_token_usage
@@ -707,6 +915,7 @@ impl ChatWidget {
         })
     }
 
+    /// Compute the absolute number of tokens used, unless a percentage is already shown.
     fn context_used_tokens(&self, info: &TokenUsageInfo, percent_known: bool) -> Option<i64> {
         if percent_known {
             return None;
@@ -715,6 +924,7 @@ impl ChatWidget {
         Some(info.total_token_usage.tokens_in_context_window())
     }
 
+    /// Restore the pre-review token usage snapshot after review mode exits.
     fn restore_pre_review_token_info(&mut self) {
         if let Some(saved) = self.pre_review_token_info.take() {
             match saved {
@@ -727,6 +937,10 @@ impl ChatWidget {
         }
     }
 
+    /// Apply a rate-limit snapshot and trigger any warning or prompt logic.
+    ///
+    /// This merges credits metadata, updates plan/rate-limit displays, emits any new warnings, and
+    /// arms the model-switch prompt if usage crosses the threshold.
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(mut snapshot) = snapshot {
             if snapshot.credits.is_none() {
@@ -794,6 +1008,7 @@ impl ChatWidget {
             self.rate_limit_snapshot = None;
         }
     }
+
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
@@ -801,6 +1016,7 @@ impl ChatWidget {
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
+
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
         self.update_task_running_state();
@@ -811,6 +1027,7 @@ impl ChatWidget {
         self.maybe_show_pending_rate_limit_prompt();
     }
 
+    /// Record an error event, finalize the turn, and continue queued inputs.
     fn on_error(&mut self, message: String) {
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
@@ -820,11 +1037,13 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    /// Record a warning event in the history transcript.
     fn on_warning(&mut self, message: impl Into<String>) {
         self.add_to_history(history_cell::new_warning_event(message.into()));
         self.request_redraw();
     }
 
+    /// Track MCP startup progress and update the status banner.
     fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
         let mut status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &ev.status {
@@ -871,6 +1090,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Finalize MCP startup status and surface any failures.
     fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
         let mut parts = Vec::new();
         if !ev.failed.is_empty() {
@@ -923,6 +1143,7 @@ impl ChatWidget {
                 format!("{queued_text}\n{existing_text}")
             };
             self.bottom_pane.set_composer_text(combined);
+
             // Clear the queue and update the status indicator list.
             self.queued_user_messages.clear();
             self.refresh_queued_user_messages();
@@ -931,10 +1152,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Record a plan update event in the transcript.
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
+    /// Handle an exec approval request, deferring if interrupts are queued.
     fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         let id2 = id.clone();
         let ev2 = ev.clone();
@@ -944,6 +1167,7 @@ impl ChatWidget {
         );
     }
 
+    /// Handle a patch approval request, deferring if interrupts are queued.
     fn on_apply_patch_approval_request(&mut self, id: String, ev: ApplyPatchApprovalRequestEvent) {
         let id2 = id.clone();
         let ev2 = ev.clone();
@@ -953,6 +1177,7 @@ impl ChatWidget {
         );
     }
 
+    /// Handle an elicitation request, deferring if interrupts are queued.
     fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
@@ -961,12 +1186,14 @@ impl ChatWidget {
         );
     }
 
+    /// Handle the start of an exec command and seed transcript grouping.
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
 
+    /// Append exec output deltas to the active exec cell and redraw.
     fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
         let Some(cell) = self
             .active_cell
@@ -982,10 +1209,13 @@ impl ChatWidget {
         }
     }
 
+    /// Handle terminal interaction events (placeholder until UI is wired).
     fn on_terminal_interaction(&mut self, _ev: TerminalInteractionEvent) {
+
         // TODO: Handle once design is ready
     }
 
+    /// Record the start of a patch application in the transcript.
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
@@ -993,6 +1223,7 @@ impl ChatWidget {
         ));
     }
 
+    /// Record a view-image tool call and refresh the UI.
     fn on_view_image_tool_call(&mut self, event: ViewImageToolCallEvent) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(history_cell::new_view_image_tool_call(
@@ -1002,6 +1233,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Handle the end of a patch application, deferring if needed.
     fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
         let ev2 = event.clone();
         self.defer_or_handle(
@@ -1010,36 +1242,43 @@ impl ChatWidget {
         );
     }
 
+    /// Handle the end of an exec command, deferring if needed.
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
     }
 
+    /// Handle MCP tool call start events, deferring if needed.
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_begin(ev), |s| s.handle_mcp_begin_now(ev2));
     }
 
+    /// Handle MCP tool call end events, deferring if needed.
     fn on_mcp_tool_call_end(&mut self, ev: McpToolCallEndEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
     }
 
+    /// Prepare the UI for a web search tool call.
     fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
     }
 
+    /// Record a web search tool call in the transcript.
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(history_cell::new_web_search_call(ev.query));
     }
 
+    /// Record a collab event cell and redraw.
     fn on_collab_event(&mut self, cell: PlainHistoryCell) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(cell);
         self.request_redraw();
     }
 
+    /// Forward a history entry response to the bottom pane.
     fn on_get_history_entry_response(
         &mut self,
         event: codex_core::protocol::GetHistoryEntryResponseEvent,
@@ -1053,20 +1292,24 @@ impl ChatWidget {
             .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
     }
 
+    /// Immediately exit the TUI after shutdown completion.
     fn on_shutdown_complete(&mut self) {
         self.request_immediate_exit();
     }
 
+    /// Log a turn diff event for debugging.
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
     }
 
+    /// Record a deprecation notice in the transcript.
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
         let DeprecationNoticeEvent { summary, details } = event;
         self.add_to_history(history_cell::new_deprecation_notice(summary, details));
         self.request_redraw();
     }
 
+    /// Surface a transient background status message.
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
@@ -1074,6 +1317,7 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    /// Surface undo-in-progress status and suppress interrupts.
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
@@ -1083,6 +1327,7 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    /// Surface the outcome of an undo operation in the transcript.
     fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
         let UndoCompletedEvent { success, message } = event;
         self.bottom_pane.hide_status_indicator();
@@ -1100,6 +1345,7 @@ impl ChatWidget {
         }
     }
 
+    /// Update the status banner for a stream error without ending the turn.
     fn on_stream_error(&mut self, message: String, additional_details: Option<String>) {
         if self.retry_status_header.is_none() {
             self.retry_status_header = Some(self.current_status_header.clone());
@@ -1123,12 +1369,14 @@ impl ChatWidget {
         }
     }
 
+    /// Drain any queued interruptive events in a FIFO manner.
     fn flush_interrupt_queue(&mut self) {
         let mut mgr = std::mem::take(&mut self.interrupts);
         mgr.flush_all(self);
         self.interrupts = mgr;
     }
 
+    /// Either queue an interruptible event or handle it immediately.
     #[inline]
     fn defer_or_handle(
         &mut self,
@@ -1145,15 +1393,21 @@ impl ChatWidget {
         }
     }
 
+    /// Finalize stream UI state when a streaming controller finishes.
     fn handle_stream_finished(&mut self) {
         if self.task_complete_pending {
             self.bottom_pane.hide_status_indicator();
             self.task_complete_pending = false;
         }
+
         // A completed stream indicates non-exec content was just inserted.
         self.flush_interrupt_queue();
     }
 
+    /// Append streamed assistant text to the active stream controller.
+    ///
+    /// This flushes any active exec cell, inserts a separator if needed, initializes a streaming
+    /// controller on the first delta, then pushes new text and schedules commit animation/redraws.
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
@@ -1176,6 +1430,7 @@ impl ChatWidget {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
             }
+
             // Streaming must not capture the current viewport width: width-derived wraps are
             // applied later, at render time, so the transcript can reflow on resize.
             self.stream_controller = Some(StreamController::new());
@@ -1190,6 +1445,7 @@ impl ChatWidget {
         }
     }
 
+    /// Apply an exec completion immediately and update transcript state.
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
         if self.suppressed_exec_calls.remove(&ev.call_id) {
@@ -1245,10 +1501,12 @@ impl ChatWidget {
                 self.request_redraw();
             }
         }
+
         // Mark that actual work was done (command executed)
         self.had_work_activity = true;
     }
 
+    /// Apply a patch completion immediately and record failures in the transcript.
     pub(crate) fn handle_patch_apply_end_now(
         &mut self,
         event: codex_core::protocol::PatchApplyEndEvent,
@@ -1258,10 +1516,12 @@ impl ChatWidget {
         if !event.success {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
+
         // Mark that actual work was done (patch applied)
         self.had_work_activity = true;
     }
 
+    /// Show an exec approval request immediately in the UI.
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
@@ -1279,6 +1539,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Show an apply-patch approval request immediately in the UI.
     pub(crate) fn handle_apply_patch_approval_now(
         &mut self,
         id: String,
@@ -1301,6 +1562,7 @@ impl ChatWidget {
         });
     }
 
+    /// Show an MCP elicitation request immediately in the UI.
     pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
         self.flush_answer_stream_with_separator();
 
@@ -1318,6 +1580,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Handle an exec begin event immediately, updating active exec grouping.
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
@@ -1381,6 +1644,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Start an MCP tool-call cell immediately and refresh the UI.
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
@@ -1392,6 +1656,8 @@ impl ChatWidget {
         self.bump_active_cell_revision();
         self.request_redraw();
     }
+
+    /// Apply an MCP tool-call completion event immediately.
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
         self.flush_answer_stream_with_separator();
 
@@ -1425,10 +1691,12 @@ impl ChatWidget {
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
         }
+
         // Mark that actual work was done (MCP tool call)
         self.had_work_activity = true;
     }
 
+    /// Create a new chat widget and spawn a fresh agent thread.
     pub(crate) fn new(common: ChatWidgetInit, thread_manager: Arc<ThreadManager>) -> Self {
         let ChatWidgetInit {
             config,
@@ -1625,6 +1893,11 @@ impl ChatWidget {
         widget
     }
 
+    /// Handle a key event from the terminal and route it to the correct UI surface.
+    ///
+    /// The flow is: (1) intercept global shortcuts (quit, paste image), (2) reset quit-shortcut
+    /// state on regular input, then (3) delegate to the bottom pane and translate its
+    /// `InputResult` into queued or submitted actions.
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -1736,12 +2009,18 @@ impl ChatWidget {
         }
     }
 
+    /// Attach an image to the composer for the next submission.
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
     }
 
+    /// Dispatch a slash command without additional arguments.
+    ///
+    /// This first enforces task-running guards, then performs the command-specific behavior such
+    /// as opening popups, submitting ops, or emitting status output. Commands may also enqueue
+    /// history cells or app events to keep the transcript and overlays in sync with the action.
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -1760,6 +2039,7 @@ impl ChatWidget {
                     self.request_redraw();
                     return;
                 }
+
                 // Step 1: pick a category (UI built in feedback_view)
                 let params =
                     crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
@@ -1784,6 +2064,7 @@ impl ChatWidget {
                     self.add_info_message(message, None);
                     return;
                 }
+                /// Prompt content sent as the initial message for `/init`.
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_user_message(INIT_PROMPT.to_string().into());
             }
@@ -1836,6 +2117,7 @@ impl ChatWidget {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
+
                     // Not supported; on non-Windows this command should never be reachable.
                 };
             }
@@ -1851,6 +2133,7 @@ impl ChatWidget {
                 }
                 self.request_quit_without_confirmation();
             }
+
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
             // }
@@ -1902,6 +2185,7 @@ impl ChatWidget {
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
                     id: "1".to_string(),
+
                     // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                     //     call_id: "1".to_string(),
                     //     command: vec!["git".into(), "apply".into()],
@@ -1934,6 +2218,10 @@ impl ChatWidget {
         }
     }
 
+    /// Dispatch a slash command that accepts additional arguments.
+    ///
+    /// Arguments are trimmed before matching; only commands with explicit argument behavior are
+    /// handled here and all others fall back to the no-arg dispatcher.
     fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -1961,11 +2249,15 @@ impl ChatWidget {
         }
     }
 
+    /// Pass pasted text through to the composer, preserving paste-burst behavior.
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
     }
 
-    // Returns true if caller should skip rendering this frame (a future frame is scheduled).
+    /// Handle a paste-burst tick; returns true when the frame should be skipped.
+    ///
+    /// This allows the composer to batch large paste bursts by scheduling the next tick and
+    /// skipping redundant renders between flushes.
     pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
         if self.bottom_pane.flush_paste_burst_if_due() {
             // A paste just flushed; request an immediate redraw and skip this frame.
@@ -1983,6 +2275,7 @@ impl ChatWidget {
         }
     }
 
+    /// Flush the active in-flight cell into history, if present.
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
@@ -1990,10 +2283,12 @@ impl ChatWidget {
         }
     }
 
+    /// Add a history cell to the transcript, boxing it for storage.
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.add_boxed_history(Box::new(cell));
     }
 
+    /// Add a boxed history cell, managing grouping and placeholder headers.
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
@@ -2011,7 +2306,10 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
-    #[allow(dead_code)] // Used in tests
+    /// Queue a user message if the session cannot accept input immediately.
+    ///
+    /// This is also used by tests to enqueue messages without running a full session.
+    #[allow(dead_code)]
     fn queue_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() || self.bottom_pane.is_task_running() {
             self.queued_user_messages.push_back(user_message);
@@ -2021,6 +2319,11 @@ impl ChatWidget {
         }
     }
 
+    /// Submit a user message as inputs or a local command.
+    ///
+    /// This normalizes local `!` commands, builds the `UserInput` sequence (images, text, skill
+    /// mentions), submits it to core, then mirrors the user text into history and resets the
+    /// message-separator state.
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
@@ -2104,11 +2407,16 @@ impl ChatWidget {
             if matches!(msg, EventMsg::SessionConfigured(_)) {
                 continue;
             }
+
             // `id: None` indicates a synthetic/fake id coming from replay.
             self.dispatch_event_msg(None, msg, true);
         }
     }
 
+    /// Dispatch an incoming Codex protocol event into UI handlers.
+    ///
+    /// This unpacks the id and routes the message through `dispatch_event_msg`, which applies
+    /// replay vs live event handling rules.
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         self.dispatch_event_msg(Some(id), msg, false);
@@ -2119,6 +2427,11 @@ impl ChatWidget {
     /// `id` is `Some` for live events and `None` for replayed events from
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
+    ///
+    /// The handler first restores any retry header, then selectively logs traces, and finally
+    /// routes each event variant to its dedicated handler while honoring replay-only rules.
+    /// It is also responsible for preserving ordering when streaming output is mutating history
+    /// cells by deferring interruptive UI changes until the stream settles.
     fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
         if !is_stream_error {
@@ -2249,6 +2562,7 @@ impl ChatWidget {
         }
     }
 
+    /// Enter review mode and seed the transcript with a review banner.
     fn on_entered_review_mode(&mut self, review: ReviewRequest) {
         // Enter review mode and emit a concise banner
         if self.pre_review_token_info.is_none() {
@@ -2263,6 +2577,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Exit review mode and display any review output summary.
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
         // Leave review mode; if output is present, flush pending stream + show results.
         if let Some(output) = review.review_output {
@@ -2286,11 +2601,13 @@ impl ChatWidget {
                         .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
                 }
             }
+
             // Final message is rendered as part of the AgentMessage.
         }
 
         self.is_review_mode = false;
         self.restore_pre_review_token_info();
+
         // Append a finishing banner at the end of this turn.
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
@@ -2298,8 +2615,10 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Record a user message event that arrives via replayed history.
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         let message = event.message.trim();
+
         // Only show the text portion in conversation history.
         if !message.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(message.to_string()));
@@ -2325,16 +2644,19 @@ impl ChatWidget {
             .send(AppEvent::Exit(ExitMode::ShutdownFirst));
     }
 
+    /// Schedule a redraw on the next frame tick.
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
     }
 
+    /// Bump the active-cell revision to invalidate transcript overlay caching.
     fn bump_active_cell_revision(&mut self) {
         // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
         // worst causes a one-time cache-key collision.
         self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
     }
 
+    /// Queue a notification if allowed by user settings.
     fn notify(&mut self, notification: Notification) {
         if !notification.allowed_for(&self.config.tui_notifications) {
             return;
@@ -2343,6 +2665,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Emit any pending notification to the OS-level notifier.
     pub(crate) fn maybe_post_pending_notification(&mut self, tui: &mut crate::tui::Tui) {
         if let Some(notif) = self.pending_notification.take() {
             tui.notify(notif.display());
@@ -2362,7 +2685,7 @@ impl ChatWidget {
         }
     }
 
-    // If idle and there are queued inputs, submit exactly one to start the next turn.
+    /// If idle, submit at most one queued input to start the next turn.
     fn maybe_send_next_queued_input(&mut self) {
         if self.bottom_pane.is_task_running() {
             return;
@@ -2370,6 +2693,7 @@ impl ChatWidget {
         if let Some(user_message) = self.queued_user_messages.pop_front() {
             self.submit_user_message(user_message);
         }
+
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_queued_user_messages();
     }
@@ -2384,14 +2708,17 @@ impl ChatWidget {
         self.bottom_pane.set_queued_user_messages(messages);
     }
 
+    /// Request a redraw to show an in-progress diff fetch.
     pub(crate) fn add_diff_in_progress(&mut self) {
         self.request_redraw();
     }
 
+    /// Request a redraw after diff results are ready.
     pub(crate) fn on_diff_complete(&mut self) {
         self.request_redraw();
     }
 
+    /// Emit a `/status` snapshot into the transcript.
     pub(crate) fn add_status_output(&mut self) {
         let default_usage = TokenUsage::default();
         let token_info = self.token_info.as_ref();
@@ -2411,12 +2738,15 @@ impl ChatWidget {
             self.model_display_name(),
         ));
     }
+
+    /// Abort the background rate-limit poller if it is running.
     fn stop_rate_limit_poller(&mut self) {
         if let Some(handle) = self.rate_limit_poller.take() {
             handle.abort();
         }
     }
 
+    /// Start a background task to prefetch rate-limit snapshots.
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
@@ -2445,6 +2775,7 @@ impl ChatWidget {
         self.rate_limit_poller = Some(handle);
     }
 
+    /// Return the lower-cost model preset, if available.
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
         let models = self.models_manager.try_list_models(&self.config).ok()?;
         models
@@ -2453,6 +2784,7 @@ impl ChatWidget {
             .cloned()
     }
 
+    /// Return true when the user has hidden the rate-limit switch prompt.
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
         self.config
             .notices
@@ -2460,6 +2792,7 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
+    /// Show the rate-limit switch prompt if a pending threshold was reached.
     fn maybe_show_pending_rate_limit_prompt(&mut self) {
         if self.rate_limit_switch_prompt_hidden() {
             self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
@@ -2479,6 +2812,7 @@ impl ChatWidget {
         }
     }
 
+    /// Open the rate-limit switch prompt with the suggested preset.
     fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
         let switch_model = preset.model.to_string();
         let display_name = preset.display_name.to_string();
@@ -2574,6 +2908,7 @@ impl ChatWidget {
         self.open_model_popup_with_presets(presets);
     }
 
+    /// Open the model picker using the provided presets list.
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
@@ -2652,10 +2987,12 @@ impl ChatWidget {
         });
     }
 
+    /// Return true if the model slug represents an auto model.
     fn is_auto_model(model: &str) -> bool {
         model.starts_with("codex-auto-")
     }
 
+    /// Return the ordering index for auto model options.
     fn auto_model_order(model: &str) -> usize {
         match model {
             "codex-auto-fast" => 0,
@@ -2665,6 +3002,7 @@ impl ChatWidget {
         }
     }
 
+    /// Open the full model list, including per-model reasoning effort.
     pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
         if presets.is_empty() {
             self.add_info_message(
@@ -2710,6 +3048,10 @@ impl ChatWidget {
         });
     }
 
+    /// Build selection actions that apply a model and optional reasoning effort.
+    ///
+    /// The actions update both the live session state and the persisted model selection so the
+    /// UI and future sessions stay consistent.
     fn model_selection_actions(
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
@@ -2742,6 +3084,9 @@ impl ChatWidget {
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
+    ///
+    /// This builds the supported effort options, applies warnings for high-effort choices, and
+    /// either auto-selects the only option or presents a selection list.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
@@ -2767,8 +3112,12 @@ impl ChatWidget {
             || preset.model.starts_with("gpt-5.1-codex-max")
             || preset.model.starts_with("gpt-5.2");
 
+        /// Single reasoning-effort option shown in the stage-two picker.
         struct EffortChoice {
+            /// Optional stored value to persist for this selection.
             stored: Option<ReasoningEffortConfig>,
+
+            /// Label to show in the UI list (always concrete).
             display: ReasoningEffortConfig,
         }
         let mut choices: Vec<EffortChoice> = Vec::new();
@@ -2877,6 +3226,7 @@ impl ChatWidget {
         });
     }
 
+    /// Return the display label for a reasoning effort value.
     fn reasoning_effort_label(effort: ReasoningEffortConfig) -> &'static str {
         match effort {
             ReasoningEffortConfig::None => "None",
@@ -2888,6 +3238,7 @@ impl ChatWidget {
         }
     }
 
+    /// Apply a model and reasoning effort selection through app events.
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
@@ -3030,6 +3381,7 @@ impl ChatWidget {
         });
     }
 
+    /// Build approval preset actions that set approval and sandbox policies.
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
@@ -3050,6 +3402,7 @@ impl ChatWidget {
         })]
     }
 
+    /// Return true if the preset matches the currently active policies.
     fn preset_matches_current(
         current_approval: AskForApproval,
         current_sandbox: &SandboxPolicy,
@@ -3072,6 +3425,7 @@ impl ChatWidget {
         )
     }
 
+    /// Return world-writable warning details or `None` if no warning is needed.
     #[cfg(target_os = "windows")]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         if self
@@ -3096,12 +3450,14 @@ impl ChatWidget {
         }
     }
 
+    /// Return `None` on non-Windows platforms where the warning does not apply.
     #[cfg(not(target_os = "windows"))]
     #[allow(dead_code)]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         None
     }
 
+    /// Show a confirmation prompt before enabling full-access approvals.
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
         let approval = preset.approval;
         let sandbox = preset.sandbox;
@@ -3166,6 +3522,7 @@ impl ChatWidget {
         });
     }
 
+    /// Show a warning before enabling a world-writable sandbox on Windows.
     #[cfg(target_os = "windows")]
     pub(crate) fn open_world_writable_warning_confirmation(
         &mut self,
@@ -3222,6 +3579,7 @@ impl ChatWidget {
         // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
         // so downstream policy-change hooks don't re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
+
         // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals),
         // to avoid duplicate warnings from the ensuing policy change.
         if preset.is_some() {
@@ -3267,6 +3625,7 @@ impl ChatWidget {
         });
     }
 
+    /// No-op on non-Windows platforms where the warning UI is unavailable.
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn open_world_writable_warning_confirmation(
         &mut self,
@@ -3277,6 +3636,7 @@ impl ChatWidget {
     ) {
     }
 
+    /// Prompt the user to set up the Windows sandbox for agent mode.
     #[cfg(target_os = "windows")]
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
@@ -3395,9 +3755,11 @@ impl ChatWidget {
         });
     }
 
+    /// No-op on non-Windows platforms where the Windows sandbox UI is unavailable.
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
 
+    /// Prompt the user to fall back to the non-elevated sandbox after failure.
     #[cfg(target_os = "windows")]
     pub(crate) fn open_windows_sandbox_fallback_prompt(
         &mut self,
@@ -3491,6 +3853,7 @@ impl ChatWidget {
         });
     }
 
+    /// No-op on non-Windows platforms where the Windows sandbox UI is unavailable.
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn open_windows_sandbox_fallback_prompt(
         &mut self,
@@ -3499,6 +3862,7 @@ impl ChatWidget {
     ) {
     }
 
+    /// Prompt the user to set up Windows sandbox if auto mode was downgraded.
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
         if self.config.forced_auto_mode_downgraded_on_windows
@@ -3511,9 +3875,11 @@ impl ChatWidget {
         }
     }
 
+    /// No-op on non-Windows platforms where the Windows sandbox UI is unavailable.
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {}
 
+    /// Disable composer input and show sandbox-setup status while installing.
     #[cfg(target_os = "windows")]
     pub(crate) fn show_windows_sandbox_setup_status(&mut self) {
         // While elevated sandbox setup runs, prevent typing so the user doesn't
@@ -3528,10 +3894,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// No-op on non-Windows platforms where the Windows sandbox UI is unavailable.
     #[cfg(not(target_os = "windows"))]
     #[allow(dead_code)]
     pub(crate) fn show_windows_sandbox_setup_status(&mut self) {}
 
+    /// Clear the sandbox-setup status and re-enable input.
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {
         self.bottom_pane.set_composer_input_enabled(true, None);
@@ -3539,14 +3907,17 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// No-op on non-Windows platforms where the Windows sandbox UI is unavailable.
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {}
 
+    /// Clear the forced auto-mode downgrade flag after successful setup.
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
         self.config.forced_auto_mode_downgraded_on_windows = false;
     }
 
+    /// No-op on non-Windows platforms where the Windows sandbox UI is unavailable.
     #[cfg(not(target_os = "windows"))]
     #[allow(dead_code)]
     pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {}
@@ -3574,6 +3945,7 @@ impl ChatWidget {
         Ok(())
     }
 
+    /// Toggle a feature flag and update dependent UI state.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
         if enabled {
@@ -3586,14 +3958,17 @@ impl ChatWidget {
         }
     }
 
+    /// Persist the full-access warning acknowledgement in config state.
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
         self.config.notices.hide_full_access_warning = Some(acknowledged);
     }
 
+    /// Persist the world-writable warning acknowledgement in config state.
     pub(crate) fn set_world_writable_warning_acknowledged(&mut self, acknowledged: bool) {
         self.config.notices.hide_world_writable_warning = Some(acknowledged);
     }
 
+    /// Update the rate-limit model nudge suppression flag.
     pub(crate) fn set_rate_limit_switch_prompt_hidden(&mut self, hidden: bool) {
         self.config.notices.hide_rate_limit_model_nudge = Some(hidden);
         if hidden {
@@ -3601,6 +3976,7 @@ impl ChatWidget {
         }
     }
 
+    /// Return true when the world-writable warning is suppressed.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn world_writable_warning_hidden(&self) -> bool {
         self.config
@@ -3620,10 +3996,12 @@ impl ChatWidget {
         self.model = Some(model.to_string());
     }
 
+    /// Return the configured model slug, if known.
     fn current_model(&self) -> Option<&str> {
         self.model.as_deref()
     }
 
+    /// Return the model label to show in the UI.
     fn model_display_name(&self) -> &str {
         self.model.as_deref().unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
     }
@@ -3667,21 +4045,25 @@ impl ChatWidget {
         }
     }
 
+    /// Add an informational message cell to the transcript.
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
     }
 
+    /// Add raw history lines directly to the transcript.
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
         self.request_redraw();
     }
 
+    /// Add an error message cell to the transcript.
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
     }
 
+    /// Add MCP tool output to the transcript or request it from core.
     pub(crate) fn add_mcp_output(&mut self) {
         if self.config.mcp_servers.is_empty() {
             self.add_to_history(history_cell::empty_mcp_output());
@@ -3794,11 +4176,12 @@ impl ChatWidget {
         self.bottom_pane.show_quit_shortcut_hint(key);
     }
 
-    // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
+    /// Return true when Ctrl+C should interrupt rather than quit.
     fn is_cancellable_work_active(&self) -> bool {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
+    /// Return true if the composer is empty and has no draft content.
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
     }
@@ -3810,6 +4193,7 @@ impl ChatWidget {
         self.bottom_pane.is_normal_backtrack_mode()
     }
 
+    /// Insert text into the composer at the current cursor position.
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.bottom_pane.insert_str(text);
     }
@@ -3819,10 +4203,12 @@ impl ChatWidget {
         self.bottom_pane.set_composer_text(text);
     }
 
+    /// Show the Esc-backtrack hint in the footer.
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.bottom_pane.show_esc_backtrack_hint();
     }
 
+    /// Clear the Esc-backtrack hint in the footer.
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
@@ -3866,6 +4252,7 @@ impl ChatWidget {
         }
     }
 
+    /// Render the list of MCP tools into the transcript.
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,
@@ -3876,17 +4263,22 @@ impl ChatWidget {
         ));
     }
 
+    /// Update the bottom pane with the latest custom prompts list.
     fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
         let len = ev.custom_prompts.len();
         debug!("received {len} custom prompts");
+
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
     }
 
+    /// Update the skills list shown in the bottom pane.
     fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
         self.set_skills_from_response(&ev);
     }
 
+    /// Open the review mode selection popup.
+    /// Open the review mode selection popup.
     pub(crate) fn open_review_popup(&mut self) {
         let mut items: Vec<SelectionItem> = Vec::new();
 
@@ -3947,6 +4339,7 @@ impl ChatWidget {
         });
     }
 
+    /// Show a picker for selecting a base branch for review.
     pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
         let branches = local_git_branches(cwd).await;
         let current_branch = current_branch_name(cwd)
@@ -3984,6 +4377,7 @@ impl ChatWidget {
         });
     }
 
+    /// Show a picker for selecting a specific commit to review.
     pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
         let commits = codex_core::git_info::recent_commits(cwd, 100).await;
 
@@ -4022,6 +4416,7 @@ impl ChatWidget {
         });
     }
 
+    /// Open the custom review prompt editor.
     pub(crate) fn show_review_custom_prompt(&mut self) {
         let tx = self.app_event_tx.clone();
         let view = CustomPromptView::new(
@@ -4046,6 +4441,7 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    /// Return the latest total token usage for the session.
     pub(crate) fn token_usage(&self) -> TokenUsage {
         self.token_info
             .as_ref()
@@ -4053,14 +4449,17 @@ impl ChatWidget {
             .unwrap_or_default()
     }
 
+    /// Return the current conversation id, if configured.
     pub(crate) fn conversation_id(&self) -> Option<ThreadId> {
         self.conversation_id
     }
 
+    /// Return the current rollout path, if one has been assigned.
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
     }
 
+    /// Return true once session configuration has completed.
     fn is_session_configured(&self) -> bool {
         self.conversation_id.is_some()
     }
@@ -4102,10 +4501,12 @@ impl ChatWidget {
         &self.config
     }
 
+    /// Clear any cached token usage information from the UI state.
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
     }
 
+    /// Build a renderable tree combining the transcript and bottom pane.
     fn as_renderable(&self) -> RenderableItem<'_> {
         let active_cell_renderable = match &self.active_cell {
             Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
@@ -4122,34 +4523,47 @@ impl ChatWidget {
 }
 
 impl Drop for ChatWidget {
+    /// Abort background tasks when the widget is dropped.
     fn drop(&mut self) {
         self.stop_rate_limit_poller();
     }
 }
 
 impl Renderable for ChatWidget {
+    /// Render the transcript and bottom pane into the provided buffer.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
+    /// Return the desired height for the current layout given the width.
     fn desired_height(&self, width: u16) -> u16 {
         self.as_renderable().desired_height(width)
     }
 
+    /// Return the cursor position in the composed UI, if any.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
     }
 }
 
+/// Notification events shown outside the TUI (system notifications).
 enum Notification {
+    /// Agent turn completion, with the last response text.
     AgentTurnComplete { response: String },
+
+    /// Exec approval request prompt with a command summary.
     ExecApprovalRequested { command: String },
+
+    /// Patch approval request prompt with target paths.
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+
+    /// MCP elicitation request prompt with server name.
     ElicitationRequested { server_name: String },
 }
 
 impl Notification {
+    /// Render the notification for display in OS-level notices.
     fn display(&self) -> String {
         match self {
             Notification::AgentTurnComplete { response } => {
@@ -4176,6 +4590,7 @@ impl Notification {
         }
     }
 
+    /// Return the settings key used to filter this notification.
     fn type_name(&self) -> &str {
         match self {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
@@ -4185,6 +4600,7 @@ impl Notification {
         }
     }
 
+    /// Return true if this notification type is allowed by user settings.
     fn allowed_for(&self, settings: &Notifications) -> bool {
         match settings {
             Notifications::Enabled(enabled) => *enabled,
@@ -4192,6 +4608,7 @@ impl Notification {
         }
     }
 
+    /// Build a single-line preview of an agent response for notifications.
     fn agent_turn_preview(response: &str) -> Option<String> {
         let mut normalized = String::new();
         for part in response.split_whitespace() {
@@ -4209,8 +4626,10 @@ impl Notification {
     }
 }
 
+/// Maximum grapheme count for agent completion notifications.
 const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
 
+/// Placeholder prompts shown in the composer before the first input.
 const PLACEHOLDERS: [&str; 8] = [
     "Explain this codebase",
     "Summarize recent commits",
@@ -4222,8 +4641,9 @@ const PLACEHOLDERS: [&str; 8] = [
     "Use /skills to list available skills",
 ];
 
-// Extract the first bold (Markdown) element in the form **...** from `s`.
-// Returns the inner text if found; otherwise `None`.
+/// Extract the first bold Markdown element (`**...**`) from `s`.
+///
+/// Returns the inner text if found, otherwise `None`.
 fn extract_first_bold(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
     let mut i = 0usize;
@@ -4244,6 +4664,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
                 }
                 j += 1;
             }
+
             // No closing; stop searching (wait for more deltas)
             return None;
         }
@@ -4252,6 +4673,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
     None
 }
 
+/// Fetch the latest rate-limit snapshot for the authenticated session.
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
     match BackendClient::from_auth(base_url, &auth) {
         Ok(client) => match client.get_rate_limits().await {
@@ -4268,6 +4690,7 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimi
     }
 }
 
+/// Show a review commit picker with pre-populated entries (test-only helper).
 #[cfg(test)]
 pub(crate) fn show_review_commit_picker_with_entries(
     chat: &mut ChatWidget,
@@ -4308,6 +4731,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
     });
 }
 
+/// Find skills referenced in the input text using `$skill` mentions.
 fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut matches: Vec<SkillMetadata> = Vec::new();
@@ -4324,6 +4748,7 @@ fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadat
     matches
 }
 
+/// Return the skills list for a specific cwd from the backend response.
 fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
     skills_entries
         .iter()

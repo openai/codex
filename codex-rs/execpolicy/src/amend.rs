@@ -55,7 +55,7 @@ pub enum AmendError {
 }
 
 /// Note this thread uses advisory file locking and performs blocking I/O, so it should be used with
-/// [`tokio::task::spawn_blocking`] when called from an async context.
+/// `tokio::task::spawn_blocking` when called from an async context.
 pub fn blocking_append_allow_prefix_rule(
     policy_path: &Path,
     prefix: &[String],

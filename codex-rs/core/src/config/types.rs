@@ -197,7 +197,7 @@ const fn default_enabled() -> bool {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
 pub enum McpServerTransportConfig {
-    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
+    /// <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio>
     Stdio {
         command: String,
         #[serde(default)]
@@ -209,7 +209,7 @@ pub enum McpServerTransportConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,
     },
-    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
+    /// <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http>
     StreamableHttp {
         url: String,
         /// Name of the environment variable to read for an HTTP bearer token.

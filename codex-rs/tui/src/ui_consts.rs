@@ -8,4 +8,5 @@
 /// - Status indicator lines begin with this many spaces for alignment.
 /// - User history lines account for this many columns (e.g., "▌ ") when wrapping.
 pub(crate) const LIVE_PREFIX_COLS: u16 = 2;
+/// Footer indentation in columns, derived from the live prefix width.
 pub(crate) const FOOTER_INDENT_COLS: usize = LIVE_PREFIX_COLS as usize;

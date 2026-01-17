@@ -184,7 +184,7 @@ pub struct Codex {
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
 }
 
-/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
+/// Wrapper returned by `Codex::spawn` containing the spawned [`Codex`],
 /// the submission id for the initial `ConfigureSession` request and the
 /// unique session id.
 pub struct CodexSpawnOk {

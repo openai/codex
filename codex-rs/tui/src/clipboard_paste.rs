@@ -1,12 +1,24 @@
+//! Clipboard paste utilities for images and file paths.
+//!
+//! Image pasting prefers native clipboard images, falling back to file-backed clipboard entries
+//! and (on WSL) a PowerShell bridge that writes the Windows clipboard image to a temporary file.
+//! Path normalization handles `file://` URLs, Windows/UNC paths, and shell-escaped POSIX paths so
+//! the caller can treat pasted text as a candidate filesystem path.
+
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
 
+/// Errors that can occur when pasting images from the system clipboard.
 #[derive(Debug, Clone)]
 pub enum PasteImageError {
+    /// Clipboard access failed or is unavailable.
     ClipboardUnavailable(String),
+    /// Clipboard is accessible but contains no image data.
     NoImage(String),
+    /// Encoding or image buffer conversion failed.
     EncodeFailed(String),
+    /// I/O operations (temp file creation, writes) failed.
     IoError(String),
 }
 
@@ -24,12 +36,16 @@ impl std::error::Error for PasteImageError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodedImageFormat {
+    /// PNG image data.
     Png,
+    /// JPEG image data.
     Jpeg,
+    /// Unknown or unsupported image format.
     Other,
 }
 
 impl EncodedImageFormat {
+    /// Return a short uppercase label for UI display.
     pub fn label(self) -> &'static str {
         match self {
             EncodedImageFormat::Png => "PNG",
@@ -39,14 +55,21 @@ impl EncodedImageFormat {
     }
 }
 
+/// Metadata describing a pasted image.
 #[derive(Debug, Clone)]
 pub struct PastedImageInfo {
+    /// Pixel width of the image.
     pub width: u32,
+    /// Pixel height of the image.
     pub height: u32,
+    /// Encoded image format reported to the UI.
     pub encoded_format: EncodedImageFormat, // Always PNG for now.
 }
 
 /// Capture image from system clipboard, encode to PNG, and return bytes + info.
+///
+/// This attempts file-backed clipboard entries first (for example Finder copy), then falls back
+/// to direct clipboard image bytes (for example from a browser).
 #[cfg(not(target_os = "android"))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     let _span = tracing::debug_span!("paste_image_as_png").entered();
@@ -229,6 +252,7 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
 }
 
 #[cfg(target_os = "android")]
+/// Android/Termux does not support clipboard image pasting; return a clear error.
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
     // Keep error consistent with paste_image_as_png.
     Err(PasteImageError::ClipboardUnavailable(
@@ -295,6 +319,7 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     None
 }
 
+/// Best-effort detection of WSL environments for clipboard fallbacks.
 #[cfg(target_os = "linux")]
 pub(crate) fn is_probably_wsl() -> bool {
     // Primary: Check /proc/version for "microsoft" or "WSL" (most reliable for standard WSL).
@@ -311,6 +336,7 @@ pub(crate) fn is_probably_wsl() -> bool {
     std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some()
 }
 
+/// Convert a Windows drive-letter path (C:\\...) into a WSL `/mnt/<drive>` path.
 #[cfg(target_os = "linux")]
 fn convert_windows_path_to_wsl(input: &str) -> Option<PathBuf> {
     if input.starts_with("\\\\") {

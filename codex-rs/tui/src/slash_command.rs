@@ -1,3 +1,8 @@
+//! Defines the slash commands recognized by the TUI message composer.
+//! These commands map to kebab-case strings for parsing and display, and their
+//! declaration order is the presentation order used by the command popup.
+//! Debug-only commands remain in the enum but are filtered from release builds.
+
 use strum::IntoEnumIterator;
 use strum_macros::AsRefStr;
 use strum_macros::EnumIter;
@@ -5,13 +10,14 @@ use strum_macros::EnumString;
 use strum_macros::IntoStaticStr;
 
 /// Commands that can be invoked by starting a message with a leading slash.
+///
+/// The variant order is the popup presentation order, so frequently used
+/// commands should appear first.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, EnumIter, AsRefStr, IntoStaticStr,
 )]
 #[strum(serialize_all = "kebab-case")]
 pub enum SlashCommand {
-    // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
-    // more frequently used commands should be listed first.
     Model,
     Approvals,
     #[strum(serialize = "setup-elevated-sandbox")]
@@ -39,7 +45,7 @@ pub enum SlashCommand {
 }
 
 impl SlashCommand {
-    /// User-visible description shown in the popup.
+    /// Returns the user-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
             SlashCommand::Feedback => "send logs to maintainers",
@@ -67,13 +73,17 @@ impl SlashCommand {
         }
     }
 
-    /// Command string without the leading '/'. Provided for compatibility with
-    /// existing code that expects a method named `command()`.
+    /// Returns the command string without the leading `/`.
+    ///
+    /// This exists for compatibility with code that expects a `command()` method.
     pub fn command(self) -> &'static str {
         self.into()
     }
 
-    /// Whether this command can be run while a task is in progress.
+    /// Reports whether this command can run while a task is in progress.
+    ///
+    /// Commands that mutate session state or start new flows are blocked while
+    /// a task is active to avoid disrupting long-running work.
     pub fn available_during_task(self) -> bool {
         match self {
             SlashCommand::New
@@ -102,6 +112,9 @@ impl SlashCommand {
         }
     }
 
+    /// Returns whether the command should be visible in the popup.
+    ///
+    /// Debug-only commands are hidden in release builds.
     fn is_visible(self) -> bool {
         match self {
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
@@ -110,7 +123,7 @@ impl SlashCommand {
     }
 }
 
-/// Return all built-in commands in a Vec paired with their command string.
+/// Returns all visible built-in commands paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
     SlashCommand::iter()
         .filter(|command| command.is_visible())

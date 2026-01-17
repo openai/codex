@@ -1,0 +1,1319 @@
+# Documentation Status: codex-rs .rs Inventory
+
+Notes
+
+- The TUI pass runs in parallel across `codex-rs/tui` and `codex-rs/tui2` for shared modules.
+- Before starting work, claim (lock) a module pair in this file with session number and date.
+- After updating a claim, re-open this file to confirm ordering and avoid overlap.
+Orchestrator workflow
+
+- Start by reading `docs/documentation-pass.md` and this file.
+- Loop: check for any "just finished" claims; if present, verify with `jj diff --no-pager --git
+  <path>`.
+
+- If no "just finished" claims remain, sleep 10 seconds and re-read both docs before checking again.
+- Only write notes when there is a new validation, follow-up, or linkage to report (no heartbeat
+  logs).
+
+Orchestrator duties
+
+- Validate completed work against diffs; remove verified entries from "Current module".
+- Track remaining TUI coverage (checked vs unchecked) and keep a short "what’s left" estimate.
+- Suggest adjacent modules/types to document next, especially `tui`/`tui2` twins and shared helpers.
+- Surface cross-module linkages or invariants that aren’t obvious from single-file context.
+Worker session instructions
+
+- Claim (lock) a module pair here before editing; include session number and date.
+- Work top-to-bottom within a single file; finish the `tui`/`tui2` twin before moving on.
+- Update TODO checkboxes when a file (and its twin) is fully documented.
+- If work is partial, leave the claim in "Current module" with a brief status note.
+Documentation standards (apply everywhere)
+- Markdown hygiene: use headings for sections; keep a blank line before lists.
+- No blank lines between list items within the same list.
+- Wrap paragraphs and list items at 100 characters.
+- Keep the file checklist separated from narrative sections with a blank line.
+
+- Comment spacing: blank line before any comment block, none after, and none immediately after item
+  headers.
+
+- Doc vs inline: use `///` for contracts; reserve `//` for local, non-obvious logic notes.
+- Attribute ordering: doc comments must appear before `#[...]` attributes.
+- Depth: long functions/structs need 2–4 sentence overviews (phases, lifecycle, ownership).
+- Refresh module and struct docs after item/field docs to pull up new invariants.
+- No bulk edits: fix spacing/doc issues file-by-file.
+- Tests: explain the invariant/flow exercised; omit doc comments if they add no value.
+Rustdoc lint tracking
+
+- Run `cargo doc` after significant updates; record new warning patterns here.
+- Known failures (2026-01-18): `target/doc/search.index/entry` missing; consider cleaning
+  `target/doc`.
+- Recent run (2026-01-18): `cargo doc -p codex-file-search` failed with the same
+  `target/doc/search.index/entry` error; no new warning patterns observed.
+
+- Known warning patterns:
+  - `rustdoc::bare_urls`: replace with `<https://...>` or reference links.
+  - `rustdoc::broken_intra_doc_links`: use fully-qualified paths or backticks.
+  - `rustdoc::private_intra_doc_links`: avoid linking private items; use backticks/public wrappers.
+  - `rustdoc::invalid_html_tags`: avoid `<key>`-style placeholders; use backticks or `&lt;...&gt;`.
+  - Bracketed labels like `[UNSTABLE]` or `[x]` are treated as links; use backticks or escape
+    brackets.
+
+- Latest `cargo doc` scan (2026-01-18):
+  - Bare URLs in `mcp-types/src/lib.rs`, `protocol/src/config_types.rs`,
+    `protocol/src/openai_models.rs`,
+    `rmcp-client/src/{oauth,rmcp_client}.rs`, `core/src/config/{mod,types}.rs`,
+    `core/src/config_loader/mod.rs`, `core/src/default_client.rs`,
+    ` (fixed in 2026-01-18 doc pass)`, `
+    (fixed in 2026-01-18 doc pass)`, `cli/src/main.rs`.
+
+  - Broken intra-doc links in `protocol/src/protocol.rs`, `app-server-
+    protocol/src/protocol/{common,v1,v2}.rs`,
+    `execpolicy/src/amend.rs`, `core/src/{config,rollout}/*`.
+
+  - Private intra-doc links in `core/src/codex.rs`.
+  - Invalid HTML tags from `<ts>/<uuid>` in `core/src/rollout/list.rs` and `<u16>` in `responses-
+    api-proxy/src/lib.rs`.
+
+  - Bracketed labels treated as links in `app-server-protocol/src/protocol/v2.rs`,
+    `core/src/review_format.rs`,
+    and `cli/src/main.rs`.
+
+Actionable items (orchestrator)
+
+- Keep the "Current module" list accurate: remove verified entries; keep in-flight locks only.
+- Keep the coverage estimate up to date when TODO checkboxes change.
+- Suggest next modules with explicit linkages (e.g., `event_stream` ↔ `streaming/controller`).
+TODO checklist hygiene (all sessions)
+
+- When you finish a file, update the TODO checkboxes for that file (and its containing folders if
+  appropriate) so progress stays accurate for everyone.
+
+- If you finished both a `tui` module and its `tui2` twin, update both checkboxes in the same edit.
+- If a file is only partially documented, do not check it off; add a brief note under "Current
+  module" instead.
+
+Current module (complete before moving on)
+
+Progress snapshot (update when TODOs change)
+
+- Remaining TUI doc coverage estimate: `tui` 113/113 checked (0 unchecked), `tui2` 123/123 checked
+  (0 unchecked).
+
+Self-instructions (orchestrator)
+
+- Start by reading `docs/documentation-pass.md` and this file before making notes.
+- Verify pending claims with `jj diff --no-pager --git` on the specific file, then add short
+  observations under the relevant sections.
+
+- Look for follow-on opportunities in adjacent files (same module directory, `tui`/`tui2` twins, or
+  shared helpers) and call them out explicitly.
+
+- Keep notes concise: what changed, any regressions or missing docs, and next logical file(s).
+- Re-read and update these self-instructions whenever they drift or when new rules are added.
+
+- [ ] .cargo/
+- [ ] .config/
+- [ ] .github/
+  - [ ] workflows/
+- [x] ansi-escape/
+  - [x] src/
+    - [x] lib.rs
+- [ ] app-server/
+  - [ ] src/
+    - [x] bespoke_event_handling.rs
+    - [x] codex_message_processor.rs
+    - [ ] config_api.rs
+    - [ ] error_code.rs
+    - [ ] fuzzy_file_search.rs
+    - [x] lib.rs
+    - [x] main.rs
+    - [ ] message_processor.rs
+    - [ ] models.rs
+    - [ ] outgoing_message.rs
+  - [ ] tests/
+    - [ ] common/
+      - [ ] auth_fixtures.rs
+      - [ ] lib.rs
+      - [ ] mcp_process.rs
+      - [ ] mock_model_server.rs
+      - [ ] models_cache.rs
+      - [ ] responses.rs
+      - [ ] rollout.rs
+    - [ ] suite/
+      - [ ] v2/
+        - [ ] account.rs
+        - [ ] analytics.rs
+        - [ ] config_rpc.rs
+        - [ ] initialize.rs
+        - [ ] mod.rs
+        - [ ] model_list.rs
+        - [ ] output_schema.rs
+      - [x] rate_limits.rs
+        - [ ] review.rs
+        - [ ] thread_archive.rs
+        - [ ] thread_fork.rs
+        - [ ] thread_list.rs
+        - [ ] thread_loaded_list.rs
+        - [ ] thread_resume.rs
+        - [ ] thread_rollback.rs
+        - [ ] thread_start.rs
+        - [ ] turn_interrupt.rs
+        - [ ] turn_start.rs
+      - [ ] archive_thread.rs
+      - [ ] auth.rs
+      - [ ] codex_message_processor_flow.rs
+      - [ ] config.rs
+      - [ ] create_thread.rs
+      - [ ] fork_thread.rs
+      - [ ] fuzzy_file_search.rs
+      - [ ] interrupt.rs
+      - [ ] list_resume.rs
+      - [ ] login.rs
+      - [x] mod.rs
+      - [ ] output_schema.rs
+      - [ ] send_message.rs
+      - [ ] set_default_model.rs
+      - [ ] user_agent.rs
+      - [ ] user_info.rs
+    - [x] all.rs
+- [ ] app-server-protocol/
+  - [ ] src/
+    - [ ] bin/
+      - [ ] export.rs
+    - [ ] protocol/
+      - [ ] common.rs
+      - [ ] mappers.rs
+      - [x] mod.rs
+      - [ ] thread_history.rs
+      - [ ] v1.rs
+      - [ ] v2.rs
+    - [ ] export.rs
+    - [ ] jsonrpc_lite.rs
+    - [x] lib.rs
+- [x] app-server-test-client/
+  - [x] src/
+    - [x] main.rs
+- [ ] apply-patch/
+  - [ ] src/
+    - [ ] invocation.rs
+    - [x] lib.rs
+    - [x] main.rs
+    - [ ] parser.rs
+    - [ ] seek_sequence.rs
+    - [ ] standalone_executable.rs
+  - [ ] tests/
+    - [ ] fixtures/
+      - [ ] scenarios/
+        - [ ] 001_add_file/
+          - [ ] expected/
+        - [ ] 002_multiple_operations/
+          - [ ] expected/
+            - [ ] nested/
+          - [ ] input/
+        - [ ] 003_multiple_chunks/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 004_move_to_new_directory/
+          - [ ] expected/
+            - [ ] old/
+            - [ ] renamed/
+              - [ ] dir/
+          - [ ] input/
+            - [ ] old/
+        - [ ] 005_rejects_empty_patch/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 006_rejects_missing_context/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 007_rejects_missing_file_delete/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 008_rejects_empty_update_hunk/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 009_requires_existing_file_for_update/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 010_move_overwrites_existing_destination/
+          - [ ] expected/
+            - [ ] old/
+            - [ ] renamed/
+              - [ ] dir/
+          - [ ] input/
+            - [ ] old/
+            - [ ] renamed/
+              - [ ] dir/
+        - [ ] 011_add_overwrites_existing_file/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 012_delete_directory_fails/
+          - [ ] expected/
+            - [ ] dir/
+          - [ ] input/
+            - [ ] dir/
+        - [ ] 013_rejects_invalid_hunk_header/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 014_update_file_appends_trailing_newline/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 015_failure_after_partial_success_leaves_changes/
+          - [ ] expected/
+        - [ ] 016_pure_addition_update_chunk/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 017_whitespace_padded_hunk_header/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 018_whitespace_padded_patch_markers/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 019_unicode_simple/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 020_delete_file_success/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 020_whitespace_padded_patch_marker_lines/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 021_update_file_deletion_only/
+          - [ ] expected/
+          - [ ] input/
+        - [ ] 022_update_file_end_of_file_marker/
+          - [ ] expected/
+          - [ ] input/
+    - [ ] suite/
+      - [ ] cli.rs
+      - [x] mod.rs
+      - [ ] scenarios.rs
+      - [ ] tool.rs
+    - [x] all.rs
+- [x] arg0/
+  - [x] src/
+    - [x] lib.rs
+- [x] async-utils/
+  - [x] src/
+    - [x] lib.rs
+- [ ] backend-client/
+  - [ ] src/
+    - [ ] client.rs
+    - [x] lib.rs
+    - [ ] types.rs
+  - [ ] tests/
+    - [ ] fixtures/
+- [ ] chatgpt/
+  - [ ] src/
+    - [ ] apply_command.rs
+    - [ ] chatgpt_client.rs
+    - [ ] chatgpt_token.rs
+    - [ ] get_task.rs
+    - [x] lib.rs
+  - [ ] tests/
+    - [ ] suite/
+      - [ ] apply_command_e2e.rs
+      - [x] mod.rs
+    - [x] all.rs
+- [ ] cli/
+  - [ ] src/
+    - [ ] debug_sandbox/
+      - [ ] pid_tracker.rs
+      - [ ] seatbelt.rs
+    - [ ] debug_sandbox.rs
+    - [ ] exit_status.rs
+    - [x] lib.rs
+    - [ ] login.rs
+    - [x] main.rs
+    - [ ] mcp_cmd.rs
+    - [ ] wsl_paths.rs
+  - [ ] tests/
+    - [ ] execpolicy.rs
+    - [ ] mcp_add_remove.rs
+    - [ ] mcp_list.rs
+- [ ] cloud-tasks/
+  - [ ] src/
+    - [x] app.rs
+    - [x] cli.rs
+    - [ ] env_detect.rs
+    - [x] lib.rs
+    - [ ] new_task.rs
+    - [ ] scrollable_diff.rs
+    - [ ] ui.rs
+    - [ ] util.rs
+  - [ ] tests/
+    - [ ] env_filter.rs
+- [ ] cloud-tasks-client/
+  - [ ] src/
+    - [ ] api.rs
+    - [ ] http.rs
+    - [x] lib.rs
+    - [ ] mock.rs
+- [ ] codex-api/
+  - [ ] src/
+    - [ ] endpoint/
+      - [ ] chat.rs
+      - [ ] compact.rs
+      - [x] mod.rs
+      - [ ] models.rs
+      - [ ] responses.rs
+      - [ ] responses_websocket.rs
+      - [ ] streaming.rs
+    - [ ] requests/
+      - [ ] chat.rs
+      - [ ] headers.rs
+      - [x] mod.rs
+      - [ ] responses.rs
+    - [ ] sse/
+      - [ ] chat.rs
+      - [x] mod.rs
+      - [ ] responses.rs
+    - [ ] auth.rs
+    - [ ] common.rs
+    - [ ] error.rs
+    - [x] lib.rs
+    - [ ] provider.rs
+      - [x] rate_limits.rs
+    - [ ] telemetry.rs
+    - [ ] tests/
+    - [ ] clients.rs
+    - [ ] models_integration.rs
+    - [ ] sse_end_to_end.rs
+- [ ] codex-backend-openapi-models/
+  - [ ] src/
+    - [ ] models/
+      - [ ] code_task_details_response.rs
+      - [ ] credit_status_details.rs
+      - [ ] external_pull_request_response.rs
+      - [ ] git_pull_request.rs
+      - [x] mod.rs
+      - [ ] paginated*list_task_list_item*.rs
+      - [ ] rate_limit_status_details.rs
+      - [ ] rate_limit_status_payload.rs
+      - [ ] rate_limit_window_snapshot.rs
+      - [ ] task_list_item.rs
+      - [ ] task_response.rs
+    - [x] lib.rs
+- [ ] codex-client/
+  - [ ] src/
+    - [ ] default_client.rs
+    - [ ] error.rs
+    - [x] lib.rs
+    - [ ] request.rs
+    - [ ] retry.rs
+    - [ ] sse.rs
+    - [ ] telemetry.rs
+    - [ ] transport.rs
+- [ ] common/
+  - [ ] src/
+    - [ ] approval_mode_cli_arg.rs
+    - [ ] approval_presets.rs
+    - [ ] config_override.rs
+    - [ ] config_summary.rs
+    - [ ] elapsed.rs
+    - [ ] format_env_display.rs
+    - [ ] fuzzy_match.rs
+    - [x] lib.rs
+    - [ ] oss.rs
+    - [ ] sandbox_mode_cli_arg.rs
+    - [ ] sandbox_summary.rs
+- [ ] core/
+  - [ ] src/
+    - [ ] agent/
+      - [ ] control.rs
+      - [x] mod.rs
+      - [ ] role.rs
+      - [ ] status.rs
+    - [ ] auth/
+      - [ ] storage.rs
+    - [ ] bin/
+      - [ ] config_schema.rs
+    - [ ] command_safety/
+      - [ ] is_dangerous_command.rs
+      - [ ] is_safe_command.rs
+      - [ ] mod.rs
+      - [ ] windows_dangerous_commands.rs
+      - [ ] windows_safe_commands.rs
+    - [ ] config/
+      - [ ] constraint.rs
+      - [ ] edit.rs
+      - [ ] mod.rs
+      - [ ] profile.rs
+      - [ ] schema.rs
+      - [ ] service.rs
+      - [ ] types.rs
+    - [ ] config_loader/
+      - [ ] config_requirements.rs
+      - [ ] fingerprint.rs
+      - [ ] layer_io.rs
+      - [ ] macos.rs
+      - [ ] merge.rs
+      - [ ] mod.rs
+      - [ ] overrides.rs
+      - [ ] state.rs
+      - [x] tests.rs
+    - [ ] context_manager/
+      - [ ] history.rs
+      - [ ] history_tests.rs
+      - [ ] mod.rs
+      - [ ] normalize.rs
+    - [ ] features/
+      - [ ] legacy.rs
+    - [ ] mcp/
+      - [ ] auth.rs
+      - [ ] mod.rs
+    - [ ] models_manager/
+      - [ ] cache.rs
+      - [ ] manager.rs
+      - [ ] mod.rs
+      - [ ] model_info.rs
+      - [ ] model_presets.rs
+    - [ ] rollout/
+      - [ ] error.rs
+      - [ ] list.rs
+      - [ ] mod.rs
+      - [ ] policy.rs
+      - [ ] recorder.rs
+      - [x] tests.rs
+      - [ ] truncation.rs
+    - [ ] sandboxing/
+      - [ ] mod.rs
+    - [ ] skills/
+      - [ ] assets/
+        - [ ] samples/
+          - [ ] skill-creator/
+            - [ ] scripts/
+          - [ ] skill-installer/
+            - [ ] scripts/
+      - [ ] injection.rs
+      - [ ] loader.rs
+      - [ ] manager.rs
+      - [ ] mod.rs
+      - [ ] model.rs
+      - [ ] render.rs
+      - [ ] system.rs
+    - [ ] state/
+      - [ ] mod.rs
+      - [ ] service.rs
+      - [ ] session.rs
+      - [ ] turn.rs
+    - [ ] tasks/
+      - [ ] compact.rs
+      - [ ] ghost_snapshot.rs
+      - [ ] mod.rs
+      - [ ] regular.rs
+      - [ ] review.rs
+      - [ ] undo.rs
+      - [ ] user_shell.rs
+    - [ ] tools/
+      - [ ] handlers/
+        - [ ] apply_patch.rs
+        - [ ] collab.rs
+        - [ ] grep_files.rs
+        - [ ] list_dir.rs
+        - [ ] mcp.rs
+        - [ ] mcp_resource.rs
+        - [ ] mod.rs
+        - [ ] plan.rs
+        - [ ] read_file.rs
+        - [ ] shell.rs
+        - [ ] test_sync.rs
+        - [ ] unified_exec.rs
+        - [ ] view_image.rs
+      - [ ] runtimes/
+        - [ ] apply_patch.rs
+        - [ ] mod.rs
+        - [ ] shell.rs
+        - [ ] unified_exec.rs
+      - [ ] context.rs
+      - [ ] events.rs
+      - [ ] mod.rs
+      - [ ] orchestrator.rs
+      - [ ] parallel.rs
+      - [ ] registry.rs
+      - [ ] router.rs
+      - [ ] sandboxing.rs
+      - [ ] spec.rs
+    - [ ] unified_exec/
+      - [ ] async_watcher.rs
+      - [ ] errors.rs
+      - [ ] head_tail_buffer.rs
+      - [ ] mod.rs
+      - [ ] process.rs
+      - [ ] process_manager.rs
+    - [ ] api_bridge.rs
+    - [ ] apply_patch.rs
+    - [ ] auth.rs
+    - [ ] bash.rs
+    - [ ] client.rs
+    - [ ] client_common.rs
+    - [ ] codex.rs
+    - [ ] codex_delegate.rs
+    - [ ] codex_thread.rs
+    - [ ] compact.rs
+    - [ ] compact_remote.rs
+    - [ ] custom_prompts.rs
+    - [ ] default_client.rs
+    - [ ] env.rs
+    - [ ] environment_context.rs
+    - [ ] error.rs
+    - [ ] event_mapping.rs
+    - [ ] exec.rs
+    - [ ] exec_env.rs
+    - [ ] exec_policy.rs
+    - [ ] features.rs
+    - [ ] flags.rs
+    - [ ] function_tool.rs
+    - [ ] git_info.rs
+    - [ ] landlock.rs
+    - [x] lib.rs
+    - [ ] mcp_connection_manager.rs
+    - [ ] mcp_tool_call.rs
+    - [ ] message_history.rs
+    - [ ] model_provider_info.rs
+    - [ ] otel_init.rs
+    - [ ] parse_command.rs
+    - [ ] path_utils.rs
+    - [ ] powershell.rs
+    - [ ] project_doc.rs
+    - [ ] review_format.rs
+    - [ ] review_prompts.rs
+    - [ ] safety.rs
+    - [ ] seatbelt.rs
+    - [ ] shell.rs
+    - [ ] shell_snapshot.rs
+    - [ ] spawn.rs
+    - [ ] stream_events_utils.rs
+    - [ ] terminal.rs
+    - [ ] text_encoding.rs
+    - [ ] thread_manager.rs
+    - [ ] token_data.rs
+    - [ ] truncate.rs
+    - [ ] turn_diff_tracker.rs
+    - [ ] user_instructions.rs
+    - [ ] user_notification.rs
+    - [ ] user_shell_command.rs
+    - [ ] util.rs
+    - [ ] windows_sandbox.rs
+  - [ ] templates/
+    - [ ] agents/
+    - [ ] collab/
+    - [ ] compact/
+    - [ ] review/
+  - [ ] tests/
+    - [ ] common/
+      - [ ] lib.rs
+      - [ ] process.rs
+      - [ ] responses.rs
+      - [ ] streaming_sse.rs
+      - [ ] test_codex.rs
+      - [ ] test_codex_exec.rs
+    - [ ] fixtures/
+    - [ ] suite/
+      - [ ] abort_tasks.rs
+      - [ ] agent_websocket.rs
+      - [ ] apply_patch_cli.rs
+      - [ ] approvals.rs
+      - [ ] auth_refresh.rs
+      - [ ] cli_stream.rs
+      - [ ] client.rs
+      - [ ] client_websockets.rs
+      - [ ] codex_delegate.rs
+      - [ ] compact.rs
+      - [ ] compact_remote.rs
+      - [ ] compact_resume_fork.rs
+      - [ ] deprecation_notice.rs
+      - [ ] exec.rs
+      - [ ] exec_policy.rs
+      - [ ] fork_thread.rs
+      - [ ] grep_files.rs
+      - [ ] hierarchical_agents.rs
+      - [ ] image_rollout.rs
+      - [ ] items.rs
+      - [ ] json_result.rs
+      - [ ] list_dir.rs
+      - [ ] list_models.rs
+      - [ ] live_cli.rs
+      - [ ] mod.rs
+      - [ ] model_info_overrides.rs
+      - [ ] model_overrides.rs
+      - [ ] model_tools.rs
+      - [ ] models_cache_ttl.rs
+      - [ ] models_etag_responses.rs
+      - [ ] otel.rs
+      - [ ] pending_input.rs
+      - [ ] permissions_messages.rs
+      - [ ] prompt_caching.rs
+      - [ ] quota_exceeded.rs
+      - [ ] read_file.rs
+      - [ ] remote_models.rs
+      - [ ] request_compression.rs
+      - [ ] resume.rs
+      - [ ] resume_warning.rs
+      - [ ] review.rs
+      - [ ] rmcp_client.rs
+      - [ ] rollout_list_find.rs
+      - [ ] seatbelt.rs
+      - [ ] shell_command.rs
+      - [ ] shell_serialization.rs
+      - [ ] shell_snapshot.rs
+      - [ ] skills.rs
+      - [ ] stream_error_allows_next_turn.rs
+      - [ ] stream_no_completed.rs
+      - [ ] text_encoding_fix.rs
+      - [ ] tool_harness.rs
+      - [ ] tool_parallelism.rs
+      - [ ] tools.rs
+      - [ ] truncation.rs
+      - [ ] turn_state.rs
+      - [ ] undo.rs
+      - [ ] unified_exec.rs
+      - [ ] user_notification.rs
+      - [ ] user_shell_cmd.rs
+      - [ ] view_image.rs
+      - [ ] web_search_cached.rs
+    - [x] all.rs
+    - [ ] chat_completions_payload.rs
+    - [ ] chat_completions_sse.rs
+    - [ ] responses_headers.rs
+- [ ] debug-client/
+  - [ ] src/
+    - [ ] client.rs
+    - [ ] commands.rs
+    - [x] main.rs
+    - [ ] output.rs
+    - [ ] reader.rs
+    - [ ] state.rs
+- [ ] docs/
+- [ ] exec/
+  - [ ] src/
+    - [x] cli.rs
+    - [ ] event_processor.rs
+    - [ ] event_processor_with_human_output.rs
+    - [ ] event_processor_with_jsonl_output.rs
+    - [ ] exec_events.rs
+    - [x] lib.rs
+    - [x] main.rs
+  - [ ] tests/
+    - [ ] fixtures/
+    - [ ] suite/
+      - [ ] add_dir.rs
+      - [ ] apply_patch.rs
+      - [ ] auth_env.rs
+      - [ ] mod.rs
+      - [ ] originator.rs
+      - [ ] output_schema.rs
+      - [ ] resume.rs
+      - [ ] sandbox.rs
+      - [ ] server_error_exit.rs
+    - [x] all.rs
+    - [ ] event_processor_with_json_output.rs
+- [ ] exec-server/
+  - [ ] src/
+    - [ ] bin/
+      - [ ] main_execve_wrapper.rs
+      - [ ] main_mcp_server.rs
+    - [ ] posix/
+      - [ ] escalate_client.rs
+      - [ ] escalate_protocol.rs
+      - [ ] escalate_server.rs
+      - [ ] escalation_policy.rs
+      - [ ] mcp.rs
+      - [ ] mcp_escalation_policy.rs
+      - [ ] socket.rs
+      - [ ] stopwatch.rs
+    - [x] lib.rs
+    - [ ] posix.rs
+  - [ ] tests/
+    - [ ] common/
+      - [ ] lib.rs
+    - [ ] suite/
+      - [ ] accept_elicitation.rs
+      - [ ] list_tools.rs
+      - [ ] mod.rs
+    - [x] all.rs
+- [ ] execpolicy/
+  - [ ] examples/
+  - [ ] src/
+    - [ ] amend.rs
+    - [ ] decision.rs
+    - [ ] error.rs
+    - [ ] execpolicycheck.rs
+    - [x] lib.rs
+    - [ ] main.rs
+    - [ ] parser.rs
+    - [ ] policy.rs
+    - [ ] rule.rs
+  - [ ] tests/
+    - [ ] basic.rs
+- [ ] execpolicy-legacy/
+  - [ ] src/
+    - [ ] arg_matcher.rs
+    - [ ] arg_resolver.rs
+    - [ ] arg_type.rs
+    - [ ] error.rs
+    - [ ] exec_call.rs
+    - [ ] execv_checker.rs
+    - [x] lib.rs
+    - [ ] main.rs
+    - [ ] opt.rs
+    - [ ] policy.rs
+    - [ ] policy_parser.rs
+    - [ ] program.rs
+    - [ ] sed_command.rs
+    - [ ] valid_exec.rs
+  - [ ] tests/
+    - [ ] suite/
+      - [ ] bad.rs
+      - [ ] cp.rs
+      - [ ] good.rs
+      - [ ] head.rs
+      - [ ] literal.rs
+      - [ ] ls.rs
+      - [ ] mod.rs
+      - [ ] parse_sed_command.rs
+      - [ ] pwd.rs
+      - [ ] sed.rs
+    - [ ] all.rs
+  - [ ] build.rs
+- [x] feedback/
+  - [x] src/
+    - [x] lib.rs
+- [ ] file-search/
+  - [ ] src/
+    - [x] cli.rs
+    - [x] lib.rs
+    - [x] main.rs
+- [ ] keyring-store/
+  - [ ] src/
+    - [x] lib.rs
+- [ ] linux-sandbox/
+  - [ ] src/
+    - [ ] landlock.rs
+    - [ ] lib.rs
+    - [ ] linux_run_main.rs
+    - [ ] main.rs
+    - [ ] mounts.rs
+  - [ ] tests/
+    - [ ] suite/
+      - [ ] landlock.rs
+      - [ ] mod.rs
+    - [ ] all.rs
+- [ ] lmstudio/
+  - [ ] src/
+    - [ ] client.rs
+    - [ ] lib.rs
+- [ ] login/
+  - [ ] src/
+    - [ ] assets/
+    - [ ] device_code_auth.rs
+    - [ ] lib.rs
+    - [ ] pkce.rs
+    - [ ] server.rs
+  - [ ] tests/
+    - [ ] suite/
+      - [ ] device_code_login.rs
+      - [ ] login_server_e2e.rs
+      - [ ] mod.rs
+    - [ ] all.rs
+- [ ] mcp-server/
+  - [ ] src/
+    - [ ] tool_handlers/
+      - [ ] mod.rs
+    - [ ] codex_tool_config.rs
+    - [ ] codex_tool_runner.rs
+    - [ ] error_code.rs
+    - [ ] exec_approval.rs
+    - [ ] lib.rs
+    - [ ] main.rs
+    - [ ] message_processor.rs
+    - [ ] outgoing_message.rs
+    - [ ] patch_approval.rs
+  - [ ] tests/
+    - [ ] common/
+      - [ ] lib.rs
+      - [ ] mcp_process.rs
+      - [ ] mock_model_server.rs
+      - [ ] responses.rs
+    - [ ] suite/
+      - [ ] codex_tool.rs
+      - [ ] mod.rs
+    - [ ] all.rs
+- [ ] mcp-types/
+  - [ ] schema/
+    - [ ] 2025-03-26/
+    - [ ] 2025-06-18/
+  - [ ] src/
+    - [ ] lib.rs
+  - [ ] tests/
+    - [ ] suite/
+      - [ ] initialize.rs
+      - [ ] mod.rs
+      - [ ] progress_notification.rs
+    - [ ] all.rs
+- [ ] ollama/
+  - [ ] src/
+    - [ ] client.rs
+    - [ ] lib.rs
+    - [ ] parser.rs
+    - [ ] pull.rs
+    - [ ] url.rs
+- [ ] otel/
+  - [ ] src/
+    - [ ] metrics/
+      - [ ] client.rs
+      - [ ] config.rs
+      - [ ] error.rs
+      - [ ] mod.rs
+      - [ ] timer.rs
+      - [ ] validation.rs
+    - [ ] traces/
+      - [ ] mod.rs
+      - [ ] otel_manager.rs
+    - [ ] config.rs
+    - [ ] lib.rs
+    - [ ] otel_provider.rs
+    - [ ] otlp.rs
+  - [ ] tests/
+    - [ ] harness/
+      - [ ] mod.rs
+    - [ ] suite/
+      - [ ] manager_metrics.rs
+      - [ ] mod.rs
+      - [ ] otlp_http_loopback.rs
+      - [ ] send.rs
+      - [ ] timing.rs
+      - [ ] validation.rs
+    - [ ] tests.rs
+- [ ] process-hardening/
+  - [ ] src/
+    - [ ] lib.rs
+- [ ] protocol/
+  - [ ] src/
+    - [ ] prompts/
+      - [ ] permissions/
+        - [ ] approval_policy/
+        - [ ] sandbox_mode/
+    - [ ] account.rs
+    - [ ] approvals.rs
+    - [ ] config_types.rs
+    - [ ] custom_prompts.rs
+    - [ ] items.rs
+    - [ ] lib.rs
+    - [ ] message_history.rs
+    - [ ] models.rs
+    - [ ] num_format.rs
+    - [ ] openai_models.rs
+    - [ ] parse_command.rs
+    - [ ] plan_tool.rs
+    - [ ] protocol.rs
+    - [ ] thread_id.rs
+    - [ ] user_input.rs
+- [ ] responses-api-proxy/
+  - [ ] npm/
+    - [ ] bin/
+  - [ ] src/
+    - [ ] lib.rs
+    - [ ] main.rs
+    - [ ] read_api_key.rs
+- [ ] rmcp-client/
+  - [ ] src/
+    - [ ] bin/
+      - [ ] rmcp_test_server.rs
+      - [ ] test_stdio_server.rs
+      - [ ] test_streamable_http_server.rs
+    - [ ] auth_status.rs
+    - [ ] find_codex_home.rs
+    - [ ] lib.rs
+    - [ ] logging_client_handler.rs
+    - [ ] oauth.rs
+    - [ ] perform_oauth_login.rs
+    - [ ] program_resolver.rs
+    - [ ] rmcp_client.rs
+    - [ ] utils.rs
+  - [ ] tests/
+    - [ ] resources.rs
+- [ ] scripts/
+- [ ] stdio-to-uds/
+  - [ ] src/
+    - [ ] lib.rs
+    - [ ] main.rs
+  - [ ] tests/
+    - [ ] stdio_to_uds.rs
+- [ ] tui/
+  - [ ] frames/
+    - [ ] blocks/
+    - [ ] codex/
+    - [ ] default/
+    - [ ] dots/
+    - [ ] hash/
+    - [ ] hbars/
+    - [ ] openai/
+    - [ ] shapes/
+    - [ ] slug/
+    - [ ] vbars/
+  - [ ] src/
+    - [x] bin/
+      - [x] md-events.rs
+    - [ ] bottom_pane/
+      - [ ] snapshots/
+      - [x] approval_overlay.rs
+      - [x] bottom_pane_view.rs
+      - [x] chat_composer.rs
+      - [x] chat_composer_history.rs
+      - [x] command_popup.rs
+      - [x] custom_prompt_view.rs
+      - [x] experimental_features_view.rs
+      - [x] feedback_view.rs
+      - [x] file_search_popup.rs
+      - [x] footer.rs
+      - [x] list_selection_view.rs
+      - [x] mod.rs
+      - [x] paste_burst.rs
+      - [x] popup_consts.rs
+      - [x] prompt_args.rs
+      - [x] queued_user_messages.rs
+      - [x] scroll_state.rs
+      - [x] selection_popup_common.rs
+      - [x] skill_popup.rs
+      - [x] textarea.rs
+      - [x] unified_exec_footer.rs
+    - [ ] chatwidget/
+      - [ ] snapshots/
+      - [x] agent.rs
+      - [x] interrupts.rs
+      - [x] session_header.rs
+      - [x] tests.rs
+    - [x] exec_cell/
+      - [x] mod.rs
+      - [x] model.rs
+      - [x] render.rs
+    - [x] notifications/
+      - [x] mod.rs
+      - [x] osc9.rs
+      - [x] windows_toast.rs
+    - [ ] onboarding/
+      - [x] auth/
+        - [x] headless_chatgpt_login.rs
+      - [ ] snapshots/
+      - [x] auth.rs
+      - [x] mod.rs
+      - [x] onboarding_screen.rs
+      - [x] trust_directory.rs
+      - [x] welcome.rs
+    - [x] public_widgets/
+      - [x] composer_input.rs
+      - [x] mod.rs
+    - [x] render/
+      - [x] highlight.rs
+      - [x] line_utils.rs
+      - [x] mod.rs
+      - [x] renderable.rs
+    - [ ] snapshots/
+    - [ ] status/
+      - [ ] snapshots/
+      - [x] account.rs
+      - [x] card.rs
+      - [x] format.rs
+      - [x] helpers.rs
+      - [x] mod.rs
+      - [x] rate_limits.rs
+      - [x] tests.rs
+    - [x] streaming/
+      - [x] controller.rs
+      - [x] mod.rs
+    - [x] tui/
+      - [x] event_stream.rs
+      - [x] frame_rate_limiter.rs
+      - [x] frame_requester.rs
+      - [x] job_control.rs
+    - [x] additional_dirs.rs
+    - [x] app.rs
+    - [x] app_backtrack.rs
+    - [x] app_event.rs
+    - [x] app_event_sender.rs
+    - [x] ascii_animation.rs
+    - [x] chatwidget.rs
+    - [x] cli.rs
+    - [x] clipboard_paste.rs
+    - [x] collab.rs
+    - [x] color.rs
+    - [x] custom_terminal.rs
+    - [x] diff_render.rs
+    - [x] exec_command.rs
+    - [x] external_editor.rs
+    - [x] file_search.rs
+    - [x] frames.rs
+    - [x] get_git_diff.rs
+    - [x] history_cell.rs
+    - [x] insert_history.rs
+    - [x] key_hint.rs
+    - [x] lib.rs
+    - [x] live_wrap.rs
+    - [x] main.rs
+    - [x] markdown.rs
+    - [x] markdown_render.rs
+    - [x] markdown_render_tests.rs
+    - [x] markdown_stream.rs
+    - [x] model_migration.rs
+    - [x] oss_selection.rs
+    - [x] pager_overlay.rs
+    - [x] resume_picker.rs
+    - [x] selection_list.rs
+    - [x] session_log.rs
+    - [x] shimmer.rs
+    - [x] slash_command.rs
+    - [x] status_indicator_widget.rs
+    - [x] style.rs
+    - [x] terminal_palette.rs
+    - [x] test_backend.rs
+    - [x] text_formatting.rs
+    - [x] tooltips.rs
+    - [x] tui.rs
+    - [x] ui_consts.rs
+    - [x] update_action.rs
+    - [x] update_prompt.rs
+    - [x] updates.rs
+    - [x] version.rs
+    - [x] wrapping.rs
+  - [ ] tests/
+    - [ ] fixtures/
+    - [x] suite/
+      - [x] mod.rs
+      - [x] no_panic_on_startup.rs
+      - [x] status_indicator.rs
+      - [x] vt100_history.rs
+      - [x] vt100_live_commit.rs
+    - [x] all.rs
+    - [x] test_backend.rs
+- [ ] tui2/
+  - [ ] docs/
+  - [ ] frames/
+    - [ ] blocks/
+    - [ ] codex/
+    - [ ] default/
+    - [ ] dots/
+    - [ ] hash/
+    - [ ] hbars/
+    - [ ] openai/
+    - [ ] shapes/
+    - [ ] slug/
+    - [ ] vbars/
+  - [ ] src/
+    - [x] bin/
+      - [x] md-events2.rs
+    - [ ] bottom_pane/
+      - [ ] snapshots/
+      - [x] approval_overlay.rs
+      - [x] bottom_pane_view.rs
+      - [x] chat_composer.rs
+      - [x] chat_composer_history.rs
+      - [x] command_popup.rs
+      - [x] custom_prompt_view.rs
+      - [x] feedback_view.rs
+      - [x] file_search_popup.rs
+      - [x] footer.rs
+      - [x] list_selection_view.rs
+      - [x] mod.rs
+      - [x] paste_burst.rs
+      - [x] popup_consts.rs
+      - [x] prompt_args.rs
+      - [x] queued_user_messages.rs
+      - [x] scroll_state.rs
+      - [x] selection_popup_common.rs
+      - [x] skill_popup.rs
+      - [x] textarea.rs
+    - [ ] chatwidget/
+      - [ ] snapshots/
+      - [x] agent.rs
+      - [x] interrupts.rs
+      - [x] session_header.rs
+      - [x] tests.rs
+    - [x] exec_cell/
+      - [x] mod.rs
+      - [x] model.rs
+      - [x] render.rs
+    - [x] notifications/
+      - [x] mod.rs
+      - [x] osc9.rs
+      - [x] windows_toast.rs
+    - [ ] onboarding/
+      - [x] auth/
+        - [x] headless_chatgpt_login.rs
+      - [ ] snapshots/
+      - [x] auth.rs
+      - [x] mod.rs
+      - [x] onboarding_screen.rs
+      - [x] trust_directory.rs
+      - [x] welcome.rs
+    - [x] public_widgets/
+      - [x] composer_input.rs
+      - [x] mod.rs
+    - [x] render/
+      - [x] highlight.rs
+      - [x] line_utils.rs
+      - [x] mod.rs
+      - [x] renderable.rs
+    - [ ] snapshots/
+    - [ ] status/
+      - [ ] snapshots/
+      - [x] account.rs
+      - [x] card.rs
+      - [x] format.rs
+      - [x] helpers.rs
+      - [x] mod.rs
+      - [x] rate_limits.rs
+      - [x] tests.rs
+    - [x] streaming/
+      - [x] controller.rs
+      - [x] mod.rs
+    - [x] tui/
+      - [x] scrolling/
+        - [x] mouse.rs
+      - [x] alt_screen_nesting.rs
+      - [x] frame_rate_limiter.rs
+      - [x] frame_requester.rs
+      - [x] job_control.rs
+      - [x] scrolling.rs
+    - [x] tui.rs
+    - [x] additional_dirs.rs
+    - [x] app.rs
+    - [x] app_backtrack.rs
+    - [x] app_event.rs
+    - [x] app_event_sender.rs
+    - [x] ascii_animation.rs
+    - [x] chatwidget.rs
+    - [x] cli.rs
+    - [x] clipboard_copy.rs
+    - [x] clipboard_paste.rs
+    - [x] collab.rs
+    - [x] color.rs
+    - [x] custom_terminal.rs
+    - [x] diff_render.rs
+    - [x] exec_command.rs
+    - [x] file_search.rs
+    - [x] frames.rs
+    - [x] get_git_diff.rs
+    - [x] history_cell.rs
+    - [x] insert_history.rs
+    - [x] key_hint.rs
+    - [x] lib.rs
+    - [x] live_wrap.rs
+    - [x] main.rs
+    - [x] markdown.rs
+    - [x] markdown_render.rs
+    - [x] markdown_render_tests.rs
+    - [x] markdown_stream.rs
+    - [x] model_migration.rs
+    - [x] oss_selection.rs
+    - [x] pager_overlay.rs
+    - [x] resume_picker.rs
+    - [x] selection_list.rs
+    - [x] session_log.rs
+    - [x] shimmer.rs
+    - [x] slash_command.rs
+    - [x] status_indicator_widget.rs
+    - [x] style.rs
+    - [x] terminal_palette.rs
+    - [x] test_backend.rs
+    - [x] text_formatting.rs
+    - [x] tooltips.rs
+    - [x] transcript_copy.rs
+    - [x] transcript_copy_action.rs
+    - [x] transcript_copy_ui.rs
+    - [x] transcript_multi_click.rs
+    - [x] transcript_render.rs
+    - [x] transcript_scrollbar.rs
+    - [x] transcript_scrollbar_ui.rs
+    - [x] transcript_selection.rs
+    - [x] transcript_view_cache.rs
+    - [x] tui.rs
+    - [x] ui_consts.rs
+    - [x] update_action.rs
+    - [x] update_prompt.rs
+    - [x] updates.rs
+    - [x] version.rs
+    - [x] wrapping.rs
+  - [ ] tests/
+    - [ ] fixtures/
+    - [x] suite/
+      - [x] mod.rs
+      - [x] no_panic_on_startup.rs
+      - [x] status_indicator.rs
+      - [x] vt100_history.rs
+      - [x] vt100_live_commit.rs
+    - [x] all.rs
+    - [x] test_backend.rs
+- [ ] utils/
+  - [ ] absolute-path/
+    - [ ] src/
+      - [ ] lib.rs
+  - [ ] cache/
+    - [ ] src/
+      - [ ] lib.rs
+  - [ ] cargo-bin/
+    - [ ] src/
+      - [ ] lib.rs
+  - [ ] git/
+    - [ ] src/
+      - [ ] apply.rs
+      - [ ] branch.rs
+      - [ ] errors.rs
+      - [ ] ghost_commits.rs
+      - [ ] lib.rs
+      - [ ] operations.rs
+      - [ ] platform.rs
+  - [ ] image/
+    - [ ] src/
+      - [ ] error.rs
+      - [ ] lib.rs
+  - [ ] json-to-toml/
+    - [ ] src/
+      - [ ] lib.rs
+  - [ ] pty/
+    - [ ] src/
+      - [ ] win/
+        - [ ] conpty.rs
+        - [ ] mod.rs
+        - [ ] procthreadattr.rs
+        - [ ] psuedocon.rs
+      - [ ] lib.rs
+      - [ ] pipe.rs
+      - [ ] process.rs
+      - [ ] process_group.rs
+      - [ ] pty.rs
+      - [ ] tests.rs
+  - [ ] readiness/
+    - [ ] src/
+      - [ ] lib.rs
+  - [ ] string/
+    - [ ] src/
+      - [ ] lib.rs
+- [ ] windows-sandbox-rs/
+  - [ ] src/
+    - [ ] bin/
+      - [ ] command_runner.rs
+      - [ ] setup_main.rs
+    - [ ] acl.rs
+    - [ ] allow.rs
+    - [ ] audit.rs
+    - [ ] cap.rs
+    - [ ] command_runner_win.rs
+    - [ ] cwd_junction.rs
+    - [ ] dpapi.rs
+    - [ ] elevated_impl.rs
+    - [ ] env.rs
+    - [ ] firewall.rs
+    - [ ] hide_users.rs
+    - [ ] identity.rs
+    - [ ] lib.rs
+    - [ ] logging.rs
+    - [ ] policy.rs
+    - [ ] process.rs
+    - [ ] read_acl_mutex.rs
+    - [ ] sandbox_users.rs
+    - [ ] setup_main_win.rs
+    - [ ] setup_orchestrator.rs
+    - [ ] token.rs
+    - [ ] winutil.rs
+  - [ ] build.rs

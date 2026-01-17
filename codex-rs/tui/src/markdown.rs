@@ -1,4 +1,15 @@
+//! Markdown rendering glue for the TUI text pipeline.
+//!
+//! This module adapts the markdown renderer into a simple `append_markdown`
+//! helper that pushes rendered lines into a caller-provided buffer. It owns no
+//! state and does not cache results; callers control when and how often the
+//! source is re-rendered.
 use ratatui::text::Line;
+
+/// Renders markdown into owned lines and appends them to the caller buffer.
+///
+/// The caller supplies the optional width hint and the destination vector so
+/// the same buffer can be reused across incremental renders.
 pub(crate) fn append_markdown(
     markdown_source: &str,
     width: Option<usize>,
@@ -14,6 +25,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::text::Line;
 
+    /// Flattens rendered lines into plain strings for snapshot-style checks.
     fn lines_to_strings(lines: &[Line<'static>]) -> Vec<String> {
         lines
             .iter()

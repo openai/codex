@@ -89,19 +89,30 @@ pub(crate) struct TranscriptScrollbarUi {
 /// concrete top-row offset, and the wheel-scroll stream state machine. Grouping them makes call
 /// sites easier to scan and helps keep `app.rs` glue minimal.
 pub(crate) struct TranscriptScrollbarMouseEvent<'a> {
+    /// Active TUI handle for scheduling redraws after scroll changes.
     pub(crate) tui: &'a mut tui::Tui,
+    /// The raw mouse event from the terminal backend.
     pub(crate) mouse_event: MouseEvent,
+    /// Transcript content area (excluding the scrollbar track/gap).
     pub(crate) transcript_area: Rect,
+    /// Scrollbar track area, if the terminal is wide enough to reserve it.
     pub(crate) scrollbar_area: Option<Rect>,
+    /// Transcript history cells used to rebuild the wrapped view.
     pub(crate) transcript_cells: &'a [Arc<dyn HistoryCell>],
+    /// Wrap cache that owns the current visual transcript lines.
     pub(crate) transcript_view_cache: &'a mut TranscriptViewCache,
+    /// Scroll anchor state machine updated when the user drags the thumb.
     pub(crate) transcript_scroll: &'a mut TranscriptScroll,
+    /// Current top-row offset into the wrapped transcript lines.
     pub(crate) transcript_view_top: &'a mut usize,
+    /// Cached total number of wrapped transcript lines.
     pub(crate) transcript_total_lines: &'a mut usize,
+    /// Wheel-scroll state, reset when scrollbar drags set a new anchor.
     pub(crate) mouse_scroll_state: &'a mut MouseScrollState,
 }
 
 impl TranscriptScrollbarUi {
+    /// Whether pointer capture is currently active for a scrollbar drag.
     pub(crate) fn pointer_capture_active(&self) -> bool {
         self.pointer_capture
     }

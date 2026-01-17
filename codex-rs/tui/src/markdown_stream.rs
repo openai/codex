@@ -1,3 +1,13 @@
+//! Streaming markdown renderer that emits only complete logical lines.
+//!
+//! This module buffers streamed markdown deltas, re-renders the accumulated
+//! text as needed, and only emits lines that are guaranteed to be complete
+//! (terminated by a newline in the source). That keeps the UI from rendering
+//! partially formed markdown constructs such as headings or list items.
+//!
+//! The collector owns only transient rendering state: the raw buffered text,
+//! the number of rendered lines already emitted, and an optional width hint.
+//! Callers own the lifecycle of the stream and decide when to finalize.
 use ratatui::text::Line;
 
 use crate::markdown;
@@ -5,12 +15,16 @@ use crate::markdown;
 /// Newline-gated accumulator that renders markdown and commits only fully
 /// completed logical lines.
 pub(crate) struct MarkdownStreamCollector {
+    /// Raw markdown accumulated from streamed deltas.
     buffer: String,
+    /// Count of rendered lines already emitted to the caller.
     committed_line_count: usize,
+    /// Optional width used for markdown rendering and wrapping.
     width: Option<usize>,
 }
 
 impl MarkdownStreamCollector {
+    /// Creates a new collector with an optional wrapping width.
     pub fn new(width: Option<usize>) -> Self {
         Self {
             buffer: String::new(),
@@ -19,11 +33,13 @@ impl MarkdownStreamCollector {
         }
     }
 
+    /// Clears the buffered source and resets the committed line counter.
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_line_count = 0;
     }
 
+    /// Appends a new streamed delta to the buffer without rendering.
     pub fn push_delta(&mut self, delta: &str) {
         tracing::trace!("push_delta: {delta:?}");
         self.buffer.push_str(delta);
@@ -97,6 +113,7 @@ impl MarkdownStreamCollector {
 }
 
 #[cfg(test)]
+/// Streams a series of deltas into a collector and returns the rendered lines.
 pub(crate) fn simulate_stream_markdown_for_tests(
     deltas: &[&str],
     finalize: bool,
@@ -372,6 +389,7 @@ mod tests {
         );
     }
 
+    /// Converts rendered lines into plain strings for comparison.
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines
             .iter()
@@ -630,6 +648,7 @@ mod tests {
     }
 
     // Targeted tests derived from fuzz findings. Each asserts streamed == full render.
+    /// Renders streamed and full markdown to plain text and compares them.
     async fn assert_streamed_equals_full(deltas: &[&str]) {
         let streamed = simulate_stream_markdown_for_tests(deltas, true);
         let streamed_strs = lines_to_plain_strings(&streamed);

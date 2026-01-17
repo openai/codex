@@ -11,7 +11,7 @@ use ts_rs::TS;
 
 use crate::config_types::Verbosity;
 
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
+/// See <https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning>
 #[derive(
     Debug,
     Serialize,

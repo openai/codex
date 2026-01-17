@@ -15,7 +15,10 @@
 //! pause happens before the stream enters a pending state; otherwise the crossterm reader thread may keep reading
 //! from stdin, so the safer approach is to drop and recreate the event stream when we need to hand off the terminal.
 //!
-//! See https://ratatui.rs/recipes/apps/spawn-vim/ and https://www.reddit.com/r/rust/comments/1f3o33u/myterious_crossterm_input_after_running_vim for more details.
+//! See the [ratatui spawn-vim recipe] and the [crossterm input discussion] for more details.
+//!
+//! [ratatui spawn-vim recipe]: <https://ratatui.rs/recipes/apps/spawn-vim/>
+//! [crossterm input discussion]: <https://www.reddit.com/r/rust/comments/1f3o33u/myterious_crossterm_input_after_running_vim>
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -38,26 +41,35 @@ use super::TuiEvent;
 /// Result type produced by an event source.
 pub type EventResult = std::io::Result<Event>;
 
-/// Abstraction over a source of terminal events. Allows swapping in a fake for tests.
-/// Value in production is [`CrosstermEventSource`].
+/// Abstraction over a source of terminal events.
+///
+/// This lets tests inject a fake stream while production uses
+/// [`CrosstermEventSource`].
 pub trait EventSource: Send + 'static {
+    /// Poll for the next terminal event from this source.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EventResult>>;
 }
 
-/// Shared crossterm input state for all [`TuiEventStream`] instances. A single crossterm EventStream
-/// is reused so all streams still see the same input source.
+/// Shared crossterm input state for all [`TuiEventStream`] instances.
 ///
-/// This intermediate layer enables dropping/recreating the underlying EventStream (pause/resume) without rebuilding consumers.
+/// A single crossterm `EventStream` is reused so all streams see the same input
+/// source. This broker also coordinates pause/resume by dropping and recreating
+/// the underlying stream without rebuilding consumers.
 pub struct EventBroker<S: EventSource = CrosstermEventSource> {
+    /// Current lifecycle state of the shared event source.
     state: Mutex<EventBrokerState<S>>,
+    /// Notifies paused streams when `resume_events` recreates the source.
     resume_events_tx: watch::Sender<()>,
 }
 
 /// Tracks state of underlying [`EventSource`].
 enum EventBrokerState<S: EventSource> {
-    Paused,     // Underlying event source (i.e., crossterm EventStream) dropped
-    Start,      // A new event source will be created on next poll
-    Running(S), // Event source is currently running
+    /// Underlying event source (i.e., crossterm `EventStream`) dropped.
+    Paused,
+    /// A new event source will be created on next poll.
+    Start,
+    /// Event source is currently running.
+    Running(S),
 }
 
 impl<S: EventSource + Default> EventBrokerState<S> {
@@ -78,6 +90,7 @@ impl<S: EventSource + Default> EventBrokerState<S> {
 }
 
 impl<S: EventSource + Default> EventBroker<S> {
+    /// Create a new broker starting in the "needs start" state.
     pub fn new() -> Self {
         let (resume_events_tx, _resume_events_rx) = watch::channel(());
         Self {
@@ -86,7 +99,7 @@ impl<S: EventSource + Default> EventBroker<S> {
         }
     }
 
-    /// Drop the underlying event source
+    /// Drop the underlying event source to relinquish stdin.
     pub fn pause_events(&self) {
         let mut state = self
             .state
@@ -95,7 +108,7 @@ impl<S: EventSource + Default> EventBroker<S> {
         *state = EventBrokerState::Paused;
     }
 
-    /// Create a new instance of the underlying event source
+    /// Create a new instance of the underlying event source.
     pub fn resume_events(&self) {
         let mut state = self
             .state
@@ -130,6 +143,8 @@ impl EventSource for CrosstermEventSource {
 }
 
 /// TuiEventStream is a struct for reading TUI events (draws and user input).
+///
+/// Each stream owns its draw subscription but shares input through the broker.
 /// Each instance has its own draw subscription (the draw channel is broadcast, so
 /// multiple receivers are fine), while crossterm input is funneled through a
 /// single shared [`EventBroker`] because crossterm uses a global stdin reader and
@@ -137,18 +152,26 @@ impl EventSource for CrosstermEventSource {
 /// (for nested or sequential screens), but only one should be polled at a time,
 /// otherwise one instance can consume ("steal") input events and the other will miss them.
 pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSource> {
+    /// Shared broker that owns the crossterm event source lifecycle.
     broker: Arc<EventBroker<S>>,
+    /// Broadcast stream used to receive draw notifications.
     draw_stream: BroadcastStream<()>,
+    /// Stream that wakes polling when the broker resumes events.
     resume_stream: WatchStream<()>,
+    /// Shared flag tracking whether the terminal is focused.
     terminal_focused: Arc<AtomicBool>,
+    /// Toggle to interleave draw and input polling for fairness.
     poll_draw_first: bool,
     #[cfg(unix)]
+    /// Unix-only job-control context for suspend handling.
     suspend_context: crate::tui::job_control::SuspendContext,
     #[cfg(unix)]
+    /// Shared flag tracking whether the alternate screen is active.
     alt_screen_active: Arc<AtomicBool>,
 }
 
 impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
+    /// Create a new event stream backed by the shared broker and draw channel.
     pub fn new(
         broker: Arc<EventBroker<S>>,
         draw_rx: broadcast::Receiver<()>,
@@ -221,7 +244,9 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
-    /// Poll the draw broadcast stream for the next draw event. Draw events are used to trigger a redraw of the TUI.
+    /// Poll the draw broadcast stream for the next draw event.
+    ///
+    /// Draw events are used to trigger a redraw of the TUI.
     pub fn poll_draw_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
         match Pin::new(&mut self.draw_stream).poll_next(cx) {
             Poll::Ready(Some(Ok(()))) => Poll::Ready(Some(TuiEvent::Draw)),
@@ -233,7 +258,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
-    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use (mouse events, etc.).
+    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use.
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
             Event::Key(key_event) => {
@@ -312,11 +337,13 @@ mod tests {
         tx: mpsc::UnboundedSender<EventResult>,
     }
 
+    /// Handle that injects events into the shared broker for tests.
     struct FakeEventSourceHandle {
         broker: Arc<EventBroker<FakeEventSource>>,
     }
 
     impl FakeEventSource {
+        /// Create a new fake event source and its backing channel.
         fn new() -> Self {
             let (tx, rx) = mpsc::unbounded_channel();
             Self { rx, tx }
@@ -330,10 +357,12 @@ mod tests {
     }
 
     impl FakeEventSourceHandle {
+        /// Create a handle bound to the provided broker.
         fn new(broker: Arc<EventBroker<FakeEventSource>>) -> Self {
             Self { broker }
         }
 
+        /// Send a terminal event into the active source if it is running.
         fn send(&self, event: EventResult) {
             let mut state = self
                 .broker
@@ -353,6 +382,7 @@ mod tests {
         }
     }
 
+    /// Build a test stream wired to the fake broker and draw channel.
     fn make_stream(
         broker: Arc<EventBroker<FakeEventSource>>,
         draw_rx: broadcast::Receiver<()>,
@@ -369,6 +399,7 @@ mod tests {
         )
     }
 
+    /// Bundled setup state used by test helpers.
     type SetupState = (
         Arc<EventBroker<FakeEventSource>>,
         FakeEventSourceHandle,
@@ -377,6 +408,7 @@ mod tests {
         Arc<AtomicBool>,
     );
 
+    /// Create a broker wired to a running fake event source and draw channel.
     fn setup() -> SetupState {
         let source = FakeEventSource::new();
         let broker = Arc::new(EventBroker::new());
@@ -388,6 +420,7 @@ mod tests {
         (broker, handle, draw_tx, draw_rx, terminal_focused)
     }
 
+    /// Skips focus-loss events and yields the first mapped key event.
     #[tokio::test(flavor = "current_thread")]
     async fn key_event_skips_unmapped() {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
@@ -408,6 +441,7 @@ mod tests {
         }
     }
 
+    /// Emits both draw and key events without losing either.
     #[tokio::test(flavor = "current_thread")]
     async fn draw_and_key_events_yield_both() {
         let (broker, handle, draw_tx, draw_rx, terminal_focused) = setup();
@@ -438,6 +472,7 @@ mod tests {
         assert!(saw_draw && saw_key, "expected both draw and key events");
     }
 
+    /// Treats lagged draw notifications as a draw event.
     #[tokio::test(flavor = "current_thread")]
     async fn lagged_draw_maps_to_draw() {
         let (broker, _handle, draw_tx, draw_rx, terminal_focused) = setup();
@@ -451,6 +486,7 @@ mod tests {
         assert!(matches!(first, Some(TuiEvent::Draw)));
     }
 
+    /// Ends the stream when the event source errors out.
     #[tokio::test(flavor = "current_thread")]
     async fn error_or_eof_ends_stream() {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
@@ -462,6 +498,7 @@ mod tests {
         assert!(next.is_none());
     }
 
+    /// Wakes a paused stream after resume and delivers the next event.
     #[tokio::test(flavor = "current_thread")]
     async fn resume_wakes_paused_stream() {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
@@ -486,6 +523,7 @@ mod tests {
         }
     }
 
+    /// Wakes a pending poll when pause/resume occurs and an event arrives.
     #[tokio::test(flavor = "current_thread")]
     async fn resume_wakes_pending_stream() {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();

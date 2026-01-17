@@ -1,3 +1,19 @@
+//! Approval overlay for user-gated actions.
+//!
+//! This module renders modal approval prompts for exec, patch, and MCP elicitation requests.
+//! It owns the short-lived state needed to present one request at a time, queue additional
+//! requests, emit the matching `AppEvent` decisions, and advance only after each request is
+//! explicitly accepted or rejected by the user.
+//!
+//! The overlay is implemented as a `BottomPaneView` backed by a selection list, so approvals
+//! remain in a single modal while status timers are paused. It does not execute commands,
+//! apply patches, or persist approval policy; it only renders the prompt and forwards the
+//! user's decision to the rest of the app.
+//!
+//! The queue is treated as a stack (`Vec::push` + `pop`), so the most recently enqueued
+//! approval is presented next. Correctness relies on keeping `current_request`,
+//! `current_variant`, and the `options` list in sync, and on marking `current_complete`
+//! before advancing to prevent double-emitting decisions.
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -37,41 +53,92 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
 /// Request coming from the agent that needs user approval.
+///
+/// Each variant carries the context needed to render the approval prompt and to emit the
+/// corresponding decision back to the core protocol once the user chooses an option.
 #[derive(Clone, Debug)]
 pub(crate) enum ApprovalRequest {
+    /// Exec request requiring user confirmation.
     Exec {
+        /// Backend request id used for correlating the approval.
         id: String,
+
+        /// Command and arguments to show and approve.
         command: Vec<String>,
+
+        /// Optional human-readable reason shown to the user.
         reason: Option<String>,
+
+        /// Optional policy amendment to apply when approving.
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
+    /// Patch application request requiring user confirmation.
     ApplyPatch {
+        /// Backend request id used for correlating the approval.
         id: String,
+
+        /// Optional human-readable reason shown to the user.
         reason: Option<String>,
+
+        /// Working directory used to render file paths.
         cwd: PathBuf,
+
+        /// File changes to summarize in the approval overlay.
         changes: HashMap<PathBuf, FileChange>,
     },
+    /// MCP elicitation request requiring explicit user consent.
     McpElicitation {
+        /// MCP server name that issued the request.
         server_name: String,
+
+        /// Request id used by the MCP server for correlation.
         request_id: RequestId,
+
+        /// Prompt message to display in the overlay.
         message: String,
     },
 }
 
 /// Modal overlay asking the user to approve or deny one or more requests.
+///
+/// The overlay owns the selection list state and advances through a queue of requests, ensuring
+/// each approval is resolved before the next one is shown. It keeps rendering-specific state
+/// (`ApprovalVariant`, `ApprovalOption`) derived from the current request so the UI stays
+/// responsive while the decision is pending.
 pub(crate) struct ApprovalOverlay {
+    /// Request currently shown to the user.
     current_request: Option<ApprovalRequest>,
+
+    /// Render-specific view of the current request.
     current_variant: Option<ApprovalVariant>,
+
+    /// Pending approvals queued behind the current one, treated as a stack.
     queue: Vec<ApprovalRequest>,
+
+    /// App event channel used to emit approval decisions and history entries.
     app_event_tx: AppEventSender,
+
+    /// List view used to render and navigate approval options.
     list: ListSelectionView,
+
+    /// Option metadata for the current request, kept in sync with `current_variant`.
     options: Vec<ApprovalOption>,
+
+    /// Whether the current request has already been handled.
     current_complete: bool,
+
+    /// Whether the overlay has completed all queued requests.
     done: bool,
+
+    /// Feature flag snapshot used to conditionally show options.
     features: Features,
 }
 
 impl ApprovalOverlay {
+    /// Create a new overlay seeded with the first approval request.
+    ///
+    /// The selection view is rebuilt from the request so the overlay is immediately ready to
+    /// render without additional setup.
     pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender, features: Features) -> Self {
         let mut view = Self {
             current_request: None,
@@ -88,10 +155,17 @@ impl ApprovalOverlay {
         view
     }
 
+    /// Append an additional approval request to the queue.
+    ///
+    /// Requests are served in last-in-first-out order to ensure the newest prompt is shown next.
     pub fn enqueue_request(&mut self, req: ApprovalRequest) {
         self.queue.push(req);
     }
 
+    /// Make a request the active one and rebuild the option list.
+    ///
+    /// This resets completion tracking and re-seeds the selection list with the options derived
+    /// from the incoming request.
     fn set_current(&mut self, request: ApprovalRequest) {
         self.current_request = Some(request.clone());
         let ApprovalRequestState { variant, header } = ApprovalRequestState::from(request);
@@ -102,6 +176,9 @@ impl ApprovalOverlay {
         self.list = ListSelectionView::new(params, self.app_event_tx.clone());
     }
 
+    /// Build the options list and selection view params for a request variant.
+    ///
+    /// The header combines a shared title with the variant-specific renderable content.
     fn build_options(
         variant: ApprovalVariant,
         header: Box<dyn Renderable>,
@@ -159,6 +236,10 @@ impl ApprovalOverlay {
         (options, params)
     }
 
+    /// Apply the selected option and advance the queue.
+    ///
+    /// The current request is marked complete before moving on so repeated selections do not
+    /// double-emit decisions.
     fn apply_selection(&mut self, actual_idx: usize) {
         if self.current_complete {
             return;
@@ -191,6 +272,9 @@ impl ApprovalOverlay {
         self.advance_queue();
     }
 
+    /// Emit a decision for an exec approval request.
+    ///
+    /// Exec decisions also create a history cell so the user can see the outcome in the log.
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
         let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision.clone());
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
@@ -200,6 +284,7 @@ impl ApprovalOverlay {
         }));
     }
 
+    /// Emit a decision for a patch approval request.
     fn handle_patch_decision(&self, id: &str, decision: ReviewDecision) {
         self.app_event_tx.send(AppEvent::CodexOp(Op::PatchApproval {
             id: id.to_string(),
@@ -207,6 +292,7 @@ impl ApprovalOverlay {
         }));
     }
 
+    /// Emit a decision for an MCP elicitation request.
     fn handle_elicitation_decision(
         &self,
         server_name: &str,
@@ -221,6 +307,9 @@ impl ApprovalOverlay {
             }));
     }
 
+    /// Advance to the next queued request, or mark the overlay done.
+    ///
+    /// The queue is treated as a stack, so the most recently enqueued request is shown next.
     fn advance_queue(&mut self) {
         if let Some(next) = self.queue.pop() {
             self.set_current(next);
@@ -229,6 +318,10 @@ impl ApprovalOverlay {
         }
     }
 
+    /// Check key bindings and apply any matching option shortcut.
+    ///
+    /// Ctrl+A opens the full-screen approval view; all other matches map to the configured
+    /// per-option shortcuts.
     fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
         match key_event {
             KeyEvent {
@@ -262,6 +355,7 @@ impl ApprovalOverlay {
 }
 
 impl BottomPaneView for ApprovalOverlay {
+    /// Handle keyboard input routed to the overlay.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;
@@ -272,6 +366,10 @@ impl BottomPaneView for ApprovalOverlay {
         }
     }
 
+    /// Handle Ctrl+C by cancelling the overlay.
+    ///
+    /// If a request is active, the cancellation emits the corresponding abort decision before
+    /// clearing the rest of the queue.
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.done {
             return CancellationEvent::Handled;
@@ -303,10 +401,12 @@ impl BottomPaneView for ApprovalOverlay {
         CancellationEvent::Handled
     }
 
+    /// Return true once all approvals are complete.
     fn is_complete(&self) -> bool {
         self.done
     }
 
+    /// Queue a new approval request while the overlay is active.
     fn try_consume_approval_request(
         &mut self,
         request: ApprovalRequest,
@@ -317,25 +417,39 @@ impl BottomPaneView for ApprovalOverlay {
 }
 
 impl Renderable for ApprovalOverlay {
+    /// Return the height required to render the overlay.
     fn desired_height(&self, width: u16) -> u16 {
         self.list.desired_height(width)
     }
 
+    /// Render the overlay into the given buffer region.
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.list.render(area, buf);
     }
 
+    /// Return the cursor position for the overlay, if any.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.list.cursor_pos(area)
     }
 }
 
+/// Precomputed rendering state derived from an approval request.
+///
+/// This bundles the renderable header with the simplified approval variant used to build
+/// option labels and shortcuts.
 struct ApprovalRequestState {
+    /// Renderable view of the request.
     variant: ApprovalVariant,
+
+    /// Header content shown above the option list.
     header: Box<dyn Renderable>,
 }
 
 impl From<ApprovalRequest> for ApprovalRequestState {
+    /// Build a renderable state from the incoming request.
+    ///
+    /// The header includes the optional reason, a preview of the command or diff, and any
+    /// prompting text needed for the active variant.
     fn from(value: ApprovalRequest) -> Self {
         match value {
             ApprovalRequest::Exec {
@@ -409,37 +523,70 @@ impl From<ApprovalRequest> for ApprovalRequestState {
     }
 }
 
+/// Render-specific view of an approval request.
+///
+/// This variant strips out data that is only needed for the header rendering so option building
+/// can focus on the decision payload.
 #[derive(Clone)]
 enum ApprovalVariant {
+    /// Exec approval with command preview.
     Exec {
+        /// Backend request id for correlating decisions.
         id: String,
+
+        /// Command to display and approve.
         command: Vec<String>,
+
+        /// Optional execpolicy amendment suggested with the request.
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
+    /// Patch approval with diff summary.
     ApplyPatch {
+        /// Backend request id for correlating decisions.
         id: String,
     },
+    /// MCP elicitation approval.
     McpElicitation {
+        /// MCP server name associated with the request.
         server_name: String,
+
+        /// Request id used by the MCP server for correlation.
         request_id: RequestId,
     },
 }
 
+/// Decision payload emitted when an option is selected.
+///
+/// Each variant matches the protocol-level decision type for its approval flow.
 #[derive(Clone)]
 enum ApprovalDecision {
+    /// Standard approve/deny decision used for exec and patch requests.
     Review(ReviewDecision),
+
+    /// Elicitation response for MCP prompts.
     McpElicitation(ElicitationAction),
 }
 
+/// A single selectable option within an approval prompt.
+///
+/// Options map user-visible labels and shortcuts to the protocol decision they should emit.
 #[derive(Clone)]
 struct ApprovalOption {
+    /// Label shown in the selection list.
     label: String,
+
+    /// Decision emitted when the option is selected.
     decision: ApprovalDecision,
+
+    /// Primary shortcut displayed next to the option, if any.
     display_shortcut: Option<KeyBinding>,
+
+    /// Additional shortcuts that trigger the option.
     additional_shortcuts: Vec<KeyBinding>,
 }
 
 impl ApprovalOption {
+    /// Iterate over all shortcuts that should activate this option.
     fn shortcuts(&self) -> impl Iterator<Item = KeyBinding> + '_ {
         self.display_shortcut
             .into_iter()
@@ -447,6 +594,10 @@ impl ApprovalOption {
     }
 }
 
+/// Build options for exec approvals, including optional policy amendments.
+///
+/// The optional execpolicy amendment is only offered when the feature flag is enabled and the
+/// command prefix can be rendered as a single line.
 fn exec_options(
     proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     features: &Features,
@@ -490,6 +641,10 @@ fn exec_options(
     .collect()
 }
 
+/// Build options for patch approvals.
+///
+/// Patch approvals include a session-scoped approval option so the user can suppress follow-up
+/// prompts for the same set of files.
 fn patch_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
@@ -513,6 +668,9 @@ fn patch_options() -> Vec<ApprovalOption> {
     ]
 }
 
+/// Build options for MCP elicitation approvals.
+///
+/// These options map directly to the `ElicitationAction` variants expected by the core protocol.
 fn elicitation_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
@@ -536,6 +694,7 @@ fn elicitation_options() -> Vec<ApprovalOption> {
     ]
 }
 
+/// Tests for approval overlay behavior and shortcuts.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,6 +702,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
+    /// Build a basic exec approval request for tests.
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "test".to_string(),
@@ -552,6 +712,7 @@ mod tests {
         }
     }
 
+    /// Ctrl+C cancels the overlay and clears pending requests.
     #[test]
     fn ctrl_c_aborts_and_clears_queue() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -563,6 +724,7 @@ mod tests {
         assert!(view.is_complete());
     }
 
+    /// Shortcut keys trigger the expected approval selection.
     #[test]
     fn shortcut_triggers_selection() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
@@ -570,6 +732,7 @@ mod tests {
         let mut view = ApprovalOverlay::new(make_exec_request(), tx, Features::with_defaults());
         assert!(!view.is_complete());
         view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
         // We expect at least one CodexOp message in the queue.
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
@@ -581,6 +744,7 @@ mod tests {
         assert!(saw_op, "expected approval decision to emit an op");
     }
 
+    /// Exec policy shortcut emits an approval with the proposed amendment.
     #[test]
     fn exec_prefix_option_emits_execpolicy_amendment() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
@@ -619,6 +783,7 @@ mod tests {
         );
     }
 
+    /// Exec policy shortcut is hidden when the feature flag is disabled.
     #[test]
     fn exec_prefix_option_hidden_when_execpolicy_disabled() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
@@ -645,6 +810,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    /// Renders a command snippet in the approval header.
     #[test]
     fn header_includes_command_snippet() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -676,6 +842,7 @@ mod tests {
         );
     }
 
+    /// Wraps exec approval history cells with the expected indentation.
     #[test]
     fn exec_history_cell_wraps_with_two_space_indent() {
         let command = vec![
@@ -703,6 +870,7 @@ mod tests {
         assert_eq!(rendered, expected);
     }
 
+    /// Enter selects the default option without dismissing queued approvals.
     #[test]
     fn enter_sets_last_selected_index_without_dismissing() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();

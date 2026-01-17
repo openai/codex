@@ -270,7 +270,7 @@ pub struct Config {
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
-    ///          https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
+    ///          <https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2>
     /// file: CODEX_HOME/.credentials.json
     ///       This file will be readable to Codex and other applications running as the same user.
     /// auto (default): keyring if available, otherwise file.
@@ -844,7 +844,7 @@ pub struct ConfigToml {
 
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
-    ///          https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
+    ///          <https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2>
     /// file: Use a file in the Codex home directory.
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
@@ -955,7 +955,7 @@ pub struct ConfigToml {
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
     /// Collection of in-product notices (different from notifications)
-    /// See [`crate::config::types::Notices`] for more details
+    /// See [`crate::config::types::Notice`] for more details
     pub notice: Option<Notice>,
 
     /// Legacy, now use features

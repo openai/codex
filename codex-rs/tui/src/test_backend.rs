@@ -1,3 +1,10 @@
+//! VT100-backed test terminal for snapshot-based rendering.
+//!
+//! This module provides a [`ratatui::backend::Backend`] implementation that
+//! routes output through a `vt100::Parser` instead of the real terminal. It
+//! avoids crossterm queries that would touch stdout and instead derives sizes
+//! and cursor positions from the parser state so snapshot tests remain hermetic.
+
 use std::fmt::{self};
 use std::io::Write;
 use std::io::{self};
@@ -11,19 +18,19 @@ use ratatui::buffer::Cell;
 use ratatui::layout::Position;
 use ratatui::layout::Size;
 
-/// This wraps a CrosstermBackend and a vt100::Parser to mock
-/// a "real" terminal.
+/// Test backend that simulates a terminal with a `vt100::Parser`.
 ///
-/// Importantly, this wrapper avoids calling any crossterm methods
-/// which write to stdout regardless of the writer. This includes:
-/// - getting the terminal size
-/// - getting the cursor position
+/// The backend wraps [`CrosstermBackend`] but never calls crossterm APIs that
+/// would touch stdout directly; size and cursor information are derived from
+/// the parser instead. This keeps tests deterministic and avoids polluting the
+/// developer's terminal during snapshot runs.
 pub struct VT100Backend {
+    /// Crossterm backend backed by the in-memory vt100 parser.
     crossterm_backend: CrosstermBackend<vt100::Parser>,
 }
 
 impl VT100Backend {
-    /// Creates a new `TestBackend` with the specified width and height.
+    /// Creates a new vt100-backed test terminal with the given dimensions.
     pub fn new(width: u16, height: u16) -> Self {
         crossterm::style::force_color_output(true);
         Self {
@@ -31,6 +38,7 @@ impl VT100Backend {
         }
     }
 
+    /// Returns the underlying vt100 parser for inspection in tests.
     pub fn vt100(&self) -> &vt100::Parser {
         self.crossterm_backend.writer()
     }
@@ -47,6 +55,7 @@ impl Write for VT100Backend {
 }
 
 impl fmt::Display for VT100Backend {
+    /// Renders the vt100 screen contents as a plain string for snapshots.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.crossterm_backend.writer().screen().contents())
     }

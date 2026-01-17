@@ -71,7 +71,7 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 ///
 /// (*) Only available on macOS via managed device profiles.
 ///
-/// See https://developers.openai.com/codex/security for details.
+/// See <https://developers.openai.com/codex/security> for details.
 ///
 /// When loading the config stack for a thread, there should be a `cwd`
 /// associated with it such that `cwd` should be `Some(...)`. Only for
