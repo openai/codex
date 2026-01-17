@@ -3,6 +3,11 @@
 //! This file owns backtrack mode (Esc/Enter navigation in the transcript overlay) and also
 //! mediates a key rendering boundary for the transcript overlay.
 //!
+//! Overall goal: keep the main chat view and the transcript overlay in sync while allowing
+//! users to "rewind" to an earlier user message. We stage a rollback request, wait for core to
+//! confirm it, then trim the local transcript to the matching history boundary. This avoids UI
+//! state diverging from the agent if a rollback fails or targets a different thread.
+//!
 //! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
 //! tail derived from the current in-flight `ChatWidget.active_cell`.
 //!
@@ -42,6 +47,9 @@ pub(crate) struct BacktrackState {
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
     /// Pending rollback request awaiting confirmation from core.
+    ///
+    /// This acts as a guardrail: once we request a rollback, we block additional backtrack
+    /// submissions until core responds with either a success or failure event.
     pub(crate) pending_rollback: Option<PendingBacktrackRollback>,
 }
 
@@ -123,6 +131,9 @@ impl App {
     }
 
     /// Stage a backtrack and request thread history from the agent.
+    ///
+    /// We send the rollback request immediately, but we only mutate the transcript after core
+    /// confirms success so the UI cannot get ahead of the actual thread state.
     pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
         let user_total = user_count(&self.transcript_cells);
         if user_total == 0 {
@@ -358,6 +369,7 @@ impl App {
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 ..
             }) => {
+                // Core rejected the rollback; clear the guard so the user can retry.
                 self.backtrack.pending_rollback = None;
             }
             _ => {}
@@ -369,6 +381,7 @@ impl App {
             return;
         };
         if pending.thread_id != self.chat_widget.thread_id() {
+            // Ignore rollbacks targeting a prior thread.
             return;
         }
         self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
