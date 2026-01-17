@@ -235,12 +235,19 @@ impl ContextManager {
         token_estimate as usize
     }
 
-    pub(crate) fn get_total_token_usage(&self) -> i64 {
-        self.token_info
+    /// When true, the server already accounted for past reasoning tokens and
+    /// the client should not re-estimate them.
+    pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
+        let last_tokens = self
+            .token_info
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
-            .unwrap_or(0)
-            .saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+            .unwrap_or(0);
+        if server_reasoning_included {
+            last_tokens
+        } else {
+            last_tokens.saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+        }
     }
 
     /// This function enforces a couple of invariants on the in-memory history:

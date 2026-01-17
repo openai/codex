@@ -316,6 +316,9 @@ async fn drain_to_completed(
                 sess.record_into_history(std::slice::from_ref(&item), turn_context)
                     .await;
             }
+            Ok(ResponseEvent::ServerReasoningIncluded(included)) => {
+                sess.set_server_reasoning_included(included).await;
+            }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(turn_context, snapshot).await;
             }

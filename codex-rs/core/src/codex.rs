@@ -805,7 +805,7 @@ impl Session {
 
     async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
-        state.get_total_token_usage()
+        state.get_total_token_usage(state.server_reasoning_included())
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -1491,6 +1491,11 @@ impl Session {
             state.set_rate_limits(new_rate_limits);
         }
         self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
+        let mut state = self.state.lock().await;
+        state.set_server_reasoning_included(included);
     }
 
     async fn send_token_count_event(&self, turn_context: &TurnContext) {
@@ -2961,6 +2966,9 @@ async fn try_run_sampling_request(
 
                     active_item = Some(tracked_item);
                 }
+            }
+            ResponseEvent::ServerReasoningIncluded(included) => {
+                sess.set_server_reasoning_included(included).await;
             }
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until
