@@ -86,7 +86,7 @@ impl SessionState {
     }
 
     pub(crate) fn set_server_reasoning_included(&mut self, included: bool) {
-        self.server_reasoning_included |= included;
+        self.server_reasoning_included = included;
     }
 
     pub(crate) fn server_reasoning_included(&self) -> bool {
