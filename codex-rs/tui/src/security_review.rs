@@ -129,6 +129,8 @@ const MAX_FILE_SEARCH_RESULTS: usize = 40;
 const BUG_FINDING_PASSES: usize = 1;
 const BUG_POLISH_CONCURRENCY: usize = 8;
 const BUG_DEDUP_CONFIDENCE_THRESHOLD: f32 = 0.85;
+const BUG_LLM_DEDUP_CONCURRENCY: usize = 6;
+const BUG_LLM_DEDUP_LINE_BUCKET_SIZE: u32 = 25;
 const BUG_DEDUP_PROMPT_MAX_CHARS: usize = 120_000;
 const COMMAND_PREVIEW_MAX_LINES: usize = 2;
 const COMMAND_PREVIEW_MAX_GRAPHEMES: usize = 96;
@@ -13064,6 +13066,54 @@ struct BugLlmDedupeOutcome {
     logs: Vec<String>,
 }
 
+fn bucket_file_location_for_llm_dedupe(location: &str) -> Option<String> {
+    let trimmed = location.trim().trim_matches('`');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let Some((path, rest)) = trimmed.split_once("#L") else {
+        return Some(trimmed.to_string());
+    };
+
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let Ok(line) = digits.parse::<u32>() else {
+        return Some(trimmed.to_string());
+    };
+
+    let bucket_size = BUG_LLM_DEDUP_LINE_BUCKET_SIZE.max(1);
+    let bucket_start = ((line.saturating_sub(1) / bucket_size) * bucket_size).saturating_add(1);
+    Some(format!("{path}#L{bucket_start}"))
+}
+
+fn vuln_tag_tokens_key_for_llm_dedupe(tag: Option<&str>) -> Option<String> {
+    let tag = tag?;
+    let tokens = vuln_tag_tokens_for_dedupe(tag);
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut sorted: Vec<String> = tokens.into_iter().collect();
+    sorted.sort();
+    Some(sorted.join("_"))
+}
+
+fn llm_dedupe_bucket_key(summary: &BugSummary) -> String {
+    let title_key = normalize_title_key(summary.title.as_str());
+    let tag_key = vuln_tag_tokens_key_for_llm_dedupe(summary.vulnerability_tag.as_deref());
+    let loc_key =
+        preferred_bug_locations_for_reporting(summary.markdown.as_str(), summary.file.as_str())
+            .first()
+            .and_then(|loc| bucket_file_location_for_llm_dedupe(loc));
+
+    match (loc_key, tag_key) {
+        (Some(loc), Some(tag)) => format!("loc::{loc}::vuln::{tag}"),
+        (Some(loc), None) => format!("loc::{loc}::title::{title_key}"),
+        (None, Some(tag)) => format!("vuln::{tag}::title::{title_key}"),
+        (None, None) => format!("title::{title_key}"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn llm_dedupe_bug_summaries(
     client: &CodexHttpClient,
@@ -13071,9 +13121,246 @@ async fn llm_dedupe_bug_summaries(
     auth: &Option<CodexAuth>,
     model: &str,
     reasoning_effort: Option<ReasoningEffort>,
-    mut summaries: Vec<BugSummary>,
+    summaries: Vec<BugSummary>,
     details: Vec<BugDetail>,
     progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+) -> BugLlmDedupeOutcome {
+    let total_findings = summaries.len();
+    if total_findings < 2 {
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs: Vec::new(),
+        };
+    }
+
+    let outcome = await_with_heartbeat(
+        progress_sender,
+        "running LLM dedupe",
+        Some(&format!("{total_findings} finding(s)")),
+        async move {
+            Ok::<BugLlmDedupeOutcome, std::convert::Infallible>(
+                llm_dedupe_bug_summaries_bucketed(
+                    client,
+                    provider,
+                    auth,
+                    model,
+                    reasoning_effort,
+                    summaries,
+                    details,
+                    metrics,
+                )
+                .await,
+            )
+        },
+    )
+    .await;
+
+    match outcome {
+        Ok(outcome) => outcome,
+        Err(err) => match err {},
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn llm_dedupe_bug_summaries_bucketed(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    summaries: Vec<BugSummary>,
+    details: Vec<BugDetail>,
+    metrics: Arc<ReviewMetrics>,
+) -> BugLlmDedupeOutcome {
+    let original_count = summaries.len();
+    if original_count < 2 {
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            logs: Vec::new(),
+        };
+    }
+
+    let id_order: HashMap<usize, usize> = summaries
+        .iter()
+        .enumerate()
+        .map(|(idx, summary)| (summary.id, idx))
+        .collect();
+
+    let mut id_to_bucket: HashMap<usize, String> = HashMap::new();
+    let mut summaries_by_bucket: HashMap<String, Vec<BugSummary>> = HashMap::new();
+    for summary in summaries {
+        let key = llm_dedupe_bucket_key(&summary);
+        id_to_bucket.insert(summary.id, key.clone());
+        summaries_by_bucket.entry(key).or_default().push(summary);
+    }
+
+    let mut details_by_bucket: HashMap<String, Vec<BugDetail>> = HashMap::new();
+    let mut orphan_details: Vec<BugDetail> = Vec::new();
+    for detail in details {
+        if let Some(bucket) = id_to_bucket.get(&detail.summary_id) {
+            details_by_bucket
+                .entry(bucket.clone())
+                .or_default()
+                .push(detail);
+        } else {
+            orphan_details.push(detail);
+        }
+    }
+
+    if summaries_by_bucket.len() == 1 {
+        let mut iter = summaries_by_bucket.into_iter();
+        let (_key, summaries) = iter.next().unwrap_or_else(|| unreachable!());
+        let mut details = details_by_bucket.into_values().next().unwrap_or_default();
+        details.extend(orphan_details);
+        return llm_dedupe_bug_summaries_single_bucket(
+            client,
+            provider,
+            auth,
+            model,
+            reasoning_effort,
+            summaries,
+            details,
+            metrics,
+        )
+        .await;
+    }
+
+    let mut logs: Vec<String> = Vec::new();
+    if !orphan_details.is_empty() {
+        logs.push(format!(
+            "LLM dedupe: found {} unbucketed finding detail(s); keeping them.",
+            orphan_details.len()
+        ));
+    }
+
+    let mut bucket_keys: Vec<String> = summaries_by_bucket.keys().cloned().collect();
+    bucket_keys.sort();
+
+    #[derive(Clone)]
+    struct BucketWorkItem {
+        index: usize,
+        summaries: Vec<BugSummary>,
+        details: Vec<BugDetail>,
+    }
+
+    let mut outcomes_by_index: HashMap<usize, BugLlmDedupeOutcome> = HashMap::new();
+    let mut work_items: Vec<BucketWorkItem> = Vec::new();
+
+    for (index, key) in bucket_keys.iter().enumerate() {
+        let bucket_summaries = summaries_by_bucket.remove(key).unwrap_or_default();
+        let bucket_details = details_by_bucket.remove(key).unwrap_or_default();
+        if bucket_summaries.len() < 2 {
+            outcomes_by_index.insert(
+                index,
+                BugLlmDedupeOutcome {
+                    summaries: bucket_summaries,
+                    details: bucket_details,
+                    removed: 0,
+                    logs: Vec::new(),
+                },
+            );
+        } else {
+            work_items.push(BucketWorkItem {
+                index,
+                summaries: bucket_summaries,
+                details: bucket_details,
+            });
+        }
+    }
+
+    let bucket_count = bucket_keys.len();
+    if bucket_count > 1 {
+        logs.push(format!(
+            "LLM dedupe: splitting {original_count} finding(s) into {bucket_count} buckets."
+        ));
+    }
+
+    let model = model.to_string();
+    let mut stream = futures::stream::iter(work_items.into_iter().map(|item| {
+        let model = model.clone();
+        let metrics = metrics.clone();
+        async move {
+            let outcome = llm_dedupe_bug_summaries_single_bucket(
+                client,
+                provider,
+                auth,
+                model.as_str(),
+                reasoning_effort,
+                item.summaries,
+                item.details,
+                metrics,
+            )
+            .await;
+            (item.index, outcome)
+        }
+    }))
+    .buffer_unordered(BUG_LLM_DEDUP_CONCURRENCY);
+
+    while let Some((index, outcome)) = stream.next().await {
+        outcomes_by_index.insert(index, outcome);
+    }
+
+    drop(stream);
+
+    let mut combined_summaries: Vec<BugSummary> = Vec::new();
+    let mut combined_details: Vec<BugDetail> = orphan_details;
+
+    for index in 0..bucket_keys.len() {
+        let Some(outcome) = outcomes_by_index.remove(&index) else {
+            continue;
+        };
+
+        let keep_bucket_logs = outcome.removed > 0
+            || outcome.logs.iter().any(|line| {
+                line.starts_with("Skipping LLM dedupe") || line.starts_with("LLM dedupe failed")
+            });
+        if keep_bucket_logs {
+            for line in outcome.logs {
+                logs.push(format!(
+                    "LLM dedupe bucket {}/{}: {}",
+                    index + 1,
+                    bucket_count,
+                    line
+                ));
+            }
+        }
+
+        combined_summaries.extend(outcome.summaries);
+        combined_details.extend(outcome.details);
+    }
+
+    combined_summaries
+        .sort_by_key(|summary| id_order.get(&summary.id).copied().unwrap_or(usize::MAX));
+    combined_details.sort_by_key(|detail| {
+        id_order
+            .get(&detail.summary_id)
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+
+    let removed = original_count.saturating_sub(combined_summaries.len());
+    BugLlmDedupeOutcome {
+        summaries: combined_summaries,
+        details: combined_details,
+        removed,
+        logs,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn llm_dedupe_bug_summaries_single_bucket(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    mut summaries: Vec<BugSummary>,
+    details: Vec<BugDetail>,
     metrics: Arc<ReviewMetrics>,
 ) -> BugLlmDedupeOutcome {
     let mut logs: Vec<String> = Vec::new();
@@ -13127,21 +13414,16 @@ async fn llm_dedupe_bug_summaries(
         };
     }
 
-    let response = await_with_heartbeat(
-        progress_sender,
-        "running LLM dedupe",
-        Some(&format!("{} finding(s)", summaries.len())),
-        call_model(
-            client,
-            provider,
-            auth,
-            model,
-            reasoning_effort,
-            BUG_DEDUP_SYSTEM_PROMPT,
-            &prompt,
-            metrics.clone(),
-            0.0,
-        ),
+    let response = call_model(
+        client,
+        provider,
+        auth,
+        model,
+        reasoning_effort,
+        BUG_DEDUP_SYSTEM_PROMPT,
+        &prompt,
+        metrics.clone(),
+        0.0,
     )
     .await;
 
