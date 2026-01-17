@@ -35,6 +35,7 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
 use codex_common::create_config_summary_entries;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 
@@ -60,6 +61,8 @@ pub(crate) struct EventProcessorWithHumanOutput {
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
     show_raw_agent_reasoning: bool,
+    model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
     last_message_path: Option<PathBuf>,
     last_total_token_usage: Option<codex_core::protocol::TokenUsageInfo>,
     final_message: Option<String>,
@@ -86,6 +89,8 @@ impl EventProcessorWithHumanOutput {
                 yellow: Style::new().yellow(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+                model: None,
+                reasoning_effort: None,
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
@@ -103,6 +108,8 @@ impl EventProcessorWithHumanOutput {
                 yellow: Style::new(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+                model: None,
+                reasoning_effort: None,
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
@@ -503,6 +510,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let SessionConfiguredEvent {
                     session_id: conversation_id,
                     model,
+                    reasoning_effort,
                     ..
                 } = session_configured_event;
 
@@ -513,14 +521,32 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     conversation_id.to_string().style(self.dimmed)
                 );
 
+                self.model = Some(model.clone());
+                self.reasoning_effort = reasoning_effort;
+
                 ts_msg!(self, "model: {}", model);
+                if let Some(reasoning_effort) = self.reasoning_effort {
+                    ts_msg!(self, "reasoning effort: {}", reasoning_effort);
+                }
                 eprintln!();
             }
             EventMsg::PlanUpdate(plan_update_event) => {
                 let UpdatePlanArgs { explanation, plan } = plan_update_event;
 
                 // Header
-                ts_msg!(self, "{}", "Plan update".style(self.magenta));
+                let mut header = String::from("Plan update");
+                if let Some(model) = self.model.as_deref() {
+                    let effort_label = match self.reasoning_effort {
+                        Some(ReasoningEffort::Minimal) => "minimal",
+                        Some(ReasoningEffort::Low) => "low",
+                        Some(ReasoningEffort::Medium) => "medium",
+                        Some(ReasoningEffort::High) => "high",
+                        Some(ReasoningEffort::XHigh) => "xhigh",
+                        None | Some(ReasoningEffort::None) => "default",
+                    };
+                    header = format!("{header} (model: {model}, effort: {effort_label})");
+                }
+                ts_msg!(self, "{}", header.style(self.magenta));
 
                 // Optional explanation
                 if let Some(explanation) = explanation

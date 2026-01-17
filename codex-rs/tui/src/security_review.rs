@@ -734,6 +734,7 @@ struct SecurityReviewPlanTracker {
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     explanation: String,
     steps: Vec<SecurityReviewPlanItem>,
+    did_emit_final_plan_cell: bool,
 }
 
 impl SecurityReviewPlanTracker {
@@ -741,18 +742,31 @@ impl SecurityReviewPlanTracker {
         mode: SecurityReviewMode,
         scope_paths: &[PathBuf],
         repo_root: &Path,
+        model: &str,
+        reasoning_effort: Option<ReasoningEffort>,
         sender: Option<AppEventSender>,
         log_sink: Option<Arc<SecurityReviewLogSink>>,
     ) -> Self {
         let steps = plan_steps_for_mode(mode);
         let scope_summary = summarize_scope(scope_paths, repo_root);
         let mode_label = mode.as_str();
-        let explanation = format!("Security review plan ({mode_label}; scope: {scope_summary})");
+        let effort_label = match reasoning_effort {
+            Some(ReasoningEffort::Minimal) => "minimal",
+            Some(ReasoningEffort::Low) => "low",
+            Some(ReasoningEffort::Medium) => "medium",
+            Some(ReasoningEffort::High) => "high",
+            Some(ReasoningEffort::XHigh) => "xhigh",
+            None | Some(ReasoningEffort::None) => "default",
+        };
+        let explanation = format!(
+            "Security review plan ({mode_label}; model: {model}; effort: {effort_label}; scope: {scope_summary})"
+        );
         let tracker = Self {
             sender,
             log_sink,
             explanation,
             steps,
+            did_emit_final_plan_cell: false,
         };
         tracker.emit_update();
         tracker
@@ -805,23 +819,35 @@ impl SecurityReviewPlanTracker {
     fn emit_update(&self) {
         let summary = self.build_log_summary();
         if let Some(sender) = self.sender.as_ref() {
-            let plan_items: Vec<PlanItemArg> = self
-                .steps
-                .iter()
-                .map(|step| PlanItemArg {
-                    step: build_step_title(step),
-                    status: step.status.clone(),
-                })
-                .collect();
-            sender.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_plan_update(UpdatePlanArgs {
-                    explanation: Some(self.explanation.clone()),
-                    plan: plan_items,
-                }),
-            )));
             sender.send(AppEvent::SecurityReviewLog(summary.clone()));
         }
         write_log_sink(&self.log_sink, summary.as_str());
+    }
+
+    fn emit_final_plan_cell(&mut self) {
+        if self.did_emit_final_plan_cell {
+            return;
+        }
+        self.did_emit_final_plan_cell = true;
+
+        let Some(sender) = self.sender.as_ref() else {
+            return;
+        };
+
+        let plan_items: Vec<PlanItemArg> = self
+            .steps
+            .iter()
+            .map(|step| PlanItemArg {
+                step: build_step_title(step),
+                status: step.status.clone(),
+            })
+            .collect();
+        sender.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_plan_update(UpdatePlanArgs {
+                explanation: Some(self.explanation.clone()),
+                plan: plan_items,
+            }),
+        )));
     }
 
     fn build_log_summary(&self) -> String {
@@ -862,6 +888,12 @@ impl SecurityReviewPlanTracker {
             .iter()
             .find(|entry| entry.kind == step)
             .map(|entry| entry.status.clone())
+    }
+}
+
+impl Drop for SecurityReviewPlanTracker {
+    fn drop(&mut self) {
+        self.emit_final_plan_cell();
     }
 }
 
@@ -4082,6 +4114,8 @@ pub async fn run_security_review(
         mode,
         &include_paths,
         &repo_path,
+        checkpoint.model.as_str(),
+        bug_reasoning_effort,
         progress_sender.clone(),
         log_sink.clone(),
     );
