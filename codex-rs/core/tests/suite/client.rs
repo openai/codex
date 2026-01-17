@@ -734,7 +734,7 @@ async fn skills_append_to_instructions() {
         .as_str()
         .expect("instructions text");
     assert!(
-        instructions_text.contains("## Skills"),
+        instructions_text.contains("# Skills"),
         "expected skills section present"
     );
     assert!(
