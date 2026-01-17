@@ -1463,6 +1463,40 @@ impl App {
                 }
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::SwitchAccount {
+                name,
+                create_if_missing,
+            } => {
+                match codex_core::accounts::switch_account(
+                    &self.config.codex_home,
+                    &name,
+                    create_if_missing,
+                ) {
+                    Ok(()) => {
+                        self.auth_manager.reload();
+                        self.chat_widget.on_active_account_changed();
+                        if create_if_missing {
+                            self.chat_widget.add_info_message(
+                                format!(
+                                    "Created and switched to account `{name}`. Authenticate with `/login` (ChatGPT) or set an API key."
+                                ),
+                                None,
+                            );
+                        } else {
+                            self.chat_widget.add_info_message(
+                                format!("Switched active account to `{name}`."),
+                                None,
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to switch active account to `{name}`: {err}"
+                        ));
+                    }
+                }
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(
                     tui,

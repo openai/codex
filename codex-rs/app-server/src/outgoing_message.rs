@@ -267,6 +267,7 @@ mod tests {
     fn verify_account_updated_notification_serialization() {
         let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
             auth_mode: Some(AuthMode::ApiKey),
+            active_account: None,
         });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);

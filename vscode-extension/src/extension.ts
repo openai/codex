@@ -1539,6 +1539,96 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.switchAccount", async () => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+      const bm = backendManager;
+
+      const session = activeSessionId ? sessions.getById(activeSessionId) : null;
+      if (!session) {
+        void vscode.window.showErrorMessage("No session selected.");
+        return;
+      }
+
+      const list = await bm.listAccounts(session);
+      const active = list.activeAccount ?? null;
+
+      type PickItem =
+        | (vscode.QuickPickItem & { itemKind: "account"; name: string })
+        | (vscode.QuickPickItem & { itemKind: "create" });
+
+      const items: PickItem[] = list.accounts.map((a) => {
+        const description =
+          a.kind === "chatgpt"
+            ? a.email
+              ? `chatgpt (${a.email})`
+              : "chatgpt"
+            : a.kind === "apiKey"
+              ? "apiKey"
+              : undefined;
+
+        return {
+          itemKind: "account",
+          name: a.name,
+          label: a.name,
+          description,
+          detail: active === a.name ? "active" : undefined,
+        };
+      });
+      items.push({
+        itemKind: "create",
+        label: "+ Create new account…",
+        description: "Use [A-Za-z0-9_-], 1..64 chars",
+      });
+
+      const picked = await vscode.window.showQuickPick(items, {
+        title: "Switch account",
+        placeHolder: "Select an account",
+      });
+      if (!picked) return;
+
+      const validateName = (name: string): string | null => {
+        const trimmed = name.trim();
+        if (trimmed.length === 0) return "Account name cannot be empty.";
+        if (trimmed.length > 64) return "Account name is too long (max 64 chars).";
+        if (!/^[A-Za-z0-9_-]+$/.test(trimmed))
+          return "Invalid account name. Use only [A-Za-z0-9_-].";
+        return null;
+      };
+
+      const doSwitch = async (
+        name: string,
+        createIfMissing: boolean,
+      ): Promise<void> => {
+        await bm.switchAccount(session, { name, createIfMissing });
+        void vscode.window.showInformationMessage(
+          `Switched active account to ${name}.`,
+        );
+      };
+
+      if (picked.itemKind === "create") {
+        const name = await vscode.window.showInputBox({
+          title: "Create account",
+          prompt: "Account name",
+          placeHolder: "e.g. work, personal, team_a",
+          validateInput: (value) => validateName(value) ?? undefined,
+        });
+        if (!name) return;
+        const trimmed = name.trim();
+        const err = validateName(trimmed);
+        if (err) {
+          void vscode.window.showErrorMessage(err);
+          return;
+        }
+        await doSwitch(trimmed, true);
+        return;
+      }
+
+      await doSwitch(picked.name, false);
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand(
       "codexMine.showSkills",
       async (args?: unknown) => {
@@ -4059,11 +4149,67 @@ function applyServerNotification(
       return;
     }
     case "error": {
+      const p = (n as any).params as {
+        error?: {
+          message?: unknown;
+          codexErrorInfo?: unknown;
+          additionalDetails?: unknown;
+        };
+        willRetry?: unknown;
+      };
+      const err = p?.error ?? {};
+      const rawMessage =
+        typeof err?.message === "string" ? err.message : String(err?.message ?? "");
+      const message = rawMessage.trim();
+
+      const additionalDetails =
+        typeof err?.additionalDetails === "string"
+          ? err.additionalDetails.trim()
+          : "";
+
+      const rawInfo = err?.codexErrorInfo ?? null;
+      const infoKey =
+        typeof rawInfo === "string"
+          ? rawInfo
+          : rawInfo && typeof rawInfo === "object"
+            ? Object.keys(rawInfo as Record<string, unknown>)[0] ?? null
+            : null;
+      const infoValue =
+        infoKey && rawInfo && typeof rawInfo === "object"
+          ? (rawInfo as Record<string, unknown>)[infoKey]
+          : null;
+      const httpStatusCode =
+        infoValue && typeof infoValue === "object"
+          ? (infoValue as any).httpStatusCode ?? (infoValue as any).http_status_code
+          : null;
+
+      const willRetry = !!p?.willRetry;
+
+      let title = "Error";
+      if (infoKey === "rateLimited" || infoKey === "rate_limited") {
+        title =
+          typeof httpStatusCode === "number" ? `Rate limited (HTTP ${httpStatusCode})` : "Rate limited";
+      } else if (infoKey === "usageLimitExceeded" || infoKey === "usage_limit_exceeded") {
+        title = "Usage limit exceeded";
+      } else if (infoKey === "contextWindowExceeded" || infoKey === "context_window_exceeded") {
+        title = "Context window exceeded";
+      }
+
+      const lines: string[] = [];
+      if (message) lines.push(message);
+      if (additionalDetails) {
+        if (lines.length > 0) lines.push("");
+        lines.push(additionalDetails);
+      }
+      if (willRetry) {
+        if (lines.length > 0) lines.push("");
+        lines.push("Will retry automatically.");
+      }
       upsertBlock(sessionId, {
         id: newLocalId("error"),
         type: "error",
-        title: "Error",
-        text: String((n as any).params?.error?.message ?? ""),
+        title,
+        text: lines.join("\n").trim(),
       });
       chatView?.refresh();
       return;
@@ -4900,7 +5046,13 @@ function applyGlobalNotification(
       return;
     }
     case "account/updated": {
-      globalStatusText = `authMode=${String((n as any).params.authMode ?? "null")}`;
+      const p = (n as any).params as { authMode?: unknown; activeAccount?: unknown };
+      const authMode = String(p?.authMode ?? "null");
+      const activeAccount =
+        typeof p?.activeAccount === "string" ? p.activeAccount : null;
+      globalStatusText = activeAccount
+        ? `authMode=${authMode} active=${activeAccount}`
+        : `authMode=${authMode}`;
       chatView?.refresh();
       return;
     }

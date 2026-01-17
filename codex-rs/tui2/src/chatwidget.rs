@@ -588,6 +588,84 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn open_account_picker(&mut self) {
+        let snapshot = match codex_core::accounts::list_accounts(&self.config.codex_home) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                self.add_error_message(format!("Failed to list accounts: {err}"));
+                return;
+            }
+        };
+
+        let active = snapshot.active_account.as_deref();
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for account in snapshot.accounts {
+            let name = account.name.clone();
+            let description = match (account.meta.kind, account.meta.email.as_deref()) {
+                (Some(codex_core::accounts::AccountKind::Chatgpt), Some(email)) => {
+                    Some(format!("chatgpt ({email})"))
+                }
+                (Some(codex_core::accounts::AccountKind::Chatgpt), None) => {
+                    Some("chatgpt".to_string())
+                }
+                (Some(codex_core::accounts::AccountKind::ApiKey), _) => Some("apiKey".to_string()),
+                (None, _) => None,
+            };
+            let is_current = active == Some(name.as_str());
+            items.push(SelectionItem {
+                name: name.clone(),
+                display_shortcut: None,
+                description,
+                selected_description: None,
+                is_current,
+                is_default: false,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::SwitchAccount {
+                        name: name.clone(),
+                        create_if_missing: false,
+                    });
+                })],
+                dismiss_on_select: true,
+                search_value: None,
+            });
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "(no accounts)".to_string(),
+                display_shortcut: None,
+                description: Some("Create one with: /account create <name>".to_string()),
+                selected_description: None,
+                is_current: false,
+                is_default: false,
+                actions: vec![],
+                dismiss_on_select: true,
+                search_value: None,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Accounts".to_string()),
+            subtitle: Some("Switch the active account".to_string()),
+            footer_note: None,
+            footer_hint: Some(
+                vec![
+                    "Create: ".dim(),
+                    "/account create <name>".cyan(),
+                    "  Logout: ".dim(),
+                    "/logout".cyan(),
+                ]
+                .into(),
+            ),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Search accounts...".to_string()),
+            header: Box::new(()),
+            initial_selected_idx: None,
+        });
+        self.request_redraw();
+    }
+
     fn on_agent_message(&mut self, message: String) {
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
@@ -785,6 +863,16 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshot = None;
         }
+    }
+
+    pub(crate) fn on_active_account_changed(&mut self) {
+        self.stop_rate_limit_poller();
+        self.rate_limit_snapshot = None;
+        self.plan_type = None;
+        self.rate_limit_warnings = RateLimitWarningState::default();
+        self.rate_limit_switch_prompt = RateLimitSwitchPromptState::default();
+        self.prefetch_rate_limits();
+        self.request_redraw();
     }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
@@ -1958,6 +2046,9 @@ impl ChatWidget {
                     }),
                 }));
             }
+            SlashCommand::Account => {
+                self.open_account_picker();
+            }
         }
     }
 
@@ -1982,6 +2073,43 @@ impl ChatWidget {
                         },
                         user_facing_hint: None,
                     },
+                });
+            }
+            SlashCommand::Account => {
+                if trimmed.is_empty() {
+                    self.open_account_picker();
+                    return;
+                }
+
+                let mut parts = trimmed.split_whitespace();
+                let first = parts.next().unwrap_or_default();
+                let second = parts.next();
+                if parts.next().is_some() {
+                    self.add_error_message(
+                        "Usage: /account [<name>] | /account create <name>".to_string(),
+                    );
+                    return;
+                }
+
+                let (create_if_missing, name) = if first == "create" {
+                    let Some(name) = second else {
+                        self.add_error_message("Usage: /account create <name>".to_string());
+                        return;
+                    };
+                    (true, name)
+                } else {
+                    if second.is_some() {
+                        self.add_error_message(
+                            "Usage: /account [<name>] | /account create <name>".to_string(),
+                        );
+                        return;
+                    }
+                    (false, first)
+                };
+
+                self.app_event_tx.send(AppEvent::SwitchAccount {
+                    name: name.to_string(),
+                    create_if_missing,
                 });
             }
             _ => self.dispatch_command(cmd),

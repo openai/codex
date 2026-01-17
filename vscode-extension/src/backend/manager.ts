@@ -18,6 +18,9 @@ import type { Model } from "../generated/v2/Model";
 import type { ReasoningEffort } from "../generated/ReasoningEffort";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
+import type { ListAccountsResponse } from "../generated/v2/ListAccountsResponse";
+import type { SwitchAccountParams } from "../generated/v2/SwitchAccountParams";
+import type { SwitchAccountResponse } from "../generated/v2/SwitchAccountResponse";
 import type { SkillsListEntry } from "../generated/v2/SkillsListEntry";
 import type { Thread } from "../generated/v2/Thread";
 import type { AnyServerNotification } from "./types";
@@ -497,6 +500,37 @@ export class BackendManager implements vscode.Disposable {
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
     return await proc.accountRead({ refreshToken: false });
+  }
+
+  public async listAccounts(session: Session): Promise<ListAccountsResponse> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+    return await proc.accountList();
+  }
+
+  public async switchAccount(
+    session: Session,
+    params: SwitchAccountParams,
+  ): Promise<SwitchAccountResponse> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+    return await proc.accountSwitch(params);
   }
 
   public async readRateLimits(

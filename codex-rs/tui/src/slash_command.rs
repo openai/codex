@@ -28,6 +28,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Account,
     Mcp,
     Logout,
     Quit,
@@ -55,6 +56,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Account => "switch active account",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
@@ -87,7 +89,8 @@ impl SlashCommand {
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
             | SlashCommand::Review
-            | SlashCommand::Logout => false,
+            | SlashCommand::Logout
+            | SlashCommand::Account => false,
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Skills

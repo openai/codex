@@ -8,7 +8,9 @@ use crate::outgoing_message::OutgoingNotification;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AccountKind as ApiAccountKind;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
+use codex_app_server_protocol::AccountSummary as ApiAccountSummary;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
@@ -48,6 +50,7 @@ use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ListAccountsResponse;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
@@ -88,6 +91,8 @@ use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SwitchAccountParams;
+use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -127,6 +132,11 @@ use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::ThreadManager;
+use codex_core::accounts::AccountKind;
+use codex_core::accounts::list_accounts as list_accounts_core;
+use codex_core::accounts::resolve_active_account as resolve_active_account_core;
+use codex_core::accounts::switch_account as switch_account_core;
+use codex_core::accounts::update_account_meta;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
@@ -469,6 +479,15 @@ impl CodexMessageProcessor {
             } => {
                 self.logout_v2(request_id).await;
             }
+            ClientRequest::ListAccounts {
+                request_id,
+                params: _,
+            } => {
+                self.list_accounts_v2(request_id).await;
+            }
+            ClientRequest::SwitchAccount { request_id, params } => {
+                self.switch_account_v2(request_id, params).await;
+            }
             ClientRequest::CancelLoginAccount { request_id, params } => {
                 self.cancel_login_v2(request_id, params).await;
             }
@@ -589,6 +608,8 @@ impl CodexMessageProcessor {
         &mut self,
         params: &LoginApiKeyParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
+        self.require_active_account_if_needed()?;
+
         if matches!(
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Chatgpt)
@@ -615,6 +636,18 @@ impl CodexMessageProcessor {
         ) {
             Ok(()) => {
                 self.auth_manager.reload();
+
+                if let Ok(Some(account)) = resolve_active_account_core(&self.config.codex_home) {
+                    if let Err(err) = update_account_meta(
+                        &self.config.codex_home,
+                        &account,
+                        AccountKind::ApiKey,
+                        None,
+                    ) {
+                        tracing::warn!("failed to update account metadata: {err}");
+                    }
+                }
+
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
@@ -664,6 +697,7 @@ impl CodexMessageProcessor {
 
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: self.auth_manager.auth_cached().map(|auth| auth.mode),
+                    active_account: self.active_account_for_notification(),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -680,6 +714,8 @@ impl CodexMessageProcessor {
         &self,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
+
+        self.require_active_account_if_needed()?;
 
         if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
             return Err(JSONRPCErrorError {
@@ -706,6 +742,7 @@ impl CodexMessageProcessor {
             Ok(opts) => match run_login_server(opts) {
                 Ok(server) => {
                     let login_id = Uuid::new_v4();
+                    let auth_url = server.auth_url.clone();
                     let shutdown_handle = server.cancel_handle();
 
                     // Replace active login if present.
@@ -724,7 +761,6 @@ impl CodexMessageProcessor {
                     let outgoing_clone = self.outgoing.clone();
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
-                    let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
                             LOGIN_CHATGPT_TIMEOUT,
@@ -814,6 +850,7 @@ impl CodexMessageProcessor {
                     let outgoing_clone = self.outgoing.clone();
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
+                    let codex_home = self.config.codex_home.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -844,10 +881,28 @@ impl CodexMessageProcessor {
                         if success {
                             auth_manager.reload();
 
+                            if let (Ok(Some(account)), Some(auth)) = (
+                                resolve_active_account_core(&codex_home),
+                                auth_manager.auth_cached(),
+                            ) {
+                                let email = auth.get_account_email();
+                                if let Err(err) = update_account_meta(
+                                    &codex_home,
+                                    &account,
+                                    AccountKind::Chatgpt,
+                                    email,
+                                ) {
+                                    tracing::warn!("failed to update account metadata: {err}");
+                                }
+                            }
+
                             // Notify clients with the actual current auth mode.
                             let current_auth_method = auth_manager.auth_cached().map(|a| a.mode);
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: current_auth_method,
+                                active_account: resolve_active_account_core(&codex_home)
+                                    .ok()
+                                    .flatten(),
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -940,6 +995,8 @@ impl CodexMessageProcessor {
     }
 
     async fn logout_common(&mut self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+        self.require_active_account_if_needed()?;
+
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -989,6 +1046,7 @@ impl CodexMessageProcessor {
 
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: current_auth_method,
+                    active_account: self.active_account_for_notification(),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -996,6 +1054,98 @@ impl CodexMessageProcessor {
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    fn active_account_for_notification(&self) -> Option<String> {
+        resolve_active_account_core(&self.config.codex_home)
+            .ok()
+            .flatten()
+    }
+
+    fn require_active_account_if_needed(&self) -> std::result::Result<(), JSONRPCErrorError> {
+        match resolve_active_account_core(&self.config.codex_home) {
+            Ok(_) => Ok(()),
+            Err(err) => Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: err.to_string(),
+                data: None,
+            }),
+        }
+    }
+
+    async fn list_accounts_v2(&self, request_id: RequestId) {
+        match list_accounts_core(&self.config.codex_home) {
+            Ok(snapshot) => {
+                let accounts = snapshot
+                    .accounts
+                    .into_iter()
+                    .map(|account| ApiAccountSummary {
+                        name: account.name,
+                        kind: account.meta.kind.map(|kind| match kind {
+                            AccountKind::Chatgpt => ApiAccountKind::Chatgpt,
+                            AccountKind::ApiKey => ApiAccountKind::ApiKey,
+                        }),
+                        email: account.meta.email,
+                    })
+                    .collect();
+                let response = ListAccountsResponse {
+                    active_account: snapshot.active_account,
+                    accounts,
+                };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to list accounts: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+
+    async fn switch_account_v2(&mut self, request_id: RequestId, params: SwitchAccountParams) {
+        let name = params.name;
+        match switch_account_core(&self.config.codex_home, &name, params.create_if_missing) {
+            Ok(()) => {
+                self.auth_manager.reload();
+                let response = SwitchAccountResponse {
+                    active_account: name,
+                };
+                self.outgoing.send_response(request_id, response).await;
+
+                let payload_v2 = AccountUpdatedNotification {
+                    auth_mode: self.auth_manager.auth_cached().map(|auth| auth.mode),
+                    active_account: self.active_account_for_notification(),
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+                    .await;
+            }
+            Err(err) => {
+                let code = match err.kind() {
+                    std::io::ErrorKind::InvalidInput | std::io::ErrorKind::NotFound => {
+                        INVALID_REQUEST_ERROR_CODE
+                    }
+                    _ => INTERNAL_ERROR_CODE,
+                };
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code,
+                            message: err.to_string(),
+                            data: None,
+                        },
+                    )
+                    .await;
             }
         }
     }
@@ -1056,6 +1206,11 @@ impl CodexMessageProcessor {
     }
 
     async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
+        if let Err(err) = self.require_active_account_if_needed() {
+            self.outgoing.send_error(request_id, err).await;
+            return;
+        }
+
         let do_refresh = params.refresh_token;
 
         self.refresh_token_if_requested(do_refresh).await;

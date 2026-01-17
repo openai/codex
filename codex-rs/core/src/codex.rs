@@ -2840,6 +2840,13 @@ async fn run_model_turn(
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
+            Err(CodexErr::RateLimited(e)) => {
+                let rate_limits = e.rate_limits.clone();
+                if let Some(rate_limits) = rate_limits {
+                    sess.update_rate_limits(&turn_context, rate_limits).await;
+                }
+                return Err(CodexErr::RateLimited(e));
+            }
             Err(err) => err,
         };
 

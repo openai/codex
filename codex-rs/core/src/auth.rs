@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
+use crate::accounts::resolve_active_account;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
@@ -174,7 +175,7 @@ impl CodexAuth {
         Self {
             api_key: None,
             mode: AuthMode::ChatGPT,
-            storage: create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File),
+            storage: create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File, None),
             auth_dot_json,
             client: crate::default_client::create_client(),
         }
@@ -184,7 +185,7 @@ impl CodexAuth {
         Self {
             api_key: Some(api_key.to_owned()),
             mode: AuthMode::ApiKey,
-            storage: create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File),
+            storage: create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File, None),
             auth_dot_json: Arc::new(Mutex::new(None)),
             client,
         }
@@ -218,7 +219,12 @@ pub fn logout(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let account_name = resolve_active_account(codex_home)?;
+    let storage = create_auth_storage(
+        codex_home.to_path_buf(),
+        auth_credentials_store_mode,
+        account_name,
+    );
     storage.delete()
 }
 
@@ -242,7 +248,12 @@ pub fn save_auth(
     auth: &AuthDotJson,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let account_name = resolve_active_account(codex_home)?;
+    let storage = create_auth_storage(
+        codex_home.to_path_buf(),
+        auth_credentials_store_mode,
+        account_name,
+    );
     storage.save(auth)
 }
 
@@ -255,7 +266,12 @@ pub fn load_auth_dot_json(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<AuthDotJson>> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let account_name = resolve_active_account(codex_home)?;
+    let storage = create_auth_storage(
+        codex_home.to_path_buf(),
+        auth_credentials_store_mode,
+        account_name,
+    );
     storage.load()
 }
 
@@ -358,7 +374,12 @@ fn load_auth(
         )));
     }
 
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let account_name = resolve_active_account(codex_home)?;
+    let storage = create_auth_storage(
+        codex_home.to_path_buf(),
+        auth_credentials_store_mode,
+        account_name,
+    );
 
     let client = crate::default_client::create_client();
     let auth_dot_json = match storage.load()? {
@@ -903,6 +924,7 @@ mod tests {
         let storage = create_auth_storage(
             codex_home.path().to_path_buf(),
             AuthCredentialsStoreMode::File,
+            None,
         );
         let updated = super::update_tokens(
             &storage,

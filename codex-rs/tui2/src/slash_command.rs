@@ -28,6 +28,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     Mcp,
+    Account,
     Logout,
     Quit,
     Exit,
@@ -57,6 +58,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::Account => "switch the active account",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -82,6 +84,7 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::ElevateSandbox
             | SlashCommand::Review
+            | SlashCommand::Account
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention

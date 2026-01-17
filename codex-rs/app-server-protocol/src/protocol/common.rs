@@ -189,6 +189,16 @@ client_request_definitions! {
         response: v2::LogoutAccountResponse,
     },
 
+    ListAccounts => "account/list" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::ListAccountsResponse,
+    },
+
+    SwitchAccount => "account/switch" {
+        params: v2::SwitchAccountParams,
+        response: v2::SwitchAccountResponse,
+    },
+
     GetAccountRateLimits => "account/rateLimits/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v2::GetAccountRateLimitsResponse,

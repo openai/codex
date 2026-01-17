@@ -42,6 +42,7 @@
     "onCommand:codexMine.showAgents",
     "onCommand:codexMine.selectCliVariant",
     "onCommand:codexMine.resumeFromHistory",
+    "onCommand:codexMine.switchAccount",
     "onView:codexMine.chatView",
     "onView:codexMine.sessionsView"
   ],
@@ -142,6 +143,10 @@
       {
         "command": "codexMine.resumeFromHistory",
         "title": "Codex UI: Resume from History"
+      },
+      {
+        "command": "codexMine.switchAccount",
+        "title": "Codex UI: Switch Account"
       }
     ],
     "keybindings": [
