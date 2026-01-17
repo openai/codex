@@ -87,6 +87,7 @@ Example (from OpenAI's official VSCode extension):
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (with reasoning effort options).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
@@ -483,17 +484,30 @@ Example:
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
-Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/or with `forceReload`).
+Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
-    "cwd": "/Users/me/project",
+    "cwds": ["/Users/me/project"],
     "forceReload": false
 } }
 { "id": 25, "result": {
-    "skills": [
-        { "name": "skill-creator", "description": "Create or update a Codex skill" }
-    ]
+    "data": [{
+        "cwd": "/Users/me/project",
+        "skills": [
+            { "name": "skill-creator", "description": "Create or update a Codex skill", "enabled": true }
+        ],
+        "errors": []
+    }]
+} }
+```
+
+To enable or disable a skill by path:
+
+```json
+{ "method": "skills/config/write", "id": 26, "params": {
+    "path": "/Users/me/.codex/skills/skill-creator/SKILL.md",
+    "enabled": false
 } }
 ```
 
