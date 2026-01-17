@@ -136,6 +136,7 @@ struct ProcessEntry {
     call_id: String,
     process_id: String,
     command: Vec<String>,
+    tty: bool,
     last_used: tokio::time::Instant,
 }
 

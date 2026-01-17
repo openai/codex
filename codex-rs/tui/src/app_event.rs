@@ -14,6 +14,7 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -41,6 +42,10 @@ pub(crate) enum WindowsSandboxFallbackReason {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+    ExternalApprovalRequest {
+        thread_id: ThreadId,
+        event: Event,
+    },
 
     /// Start a new session.
     NewSession,
@@ -48,8 +53,8 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
-    /// Open the fork picker inside the running TUI session.
-    OpenForkPicker,
+    /// Fork the current session into a new thread.
+    ForkCurrentSession,
 
     /// Request to exit the application.
     ///

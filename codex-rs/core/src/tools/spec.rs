@@ -503,9 +503,10 @@ fn create_send_input_tool() -> ToolSpec {
 fn create_wait_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
-        "id".to_string(),
-        JsonSchema::String {
-            description: Some("Identifier of the agent to wait on.".to_string()),
+        "ids".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::String { description: None }),
+            description: Some("Identifiers of the agents to wait on.".to_string()),
         },
     );
     properties.insert(
@@ -519,11 +520,13 @@ fn create_wait_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description: "Wait for an agent and return its status.".to_string(),
+        description:
+            "Wait for agents and return their statuses. If no agent is done, no status get returned."
+                .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string()]),
+            required: Some(vec!["ids".to_string()]),
             additional_properties: Some(false.into()),
         },
     })

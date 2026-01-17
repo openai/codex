@@ -100,6 +100,7 @@ pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::find_thread_path_by_id_str;
 pub use rollout::list::Cursor;
 pub use rollout::list::ThreadItem;
+pub use rollout::list::ThreadSortKey;
 pub use rollout::list::ThreadsPage;
 pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;

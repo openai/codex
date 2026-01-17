@@ -383,6 +383,7 @@ pub(crate) struct ChatWidget {
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     conversation_id: Option<ThreadId>,
+    forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -405,8 +406,17 @@ pub(crate) struct ChatWidget {
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
-    // Whether to add a final message separator after the last message
+    // Whether the next streamed assistant content should be preceded by a final message separator.
+    //
+    // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
+    // The separator itself is only rendered if the turn recorded "work" activity (see
+    // `had_work_activity`).
     needs_final_message_separator: bool,
+    // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
+    //
+    // This gates rendering of the "Worked for …" separator so purely conversational turns don't
+    // show an empty divider. It is reset when the separator is emitted.
+    had_work_activity: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
@@ -513,6 +523,7 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.conversation_id = Some(event.session_id);
+        self.forked_from = event.forked_from_id;
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
@@ -1150,14 +1161,20 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
-            if self.needs_final_message_separator {
+            // If the previous turn inserted non-stream history (exec output, patch status, MCP
+            // calls), render a separator before starting the next streamed assistant message.
+            if self.needs_final_message_separator && self.had_work_activity {
                 let elapsed_seconds = self
                     .bottom_pane
                     .status_widget()
                     .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
                 self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
                 self.needs_final_message_separator = false;
+                self.had_work_activity = false;
                 needs_redraw = true;
+            } else if self.needs_final_message_separator {
+                // Reset the flag even if we don't show separator (no work was done)
+                self.needs_final_message_separator = false;
             }
             // Streaming must not capture the current viewport width: width-derived wraps are
             // applied later, at render time, so the transcript can reflow on resize.
@@ -1228,6 +1245,8 @@ impl ChatWidget {
                 self.request_redraw();
             }
         }
+        // Mark that actual work was done (command executed)
+        self.had_work_activity = true;
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -1239,6 +1258,8 @@ impl ChatWidget {
         if !event.success {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
+        // Mark that actual work was done (patch applied)
+        self.had_work_activity = true;
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -1404,6 +1425,8 @@ impl ChatWidget {
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
         }
+        // Mark that actual work was done (MCP tool call)
+        self.had_work_activity = true;
     }
 
     pub(crate) fn new(common: ChatWidgetInit, thread_manager: Arc<ThreadManager>) -> Self {
@@ -1481,6 +1504,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             conversation_id: None,
+            forked_from: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -1490,6 +1514,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            had_work_activity: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -1576,6 +1601,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             conversation_id: None,
+            forked_from: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -1585,6 +1611,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            had_work_activity: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -1746,7 +1773,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Fork => {
-                self.app_event_tx.send(AppEvent::OpenForkPicker);
+                self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -2377,6 +2404,7 @@ impl ChatWidget {
             token_info,
             total_usage,
             &self.conversation_id,
+            self.forked_from,
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
             Local::now(),

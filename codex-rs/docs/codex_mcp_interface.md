@@ -105,6 +105,24 @@ While a conversation runs, the server sends notifications:
 
 Clients should render events and, when present, surface approval requests (see next section).
 
+## Tool responses
+
+The `codex` and `codex-reply` tools return standard MCP `CallToolResult` payloads. For
+compatibility with MCP clients that prefer `structuredContent`, Codex mirrors the
+content blocks inside `structuredContent` alongside the `threadId`.
+
+Example:
+
+```json
+{
+  "content": [{ "type": "text", "text": "Hello from Codex" }],
+  "structuredContent": {
+    "threadId": "019bbed6-1e9e-7f31-984c-a05b65045719",
+    "content": "Hello from Codex"
+  }
+}
+```
+
 ## Approvals (server → client)
 
 When Codex needs approval to apply changes or run commands, the server issues JSON‑RPC requests to the client:

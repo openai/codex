@@ -162,6 +162,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
                 ],
                 "structuredContent": {
                     "threadId": params.thread_id,
+                    "content": "File created!"
                 }
             }),
         },
@@ -323,6 +324,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
                 ],
                 "structuredContent": {
                     "threadId": params.thread_id,
+                    "content": "Patch has been applied successfully!"
                 }
             }),
         },
@@ -394,6 +396,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
                     .and_then(|v| v.get("threadId"))
                     .and_then(serde_json::Value::as_str)
                     .expect("codex tool response should include structuredContent.threadId"),
+                "content": "Enjoy!"
             }
         })
     );

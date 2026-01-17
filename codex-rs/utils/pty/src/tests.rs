@@ -163,9 +163,11 @@ async fn pipe_and_pty_share_interface() -> anyhow::Result<()> {
         spawn_pipe_process(&pipe_program, &pipe_args, Path::new("."), &env_map, &None).await?;
     let pty = spawn_pty_process(&pty_program, &pty_args, Path::new("."), &env_map, &None).await?;
 
+    let timeout_ms = if cfg!(windows) { 10_000 } else { 3_000 };
     let (pipe_out, pipe_code) =
-        collect_output_until_exit(pipe.output_rx, pipe.exit_rx, 3_000).await;
-    let (pty_out, pty_code) = collect_output_until_exit(pty.output_rx, pty.exit_rx, 3_000).await;
+        collect_output_until_exit(pipe.output_rx, pipe.exit_rx, timeout_ms).await;
+    let (pty_out, pty_code) =
+        collect_output_until_exit(pty.output_rx, pty.exit_rx, timeout_ms).await;
 
     assert_eq!(pipe_code, 0);
     assert_eq!(pty_code, 0);
