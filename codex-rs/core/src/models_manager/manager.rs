@@ -95,12 +95,8 @@ impl ModelsManager {
     /// List collaboration mode presets.
     ///
     /// Returns a static set of presets seeded with the configured model.
-    pub fn list_collaboration_modes(&self, config: &Config) -> Vec<CollaborationMode> {
-        let model = config
-            .model
-            .clone()
-            .unwrap_or_else(|| OPENAI_DEFAULT_API_MODEL.to_string());
-        builtin_collaboration_mode_presets(model, config.model_reasoning_effort)
+    pub fn list_collaboration_modes(&self) -> Vec<CollaborationMode> {
+        builtin_collaboration_mode_presets()
     }
 
     /// Attempt to list models without blocking, using the current cached state.
