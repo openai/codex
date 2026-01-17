@@ -1456,19 +1456,6 @@ impl ChatComposer {
 
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
     fn prepare_submission_text(&mut self) -> Option<(String, Vec<TextElement>)> {
-        // If we have pending placeholder pastes, replace them in the textarea text
-        // and continue to the normal submission flow to handle slash commands.
-        if !self.pending_pastes.is_empty() {
-            let mut text = self.textarea.text().to_string();
-            for (placeholder, actual) in &self.pending_pastes {
-                if text.contains(placeholder) {
-                    text = text.replace(placeholder, actual);
-                }
-            }
-            self.textarea.set_text(&text);
-            self.pending_pastes.clear();
-        }
-
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
@@ -1482,12 +1469,24 @@ impl ChatComposer {
         self.textarea.set_text("");
 
         // Replace all pending pastes in the text
-        for (placeholder, actual) in &self.pending_pastes {
-            if text.contains(placeholder) {
-                text = text.replace(placeholder, actual);
+        if !self.pending_pastes.is_empty() {
+            let pending_placeholders: HashSet<&str> = self
+                .pending_pastes
+                .iter()
+                .map(|(placeholder, _)| placeholder.as_str())
+                .collect();
+            for (placeholder, actual) in &self.pending_pastes {
+                if text.contains(placeholder) {
+                    text = text.replace(placeholder, actual);
+                }
             }
+            text_elements.retain(|elem| {
+                elem.placeholder.as_deref().map_or(true, |placeholder| {
+                    !pending_placeholders.contains(placeholder)
+                })
+            });
+            self.pending_pastes.clear();
         }
-        self.pending_pastes.clear();
 
         // If there is neither text nor attachments, suppress submission entirely.
         let has_attachments = !self.attached_images.is_empty();
@@ -4159,6 +4158,50 @@ mod tests {
                     ByteRange {
                         start: 0,
                         end: "[Image #1]".len()
+                    }
+                );
+            }
+            _ => panic!("expected Submitted"),
+        }
+        let imgs = composer.take_recent_submission_images();
+        assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn large_paste_preserves_image_text_elements_on_submit() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let large_content = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large_content.clone());
+        composer.handle_paste(" ".into());
+        let path = PathBuf::from("/tmp/image_with_paste.png");
+        composer.attach_image(path.clone());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                let expected = format!("{large_content} [Image #1]");
+                assert_eq!(text, expected);
+                assert_eq!(text_elements.len(), 1);
+                assert_eq!(text_elements[0].placeholder.as_deref(), Some("[Image #1]"));
+                assert_eq!(
+                    text_elements[0].byte_range,
+                    ByteRange {
+                        start: large_content.len() + 1,
+                        end: large_content.len() + 1 + "[Image #1]".len(),
                     }
                 );
             }
