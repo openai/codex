@@ -9,6 +9,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Settings;
+use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -35,16 +36,36 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 
-    let settings = Settings {
-        model: "gpt-5.2-codex".to_string(),
-        reasoning_effort: None,
-        developer_instructions: None,
-    };
     let expected = vec![
-        CollaborationMode::Plan(settings.clone()),
-        CollaborationMode::Collaborate(settings.clone()),
-        CollaborationMode::Execute(settings),
+        plan_preset(),
+        collaborate_preset(),
+        execute_preset(),
     ];
     assert_eq!(expected, items);
     Ok(())
+}
+
+
+fn plan_preset() -> CollaborationMode {
+    CollaborationMode::Plan(Settings {
+        model: "gpt-5.2-codex".to_string(),
+        reasoning_effort: Some(ReasoningEffort::Medium),
+        developer_instructions: None,
+    })
+}
+
+fn collaborate_preset() -> CollaborationMode {
+    CollaborationMode::Collaborate(Settings {
+        model: "gpt-5.2-codex".to_string(),
+        reasoning_effort: Some(ReasoningEffort::Medium),
+        developer_instructions: None,
+    })
+}
+
+fn execute_preset() -> CollaborationMode {
+    CollaborationMode::Execute(Settings {
+        model: "gpt-5.2-codex".to_string(),
+        reasoning_effort: Some(ReasoningEffort::XHigh),
+        developer_instructions: None,
+    })
 }
