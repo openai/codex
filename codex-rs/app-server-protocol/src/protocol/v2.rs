@@ -300,7 +300,6 @@ impl PartialOrd for ConfigLayerSource {
     }
 }
 
-/// EXPERIMENTAL - list collaboration mode presets.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
