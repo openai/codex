@@ -340,6 +340,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
@@ -502,6 +503,7 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
             feedback: feedback.clone(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
@@ -622,6 +624,10 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    if self.backtrack_render_pending {
+                        self.backtrack_render_pending = false;
+                        self.render_transcript_once(tui);
+                    }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
@@ -870,6 +876,9 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.handle_codex_event_now(event);
+                if self.backtrack_render_pending {
+                    tui.frame_requester().schedule_frame();
+                }
             }
             AppEvent::ExternalApprovalRequest { thread_id, event } => {
                 self.handle_external_approval_request(thread_id, event);
@@ -1415,6 +1424,7 @@ impl App {
             let errors = errors_for_cwd(&cwd, response);
             emit_skill_load_warnings(&self.app_event_tx, &errors);
         }
+        self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
     }
 
@@ -1739,6 +1749,7 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
@@ -1781,6 +1792,7 @@ mod tests {
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
+                backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,

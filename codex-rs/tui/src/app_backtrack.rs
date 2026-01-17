@@ -20,6 +20,9 @@ use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_core::protocol::CodexErrorInfo;
+use codex_core::protocol::ErrorEvent;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
@@ -38,12 +41,20 @@ pub(crate) struct BacktrackState {
     pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
+    /// Pending rollback request awaiting confirmation from core.
+    pub(crate) pending_rollback: Option<PendingBacktrackRollback>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct BacktrackSelection {
     pub(crate) nth_user_message: usize,
     pub(crate) prefill: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingBacktrackRollback {
+    pub(crate) selection: BacktrackSelection,
+    pub(crate) thread_id: Option<ThreadId>,
 }
 
 impl App {
@@ -118,16 +129,26 @@ impl App {
             return;
         }
 
+        if self.backtrack.pending_rollback.is_some() {
+            self.chat_widget
+                .add_error_message("Backtrack rollback already in progress.".to_string());
+            return;
+        }
+
         let num_turns = user_total.saturating_sub(selection.nth_user_message);
         let num_turns = u32::try_from(num_turns).unwrap_or(u32::MAX);
         if num_turns == 0 {
             return;
         }
 
+        let prefill = selection.prefill.clone();
+        self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
+            selection,
+            thread_id: self.chat_widget.thread_id(),
+        });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
-        self.trim_transcript_for_backtrack(selection.nth_user_message);
-        if !selection.prefill.is_empty() {
-            self.chat_widget.set_composer_text(selection.prefill);
+        if !prefill.is_empty() {
+            self.chat_widget.set_composer_text(prefill);
         }
     }
 
@@ -290,7 +311,6 @@ impl App {
         self.close_transcript_overlay(tui);
         if let Some(selection) = selection {
             self.apply_backtrack_rollback(selection);
-            self.render_transcript_once(tui);
             tui.frame_requester().schedule_frame();
         }
     }
@@ -328,8 +348,31 @@ impl App {
         selection: BacktrackSelection,
     ) {
         self.apply_backtrack_rollback(selection);
-        self.render_transcript_once(tui);
         tui.frame_requester().schedule_frame();
+    }
+
+    pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
+        match event {
+            EventMsg::ThreadRolledBack(_) => self.finish_pending_backtrack(),
+            EventMsg::Error(ErrorEvent {
+                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                ..
+            }) => {
+                self.backtrack.pending_rollback = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn finish_pending_backtrack(&mut self) {
+        let Some(pending) = self.backtrack.pending_rollback.take() else {
+            return;
+        };
+        if pending.thread_id != self.chat_widget.thread_id() {
+            return;
+        }
+        self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
+        self.backtrack_render_pending = true;
     }
 
     fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
