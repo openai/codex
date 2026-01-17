@@ -10,6 +10,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::exec::SandboxType;
 use crate::exec_env::create_env;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
@@ -470,14 +471,26 @@ impl UnifiedExecProcessManager {
             )
             .await
         } else {
-            codex_utils_pty::pipe::spawn_process_no_stdin(
-                program,
-                args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
-            )
-            .await
+            let detach_from_tty = matches!(env.sandbox, SandboxType::None);
+            if detach_from_tty {
+                codex_utils_pty::pipe::spawn_process_no_stdin_detached(
+                    program,
+                    args,
+                    env.cwd.as_path(),
+                    &env.env,
+                    &env.arg0,
+                )
+                .await
+            } else {
+                codex_utils_pty::pipe::spawn_process_no_stdin(
+                    program,
+                    args,
+                    env.cwd.as_path(),
+                    &env.env,
+                    &env.arg0,
+                )
+                .await
+            }
         };
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;

@@ -35,6 +35,7 @@ where
         sandbox_policy,
         stdio_policy,
         env,
+        false,
     )
     .await
 }

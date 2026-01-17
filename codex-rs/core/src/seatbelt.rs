@@ -39,6 +39,7 @@ pub async fn spawn_command_under_seatbelt(
         sandbox_policy,
         stdio_policy,
         env,
+        false,
     )
     .await
 }

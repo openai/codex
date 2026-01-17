@@ -549,6 +549,7 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
+    let detach_from_tty = matches!(sandbox, SandboxType::None);
     let child = spawn_child_async(
         PathBuf::from(program),
         args.into(),
@@ -557,6 +558,7 @@ async fn exec(
         sandbox_policy,
         StdioPolicy::RedirectForShellTool,
         env,
+        detach_from_tty,
     )
     .await?;
     consume_truncated_output(child, expiration, stdout_stream).await

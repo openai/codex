@@ -35,6 +35,7 @@ pub enum StdioPolicy {
 /// For now, we take `SandboxPolicy` as a parameter to spawn_child() because
 /// we need to determine whether to set the
 /// `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` environment variable.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_child_async(
     program: PathBuf,
     args: Vec<String>,
@@ -43,6 +44,7 @@ pub(crate) async fn spawn_child_async(
     sandbox_policy: &SandboxPolicy,
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
+    detach_from_tty: bool,
 ) -> std::io::Result<Child> {
     trace!(
         "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} {env:?}"
@@ -66,12 +68,16 @@ pub(crate) async fn spawn_child_async(
 
     #[cfg(unix)]
     unsafe {
-        let set_process_group = matches!(stdio_policy, StdioPolicy::RedirectForShellTool);
+        let isolate_process_group = matches!(stdio_policy, StdioPolicy::RedirectForShellTool);
         #[cfg(target_os = "linux")]
         let parent_pid = libc::getpid();
         cmd.pre_exec(move || {
-            if set_process_group {
-                codex_utils_pty::process_group::set_process_group()?;
+            if isolate_process_group {
+                if detach_from_tty {
+                    codex_utils_pty::process_group::detach_from_tty()?;
+                } else {
+                    codex_utils_pty::process_group::set_process_group()?;
+                }
             }
 
             // This relies on prctl(2), so it only works on Linux.

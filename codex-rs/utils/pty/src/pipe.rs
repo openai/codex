@@ -103,6 +103,7 @@ async fn spawn_process_with_stdin_mode(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     stdin_mode: PipeStdinMode,
+    detach_from_tty: bool,
 ) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for pipe spawn");
@@ -118,7 +119,11 @@ async fn spawn_process_with_stdin_mode(
     #[cfg(unix)]
     unsafe {
         command.pre_exec(move || {
-            crate::process_group::set_process_group()?;
+            if detach_from_tty {
+                crate::process_group::detach_from_tty()?;
+            } else {
+                crate::process_group::set_process_group()?;
+            }
             #[cfg(target_os = "linux")]
             crate::process_group::set_parent_death_signal(parent_pid)?;
             Ok(())
@@ -253,7 +258,7 @@ pub async fn spawn_process(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
 ) -> Result<SpawnedProcess> {
-    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped).await
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped, false).await
 }
 
 /// Spawn a process using regular pipes, but close stdin immediately.
@@ -264,5 +269,27 @@ pub async fn spawn_process_no_stdin(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
 ) -> Result<SpawnedProcess> {
-    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Null).await
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Null, false).await
+}
+
+/// Spawn a process using regular pipes, but detach it from the controlling TTY.
+pub async fn spawn_process_detached(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+) -> Result<SpawnedProcess> {
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped, true).await
+}
+
+/// Spawn a process using regular pipes, close stdin immediately, and detach it from the TTY.
+pub async fn spawn_process_no_stdin_detached(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+) -> Result<SpawnedProcess> {
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Null, true).await
 }
