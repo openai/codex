@@ -72,7 +72,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SkillsListEntry;
+use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
@@ -87,7 +87,6 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
-use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -173,6 +172,8 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
+mod skills;
+use self::skills::find_skill_mentions;
 use crate::streaming::controller::StreamController;
 use std::path::Path;
 
@@ -424,6 +425,8 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
+    skills_all: Vec<ProtocolSkillMetadata>,
+    skills_initial_state: Option<HashMap<PathBuf, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     task_complete_pending: bool,
@@ -749,11 +752,6 @@ impl ChatWidget {
 
     fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.bottom_pane.set_skills(skills);
-    }
-
-    fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
-        self.set_skills(Some(skills));
     }
 
     pub(crate) fn open_feedback_note(
@@ -1853,6 +1851,8 @@ impl ChatWidget {
             active_cell,
             active_cell_revision: 0,
             config,
+            skills_all: Vec::new(),
+            skills_initial_state: None,
             stored_collaboration_mode,
             auth_manager,
             models_manager,
@@ -1967,6 +1967,8 @@ impl ChatWidget {
             active_cell: None,
             active_cell_revision: 0,
             config,
+            skills_all: Vec::new(),
+            skills_initial_state: None,
             stored_collaboration_mode,
             auth_manager,
             models_manager,
@@ -2332,7 +2334,7 @@ impl ChatWidget {
                 self.insert_str("@");
             }
             SlashCommand::Skills => {
-                self.insert_str("$");
+                self.open_skills_menu();
             }
             SlashCommand::Status => {
                 self.add_status_output();
@@ -5006,50 +5008,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
-}
-
-fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
-    skills_entries
-        .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
-        .map(|entry| {
-            entry
-                .skills
-                .iter()
-                .map(|skill| SkillMetadata {
-                    name: skill.name.clone(),
-                    description: skill.description.clone(),
-                    short_description: skill.short_description.clone(),
-                    interface: skill.interface.clone().map(|interface| SkillInterface {
-                        display_name: interface.display_name,
-                        short_description: interface.short_description,
-                        icon_small: interface.icon_small,
-                        icon_large: interface.icon_large,
-                        brand_color: interface.brand_color,
-                        default_prompt: interface.default_prompt,
-                    }),
-                    path: skill.path.clone(),
-                    scope: skill.scope,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut matches: Vec<SkillMetadata> = Vec::new();
-    for skill in skills {
-        if seen.contains(&skill.name) {
-            continue;
-        }
-        let needle = format!("${}", skill.name);
-        if text.contains(&needle) {
-            seen.insert(skill.name.clone());
-            matches.push(skill.clone());
-        }
-    }
-    matches
 }
 
 #[cfg(test)]

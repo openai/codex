@@ -2041,6 +2041,7 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub path: PathBuf,
     pub scope: SkillScope,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
