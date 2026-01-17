@@ -515,7 +515,6 @@ async fn review_input_isolated_from_parent_history() {
             "payload": {
                 "id": convo_id,
                 "timestamp": "2024-01-01T00:00:00Z",
-                "instructions": null,
                 "cwd": ".",
                 "originator": "test_originator",
                 "cli_version": "test_version",

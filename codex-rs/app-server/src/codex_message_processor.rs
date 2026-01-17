@@ -4249,7 +4249,6 @@ mod tests {
                 "cwd": "/",
                 "originator": "codex",
                 "cli_version": "0.0.0",
-                "instructions": null,
                 "model_provider": "test-provider"
             }),
             json!({

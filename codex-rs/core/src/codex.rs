@@ -598,12 +598,7 @@ impl Session {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        forked_from_id,
-                        session_configuration.user_instructions.clone(),
-                        session_source,
-                    ),
+                    RolloutRecorderParams::new(conversation_id, forked_from_id, session_source),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (

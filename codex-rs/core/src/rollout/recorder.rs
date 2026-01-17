@@ -58,7 +58,6 @@ pub enum RolloutRecorderParams {
     Create {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
-        instructions: Option<String>,
         source: SessionSource,
     },
     Resume {
@@ -81,13 +80,11 @@ impl RolloutRecorderParams {
     pub fn new(
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
-        instructions: Option<String>,
         source: SessionSource,
     ) -> Self {
         Self::Create {
             conversation_id,
             forked_from_id,
-            instructions,
             source,
         }
     }
@@ -162,7 +159,6 @@ impl RolloutRecorder {
             RolloutRecorderParams::Create {
                 conversation_id,
                 forked_from_id,
-                instructions,
                 source,
             } => {
                 let LogFileInfo {
@@ -190,7 +186,6 @@ impl RolloutRecorder {
                         cwd: config.cwd.clone(),
                         originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                        instructions,
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                     }),
