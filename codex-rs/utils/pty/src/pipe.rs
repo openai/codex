@@ -103,7 +103,7 @@ async fn spawn_process_with_stdin_mode(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     stdin_mode: PipeStdinMode,
-    detach_from_tty: bool,
+    #[cfg_attr(not(unix), allow(unused_variables))] detach_from_tty: bool,
 ) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for pipe spawn");
