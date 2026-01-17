@@ -24,6 +24,7 @@ use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
@@ -44,6 +45,7 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -187,6 +189,14 @@ pub enum Op {
         request_id: RequestId,
         /// User's decision for the request.
         decision: ElicitationAction,
+    },
+
+    /// Resolve a request_user_input tool call.
+    RequestUserInputResponse {
+        /// Turn id for the in-flight request.
+        id: String,
+        /// User-provided answers.
+        response: RequestUserInputResponse,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -720,6 +730,8 @@ pub enum EventMsg {
     ViewImageToolCall(ViewImageToolCallEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
+
+    RequestUserInput(RequestUserInputEvent),
 
     ElicitationRequest(ElicitationRequestEvent),
 

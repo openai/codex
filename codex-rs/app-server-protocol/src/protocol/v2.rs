@@ -2266,6 +2266,50 @@ pub struct FileChangeRequestApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ToolRequestUserInputOption {
+    pub value: String,
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ToolRequestUserInputQuestion {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub options: Option<Vec<ToolRequestUserInputOption>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ToolRequestUserInputParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub questions: Vec<ToolRequestUserInputQuestion>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ToolRequestUserInputAnswer {
+    pub selected: Vec<String>,
+    pub other: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ToolRequestUserInputResponse {
+    pub answers: HashMap<String, ToolRequestUserInputAnswer>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
