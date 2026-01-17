@@ -1,14 +1,20 @@
 use crate::config::NetworkMode;
 use crate::mitm;
+use crate::network_policy::NetworkDecision;
+use crate::network_policy::NetworkPolicyDecider;
+use crate::network_policy::NetworkPolicyRequest;
+use crate::network_policy::NetworkProtocol;
+use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::responses::blocked_header_value;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
 use anyhow::Context as _;
 use anyhow::Result;
-use rama::Context;
 use rama::Layer;
 use rama::Service;
+use rama::extensions::ExtensionsMut;
+use rama::extensions::ExtensionsRef;
 use rama::http::Body;
 use rama::http::Request;
 use rama::http::Response;
@@ -20,7 +26,7 @@ use rama::http::layer::upgrade::UpgradeLayer;
 use rama::http::layer::upgrade::Upgraded;
 use rama::http::matcher::MethodMatcher;
 use rama::http::server::HttpServer;
-use rama::layer::AddExtensionLayer;
+use rama::layer::AddInputExtensionLayer;
 use rama::net::http::RequestContext;
 use rama::net::proxy::ProxyTarget;
 use rama::net::stream::SocketInfo;
@@ -35,7 +41,11 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-pub async fn run_http_proxy(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
+pub async fn run_http_proxy(
+    state: Arc<AppState>,
+    addr: SocketAddr,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+) -> Result<()> {
     let listener = TcpListener::build()
         .bind(addr)
         .await
@@ -51,39 +61,40 @@ pub async fn run_http_proxy(state: Arc<AppState>, addr: SocketAddr) -> Result<()
         (
             UpgradeLayer::new(
                 MethodMatcher::CONNECT,
-                service_fn(http_connect_accept),
+                service_fn({
+                    let policy_decider = policy_decider.clone();
+                    move |req| http_connect_accept(policy_decider.clone(), req)
+                }),
                 service_fn(http_connect_proxy),
             ),
             RemoveResponseHeaderLayer::hop_by_hop(),
             RemoveRequestHeaderLayer::hop_by_hop(),
         )
-            .into_layer(service_fn(http_plain_proxy)),
+            .into_layer(service_fn({
+                let policy_decider = policy_decider.clone();
+                move |req| http_plain_proxy(policy_decider.clone(), req)
+            })),
     );
 
     info!("HTTP proxy listening on {addr}");
 
     listener
-        .serve(AddExtensionLayer::new(state).into_layer(http_service))
+        .serve(AddInputExtensionLayer::new(state).into_layer(http_service))
         .await;
     Ok(())
 }
 
-async fn http_connect_accept<S>(
-    mut ctx: Context<S>,
-    req: Request,
-) -> Result<(Response, Context<S>, Request), Response>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let app_state = ctx
+async fn http_connect_accept(
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    mut req: Request,
+) -> Result<(Response, Request), Response> {
+    let app_state = req
+        .extensions()
         .get::<Arc<AppState>>()
         .cloned()
         .ok_or_else(|| text_response(StatusCode::INTERNAL_SERVER_ERROR, "missing state"))?;
 
-    let authority = match ctx
-        .get_or_try_insert_with_ctx::<RequestContext, _>(|ctx| (ctx, &req).try_into())
-        .map(|ctx| ctx.authority.clone())
-    {
+    let authority = match RequestContext::try_from(&req).map(|ctx| ctx.host_with_port()) {
         Ok(authority) => authority,
         Err(err) => {
             warn!("CONNECT missing authority: {err}");
@@ -91,15 +102,25 @@ where
         }
     };
 
-    let host = normalize_host(&authority.host().to_string());
+    let host = normalize_host(&authority.host.to_string());
     if host.is_empty() {
         return Err(text_response(StatusCode::BAD_REQUEST, "invalid host"));
     }
 
-    let client = client_addr(&ctx);
+    let client = client_addr(&req);
 
-    match app_state.host_blocked(&host, authority.port()).await {
-        Ok((true, reason)) => {
+    let request = NetworkPolicyRequest::new(
+        NetworkProtocol::HttpsConnect,
+        host.clone(),
+        authority.port,
+        client.clone(),
+        Some("CONNECT".to_string()),
+        None,
+        None,
+    );
+
+    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+        Ok(NetworkDecision::Deny { reason }) => {
             let _ = app_state
                 .record_blocked(BlockedRequest::new(
                     host.clone(),
@@ -114,7 +135,7 @@ where
             warn!("CONNECT blocked (client={client}, host={host}, reason={reason})");
             return Err(blocked_text(&reason));
         }
-        Ok((false, _)) => {
+        Ok(NetworkDecision::Allow) => {
             let client = client.as_deref().unwrap_or_default();
             info!("CONNECT allowed (client={client}, host={host})");
         }
@@ -160,10 +181,10 @@ where
         return Err(blocked_text("mitm_required"));
     }
 
-    ctx.insert(ProxyTarget(authority));
-    ctx.insert(mode);
+    req.extensions_mut().insert(ProxyTarget(authority));
+    req.extensions_mut().insert(mode);
     if let Some(mitm_state) = mitm_state {
-        ctx.insert(mitm_state);
+        req.extensions_mut().insert(mitm_state);
     }
 
     Ok((
@@ -171,54 +192,59 @@ where
             .status(StatusCode::OK)
             .body(Body::empty())
             .unwrap_or_else(|_| Response::new(Body::empty())),
-        ctx,
         req,
     ))
 }
 
-async fn http_connect_proxy<S>(ctx: Context<S>, upgraded: Upgraded) -> Result<(), Infallible>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let mode = ctx
+async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
+    let mode = upgraded
+        .extensions()
         .get::<NetworkMode>()
         .copied()
         .unwrap_or(NetworkMode::Full);
 
-    let Some(target) = ctx.get::<ProxyTarget>().map(|t| t.0.clone()) else {
+    let Some(target) = upgraded
+        .extensions()
+        .get::<ProxyTarget>()
+        .map(|t| t.0.clone())
+    else {
         warn!("CONNECT missing proxy target");
         return Ok(());
     };
-    let host = normalize_host(&target.host().to_string());
+    let host = normalize_host(&target.host.to_string());
 
-    if ctx.get::<Arc<mitm::MitmState>>().is_some() {
-        let port = target.port();
+    if upgraded
+        .extensions()
+        .get::<Arc<mitm::MitmState>>()
+        .is_some()
+    {
+        let port = target.port;
         info!("CONNECT MITM enabled (host={host}, port={port}, mode={mode:?})");
-        if let Err(err) = mitm::mitm_tunnel(ctx, upgraded).await {
+        if let Err(err) = mitm::mitm_tunnel(upgraded).await {
             warn!("MITM tunnel error: {err}");
         }
         return Ok(());
     }
 
     let forwarder = Forwarder::ctx();
-    if let Err(err) = forwarder.serve(ctx, upgraded).await {
+    if let Err(err) = forwarder.serve(upgraded).await {
         warn!("tunnel error: {err}");
     }
     Ok(())
 }
 
-async fn http_plain_proxy<S>(mut ctx: Context<S>, req: Request) -> Result<Response, Infallible>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let app_state = match ctx.get::<Arc<AppState>>().cloned() {
+async fn http_plain_proxy(
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    req: Request,
+) -> Result<Response, Infallible> {
+    let app_state = match req.extensions().get::<Arc<AppState>>().cloned() {
         Some(state) => state,
         None => {
             error!("missing app state");
             return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     };
-    let client = client_addr(&ctx);
+    let client = client_addr(&req);
 
     let method_allowed = match app_state.method_allowed(req.method().as_str()).await {
         Ok(allowed) => allowed,
@@ -263,7 +289,7 @@ where
             Ok(true) => {
                 let client = client.as_deref().unwrap_or_default();
                 info!("unix socket allowed (client={client}, path={socket_path})");
-                match proxy_via_unix_socket(ctx, req, &socket_path).await {
+                match proxy_via_unix_socket(req, &socket_path).await {
                     Ok(resp) => return Ok(resp),
                     Err(err) => {
                         warn!("unix socket proxy failed: {err}");
@@ -286,21 +312,28 @@ where
         }
     }
 
-    let authority = match ctx
-        .get_or_try_insert_with_ctx::<RequestContext, _>(|ctx| (ctx, &req).try_into())
-        .map(|ctx| ctx.authority.clone())
-    {
+    let authority = match RequestContext::try_from(&req).map(|ctx| ctx.host_with_port()) {
         Ok(authority) => authority,
         Err(err) => {
             warn!("missing host: {err}");
             return Ok(text_response(StatusCode::BAD_REQUEST, "missing host"));
         }
     };
-    let host = normalize_host(&authority.host().to_string());
-    let port = authority.port();
+    let host = normalize_host(&authority.host.to_string());
+    let port = authority.port;
 
-    match app_state.host_blocked(&host, port).await {
-        Ok((true, reason)) => {
+    let request = NetworkPolicyRequest::new(
+        NetworkProtocol::Http,
+        host.clone(),
+        port,
+        client.clone(),
+        Some(req.method().as_str().to_string()),
+        None,
+        None,
+    );
+
+    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+        Ok(NetworkDecision::Deny { reason }) => {
             let _ = app_state
                 .record_blocked(BlockedRequest::new(
                     host.clone(),
@@ -315,7 +348,7 @@ where
             warn!("request blocked (client={client}, host={host}, reason={reason})");
             return Ok(json_blocked(&host, &reason));
         }
-        Ok((false, _)) => {}
+        Ok(NetworkDecision::Allow) => {}
         Err(err) => {
             error!("failed to evaluate host for {host}: {err}");
             return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
@@ -346,7 +379,7 @@ where
     info!("request allowed (client={client}, host={host}, method={method})");
 
     let client = EasyHttpWebClient::default();
-    match client.serve(ctx, req).await {
+    match client.serve(req).await {
         Ok(resp) => Ok(resp),
         Err(err) => {
             warn!("upstream request failed: {err}");
@@ -355,30 +388,24 @@ where
     }
 }
 
-async fn proxy_via_unix_socket<S>(
-    ctx: Context<S>,
-    req: Request,
-    socket_path: &str,
-) -> Result<Response>
-where
-    S: Clone + Send + Sync + 'static,
-{
+async fn proxy_via_unix_socket(req: Request, socket_path: &str) -> Result<Response> {
     #[cfg(target_os = "macos")]
     {
         use rama::unix::client::UnixConnector;
 
-        let client = EasyHttpWebClient::builder()
+        let client = EasyHttpWebClient::connector_builder()
             .with_custom_transport_connector(UnixConnector::fixed(socket_path))
             .without_tls_proxy_support()
             .without_proxy_support()
             .without_tls_support()
-            .build();
+            .with_default_http_connector()
+            .build_client();
 
         let (mut parts, body) = req.into_parts();
         let path = parts
             .uri
             .path_and_query()
-            .map(rama::http::dep::http::uri::PathAndQuery::as_str)
+            .map(rama::http::uri::PathAndQuery::as_str)
             .unwrap_or("/");
         parts.uri = path
             .parse()
@@ -386,19 +413,20 @@ where
         parts.headers.remove("x-unix-socket");
 
         let req = Request::from_parts(parts, body);
-        Ok(client.serve(ctx, req).await?)
+        Ok(client.serve(req).await?)
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = req;
-        let _ = ctx;
         let _ = socket_path;
         Err(anyhow::anyhow!("unix sockets not supported"))
     }
 }
 
-fn client_addr<S>(ctx: &Context<S>) -> Option<String> {
-    ctx.get::<SocketInfo>()
+fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
+    input
+        .extensions()
+        .get::<SocketInfo>()
         .map(|info| info.peer_addr().to_string())
 }
 

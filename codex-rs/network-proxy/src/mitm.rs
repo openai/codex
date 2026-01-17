@@ -8,12 +8,12 @@ use crate::state::BlockedRequest;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
-use rama::Context;
 use rama::Layer;
 use rama::Service;
 use rama::bytes::Bytes;
 use rama::error::BoxError;
 use rama::error::OpaqueError;
+use rama::extensions::ExtensionsRef;
 use rama::futures::stream::Stream;
 use rama::http::Body;
 use rama::http::HeaderValue;
@@ -29,6 +29,7 @@ use rama::http::layer::upgrade::Upgraded;
 use rama::http::server::HttpServer;
 use rama::net::proxy::ProxyTarget;
 use rama::net::stream::SocketInfo;
+use rama::rt::Executor;
 use rama::service::service_fn;
 use rama::tls::rustls::dep::pki_types::CertificateDer;
 use rama::tls::rustls::dep::pki_types::PrivateKeyDer;
@@ -63,7 +64,7 @@ use rcgen_rama::SanType;
 
 pub struct MitmState {
     issuer: Issuer<'static, KeyPair>,
-    upstream: rama::service::BoxService<(), Request, Response, OpaqueError>,
+    upstream: rama::service::BoxService<Request, Response, OpaqueError>,
     inspect: bool,
     max_body_bytes: usize,
 }
@@ -88,16 +89,17 @@ impl MitmState {
         let issuer: Issuer<'static, KeyPair> =
             Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key).context("failed to parse CA cert")?;
 
-        let tls_config = rama::tls::rustls::client::TlsConnectorData::new_http_auto()
+        let tls_config = rama::tls::rustls::client::TlsConnectorData::try_new_http_auto()
             .context("create upstream TLS config")?;
-        let upstream: rama::service::BoxService<(), Request, Response, OpaqueError> =
-            EasyHttpWebClient::builder()
+        let upstream: rama::service::BoxService<Request, Response, OpaqueError> =
+            EasyHttpWebClient::connector_builder()
                 // Use a direct transport connector (no upstream proxy) to avoid proxy loops.
                 .with_default_transport_connector()
                 .without_tls_proxy_support()
                 .without_proxy_support()
                 .with_tls_support_using_rustls(Some(tls_config))
-                .build()
+                .with_default_http_connector()
+                .build_client()
                 .boxed();
 
         Ok(Self {
@@ -135,23 +137,26 @@ impl MitmState {
     }
 }
 
-pub async fn mitm_tunnel<S>(ctx: Context<S>, upgraded: Upgraded) -> Result<()>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let state = ctx
+pub async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
+    let state = upgraded
+        .extensions()
         .get::<Arc<MitmState>>()
         .cloned()
         .context("missing MITM state")?;
-    let target = ctx
+    let target = upgraded
+        .extensions()
         .get::<ProxyTarget>()
         .context("missing proxy target")?
         .0
         .clone();
-    let host = normalize_host(&target.host().to_string());
+    let host = normalize_host(&target.host.to_string());
     let acceptor_data = state.tls_acceptor_data_for_host(&host)?;
 
-    let executor = ctx.executor().clone();
+    let executor = upgraded
+        .extensions()
+        .get::<Executor>()
+        .cloned()
+        .unwrap_or_default();
 
     let http_service = HttpServer::auto(executor).service(
         (
@@ -166,20 +171,14 @@ where
         .into_layer(http_service);
 
     https_service
-        .serve(ctx, upgraded)
+        .serve(upgraded)
         .await
         .map_err(|err| anyhow!("MITM serve error: {err}"))?;
     Ok(())
 }
 
-async fn handle_mitm_request<S>(
-    ctx: Context<S>,
-    req: Request,
-) -> Result<Response, std::convert::Infallible>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let response = match forward_request(ctx, req).await {
+async fn handle_mitm_request(req: Request) -> Result<Response, std::convert::Infallible> {
+    let response = match forward_request(req).await {
         Ok(resp) => resp,
         Err(err) => {
             warn!("MITM upstream request failed: {err}");
@@ -189,27 +188,28 @@ where
     Ok(response)
 }
 
-async fn forward_request<S>(ctx: Context<S>, req: Request) -> Result<Response>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let target = ctx
+async fn forward_request(req: Request) -> Result<Response> {
+    let target = req
+        .extensions()
         .get::<ProxyTarget>()
         .context("missing proxy target")?
         .0
         .clone();
 
-    let target_host = normalize_host(&target.host().to_string());
-    let target_port = target.port();
-    let mode = ctx
+    let target_host = normalize_host(&target.host.to_string());
+    let target_port = target.port;
+    let mode = req
+        .extensions()
         .get::<NetworkMode>()
         .copied()
         .unwrap_or(NetworkMode::Full);
-    let mitm = ctx
+    let mitm = req
+        .extensions()
         .get::<Arc<MitmState>>()
         .cloned()
         .context("missing MITM state")?;
-    let app_state = ctx
+    let app_state = req
+        .extensions()
         .get::<Arc<AppState>>()
         .cloned()
         .context("missing app state")?;
@@ -223,7 +223,8 @@ where
 
     let method = req.method().as_str().to_string();
     let path = path_and_query(req.uri());
-    let client = ctx
+    let client = req
+        .extensions()
         .get::<SocketInfo>()
         .map(|info| info.peer_addr().to_string());
 
@@ -276,10 +277,7 @@ where
     };
 
     let upstream_req = Request::from_parts(parts, body);
-    let upstream_resp = mitm
-        .upstream
-        .serve(ctx.map_state(|_| ()), upstream_req)
-        .await?;
+    let upstream_resp = mitm.upstream.serve(upstream_req).await?;
     respond_with_inspection(
         upstream_resp,
         inspect,
@@ -428,7 +426,7 @@ fn build_https_uri(authority: &str, path: &str) -> Result<Uri> {
 
 fn path_and_query(uri: &Uri) -> String {
     uri.path_and_query()
-        .map(rama::http::dep::http::uri::PathAndQuery::as_str)
+        .map(rama::http::uri::PathAndQuery::as_str)
         .unwrap_or("/")
         .to_string()
 }

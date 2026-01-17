@@ -67,6 +67,13 @@ cargo run -p codex-network-proxy -- init
 cargo run -p codex-network-proxy --
 ```
 
+Optional flags:
+
+```bash
+# Enable SOCKS5 UDP associate support (off by default).
+cargo run -p codex-network-proxy -- --enable-socks5-udp
+```
+
 ### 4) Point a client at it
 
 For HTTP(S) traffic:
@@ -96,6 +103,45 @@ When a request is blocked, the proxy responds with `403` and includes:
 In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. In addition, HTTPS `CONNECT`
 requires MITM to be enabled to allow read-only HTTPS; otherwise the proxy blocks CONNECT with
 reason `mitm_required`.
+
+## Library API
+
+`codex-network-proxy` can be embedded as a library with a thin API:
+
+```rust
+use codex_network_proxy::{NetworkProxy, NetworkDecision, NetworkPolicyRequest};
+
+let proxy = NetworkProxy::builder()
+    .http_addr("127.0.0.1:8080".parse()?)
+    .socks_addr("127.0.0.1:1080".parse()?)
+    .admin_addr("127.0.0.1:9000".parse()?)
+    .policy_decider(|request: NetworkPolicyRequest| async move {
+        // Example: auto-allow when exec policy already approved a command prefix.
+        if let Some(command) = request.command.as_deref() {
+            if command.starts_with("curl ") {
+                return NetworkDecision::Allow;
+            }
+        }
+        NetworkDecision::Deny {
+            reason: "policy_denied".to_string(),
+        }
+    })
+    .build()
+    .await?;
+
+let handle = proxy.run().await?;
+handle.shutdown().await?;
+```
+
+### Policy hook (exec-policy mapping)
+
+The proxy exposes a policy hook (`NetworkPolicyDecider`) that can override allowlist-only blocks.
+It receives `command` and `exec_policy_hint` fields when supplied by the embedding app. This lets
+core map exec approvals to network access, e.g. if a user already approved `curl *` for a session,
+the decider can auto-allow network requests originating from that command.
+
+**Important:** Explicit deny rules still win. The decider only gets a chance to override
+`not_allowed` (allowlist misses), not `denied` or `not_allowed_local`.
 
 ## Admin API
 
