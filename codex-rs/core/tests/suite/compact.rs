@@ -2150,7 +2150,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_skips_reasoning_when_server_includes_header() {
+async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -2223,8 +2223,10 @@ async fn auto_compact_skips_reasoning_when_server_includes_header() {
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
 
-    assert!(
-        compact_mock.requests().is_empty(),
-        "remote compaction should not run when server includes reasoning usage"
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        1,
+        "remote compaction should run once after the reasoning header clears"
     );
 }
