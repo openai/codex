@@ -128,6 +128,7 @@ use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -1173,6 +1174,70 @@ impl ChatComposer {
             .collect()
     }
 
+    /// Expand large-paste placeholders using element ranges and rebuild other element spans.
+    fn expand_pending_pastes(
+        text: &str,
+        mut elements: Vec<TextElement>,
+        pending_pastes: &[(String, String)],
+    ) -> (String, Vec<TextElement>) {
+        if pending_pastes.is_empty() || elements.is_empty() {
+            return (text.to_string(), elements);
+        }
+
+        let mut pending_by_placeholder: HashMap<&str, VecDeque<&str>> = HashMap::new();
+        for (placeholder, actual) in pending_pastes {
+            pending_by_placeholder
+                .entry(placeholder.as_str())
+                .or_default()
+                .push_back(actual.as_str());
+        }
+
+        elements.sort_by_key(|elem| elem.byte_range.start);
+
+        let mut rebuilt = String::with_capacity(text.len());
+        let mut rebuilt_elements = Vec::with_capacity(elements.len());
+        let mut cursor = 0usize;
+
+        for elem in elements {
+            let start = elem.byte_range.start.min(text.len());
+            let end = elem.byte_range.end.min(text.len());
+            if start > end {
+                continue;
+            }
+            if start > cursor {
+                rebuilt.push_str(&text[cursor..start]);
+            }
+            let elem_text = &text[start..end];
+            let placeholder = elem.placeholder;
+            let replacement = placeholder
+                .as_deref()
+                .and_then(|ph| pending_by_placeholder.get_mut(ph))
+                .and_then(|queue| queue.pop_front());
+            if let Some(actual) = replacement {
+                rebuilt.push_str(actual);
+            } else {
+                let new_start = rebuilt.len();
+                rebuilt.push_str(elem_text);
+                let new_end = rebuilt.len();
+                let placeholder = placeholder.or_else(|| Some(elem_text.to_string()));
+                rebuilt_elements.push(TextElement {
+                    byte_range: ByteRange {
+                        start: new_start,
+                        end: new_end,
+                    },
+                    placeholder,
+                });
+            }
+            cursor = end;
+        }
+
+        if cursor < text.len() {
+            rebuilt.push_str(&text[cursor..]);
+        }
+
+        (rebuilt, rebuilt_elements)
+    }
+
     fn skills_enabled(&self) -> bool {
         self.skills.as_ref().is_some_and(|s| !s.is_empty())
     }
@@ -1401,23 +1466,12 @@ impl ChatComposer {
         let input_starts_with_space = original_input.starts_with(' ');
         self.textarea.set_text("");
 
-        // Replace all pending pastes in the text
         if !self.pending_pastes.is_empty() {
-            let pending_placeholders: HashSet<&str> = self
-                .pending_pastes
-                .iter()
-                .map(|(placeholder, _)| placeholder.as_str())
-                .collect();
-            for (placeholder, actual) in &self.pending_pastes {
-                if text.contains(placeholder) {
-                    text = text.replace(placeholder, actual);
-                }
-            }
-            text_elements.retain(|elem| {
-                elem.placeholder.as_deref().map_or(true, |placeholder| {
-                    !pending_placeholders.contains(placeholder)
-                })
-            });
+            // Expand placeholders so element byte ranges stay aligned.
+            let (expanded, expanded_elements) =
+                Self::expand_pending_pastes(&text, text_elements, &self.pending_pastes);
+            text = expanded;
+            text_elements = expanded_elements;
             self.pending_pastes.clear();
         }
 
