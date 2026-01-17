@@ -1566,22 +1566,44 @@ impl HistoryCell for PlanUpdateCell {
                 .collect()
         };
 
-        let render_step = |status: &StepStatus, text: &str| -> Vec<Line<'static>> {
+        let render_step = |item: &PlanItemArg| -> Vec<Line<'static>> {
+            let PlanItemArg {
+                step: text,
+                status,
+                model,
+                reasoning_effort,
+            } = item;
             let (box_str, step_style) = match status {
                 StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
                 StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
                 StepStatus::Pending => ("□ ", Style::default().dim()),
             };
-            let wrap_width = (width as usize)
-                .saturating_sub(4)
-                .saturating_sub(box_str.width())
-                .max(1);
-            let parts = textwrap::wrap(text, wrap_width);
-            let step_text = parts
-                .into_iter()
-                .map(|s| s.to_string().set_style(step_style).into())
-                .collect();
-            prefix_lines(step_text, box_str.into(), "  ".into())
+            let mut meta_parts: Vec<String> = Vec::new();
+            if let Some(model) = model.as_deref() {
+                meta_parts.push(format!("model: {model}"));
+            }
+            if let Some(reasoning_effort) = reasoning_effort {
+                meta_parts.push(format!("effort: {reasoning_effort}"));
+            }
+            let meta = if meta_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", meta_parts.join(", "))
+            };
+
+            let available_width = width.saturating_sub(4).max(1) as usize;
+            let mut spans: Vec<Span<'static>> =
+                vec![Span::from(text.clone()).set_style(step_style)];
+            if !meta.is_empty() {
+                spans.push(meta.dim());
+            }
+            let line: Line<'static> = spans.into();
+            word_wrap_lines(
+                [line],
+                RtOptions::new(available_width)
+                    .initial_indent(Line::from(box_str))
+                    .subsequent_indent(Line::from("  ")),
+            )
         };
 
         let mut lines: Vec<Line<'static>> = vec![];
@@ -1600,8 +1622,8 @@ impl HistoryCell for PlanUpdateCell {
         if self.plan.is_empty() {
             indented_lines.push(Line::from("(no steps provided)".dim().italic()));
         } else {
-            for PlanItemArg { step, status } in self.plan.iter() {
-                indented_lines.extend(render_step(status, step));
+            for item in &self.plan {
+                indented_lines.extend(render_step(item));
             }
         }
         lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));
@@ -2617,14 +2639,20 @@ mod tests {
                 PlanItemArg {
                     step: "Investigate existing error paths and logging around HTTP timeouts".into(),
                     status: StepStatus::Completed,
+                    model: None,
+                    reasoning_effort: None,
                 },
                 PlanItemArg {
                     step: "Harden Grafana client error handling with retry/backoff and user‑friendly messages".into(),
                     status: StepStatus::InProgress,
+                    model: None,
+                    reasoning_effort: None,
                 },
                 PlanItemArg {
                     step: "Add tests for transient failure scenarios and surfacing to the UI".into(),
                     status: StepStatus::Pending,
+                    model: None,
+                    reasoning_effort: None,
                 },
             ],
         };
@@ -2644,10 +2672,14 @@ mod tests {
                 PlanItemArg {
                     step: "Define error taxonomy".into(),
                     status: StepStatus::InProgress,
+                    model: None,
+                    reasoning_effort: None,
                 },
                 PlanItemArg {
                     step: "Implement mapping to user messages".into(),
                     status: StepStatus::Pending,
+                    model: None,
+                    reasoning_effort: None,
                 },
             ],
         };

@@ -56,6 +56,7 @@ See `codex-rs/tui/styles.md`.
 - If you have a ratatui Line and you want to wrap it, use the helpers in tui/src/wrapping.rs, e.g. word_wrap_lines / word_wrap_line.
 - If you need to indent wrapped lines, use the initial_indent / subsequent_indent options from RtOptions if you can, rather than writing custom logic.
 - If you have a list of lines and you need to prefix them all with some prefix (optionally different on the first vs subsequent lines), use the `prefix_lines` helper from line_utils.
+- For security-review workflows, keep all LLM prompt strings (system prompts, templates, and Linear-sync prompts) in `codex-rs/tui/src/security_prompts/` and re-export via `codex-rs/tui/src/security_prompts/mod.rs` instead of embedding large prompt literals in other modules.
 
 ## Tests
 

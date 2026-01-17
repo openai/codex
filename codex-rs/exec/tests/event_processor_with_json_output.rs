@@ -146,10 +146,14 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
                 PlanItemArg {
                     step: "step one".to_string(),
                     status: StepStatus::Pending,
+                    model: None,
+                    reasoning_effort: None,
                 },
                 PlanItemArg {
                     step: "step two".to_string(),
                     status: StepStatus::InProgress,
+                    model: None,
+                    reasoning_effort: None,
                 },
             ],
         }),
@@ -185,10 +189,14 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
                 PlanItemArg {
                     step: "step one".to_string(),
                     status: StepStatus::Completed,
+                    model: None,
+                    reasoning_effort: None,
                 },
                 PlanItemArg {
                     step: "step two".to_string(),
                     status: StepStatus::InProgress,
+                    model: None,
+                    reasoning_effort: None,
                 },
             ],
         }),
@@ -456,6 +464,8 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
             plan: vec![PlanItemArg {
                 step: "only".to_string(),
                 status: StepStatus::Pending,
+                model: None,
+                reasoning_effort: None,
             }],
         }),
     );
@@ -476,6 +486,8 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
             plan: vec![PlanItemArg {
                 step: "again".to_string(),
                 status: StepStatus::Pending,
+                model: None,
+                reasoning_effort: None,
             }],
         }),
     );

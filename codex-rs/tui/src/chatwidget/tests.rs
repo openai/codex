@@ -3200,14 +3200,20 @@ async fn plan_update_renders_history_cell() {
             PlanItemArg {
                 step: "Explore codebase".into(),
                 status: StepStatus::Completed,
+                model: None,
+                reasoning_effort: None,
             },
             PlanItemArg {
                 step: "Implement feature".into(),
                 status: StepStatus::InProgress,
+                model: None,
+                reasoning_effort: None,
             },
             PlanItemArg {
                 step: "Write tests".into(),
                 status: StepStatus::Pending,
+                model: None,
+                reasoning_effort: None,
             },
         ],
     };

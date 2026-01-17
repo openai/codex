@@ -557,19 +557,45 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
                 // Pretty-print the plan items with simple status markers.
                 for item in plan {
+                    let mut meta_parts: Vec<String> = Vec::new();
+                    if let Some(model) = item.model.as_deref() {
+                        meta_parts.push(format!("model: {model}"));
+                    }
+                    if let Some(reasoning_effort) = item.reasoning_effort {
+                        meta_parts.push(format!("effort: {reasoning_effort}"));
+                    }
+                    let meta_suffix = if meta_parts.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", meta_parts.join(", "))
+                    };
+
                     match item.status {
                         StepStatus::Completed => {
-                            ts_msg!(self, "  {} {}", "✓".style(self.green), item.step);
+                            ts_msg!(
+                                self,
+                                "  {} {}{}",
+                                "✓".style(self.green),
+                                item.step,
+                                meta_suffix.style(self.dimmed)
+                            );
                         }
                         StepStatus::InProgress => {
-                            ts_msg!(self, "  {} {}", "→".style(self.cyan), item.step);
+                            ts_msg!(
+                                self,
+                                "  {} {}{}",
+                                "→".style(self.cyan),
+                                item.step,
+                                meta_suffix.style(self.dimmed)
+                            );
                         }
                         StepStatus::Pending => {
                             ts_msg!(
                                 self,
-                                "  {} {}",
+                                "  {} {}{}",
                                 "•".style(self.dimmed),
-                                item.step.style(self.dimmed)
+                                item.step.style(self.dimmed),
+                                meta_suffix.style(self.dimmed)
                             );
                         }
                     }

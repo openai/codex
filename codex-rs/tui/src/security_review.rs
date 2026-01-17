@@ -689,7 +689,7 @@ fn is_open_source_review(prompt: &Option<String>) -> bool {
     KEYWORDS.iter().any(|keyword| lower.contains(keyword))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum SecurityReviewPlanStep {
     GenerateSpecs,
     ThreatModel,
@@ -734,7 +734,14 @@ struct SecurityReviewPlanTracker {
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     explanation: String,
     steps: Vec<SecurityReviewPlanItem>,
+    step_models: HashMap<SecurityReviewPlanStep, PlanStepModelInfo>,
     did_emit_final_plan_cell: bool,
+}
+
+#[derive(Clone)]
+struct PlanStepModelInfo {
+    model: String,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl SecurityReviewPlanTracker {
@@ -742,30 +749,20 @@ impl SecurityReviewPlanTracker {
         mode: SecurityReviewMode,
         scope_paths: &[PathBuf],
         repo_root: &Path,
-        model: &str,
-        reasoning_effort: Option<ReasoningEffort>,
+        step_models: HashMap<SecurityReviewPlanStep, PlanStepModelInfo>,
         sender: Option<AppEventSender>,
         log_sink: Option<Arc<SecurityReviewLogSink>>,
     ) -> Self {
         let steps = plan_steps_for_mode(mode);
         let scope_summary = summarize_scope(scope_paths, repo_root);
         let mode_label = mode.as_str();
-        let effort_label = match reasoning_effort {
-            Some(ReasoningEffort::Minimal) => "minimal",
-            Some(ReasoningEffort::Low) => "low",
-            Some(ReasoningEffort::Medium) => "medium",
-            Some(ReasoningEffort::High) => "high",
-            Some(ReasoningEffort::XHigh) => "xhigh",
-            None | Some(ReasoningEffort::None) => "default",
-        };
-        let explanation = format!(
-            "Security review plan ({mode_label}; model: {model}; effort: {effort_label}; scope: {scope_summary})"
-        );
+        let explanation = format!("Security review plan ({mode_label}; scope: {scope_summary})");
         let tracker = Self {
             sender,
             log_sink,
             explanation,
             steps,
+            step_models,
             did_emit_final_plan_cell: false,
         };
         tracker.emit_update();
@@ -837,9 +834,14 @@ impl SecurityReviewPlanTracker {
         let plan_items: Vec<PlanItemArg> = self
             .steps
             .iter()
-            .map(|step| PlanItemArg {
-                step: build_step_title(step),
-                status: step.status.clone(),
+            .map(|step| {
+                let model_info = self.step_models.get(&step.kind);
+                PlanItemArg {
+                    step: build_step_title(step),
+                    status: step.status.clone(),
+                    model: model_info.map(|info| info.model.clone()),
+                    reasoning_effort: model_info.and_then(|info| info.reasoning_effort),
+                }
             })
             .collect();
         sender.send(AppEvent::InsertHistoryCell(Box::new(
@@ -4110,12 +4112,71 @@ pub async fn run_security_review(
         });
     }
 
+    let mut plan_step_models: HashMap<SecurityReviewPlanStep, PlanStepModelInfo> = HashMap::new();
+    if matches!(mode, SecurityReviewMode::Full) {
+        plan_step_models.insert(
+            SecurityReviewPlanStep::GenerateSpecs,
+            PlanStepModelInfo {
+                model: request.spec_model.clone(),
+                reasoning_effort: spec_reasoning_effort,
+            },
+        );
+        plan_step_models.insert(
+            SecurityReviewPlanStep::ThreatModel,
+            PlanStepModelInfo {
+                model: THREAT_MODEL_MODEL.to_string(),
+                reasoning_effort: spec_reasoning_effort,
+            },
+        );
+    }
+    plan_step_models.insert(
+        SecurityReviewPlanStep::AnalyzeBugs,
+        PlanStepModelInfo {
+            model: request.model.clone(),
+            reasoning_effort: bug_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::PolishFindings,
+        PlanStepModelInfo {
+            model: request.model.clone(),
+            reasoning_effort: bug_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::PrepareValidationTargets,
+        PlanStepModelInfo {
+            model: request.validation_model.clone(),
+            reasoning_effort: validation_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::ValidateFindings,
+        PlanStepModelInfo {
+            model: request.validation_model.clone(),
+            reasoning_effort: validation_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::PostValidationRefine,
+        PlanStepModelInfo {
+            model: request.validation_model.clone(),
+            reasoning_effort: validation_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::AssembleReport,
+        PlanStepModelInfo {
+            model: request.writing_model.clone(),
+            reasoning_effort: writing_reasoning_effort,
+        },
+    );
+
     let mut plan_tracker = SecurityReviewPlanTracker::new(
         mode,
         &include_paths,
         &repo_path,
-        checkpoint.model.as_str(),
-        bug_reasoning_effort,
+        plan_step_models,
         progress_sender.clone(),
         log_sink.clone(),
     );
@@ -6027,12 +6088,8 @@ fn render_checklist_markdown(statuses: &HashMap<String, StepStatus>) -> String {
     lines.join("\n")
 }
 
-const LINEAR_SCOPE_CONTEXT_SYSTEM_PROMPT: &str = "Gather the full Linear issue context for a security review without modifying the ticket. Use Linear MCP tools only. Do not plan or reason before acting. Your FIRST action must be a Linear MCP call to fetch the issue by key; your SECOND action must fetch all comments/activity for that same issue. If attachments exist, fetch/describe them. Respond with plaintext only (no code fences). Retry failed Linear calls once, otherwise surface the failure succinctly.";
-
 fn build_linear_scope_context_prompt(issue_ref: &str) -> String {
-    format!(
-        "Collect Linear issue context for `{issue_ref}` to inform auto-scoping.\n\nStrict tool order:\n1) Call Linear MCP to fetch this exact issue immediately (no planning).\n2) Call Linear MCP to fetch ALL comments/activity for the same issue.\n3) If attachments exist, fetch/describe them via Linear MCP.\n\nRequirements:\n- Read the full issue description and attachments.\n- Read ALL activity entries and comments, including authors and timestamps.\n- Capture the current issue status/state and assignee.\n- Do not edit the issue.\n\nOutput (plaintext):\n- One-line summary of the issue intent.\n- Current status/state and assignee.\n- Activity timeline (newest first) with key events.\n- Comments section listing each comment with author, timestamp, and body. Do not skip comments.\n- Attachments (if any) with brief notes."
-    )
+    linear_scope_context_prompt(issue_ref)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6197,17 +6254,19 @@ fn build_linear_init_prompt(
             .join(", ")
     };
     let workspace_marker = encode_workspace_hint(repo_root).unwrap_or_default();
-    format!(
-        "You are a workflow assistant that manages a security review using the configured MCP servers (Linear, Notion, Google Workspace, Secbot).\n\nTask: Using the Linear MCP server, open the issue `{issue}` directly (call `get_issue` first; avoid team or project enumeration unless the key fails).\n\nRules:\n- No long planning steps; fetch the issue immediately with `get_issue`, then proceed.\n- Do not post Linear comments until the full security review is finished; keep all interim updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline.\n- Preserve existing status content, key insights, and doc summaries—append or merge updates instead of overwriting.\n- Do not paste full findings or reproduction details into the description; use concise bullets and reference attachments/artifacts instead.\n\nSteps:\n1) Classify the issue. If this is NOT a security_review request, prepend a short note in the status block that automation only runs for security review tickets, then stop.\n2) If it IS a security_review: gather all context from the issue description, attachments, and comments. Open every linked doc (including links inside comments) with the appropriate MCP (Notion or Google Workspace) and read them fully; use Google Workspace MCP to open Google Docs links found in comments. Use Secbot MCP to search for prior contexts, tickets, policies, and recommendations relevant to this issue; reason from the issue context, select only relevant hits, and explain why each matters instead of dumping raw results.\n3) From the collected context, check for missing essentials (e.g., code locations/links, critical docs/flows, required policies). If critical items are missing (e.g., no code links), pause the review and capture the requests in the “Follow-ups / Missing Inputs” subsection of the status block; do not continue until inputs arrive. If most information is present, continue.\n4) Update the Linear issue description by PREPENDING a section titled “Security Agent ({model}) - Review Status” (remove any existing section with that heading first) with:\n   - A header line: `# Security Agent ({model}) - Review Status`\n   - Key points summary (3–7 concise bullets highlighting security-relevant conclusions and recommended next steps; integrate insights from docs and Secbot here when they materially change risk, but avoid restating raw observations).\n   - Scope summary: a short description of what was reviewed (for example, key services, directories, or APIs) rather than a full path dump. Do NOT inline every path or add a long `scope: ...` line; instead, ensure the \"Scope paths\" artifact ({scope_file}) is uploaded and reference it once in this bullet.\n   - Design / architecture docs: only include genuine design, architecture, requirements, threat-model, or runbook documents. Summarize each in 1–2 lines with inline hyperlinks and highlight why it matters for security. Skip generic README/env/source files that merely restate code.\n   - Related Secbot / precedent tickets: only when Secbot MCP surfaces clearly related policies or tickets grounded in the same repo, service, or code paths (or explicitly requested in the issue). Summarize why each is relevant and include the assignee and last-updated date. If no strong matches exist, omit this subsection entirely rather than forcing weak content.\n   - A checklist mirroring the AppSec pipeline steps.\n   - A “Design/Implementation follow-ups” subsection listing concrete security requirements that must be validated during build (derive from the issue/docs when present—e.g., user content isolation via a separate domain, role- or resource-based access control checks). When details are missing, phrase items as questions for the product/eng team so they can answer before implementation.\n   - A “Follow-ups / Missing Inputs” subsection listing any missing docs, flows, or code locations that block analysis; phrase items as actionable questions for the ticket owner.\n   - Artifacts: reference uploaded attachments only (no local filesystem paths, no gists). For scope details and triage outputs, reference the uploaded scope file or \"Scope paths\" artifact ({scope_file}) instead of pasting lists of directories or files.\n\nChecklist:\n{checklist}\n\nRepository: {repo}\nMode: {mode}\nScope: {scope}\nIncluded paths: {include_text}\nArtifacts directory (local): {art_dir}\nScope file (upload): {scope_file}\nWorkspace marker (embed this exact marker on its own line inside the status block so Codex can resume with the same local workspace later): {workspace_marker}\n\nLocal workspace convention:\n- Keep all repositories under `~/code`.\n- If a required repository is missing under `~/code`, use GitHub CLI to clone a shallow copy (depth=1). Example:\n  `gh repo clone owner/repo ~/code/repo -- --depth=1`\n\nNotes:\n- Preserve the existing description content below the new status section.\n- Do not remove any existing details; prepend the status section.\n- Keep local filesystem paths out of Linear updates; reference uploaded attachments (no gists or external pastes).\n- When resuming, download any relevant attachments locally into the artifacts directory before continuing.",
-        issue = issue_ref,
-        model = model_name,
-        repo = repo_root.display(),
-        mode = mode.as_str(),
-        scope = scope,
-        include_text = include_text,
-        art_dir = output_root.display(),
-        scope_file = scope_file_text,
-        workspace_marker = workspace_marker,
+    let repo = repo_root.display().to_string();
+    let art_dir = output_root.display().to_string();
+    linear_init_prompt(
+        issue_ref,
+        model_name,
+        repo.as_str(),
+        mode.as_str(),
+        checklist.as_str(),
+        scope.as_str(),
+        include_text.as_str(),
+        art_dir.as_str(),
+        scope_file_text.as_str(),
+        workspace_marker.as_str(),
     )
 }
 
@@ -6258,16 +6317,16 @@ fn build_linear_progress_prompt(
             root = output_root.display(),
         )
     };
-    format!(
-        "Use the Linear MCP to update issue `{issue}` progress.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- No Linear comments until all security review steps are complete; keep updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline. Preserve existing status content, key insights, and doc summaries—append/merge instead of overwriting.\n- Do not paste full findings; reference uploaded artifacts instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload files directly from the local artifacts directory ({art_root}).\n- Before updating, read any newly linked docs in the description or comments via Notion/Google Workspace MCP (use Google Workspace MCP for Google Docs) and summarize; include inline hyperlinks to the docs in your summary.\n- Check Secbot MCP for any new relevant policies/recommendations; reason from the issue context, explain why results matter, and when Secbot surfaces similar or relevant tickets, capture assignee and date in the summary.\n- Upload/attach the scope file if not already present ({scope_file}) so that readers can inspect the full “Scope paths” artifact; do NOT paste long `scope: ...` lines or raw path dumps into the description.\n\nActions:\n- Update the checklist status for the step: {step}.\n- Maintain a single “Scope summary” bullet in the status block that briefly describes what is in scope and points to the uploaded \"Scope paths\" artifact instead of listing every path.\n- Add or update a “Design/Implementation follow-ups” subsection with concrete items to check during build (derive from the issue/docs—e.g., user content isolation via a separate domain, role- or resource-based access control checks). When details are missing, phrase the items as questions for the product/eng team.\n- If new artifacts exist, upload/attach them from the local artifacts directory (no gists or external shares) and reference them in the status block without including local paths.\n- Capture any new gaps (docs, flows, code links) in the “Follow-ups / Missing Inputs” subsection instead of posting comments.\n- If critical inputs (e.g., code links) are still missing, pause and keep them in “Follow-ups / Missing Inputs” until they are provided.\n\nChecklist now:\n{checklist}{artifacts_section}\n\nScope file (upload): {scope_file}\nScope paths: {scope_paths}",
-        issue = issue_ref,
-        model = model_name,
-        step = step_title,
-        checklist = checklist,
-        artifacts_section = artifacts_section,
-        scope_file = scope_file_text,
-        scope_paths = scope_paths_text,
-        art_root = output_root.display(),
+    let artifacts_root = output_root.display().to_string();
+    linear_progress_prompt(
+        issue_ref,
+        model_name,
+        step_title,
+        checklist.as_str(),
+        scope_file_text,
+        scope_paths_text.as_str(),
+        artifacts_root.as_str(),
+        artifacts_section.as_str(),
     )
 }
 
@@ -6302,32 +6361,24 @@ fn build_linear_finalize_prompt(
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "(not run)".to_string());
 
-    format!(
-        "Finalize Linear sync for `{issue}`.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- Keep the description’s “Security Agent ({model}) - Review Status” block intact with the header `# Security Agent ({model}) - Review Status`; remove any prior instance of this section before writing the new one; do not add any extra automation tagline. Preserve earlier summaries and doc context—append final updates instead of overwriting.\n- Do not paste full findings; reference artifacts and child tickets instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload from the local artifacts directory ({root}) first, then reference.\n- Ensure the triaged scope file is attached and clearly labeled as the \"Scope paths\" artifact ({scope_file}); do **not** inline long `scope: ...` lines or raw path dumps into the description.\n- Before writing the final comment, use Linear MCP to list child/sub-issues and related issues for `{issue}`; treat tickets created for this review as the ground truth for findings.\n\nFinal status block:\n- Update the “Security Agent ({model}) - Review Status” section in the description so it reflects the final checklist below and the final scope summary while keeping previous insights and doc summaries.\n- Keep the scope section short (1–2 lines) and refer to the attached \"Scope paths\" artifact rather than listing every path.\n- Maintain a “Design/Implementation follow-ups” subsection with concrete build-time checks based on the issue/docs (e.g., user content isolation via a separate domain, role- or resource-based access control). When context is missing, phrase the items as questions for the product/eng team so future runs can confirm them.\n- Fold key insights from design docs, Secbot, and prior comments into the key points and follow-ups instead of listing irrelevant docs.\n\nFinal comment (single comment only):\n- Post exactly one final comment on the issue, prefixed with `Security Agent ({model}) - automated security review` so humans can recognize automation.\n- Structure the comment into three plain-language sections (no angle-bracket tags):\n  - Conclusion — a short paragraph summarizing whether the security analysis is complete and whether any HIGH or MEDIUM risk findings remain. If there are no HIGH or MEDIUM findings, state clearly that no blocking issues were found and that the surface appears ready from an AppSec perspective (subject to other launch gates), and that the review can likely be closed.\n  - Findings — a bullet list focusing on HIGH-severity findings only. For each HIGH finding, name the issue, mention its risk briefly, and link to its child ticket key. Summarize MEDIUM/LOW findings only as counts or short notes without listing each one.\n  - Runtime summary — a single line summarizing the runtime metrics for this review using: {runtime}. Include the analyzed revision line `{revision}` when it is available.\n- Do not include the full HTML report inline in the comment; instead, link to the uploaded markdown/HTML reports and the scope file.\n\nArtifacts to rely on:\n- report_markdown: {md}\n- report_html: {html}\n- scope_file (\"Scope paths\" artifact): {scope_file}\n- analyzed_scope_label: {scope_paths}\n- trufflehog_json (open-source reviews only, if present): {trufflehog}\n- artifacts_root (local, for uploads only): {root}\n\nChecklist:\n{checklist}",
-        issue = issue_ref,
-        model = model_name,
-        checklist = checklist,
-        scope_paths = scope_paths_text,
-        scope_file = scope_file_text,
-        html = html_path,
-        md = md_path,
-        root = output_root.display(),
-        runtime = runtime_summary,
-        revision = revision_summary,
-        trufflehog = trufflehog_text,
+    let artifacts_root = output_root.display().to_string();
+    linear_finalize_prompt(
+        issue_ref,
+        model_name,
+        checklist.as_str(),
+        scope_paths_text.as_str(),
+        scope_file_text,
+        md_path.as_str(),
+        html_path.as_str(),
+        trufflehog_text.as_str(),
+        artifacts_root.as_str(),
+        runtime_summary,
+        revision_summary,
     )
 }
 
 fn build_linear_create_tickets_prompt(issue_ref: &str, bugs_markdown: &str) -> String {
-    let bugs_preview = bugs_markdown.trim();
-    let bugs_block = if bugs_preview.is_empty() {
-        "No structured findings were produced; do not create any child tickets.".to_string()
-    } else {
-        format!("Source findings markdown (full content):\n```markdown\n{bugs_preview}\n```")
-    };
-    format!(
-        "Create Linear child tickets for validated security findings and link them to the review ticket `{issue_ref}`.\n\n{bugs_block}\n\nInstructions:\n- Work only from the findings markdown above plus the main review ticket context; do NOT invent findings.\n- For each HIGH-severity finding, first search for existing sub-issues or clearly related tickets (matching severity + component/file + summary) using Linear MCP. If a closely matching ticket already exists, link that ticket to `{issue_ref}` and **do not** create a duplicate.\n- Only create new tickets for findings that have no similar existing ticket.\n- When creating a new ticket, keep it unassigned and in the initial TODO/backlog state; do **not** auto-assign owners or move tickets to triaged/in-progress/done.\n- Parse the bugs markdown to create concise titles that include severity and the most important component/file.\n- Include reproduction/verification details and recommendations in each ticket body.\n- If the finding includes blame information or a suggested owner (for example, a `Suggested owner:` line derived from git blame), copy that line into the ticket body but do **not** set an assignee.\n- Add links back to the review ticket `{issue_ref}` so engineers can reach the full report and artifacts.\n- Do **not** post comments on the review ticket; this step is only for creating/linking child tickets. The final summary comment is handled separately.\n- Keep everything within the Linear MCP; do not use external network calls.",
-    )
+    linear_create_tickets_prompt(issue_ref, bugs_markdown)
 }
 
 fn build_linear_related_docs_prompt(
@@ -6345,13 +6396,13 @@ fn build_linear_related_docs_prompt(
         .scope_file_path
         .as_deref()
         .unwrap_or("(not generated)");
-    format!(
-        "Unblock analysis by gathering related docs and updating the Linear status block for `{issue}`.\n\nSteps:\n- Use Linear MCP to open the issue immediately.\n- Collect all doc links (description + comments), then read them via Notion/Google Workspace MCP; include inline hyperlinks.\n- Use Secbot MCP to find prior contexts/policies related to this issue; reason from the issue context, select only relevant hits, and explain why each matters.\n- Summarize briefly in the description’s “Security Agent ({model}) - Review Status” block under a \"Related Docs / Secbot Results\" section; keep bullets concise.\n- Do not post comments; update only the status block. Keep artifact references to uploaded attachments only (local artifacts root: {art_root}).\n\nReminders:\n- Scope paths: {scope_paths}\n- Scope file: {scope_file}\n- Keep local filesystem paths out of Linear; link uploaded files or remote docs only.",
-        issue = issue_ref,
-        model = model_name,
-        scope_paths = scope_paths_text,
-        scope_file = scope_file_text,
-        art_root = output_root.display(),
+    let artifacts_root = output_root.display().to_string();
+    linear_related_docs_prompt(
+        issue_ref,
+        model_name,
+        scope_paths_text.as_str(),
+        scope_file_text,
+        artifacts_root.as_str(),
     )
 }
 
@@ -6370,10 +6421,7 @@ async fn run_linear_status_agent(
     let mut lin_config = config.clone();
     lin_config.model = Some("gpt-5.1".to_string());
     lin_config.model_provider = provider.clone();
-    lin_config.base_instructions = Some(
-        "Use Linear, Notion, and Google Workspace via MCP tools. Prefer MCP tools for reading/updating issues and documents. When an issue key is provided, open it directly with Linear MCP `get_issue` before any searches; avoid enumerating teams/projects/resources unless direct lookup fails. Keep repositories under ~/code; if a repository is missing under ~/code, use GitHub CLI to clone a shallow copy (depth=1), e.g., `gh repo clone owner/repo ~/code/repo -- --depth=1`."
-            .to_string(),
-    );
+    lin_config.base_instructions = Some(LINEAR_STATUS_AGENT_BASE_INSTRUCTIONS.to_string());
     lin_config.user_instructions = None;
     lin_config.developer_instructions = None;
     lin_config.compact_prompt = None;
