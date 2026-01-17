@@ -1841,13 +1841,17 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 model,
                 effort,
                 summary,
+                collaboration_mode,
             } => {
-                let collaboration_mode = {
+                let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
+                    collab_mode
+                } else {
                     let state = sess.state.lock().await;
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, None)
+                    state.session_configuration.collaboration_mode.with_updates(
+                        model.clone(),
+                        effort,
+                        None,
+                    )
                 };
                 handlers::override_turn_context(
                     &sess,
@@ -2012,12 +2016,15 @@ mod handlers {
                 summary,
                 final_output_json_schema,
                 items,
+                collaboration_mode,
             } => {
-                let collaboration_mode = Some(CollaborationMode::Custom(Settings {
-                    model,
-                    reasoning_effort: effort,
-                    developer_instructions: None,
-                }));
+                let collaboration_mode = collaboration_mode.or_else(|| {
+                    Some(CollaborationMode::Custom(Settings {
+                        model: model.clone(),
+                        reasoning_effort: effort,
+                        developer_instructions: None,
+                    }))
+                });
                 (
                     items,
                     SessionSettingsUpdate {

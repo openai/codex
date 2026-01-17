@@ -11,6 +11,8 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
@@ -22,6 +24,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 fn text_user_input(text: String) -> serde_json::Value {
@@ -344,6 +347,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
+            collaboration_mode: None,
         })
         .await?;
 
@@ -399,14 +403,21 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
+    let collaboration_mode = CollaborationMode::Custom(Settings {
+        model: "gpt-5.1".to_string(),
+        reasoning_effort: Some(ReasoningEffort::High),
+        developer_instructions: None,
+    });
+
     codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
-            model: None,
-            effort: None,
+            model: Some("gpt-5.1-codex".to_string()),
+            effort: Some(Some(ReasoningEffort::Low)),
             summary: None,
+            collaboration_mode: Some(collaboration_mode),
         })
         .await?;
 
@@ -423,6 +434,13 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let body = req.single_request().body_json();
+    assert_eq!(body["model"].as_str(), Some("gpt-5.1"));
+    assert_eq!(
+        body.get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(|value| value.as_str()),
+        Some("high")
+    );
     let input = body["input"]
         .as_array()
         .expect("input array must be present");
@@ -554,6 +572,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            collaboration_mode: None,
             final_output_json_schema: None,
         })
         .await?;
@@ -646,6 +665,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            collaboration_mode: None,
             final_output_json_schema: None,
         })
         .await?;
@@ -663,6 +683,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            collaboration_mode: None,
             final_output_json_schema: None,
         })
         .await?;
@@ -741,6 +762,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             model: default_model,
             effort: default_effort,
             summary: default_summary,
+            collaboration_mode: None,
             final_output_json_schema: None,
         })
         .await?;
@@ -758,6 +780,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            collaboration_mode: None,
             final_output_json_schema: None,
         })
         .await?;
