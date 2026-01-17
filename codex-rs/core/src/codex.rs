@@ -2080,6 +2080,13 @@ mod handlers {
             _ => unreachable!(),
         };
 
+        let previous_collaboration_mode = sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .collaboration_mode
+            .clone();
         let next_collaboration_mode = updates.collaboration_mode.clone();
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
@@ -2090,13 +2097,6 @@ mod handlers {
             .get_otel_manager()
             .user_prompt(&items);
 
-        let previous_collaboration_mode = sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .collaboration_mode
-            .clone();
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             let mut update_items = Vec::new();
