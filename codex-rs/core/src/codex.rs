@@ -78,6 +78,8 @@ use tracing::trace_span;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
+
+const PLAN_MODE_PROMPT: &str = include_str!("../plan_mode_prompt.md");
 use crate::WireApi;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
@@ -545,11 +547,23 @@ impl Session {
             web_search_mode: per_turn_config.web_search_mode,
         });
 
+        let developer_instructions = if matches!(
+            session_configuration.collaboration_mode,
+            CollaborationMode::Plan(_)
+        ) {
+            match session_configuration.developer_instructions.as_deref() {
+                Some(base) => Some(format!("{base}\n\n{PLAN_MODE_PROMPT}")),
+                None => Some(PLAN_MODE_PROMPT.to_string()),
+            }
+        } else {
+            session_configuration.developer_instructions.clone()
+        };
+
         TurnContext {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
-            developer_instructions: session_configuration.developer_instructions.clone(),
+            developer_instructions,
             base_instructions: session_configuration.base_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
