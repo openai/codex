@@ -1,6 +1,7 @@
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_app_server_protocol::AuthMode;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
@@ -23,6 +24,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
 
@@ -88,6 +90,17 @@ impl ModelsManager {
         }
         let remote_models = self.get_remote_models(config).await;
         self.build_available_models(remote_models)
+    }
+
+    /// List collaboration mode presets.
+    ///
+    /// Returns a static set of presets seeded with the configured model.
+    pub fn list_collaboration_modes(&self, config: &Config) -> Vec<CollaborationMode> {
+        let model = config
+            .model
+            .clone()
+            .unwrap_or_else(|| OPENAI_DEFAULT_API_MODEL.to_string());
+        builtin_collaboration_mode_presets(model, config.model_reasoning_effort)
     }
 
     /// Attempt to list models without blocking, using the current cached state.

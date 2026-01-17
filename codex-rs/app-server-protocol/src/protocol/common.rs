@@ -154,6 +154,11 @@ client_request_definitions! {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
     },
+    /// EXPERIMENTAL - list collaboration mode presets.
+    CollaborationModeList => "collaborationMode/list" {
+        params: v2::CollaborationModeListParams,
+        response: v2::CollaborationModeListResponse,
+    },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
         params: v2::McpServerOauthLoginParams,
@@ -873,6 +878,23 @@ mod tests {
                     "limit": null,
                     "cursor": null
                 }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_collaboration_modes() -> Result<()> {
+        let request = ClientRequest::CollaborationModeList {
+            request_id: RequestId::Integer(7),
+            params: v2::CollaborationModeListParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "collaborationMode/list",
+                "id": 7,
+                "params": {}
             }),
             serde_json::to_value(&request)?,
         );

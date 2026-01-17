@@ -23,6 +23,8 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CollaborationModeListParams;
+use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
@@ -434,6 +436,22 @@ impl CodexMessageProcessor {
 
                 tokio::spawn(async move {
                     Self::list_models(outgoing, thread_manager, config, request_id, params).await;
+                });
+            }
+            ClientRequest::CollaborationModeList { request_id, params } => {
+                let outgoing = self.outgoing.clone();
+                let thread_manager = self.thread_manager.clone();
+                let config = self.config.clone();
+
+                tokio::spawn(async move {
+                    Self::list_collaboration_modes(
+                        outgoing,
+                        thread_manager,
+                        config,
+                        request_id,
+                        params,
+                    )
+                    .await;
                 });
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
@@ -2368,6 +2386,19 @@ impl CodexMessageProcessor {
             data: items,
             next_cursor,
         };
+        outgoing.send_response(request_id, response).await;
+    }
+
+    async fn list_collaboration_modes(
+        outgoing: Arc<OutgoingMessageSender>,
+        thread_manager: Arc<ThreadManager>,
+        config: Arc<Config>,
+        request_id: RequestId,
+        params: CollaborationModeListParams,
+    ) {
+        let CollaborationModeListParams {} = params;
+        let items = thread_manager.list_collaboration_modes(&config);
+        let response = CollaborationModeListResponse { data: items };
         outgoing.send_response(request_id, response).await;
     }
 

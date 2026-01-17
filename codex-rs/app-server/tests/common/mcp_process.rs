@@ -17,6 +17,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
@@ -394,6 +395,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("model/list", params).await
+    }
+
+    /// Send a `collaborationMode/list` JSON-RPC request.
+    pub async fn send_list_collaboration_modes_request(
+        &mut self,
+        params: CollaborationModeListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("collaborationMode/list", params).await
     }
 
     /// Send a `resumeConversation` JSON-RPC request.
