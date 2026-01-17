@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
@@ -916,6 +917,20 @@ pub struct ModelListResponse {
     pub next_cursor: Option<String>,
 }
 
+/// EXPERIMENTAL - list collaboration mode presets.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CollaborationModeListParams {}
+
+/// EXPERIMENTAL - collaboration mode presets response.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CollaborationModeListResponse {
+    pub data: Vec<CollaborationMode>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1274,6 +1289,7 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub path: PathBuf,
     pub scope: SkillScope,
+    pub enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1311,6 +1327,21 @@ pub struct SkillsListEntry {
     pub errors: Vec<SkillErrorInfo>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsConfigWriteParams {
+    pub path: PathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsConfigWriteResponse {
+    pub effective_enabled: bool,
+}
+
 impl From<CoreSkillMetadata> for SkillMetadata {
     fn from(value: CoreSkillMetadata) -> Self {
         Self {
@@ -1320,6 +1351,7 @@ impl From<CoreSkillMetadata> for SkillMetadata {
             interface: value.interface.map(SkillInterface::from),
             path: value.path,
             scope: value.scope.into(),
+            enabled: true,
         }
     }
 }
@@ -1521,6 +1553,10 @@ pub struct TurnStartParams {
     pub summary: Option<ReasoningSummary>,
     /// Optional JSON Schema used to constrain the final assistant message for this turn.
     pub output_schema: Option<JsonValue>,
+
+    /// EXPERIMENTAL - set a pre-set collaboration mode.
+    /// Takes precedence over model, reasoning_effort, and developer instructions if set.
+    pub collaboration_mode: Option<CollaborationMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

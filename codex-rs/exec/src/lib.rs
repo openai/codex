@@ -452,6 +452,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     effort: default_effort,
                     summary: default_summary,
                     final_output_json_schema: output_schema,
+                    collaboration_mode: None,
                 })
                 .await?;
             info!("Sent prompt with event ID: {task_id}");

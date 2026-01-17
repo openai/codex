@@ -23,6 +23,8 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CollaborationModeListParams;
+use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
@@ -85,6 +87,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::SkillsConfigWriteParams;
+use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
@@ -131,6 +135,7 @@ use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigService;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::default_client::get_codex_user_agent;
@@ -400,6 +405,9 @@ impl CodexMessageProcessor {
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
             }
+            ClientRequest::SkillsConfigWrite { request_id, params } => {
+                self.skills_config_write(request_id, params).await;
+            }
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(request_id, params).await;
             }
@@ -428,6 +436,15 @@ impl CodexMessageProcessor {
 
                 tokio::spawn(async move {
                     Self::list_models(outgoing, thread_manager, config, request_id, params).await;
+                });
+            }
+            ClientRequest::CollaborationModeList { request_id, params } => {
+                let outgoing = self.outgoing.clone();
+                let thread_manager = self.thread_manager.clone();
+
+                tokio::spawn(async move {
+                    Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
+                        .await;
                 });
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
@@ -2365,6 +2382,18 @@ impl CodexMessageProcessor {
         outgoing.send_response(request_id, response).await;
     }
 
+    async fn list_collaboration_modes(
+        outgoing: Arc<OutgoingMessageSender>,
+        thread_manager: Arc<ThreadManager>,
+        request_id: RequestId,
+        params: CollaborationModeListParams,
+    ) {
+        let CollaborationModeListParams {} = params;
+        let items = thread_manager.list_collaboration_modes();
+        let response = CollaborationModeListResponse { data: items };
+        outgoing.send_response(request_id, response).await;
+    }
+
     async fn mcp_server_refresh(&self, request_id: RequestId, _params: Option<()>) {
         let config = match self.load_latest_config().await {
             Ok(config) => config,
@@ -3225,6 +3254,7 @@ impl CodexMessageProcessor {
                 effort,
                 summary,
                 final_output_json_schema: output_schema,
+                collaboration_mode: None,
             })
             .await;
 
@@ -3246,7 +3276,7 @@ impl CodexMessageProcessor {
         for cwd in cwds {
             let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
             let errors = errors_to_info(&outcome.errors);
-            let skills = skills_to_info(&outcome.skills);
+            let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {
                 cwd,
                 skills,
@@ -3256,6 +3286,37 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
+    }
+
+    async fn skills_config_write(&self, request_id: RequestId, params: SkillsConfigWriteParams) {
+        let SkillsConfigWriteParams { path, enabled } = params;
+        let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
+        let result = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await;
+
+        match result {
+            Ok(()) => {
+                self.thread_manager.skills_manager().clear_cache();
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        SkillsConfigWriteResponse {
+                            effective_enabled: enabled,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to update skill settings: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
     }
 
     async fn interrupt_conversation(
@@ -3307,7 +3368,8 @@ impl CodexMessageProcessor {
             || params.sandbox_policy.is_some()
             || params.model.is_some()
             || params.effort.is_some()
-            || params.summary.is_some();
+            || params.summary.is_some()
+            || params.collaboration_mode.is_some();
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
@@ -3319,6 +3381,7 @@ impl CodexMessageProcessor {
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,
+                    collaboration_mode: params.collaboration_mode,
                 })
                 .await;
         }
@@ -3918,25 +3981,30 @@ impl CodexMessageProcessor {
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
+    disabled_paths: &std::collections::HashSet<PathBuf>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
         .iter()
-        .map(|skill| codex_app_server_protocol::SkillMetadata {
-            name: skill.name.clone(),
-            description: skill.description.clone(),
-            short_description: skill.short_description.clone(),
-            interface: skill.interface.clone().map(|interface| {
-                codex_app_server_protocol::SkillInterface {
-                    display_name: interface.display_name,
-                    short_description: interface.short_description,
-                    icon_small: interface.icon_small,
-                    icon_large: interface.icon_large,
-                    brand_color: interface.brand_color,
-                    default_prompt: interface.default_prompt,
-                }
-            }),
-            path: skill.path.clone(),
-            scope: skill.scope.into(),
+        .map(|skill| {
+            let enabled = !disabled_paths.contains(&skill.path);
+            codex_app_server_protocol::SkillMetadata {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                short_description: skill.short_description.clone(),
+                interface: skill.interface.clone().map(|interface| {
+                    codex_app_server_protocol::SkillInterface {
+                        display_name: interface.display_name,
+                        short_description: interface.short_description,
+                        icon_small: interface.icon_small,
+                        icon_large: interface.icon_large,
+                        brand_color: interface.brand_color,
+                        default_prompt: interface.default_prompt,
+                    }
+                }),
+                path: skill.path.clone(),
+                scope: skill.scope.into(),
+                enabled,
+            }
         })
         .collect()
 }
