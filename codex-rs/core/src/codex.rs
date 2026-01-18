@@ -12,7 +12,6 @@ use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
-use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -410,7 +409,6 @@ pub(crate) struct TurnContext {
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
     pub(crate) developer_instructions: Option<String>,
-    pub(crate) base_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) approval_policy: AskForApproval,
@@ -563,7 +561,6 @@ impl Session {
             client,
             cwd: session_configuration.cwd.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            base_instructions: Some(session_configuration.base_instructions.clone()),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
@@ -2482,7 +2479,6 @@ async fn spawn_review_thread(
         web_search_mode: Some(review_web_search_mode),
     });
 
-    let base_instructions = REVIEW_PROMPT.to_string();
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
@@ -2519,7 +2515,6 @@ async fn spawn_review_thread(
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
         user_instructions: None,
-        base_instructions: Some(base_instructions.clone()),
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -2919,7 +2914,6 @@ async fn try_run_sampling_request(
         model: turn_context.client.get_model(),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
-        base_instructions: turn_context.base_instructions.clone(),
         user_instructions: turn_context.user_instructions.clone(),
         developer_instructions: turn_context.developer_instructions.clone(),
         final_output_json_schema: turn_context.final_output_json_schema.clone(),
