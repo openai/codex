@@ -204,7 +204,8 @@ impl App {
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
         if !prefill.is_empty() {
-            self.chat_widget.set_composer_text(prefill);
+            self.chat_widget
+                .set_composer_text(prefill, Vec::new(), Vec::new());
         }
     }
 

@@ -63,7 +63,7 @@ impl TextArea {
     }
 
     /// Replace the textarea text and clear any existing text elements.
-    pub fn set_text(&mut self, text: &str) {
+    pub fn set_text_clearing_elements(&mut self, text: &str) {
         self.set_text_inner(text, None);
     }
 
@@ -1292,7 +1292,7 @@ mod tests {
         let mut t = TextArea::new();
         t.insert_str("abcd");
         t.set_cursor(1);
-        t.set_text("你");
+        t.set_text_clearing_elements("你");
         assert_eq!(t.cursor(), 0);
         t.insert_str("a");
         assert_eq!(t.text(), "a你");
@@ -1974,7 +1974,7 @@ mod tests {
             for _ in 0..base_len {
                 base.push_str(&rand_grapheme(&mut rng));
             }
-            ta.set_text(&base);
+            ta.set_text_clearing_elements(&base);
             // Choose a valid char boundary for initial cursor
             let mut boundaries: Vec<usize> = vec![0];
             boundaries.extend(ta.text().char_indices().map(|(i, _)| i).skip(1));
