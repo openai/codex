@@ -4,6 +4,8 @@
 //! includes the plan, pair programming, and execute modes with their default model and reasoning
 //! effort settings, which keeps the API contract visible in one place.
 
+#![allow(clippy::unwrap_used)]
+
 use std::time::Duration;
 
 use anyhow::Result;
