@@ -20,6 +20,8 @@ pub struct NetworkProxyConfig {
     #[serde(default = "default_admin_url")]
     pub admin_url: String,
     #[serde(default)]
+    pub allow_upstream_proxy: bool,
+    #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
     #[serde(default)]
     pub dangerously_allow_non_loopback_admin: bool,
@@ -37,6 +39,7 @@ impl Default for NetworkProxyConfig {
             enabled: false,
             proxy_url: default_proxy_url(),
             admin_url: default_admin_url(),
+            allow_upstream_proxy: false,
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_non_loopback_admin: false,
             mode: NetworkMode::default(),

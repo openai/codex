@@ -21,6 +21,8 @@ Example config:
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
+# When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests.
+allow_upstream_proxy = false
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false

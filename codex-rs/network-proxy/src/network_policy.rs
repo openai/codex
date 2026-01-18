@@ -46,7 +46,7 @@ impl NetworkPolicyRequest {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkDecision {
     Allow,
     Deny { reason: String },
@@ -110,4 +110,121 @@ pub(crate) async fn evaluate_host_policy(
     }
 
     Ok(NetworkDecision::deny(reason))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::NetworkPolicy;
+    use crate::state::app_state_for_policy;
+    use pretty_assertions::assert_eq;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    #[tokio::test]
+    async fn evaluate_host_policy_invokes_decider_for_not_allowed() {
+        let state = app_state_for_policy(NetworkPolicy::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
+            let calls = calls.clone();
+            move |_req| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { NetworkDecision::Allow }
+            }
+        });
+
+        let request = NetworkPolicyRequest::new(
+            NetworkProtocol::Http,
+            "example.com".to_string(),
+            80,
+            None,
+            Some("GET".to_string()),
+            None,
+            None,
+        );
+
+        let decision = evaluate_host_policy(&state, Some(&decider), &request)
+            .await
+            .unwrap();
+        assert_eq!(decision, NetworkDecision::Allow);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn evaluate_host_policy_skips_decider_for_denied() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            denied_domains: vec!["blocked.com".to_string()],
+            ..NetworkPolicy::default()
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
+            let calls = calls.clone();
+            move |_req| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { NetworkDecision::Allow }
+            }
+        });
+
+        let request = NetworkPolicyRequest::new(
+            NetworkProtocol::Http,
+            "blocked.com".to_string(),
+            80,
+            None,
+            Some("GET".to_string()),
+            None,
+            None,
+        );
+
+        let decision = evaluate_host_policy(&state, Some(&decider), &request)
+            .await
+            .unwrap();
+        assert_eq!(
+            decision,
+            NetworkDecision::Deny {
+                reason: "denied".to_string()
+            }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn evaluate_host_policy_skips_decider_for_not_allowed_local() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
+            let calls = calls.clone();
+            move |_req| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { NetworkDecision::Allow }
+            }
+        });
+
+        let request = NetworkPolicyRequest::new(
+            NetworkProtocol::Http,
+            "127.0.0.1".to_string(),
+            80,
+            None,
+            Some("GET".to_string()),
+            None,
+            None,
+        );
+
+        let decision = evaluate_host_policy(&state, Some(&decider), &request)
+            .await
+            .unwrap();
+        assert_eq!(
+            decision,
+            NetworkDecision::Deny {
+                reason: "not_allowed_local".to_string()
+            }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
 }

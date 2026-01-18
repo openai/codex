@@ -24,14 +24,17 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::SystemTime;
 use time::OffsetDateTime;
 use tokio::net::lookup_host;
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
 const MAX_BLOCKED_EVENTS: usize = 200;
+const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BlockedRequest {
@@ -235,6 +238,12 @@ impl AppState {
         Ok(method_allowed(guard.config.network_proxy.mode, method))
     }
 
+    pub async fn allow_upstream_proxy(&self) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.config.network_proxy.allow_upstream_proxy)
+    }
+
     pub async fn network_mode(&self) -> Result<NetworkMode> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
@@ -288,9 +297,9 @@ async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> Result<bool> {
     // If DNS lookup fails, default to "not local/private" rather than blocking. In practice, the
     // subsequent connect attempt will fail anyway, and blocking on transient resolver issues would
     // make the proxy fragile. The allowlist/denylist remains the primary control plane.
-    let addrs = match lookup_host((host, port)).await {
-        Ok(addrs) => addrs,
-        Err(_) => return Ok(false),
+    let addrs = match timeout(DNS_LOOKUP_TIMEOUT, lookup_host((host, port))).await {
+        Ok(Ok(addrs)) => addrs,
+        Ok(Err(_)) | Err(_) => return Ok(false),
     };
 
     for addr in addrs {
@@ -330,7 +339,10 @@ async fn build_config_state() -> Result<ConfigState> {
     let deny_set = compile_globset(&config.network_proxy.policy.denied_domains)?;
     let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains)?;
     let mitm = if config.network_proxy.mitm.enabled {
-        build_mitm_state(&config.network_proxy.mitm)?
+        build_mitm_state(
+            &config.network_proxy.mitm,
+            config.network_proxy.allow_upstream_proxy,
+        )?
     } else {
         None
     };
@@ -355,8 +367,14 @@ fn resolve_mitm_paths(config: &mut Config, cfg_path: &Path) {
     }
 }
 
-fn build_mitm_state(config: &MitmConfig) -> Result<Option<Arc<MitmState>>> {
-    Ok(Some(Arc::new(MitmState::new(config)?)))
+fn build_mitm_state(
+    config: &MitmConfig,
+    allow_upstream_proxy: bool,
+) -> Result<Option<Arc<MitmState>>> {
+    Ok(Some(Arc::new(MitmState::new(
+        config,
+        allow_upstream_proxy,
+    )?)))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -369,6 +387,7 @@ struct PartialConfig {
 struct PartialNetworkProxyConfig {
     enabled: Option<bool>,
     mode: Option<NetworkMode>,
+    allow_upstream_proxy: Option<bool>,
     dangerously_allow_non_loopback_proxy: Option<bool>,
     dangerously_allow_non_loopback_admin: Option<bool>,
     #[serde(default)]
@@ -391,6 +410,7 @@ struct PartialNetworkPolicy {
 struct NetworkProxyConstraints {
     enabled: Option<bool>,
     mode: Option<NetworkMode>,
+    allow_upstream_proxy: Option<bool>,
     dangerously_allow_non_loopback_proxy: Option<bool>,
     dangerously_allow_non_loopback_admin: Option<bool>,
     allowed_domains: Option<Vec<String>>,
@@ -433,6 +453,9 @@ fn network_proxy_constraints_from_trusted_layers(
         }
         if let Some(mode) = partial.network_proxy.mode {
             constraints.mode = Some(mode);
+        }
+        if let Some(allow_upstream_proxy) = partial.network_proxy.allow_upstream_proxy {
+            constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
         }
         if let Some(dangerously_allow_non_loopback_proxy) =
             partial.network_proxy.dangerously_allow_non_loopback_proxy
@@ -517,6 +540,25 @@ fn validate_policy_against_constraints(
             }
         })?;
     }
+
+    let allow_upstream_proxy = constraints.allow_upstream_proxy;
+    let _ = Constrained::new(
+        config.network_proxy.allow_upstream_proxy,
+        move |candidate| match allow_upstream_proxy {
+            Some(true) | None => Ok(()),
+            Some(false) => {
+                if *candidate {
+                    Err(invalid_value(
+                        "network_proxy.allow_upstream_proxy",
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+    )?;
 
     let allow_non_loopback_admin = constraints.dangerously_allow_non_loopback_admin;
     let _ = Constrained::new(
@@ -735,40 +777,41 @@ fn unix_timestamp() -> i64 {
 }
 
 #[cfg(test)]
+pub(crate) fn app_state_for_policy(policy: crate::config::NetworkPolicy) -> AppState {
+    let config = Config {
+        network_proxy: crate::config::NetworkProxyConfig {
+            enabled: true,
+            mode: NetworkMode::Full,
+            policy,
+            ..crate::config::NetworkProxyConfig::default()
+        },
+    };
+
+    let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains).unwrap();
+    let deny_set = compile_globset(&config.network_proxy.policy.denied_domains).unwrap();
+
+    let state = ConfigState {
+        config,
+        mtime: None,
+        allow_set,
+        deny_set,
+        mitm: None,
+        cfg_path: PathBuf::from("/nonexistent/config.toml"),
+        blocked: VecDeque::new(),
+    };
+
+    AppState {
+        state: Arc::new(RwLock::new(state)),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::config::NetworkPolicy;
     use crate::config::NetworkProxyConfig;
     use pretty_assertions::assert_eq;
-
-    fn app_state_for_policy(policy: NetworkPolicy) -> AppState {
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
-                enabled: true,
-                mode: NetworkMode::Full,
-                policy,
-                ..NetworkProxyConfig::default()
-            },
-        };
-
-        let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains).unwrap();
-        let deny_set = compile_globset(&config.network_proxy.policy.denied_domains).unwrap();
-
-        let state = ConfigState {
-            config,
-            mtime: None,
-            allow_set,
-            deny_set,
-            mitm: None,
-            cfg_path: PathBuf::from("/nonexistent/config.toml"),
-            blocked: VecDeque::new(),
-        };
-
-        AppState {
-            state: Arc::new(RwLock::new(state)),
-        }
-    }
 
     #[tokio::test]
     async fn host_blocked_denied_wins_over_allowed() {

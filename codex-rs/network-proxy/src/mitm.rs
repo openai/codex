@@ -80,7 +80,7 @@ impl std::fmt::Debug for MitmState {
 }
 
 impl MitmState {
-    pub fn new(cfg: &MitmConfig) -> Result<Self> {
+    pub fn new(cfg: &MitmConfig, allow_upstream_proxy: bool) -> Result<Self> {
         // MITM exists to make limited-mode HTTPS enforceable: once CONNECT is established, plain
         // proxying would lose visibility into the inner HTTP request. We generate/load a local CA
         // and issue per-host leaf certs so we can terminate TLS and apply policy.
@@ -89,18 +89,22 @@ impl MitmState {
         let issuer: Issuer<'static, KeyPair> =
             Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key).context("failed to parse CA cert")?;
 
-        let tls_config = rama::tls::rustls::client::TlsConnectorData::try_new_http_auto()
-            .context("create upstream TLS config")?;
         let upstream: rama::service::BoxService<Request, Response, OpaqueError> =
-            EasyHttpWebClient::connector_builder()
-                // Use a direct transport connector (no upstream proxy) to avoid proxy loops.
-                .with_default_transport_connector()
-                .without_tls_proxy_support()
-                .without_proxy_support()
-                .with_tls_support_using_rustls(Some(tls_config))
-                .with_default_http_connector()
-                .build_client()
-                .boxed();
+            if allow_upstream_proxy {
+                EasyHttpWebClient::default().boxed()
+            } else {
+                let tls_config = rama::tls::rustls::client::TlsConnectorData::try_new_http_auto()
+                    .context("create upstream TLS config")?;
+                EasyHttpWebClient::connector_builder()
+                    // Use a direct transport connector (no upstream proxy) to avoid proxy loops.
+                    .with_default_transport_connector()
+                    .without_tls_proxy_support()
+                    .without_proxy_support()
+                    .with_tls_support_using_rustls(Some(tls_config))
+                    .with_default_http_connector()
+                    .build_client()
+                    .boxed()
+            };
 
         Ok(Self {
             issuer,

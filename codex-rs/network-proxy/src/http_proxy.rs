@@ -7,6 +7,7 @@ use crate::network_policy::NetworkProtocol;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::responses::blocked_header_value;
+use crate::responses::json_response;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
 use anyhow::Context as _;
@@ -16,6 +17,7 @@ use rama::Service;
 use rama::extensions::ExtensionsMut;
 use rama::extensions::ExtensionsRef;
 use rama::http::Body;
+use rama::http::HeaderValue;
 use rama::http::Request;
 use rama::http::Response;
 use rama::http::StatusCode;
@@ -33,7 +35,7 @@ use rama::net::stream::SocketInfo;
 use rama::service::service_fn;
 use rama::tcp::client::service::Forwarder;
 use rama::tcp::server::TcpListener;
-use serde_json::json;
+use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -378,7 +380,32 @@ async fn http_plain_proxy(
     let method = req.method();
     info!("request allowed (client={client}, host={host}, method={method})");
 
-    let client = EasyHttpWebClient::default();
+    let allow_upstream_proxy = match app_state.allow_upstream_proxy().await {
+        Ok(allow) => allow,
+        Err(err) => {
+            error!("failed to read upstream proxy config: {err}");
+            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+        }
+    };
+    let client = if allow_upstream_proxy {
+        EasyHttpWebClient::default()
+    } else {
+        let tls_config = match rama::tls::rustls::client::TlsConnectorData::try_new_http_auto() {
+            Ok(config) => config,
+            Err(err) => {
+                error!("failed to create upstream TLS config: {err}");
+                return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+            }
+        };
+        EasyHttpWebClient::connector_builder()
+            .with_default_transport_connector()
+            .without_tls_proxy_support()
+            .without_proxy_support()
+            .with_tls_support_using_rustls(Some(tls_config))
+            .with_default_http_connector()
+            .build_client()
+    };
+
     match client.serve(req).await {
         Ok(resp) => Ok(resp),
         Err(err) => {
@@ -431,13 +458,18 @@ fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
 }
 
 fn json_blocked(host: &str, reason: &str) -> Response {
-    let body = Body::from(json!({"status":"blocked","host":host,"reason":reason}).to_string());
-    Response::builder()
-        .status(StatusCode::FORBIDDEN)
-        .header("content-type", "application/json")
-        .header("x-proxy-error", blocked_header_value(reason))
-        .body(body)
-        .unwrap_or_else(|_| Response::new(Body::from("blocked")))
+    let response = BlockedResponse {
+        status: "blocked",
+        host,
+        reason,
+    };
+    let mut resp = json_response(&response);
+    *resp.status_mut() = StatusCode::FORBIDDEN;
+    resp.headers_mut().insert(
+        "x-proxy-error",
+        HeaderValue::from_static(blocked_header_value(reason)),
+    );
+    resp
 }
 
 fn blocked_text(reason: &str) -> Response {
@@ -450,4 +482,11 @@ fn text_response(status: StatusCode, body: &str) -> Response {
         .header("content-type", "text/plain")
         .body(Body::from(body.to_string()))
         .unwrap_or_else(|_| Response::new(Body::from(body.to_string())))
+}
+
+#[derive(Serialize)]
+struct BlockedResponse<'a> {
+    status: &'static str,
+    host: &'a str,
+    reason: &'a str,
 }
