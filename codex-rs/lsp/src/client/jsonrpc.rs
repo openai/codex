@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
@@ -51,6 +52,8 @@ pub struct JsonRpcClient {
 pub struct JsonRpcIncoming {
     pub rx: mpsc::Receiver<IncomingMessage>,
 }
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct Inner {
     transport: Arc<Transport>,
@@ -123,13 +126,24 @@ impl JsonRpcClient {
                 data: None,
             });
         }
-        rx.await.unwrap_or_else(|_err| {
-            Err(JsonRpcError {
-                code: -32603,
-                message: "jsonrpc response channel closed".to_string(),
-                data: None,
-            })
-        })
+        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+            Ok(result) => result.unwrap_or_else(|_err| {
+                Err(JsonRpcError {
+                    code: -32603,
+                    message: "jsonrpc response channel closed".to_string(),
+                    data: None,
+                })
+            }),
+            Err(_) => {
+                let mut pending = self.inner.pending.lock().await;
+                pending.remove(&id);
+                Err(JsonRpcError {
+                    code: -32603,
+                    message: "jsonrpc request timed out".to_string(),
+                    data: None,
+                })
+            }
+        }
     }
 
     pub async fn respond(

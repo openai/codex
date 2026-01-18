@@ -18,6 +18,8 @@ pub struct Transport {
     _child: Option<Child>,
 }
 
+const MAX_CONTENT_LENGTH: usize = 100 * 1024 * 1024;
+
 impl Transport {
     pub async fn spawn(
         command: &str,
@@ -122,6 +124,9 @@ pub async fn read_framed_message(reader: &mut (dyn AsyncBufRead + Send + Unpin))
     }
 
     let content_length = content_length.context("missing Content-Length header")?;
+    if content_length > MAX_CONTENT_LENGTH {
+        anyhow::bail!("Content-Length {content_length} exceeds limit {MAX_CONTENT_LENGTH}");
+    }
     let mut buffer = vec![0u8; content_length];
     reader.read_exact(&mut buffer).await?;
     let message = String::from_utf8(buffer).context("decode lsp message")?;

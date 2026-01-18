@@ -9,6 +9,7 @@ use anyhow::Result;
 use lsp_types::ClientCapabilities;
 use lsp_types::ConfigurationParams;
 use lsp_types::DidChangeTextDocumentParams;
+use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::GeneralClientCapabilities;
 use lsp_types::InitializeParams;
@@ -27,6 +28,7 @@ use lsp_types::Uri;
 use lsp_types::WorkspaceFolder;
 use serde_json::Value;
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct LspClient {
@@ -47,7 +49,11 @@ impl LspClient {
         let transport = Transport::spawn(command, args, env, cwd).await?;
         let (rpc, mut incoming) = JsonRpcClient::new(transport);
 
-        let initialize = build_initialize_params(root_uri.clone());
+        let workspace_folders = vec![WorkspaceFolder {
+            uri: root_uri.clone(),
+            name: "workspace".to_string(),
+        }];
+        let initialize = build_initialize_params(workspace_folders.clone());
         let init_value = rpc
             .request("initialize", Some(serde_json::to_value(initialize)?))
             .await
@@ -75,9 +81,13 @@ impl LspClient {
 
         let rpc_clone = rpc.clone();
         let diagnostics = diagnostics.clone();
-        tokio::spawn(async move {
-            while let Some(message) = incoming.rx.recv().await {
-                handle_incoming(message, &rpc_clone, &diagnostics).await;
+        let workspace_folders = Arc::new(workspace_folders);
+        tokio::spawn({
+            let workspace_folders = Arc::clone(&workspace_folders);
+            async move {
+                while let Some(message) = incoming.rx.recv().await {
+                    handle_incoming(message, &rpc_clone, &diagnostics, &workspace_folders).await;
+                }
             }
         });
 
@@ -132,6 +142,15 @@ impl LspClient {
                 "textDocument/didChange",
                 Some(serde_json::to_value(params)?),
             )
+            .await
+    }
+
+    pub async fn notify_did_close(&self, uri: Uri) -> Result<()> {
+        let params = DidCloseTextDocumentParams {
+            text_document: TextDocumentIdentifier { uri },
+        };
+        self.rpc
+            .notify("textDocument/didClose", Some(serde_json::to_value(params)?))
             .await
     }
 
@@ -210,11 +229,9 @@ impl LspClient {
     }
 }
 
-fn build_initialize_params(root_uri: Uri) -> InitializeParams {
+fn build_initialize_params(workspace_folders: Vec<WorkspaceFolder>) -> InitializeParams {
     InitializeParams {
         process_id: Some(std::process::id()),
-        root_uri: Some(root_uri.clone()),
-        root_path: None,
         capabilities: ClientCapabilities {
             general: Some(GeneralClientCapabilities {
                 position_encodings: Some(vec![
@@ -225,16 +242,14 @@ fn build_initialize_params(root_uri: Uri) -> InitializeParams {
             }),
             workspace: Some(lsp_types::WorkspaceClientCapabilities {
                 configuration: Some(true),
+                workspace_folders: Some(true),
                 ..Default::default()
             }),
             ..Default::default()
         },
         initialization_options: None,
         trace: None,
-        workspace_folders: Some(vec![WorkspaceFolder {
-            uri: root_uri,
-            name: "workspace".to_string(),
-        }]),
+        workspace_folders: Some(workspace_folders),
         client_info: Some(lsp_types::ClientInfo {
             name: "codex".to_string(),
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -248,6 +263,7 @@ async fn handle_incoming(
     message: IncomingMessage,
     rpc: &JsonRpcClient,
     diagnostics: &DiagnosticStore,
+    workspace_folders: &Arc<Vec<WorkspaceFolder>>,
 ) {
     match message {
         IncomingMessage::Notification { method, params } => {
@@ -273,7 +289,9 @@ async fn handle_incoming(
                 "client/registerCapability" => rpc.respond(id, None, None).await,
                 "window/showMessageRequest" => rpc.respond(id, None, None).await,
                 "workspace/workspaceFolders" => {
-                    rpc.respond(id, Some(Value::Array(Vec::new())), None).await
+                    let folders = serde_json::to_value(workspace_folders.as_ref())
+                        .unwrap_or_else(|_| Value::Array(Vec::new()));
+                    rpc.respond(id, Some(folders), None).await
                 }
                 _ => {
                     let error = crate::client::jsonrpc::JsonRpcError {

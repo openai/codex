@@ -26,6 +26,7 @@ use lsp_types::Uri;
 use lsp_types::WorkspaceEdit;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -81,7 +82,13 @@ pub struct LspManager {
 }
 
 struct LspState {
-    servers: HashMap<LanguageServerId, ServerHandle>,
+    servers: HashMap<ServerKey, ServerHandle>,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct ServerKey {
+    id: LanguageServerId,
+    root: PathBuf,
 }
 
 struct ServerHandle {
@@ -95,7 +102,6 @@ struct ServerHandle {
 #[derive(Debug, Clone)]
 struct OpenDocument {
     version: i32,
-    language_id: String,
 }
 
 impl LspManager {
@@ -140,21 +146,28 @@ impl LspManager {
             let server_config = self.config.server_config(spec.id);
             let enabled = server_config.enabled;
             let detected = find_root_with_markers(&self.root, &spec.markers).is_some();
-            let running = state.servers.contains_key(&spec.id);
+            let mut running_root = None;
+            let mut running_command = None;
+            for (key, handle) in &state.servers {
+                if key.id == spec.id {
+                    running_root = Some(handle.root.clone());
+                    running_command = Some(handle.command.clone());
+                    break;
+                }
+            }
+            let running = running_root.is_some();
             let installed = self.is_installed(spec, &server_config);
-            let command = if let Some(handle) = state.servers.get(&spec.id) {
-                handle.command.clone()
-            } else {
+            let command = running_command.unwrap_or_else(|| {
                 self.resolve_command(spec, &server_config)
                     .unwrap_or_default()
-            };
+            });
             entries.push(LspManagerStatusEntry {
                 id: spec.id,
                 enabled,
                 detected,
                 running,
                 installed,
-                root: find_root_with_markers(&self.root, &spec.markers),
+                root: running_root.or_else(|| find_root_with_markers(&self.root, &spec.markers)),
                 command,
             });
         }
@@ -178,10 +191,52 @@ impl LspManager {
 
     pub async fn on_files_changed(&self, paths: Vec<PathBuf>) -> Result<(), LspError> {
         for path in paths {
-            let Some(server_id) = self.ensure_server_for_path(&path).await? else {
+            if self.path_missing(&path).await? {
+                self.handle_missing_path(&path).await?;
+                continue;
+            }
+            let Some(server_key) = self.ensure_server_for_path(&path).await? else {
                 continue;
             };
-            self.open_or_change(&path, server_id).await?;
+            match self.open_or_change(&path, &server_key).await {
+                Ok(_) => {}
+                Err(LspError::Io(err)) if err.kind() == ErrorKind::NotFound => {
+                    self.handle_missing_path(&path).await?;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+
+    async fn path_missing(&self, path: &Path) -> Result<bool, LspError> {
+        match tokio::fs::metadata(path).await {
+            Ok(_) => Ok(false),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(true),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn handle_missing_path(&self, path: &Path) -> Result<(), LspError> {
+        self.diagnostics.clear(path);
+        let Some(uri) = uri_from_file_path(path) else {
+            return Ok(());
+        };
+        let clients = {
+            let mut state = self.state.lock().await;
+            let mut clients = Vec::new();
+            for handle in state.servers.values_mut() {
+                if handle.open_docs.remove(&uri).is_some() {
+                    clients.push(handle.client.clone());
+                }
+            }
+            clients
+        };
+        for client in clients {
+            client
+                .notify_did_close(uri.clone())
+                .await
+                .map_err(|err| LspError::ServerError(err.to_string()))?;
         }
         Ok(())
     }
@@ -193,10 +248,10 @@ impl LspManager {
         wait: Option<std::time::Duration>,
     ) -> Result<Vec<DiagnosticEntry>, LspError> {
         if let Some(path) = path {
-            let Some(server_id) = self.ensure_server_for_path(&path).await? else {
+            let Some(server_key) = self.ensure_server_for_path(&path).await? else {
                 return Err(LspError::NotDetected(path.display().to_string()));
             };
-            self.open_or_change(&path, server_id).await?;
+            self.open_or_change(&path, &server_key).await?;
             if let Some(wait) = wait {
                 let _ = self.diagnostics.wait_for_path(&path, wait).await;
             }
@@ -270,18 +325,20 @@ impl LspManager {
             )
             .await
             .map_err(|err| LspError::ServerError(err.message))?;
-        let edit: WorkspaceEdit = serde_json::from_value(value)
+        let edit: Option<WorkspaceEdit> = serde_json::from_value(value)
             .context("deserialize workspace edit")
             .map_err(|err| LspError::ServerError(err.to_string()))?;
+        let Some(edit) = edit else {
+            return Err(LspError::ServerError(
+                "rename returned no edits".to_string(),
+            ));
+        };
         let encoding = client.position_encoding();
         let result = workspace_edit_to_apply_patch(edit, &self.root, encoding).await?;
         Ok(result)
     }
 
-    async fn ensure_server_for_path(
-        &self,
-        path: &Path,
-    ) -> Result<Option<LanguageServerId>, LspError> {
+    async fn ensure_server_for_path(&self, path: &Path) -> Result<Option<ServerKey>, LspError> {
         match self.config.mode {
             LspMode::Off => return Err(LspError::Disabled),
             LspMode::Auto => {}
@@ -334,10 +391,16 @@ impl LspManager {
         spec: &ServerSpec,
         root: PathBuf,
         server_config: crate::config::LspServerConfig,
-    ) -> Result<Option<LanguageServerId>, LspError> {
-        let mut state = self.state.lock().await;
-        if state.servers.contains_key(&spec.id) {
-            return Ok(Some(spec.id));
+    ) -> Result<Option<ServerKey>, LspError> {
+        let key = ServerKey {
+            id: spec.id,
+            root: root.clone(),
+        };
+        {
+            let state = self.state.lock().await;
+            if state.servers.contains_key(&key) {
+                return Ok(Some(key));
+            }
         }
 
         if !self.is_installed(spec, &server_config) && self.config.auto_install {
@@ -364,30 +427,34 @@ impl LspManager {
         .await
         .map_err(|err| LspError::ServerError(err.to_string()))?;
 
-        state.servers.insert(
-            spec.id,
-            ServerHandle {
-                spec: spec.clone(),
-                root,
-                client,
-                open_docs: HashMap::new(),
-                command,
-            },
-        );
-        Ok(Some(spec.id))
+        let mut inserted = false;
+        {
+            let mut state = self.state.lock().await;
+            if !state.servers.contains_key(&key) {
+                state.servers.insert(
+                    key.clone(),
+                    ServerHandle {
+                        spec: spec.clone(),
+                        root,
+                        client: client.clone(),
+                        open_docs: HashMap::new(),
+                        command,
+                    },
+                );
+                inserted = true;
+            }
+        }
+        if !inserted {
+            let _ = client.shutdown().await;
+        }
+        Ok(Some(key))
     }
 
     async fn open_or_change(
         &self,
         path: &Path,
-        server_id: LanguageServerId,
+        server_key: &ServerKey,
     ) -> Result<(LspClient, Uri), LspError> {
-        let mut state = self.state.lock().await;
-        let handle = state
-            .servers
-            .get_mut(&server_id)
-            .ok_or_else(|| LspError::ServerError("server missing".to_string()))?;
-
         let uri = uri_from_file_path(path)
             .ok_or_else(|| LspError::ServerError("invalid file uri".to_string()))?;
         let text = tokio::fs::read_to_string(path).await?;
@@ -396,34 +463,40 @@ impl LspManager {
             .and_then(|ext| ext.to_str())
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
-        let language_id = handle
-            .spec
-            .language_id_for_extension(&extension)
-            .to_string();
+        let (client, language_id, version, is_change) = {
+            let mut state = self.state.lock().await;
+            let handle = state
+                .servers
+                .get_mut(server_key)
+                .ok_or_else(|| LspError::ServerError("server missing".to_string()))?;
+            let language_id = handle
+                .spec
+                .language_id_for_extension(&extension)
+                .to_string();
+            let (version, is_change) = if let Some(open) = handle.open_docs.get_mut(&uri) {
+                open.version += 1;
+                (open.version, true)
+            } else {
+                handle
+                    .open_docs
+                    .insert(uri.clone(), OpenDocument { version: 1 });
+                (1, false)
+            };
+            (handle.client.clone(), language_id, version, is_change)
+        };
 
-        if let Some(open) = handle.open_docs.get_mut(&uri) {
-            open.version += 1;
-            handle
-                .client
-                .notify_did_change(uri.clone(), open.version, text)
+        if is_change {
+            client
+                .notify_did_change(uri.clone(), version, text)
                 .await
                 .map_err(|err| LspError::ServerError(err.to_string()))?;
-            return Ok((handle.client.clone(), uri));
+        } else {
+            client
+                .notify_did_open(uri.clone(), &language_id, version, text)
+                .await
+                .map_err(|err| LspError::ServerError(err.to_string()))?;
         }
-
-        handle
-            .client
-            .notify_did_open(uri.clone(), &language_id, 1, text)
-            .await
-            .map_err(|err| LspError::ServerError(err.to_string()))?;
-        handle.open_docs.insert(
-            uri.clone(),
-            OpenDocument {
-                version: 1,
-                language_id,
-            },
-        );
-        Ok((handle.client.clone(), uri))
+        Ok((client, uri))
     }
 
     fn resolve_command(
@@ -523,7 +596,15 @@ impl LspManager {
                 }
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let source = PathBuf::from(path);
-                let dest = self.config.install_dir.join("bin").join(spec.bin_name);
+                let dest = if let Some(ext) = source.extension() {
+                    self.config
+                        .install_dir
+                        .join("bin")
+                        .join(spec.bin_name)
+                        .with_extension(ext)
+                } else {
+                    self.config.install_dir.join("bin").join(spec.bin_name)
+                };
                 tokio::fs::copy(&source, &dest).await?;
             }
         }
@@ -536,11 +617,11 @@ impl LspManager {
         line: u32,
         character: u32,
     ) -> Result<(LspClient, Uri, Position), LspError> {
-        let server_id = self
+        let server_key = self
             .ensure_server_for_path(path)
             .await?
             .ok_or_else(|| LspError::NotDetected(path.display().to_string()))?;
-        let (client, uri) = self.open_or_change(path, server_id).await?;
+        let (client, uri) = self.open_or_change(path, &server_key).await?;
         let text = tokio::fs::read_to_string(path).await?;
         let offset = byte_offset_for_line_character(&text, line, character).ok_or_else(|| {
             LspError::InvalidPosition {
@@ -614,9 +695,12 @@ pub struct LocationInfo {
 }
 
 fn parse_locations(value: Value) -> Result<Vec<LocationInfo>, LspError> {
-    let response: lsp_types::GotoDefinitionResponse = serde_json::from_value(value)
+    let response: Option<lsp_types::GotoDefinitionResponse> = serde_json::from_value(value)
         .context("parse definition response")
         .map_err(|err| LspError::ServerError(err.to_string()))?;
+    let Some(response) = response else {
+        return Ok(Vec::new());
+    };
     let mut locations = Vec::new();
     match response {
         lsp_types::GotoDefinitionResponse::Scalar(location) => {
