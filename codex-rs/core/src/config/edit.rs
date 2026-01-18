@@ -614,6 +614,45 @@ fn normalize_skill_config_path(path: &Path) -> String {
         .to_string()
 }
 
+fn resolve_config_write_target(config_path: &Path) -> anyhow::Result<PathBuf> {
+    // If config.toml is a symlink, writing via rename/persist would replace the
+    // symlink itself. Instead, follow the symlink chain and write to the final
+    // target path so the link is preserved.
+    let mut current = config_path.to_path_buf();
+    for _ in 0..16 {
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_symlink() {
+                    return Ok(current);
+                }
+
+                let target = std::fs::read_link(&current).with_context(|| {
+                    format!("failed to read config symlink target at {}", current.display())
+                })?;
+                current = if target.is_absolute() {
+                    target
+                } else {
+                    let parent = current
+                        .parent()
+                        .context("config.toml symlink missing parent directory")?;
+                    parent.join(target)
+                };
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // The path doesn't exist yet (or is a dangling symlink target). Treat it as the
+                // final destination so callers can create the file.
+                return Ok(current);
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "too many levels of symbolic links resolving {}",
+        config_path.display()
+    ))
+}
+
 /// Persist edits using a blocking strategy.
 pub fn apply_blocking(
     codex_home: &Path,
@@ -661,14 +700,49 @@ pub fn apply_blocking(
         )
     })?;
 
-    let tmp = NamedTempFile::new_in(codex_home)?;
+    let write_target = resolve_config_write_target(&config_path)?;
+
+    if write_target.exists() {
+        let can_write = std::fs::OpenOptions::new().write(true).open(&write_target);
+        if let Err(err) = can_write {
+            if err.kind() == std::io::ErrorKind::PermissionDenied {
+                return Err(anyhow::anyhow!(
+                    "config file {} is read-only (symlink target); update the source file and re-link",
+                    write_target.display()
+                ));
+            }
+            return Err(err.into());
+        }
+    }
+
+    let write_parent = write_target
+        .parent()
+        .context("config write target missing parent directory")?;
+    std::fs::create_dir_all(write_parent).with_context(|| {
+        format!(
+            "failed to create config write parent directory at {}",
+            write_parent.display()
+        )
+    })?;
+
+    let tmp = NamedTempFile::new_in(write_parent).with_context(|| {
+        format!(
+            "failed to create temporary config file in {}",
+            write_parent.display()
+        )
+    })?;
     std::fs::write(tmp.path(), document.doc.to_string()).with_context(|| {
         format!(
             "failed to write temporary config file at {}",
             tmp.path().display()
         )
     })?;
-    tmp.persist(config_path)?;
+    tmp.persist(&write_target).with_context(|| {
+        format!(
+            "failed to persist config file to {}",
+            write_target.display()
+        )
+    })?;
 
     Ok(())
 }
@@ -816,6 +890,9 @@ mod tests {
     use tempfile::tempdir;
     use toml::Value as TomlValue;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     #[test]
     fn blocking_set_model_top_level() {
         let tmp = tempdir().expect("tmpdir");
@@ -855,6 +932,40 @@ model_reasoning_effort = "high"
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, "enabled = true\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn preserves_config_toml_symlink_when_writing() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path().join("codex-home");
+        let external_dir = tmp.path().join("external");
+        std::fs::create_dir_all(&codex_home).expect("create codex_home");
+        std::fs::create_dir_all(&external_dir).expect("create external dir");
+
+        let external_config = external_dir.join("config.toml");
+        std::fs::write(&external_config, "model = \"gpt-5\"\n").expect("seed external config");
+
+        let config_link = codex_home.join(CONFIG_TOML_FILE);
+        symlink(&external_config, &config_link).expect("create config.toml symlink");
+
+        ConfigEditsBuilder::new(&codex_home)
+            .with_edits([ConfigEdit::SetPath {
+                segments: vec!["enabled".to_string()],
+                value: value(true),
+            }])
+            .apply_blocking()
+            .expect("persist");
+
+        let meta = std::fs::symlink_metadata(&config_link).expect("symlink metadata");
+        assert!(meta.file_type().is_symlink(), "config.toml should remain a symlink");
+
+        let updated_external =
+            std::fs::read_to_string(&external_config).expect("read external config");
+        assert!(
+            updated_external.contains("enabled = true"),
+            "expected to write through to symlink target"
+        );
     }
 
     #[test]
