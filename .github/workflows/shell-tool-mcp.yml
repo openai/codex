@@ -93,7 +93,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
 

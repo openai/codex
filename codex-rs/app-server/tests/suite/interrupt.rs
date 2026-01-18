@@ -105,6 +105,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
             conversation_id,
             items: vec![codex_app_server_protocol::InputItem::Text {
                 text: "run first sleep command".to_string(),
+                text_elements: Vec::new(),
             }],
         })
         .await?;

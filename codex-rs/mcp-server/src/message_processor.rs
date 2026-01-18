@@ -498,17 +498,11 @@ impl MessageProcessor {
             Ok(c) => c,
             Err(_) => {
                 tracing::warn!("Session not found for thread_id: {thread_id}");
-                let result = CallToolResult {
-                    content: vec![ContentBlock::TextContent(TextContent {
-                        r#type: "text".to_owned(),
-                        text: format!("Session not found for thread_id: {thread_id}"),
-                        annotations: None,
-                    })],
-                    is_error: Some(true),
-                    structured_content: Some(json!({
-                        "threadId": thread_id,
-                    })),
-                };
+                let result = crate::codex_tool_runner::create_call_tool_result_with_thread_id(
+                    thread_id,
+                    format!("Session not found for thread_id: {thread_id}"),
+                    Some(true),
+                );
                 outgoing.send_response(request_id, result).await;
                 return;
             }
