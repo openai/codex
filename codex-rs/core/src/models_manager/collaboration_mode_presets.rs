@@ -12,6 +12,11 @@ pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationMode> {
     vec![plan_preset(), pair_programming_preset(), execute_preset()]
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_builtin_collaboration_mode_presets() -> Vec<CollaborationMode> {
+    builtin_collaboration_mode_presets()
+}
+
 fn plan_preset() -> CollaborationMode {
     CollaborationMode::Plan(Settings {
         model: "gpt-5.2-codex".to_string(),

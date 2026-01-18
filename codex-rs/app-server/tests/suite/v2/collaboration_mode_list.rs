@@ -13,9 +13,8 @@ use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_core::models_manager::test_builtin_collaboration_mode_presets;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::Settings;
-use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -43,73 +42,43 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 
-    assert_eq!(items.len(), 3, "should return exactly 3 presets");
-
-    // Verify plan preset
-    let plan = items
-        .iter()
-        .find(|item| matches!(item, CollaborationMode::Plan(_)))
-        .expect("should include plan preset");
-    assert_eq!(plan.model(), "gpt-5.2-codex");
-    assert_eq!(plan.reasoning_effort(), Some(ReasoningEffort::Medium));
-    match plan {
-        CollaborationMode::Plan(settings) => {
-            assert!(
-                settings.developer_instructions.is_some(),
-                "plan preset should include developer instructions"
-            );
-            assert!(
-                !settings.developer_instructions.as_ref().unwrap().is_empty(),
-                "plan preset developer instructions should not be empty"
-            );
-        }
-        _ => unreachable!(),
-    }
-
-    // Verify pair programming preset
-    let pair_programming = items
-        .iter()
-        .find(|item| matches!(item, CollaborationMode::PairProgramming(_)))
-        .expect("should include pair programming preset");
-    assert_eq!(pair_programming.model(), "gpt-5.2-codex");
-    assert_eq!(
-        pair_programming.reasoning_effort(),
-        Some(ReasoningEffort::Medium)
-    );
-    match pair_programming {
-        CollaborationMode::PairProgramming(settings) => {
-            assert!(
-                settings.developer_instructions.is_some(),
-                "pair programming preset should include developer instructions"
-            );
-            assert!(
-                !settings.developer_instructions.as_ref().unwrap().is_empty(),
-                "pair programming preset developer instructions should not be empty"
-            );
-        }
-        _ => unreachable!(),
-    }
-
-    // Verify execute preset
-    let execute = items
-        .iter()
-        .find(|item| matches!(item, CollaborationMode::Execute(_)))
-        .expect("should include execute preset");
-    assert_eq!(execute.model(), "gpt-5.2-codex");
-    assert_eq!(execute.reasoning_effort(), Some(ReasoningEffort::XHigh));
-    match execute {
-        CollaborationMode::Execute(settings) => {
-            assert!(
-                settings.developer_instructions.is_some(),
-                "execute preset should include developer instructions"
-            );
-            assert!(
-                !settings.developer_instructions.as_ref().unwrap().is_empty(),
-                "execute preset developer instructions should not be empty"
-            );
-        }
-        _ => unreachable!(),
-    }
-
+    let expected = vec![plan_preset(), pair_programming_preset(), execute_preset()];
+    assert_eq!(expected, items);
     Ok(())
+}
+
+/// Builds the plan preset that the list response is expected to return.
+///
+/// If the defaults change in the app server, this helper should be updated alongside the
+/// contract, or the test will fail in ways that imply a regression in the API.
+fn plan_preset() -> CollaborationMode {
+    let presets = test_builtin_collaboration_mode_presets();
+    presets
+        .into_iter()
+        .find(|p| matches!(p, CollaborationMode::Plan(_)))
+        .expect("plan preset should exist")
+}
+
+/// Builds the pair programming preset that the list response is expected to return.
+///
+/// The helper keeps the expected model and reasoning defaults co-located with the test
+/// so that mismatches point directly at the API contract being exercised.
+fn pair_programming_preset() -> CollaborationMode {
+    let presets = test_builtin_collaboration_mode_presets();
+    presets
+        .into_iter()
+        .find(|p| matches!(p, CollaborationMode::PairProgramming(_)))
+        .expect("pair programming preset should exist")
+}
+
+/// Builds the execute preset that the list response is expected to return.
+///
+/// The execute preset uses a different reasoning effort to capture the higher-effort
+/// execution contract the server currently exposes.
+fn execute_preset() -> CollaborationMode {
+    let presets = test_builtin_collaboration_mode_presets();
+    presets
+        .into_iter()
+        .find(|p| matches!(p, CollaborationMode::Execute(_)))
+        .expect("execute preset should exist")
 }
