@@ -530,6 +530,14 @@ fn parse_timestamp_from_folder(folder: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(folder, &fmt).ok()
 }
 
+fn format_review_datetime(dt: OffsetDateTime) -> String {
+    let fmt = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+    let utc = dt.to_offset(time::UtcOffset::UTC);
+    utc.format(&fmt)
+        .map(|value| format!("{value}Z"))
+        .unwrap_or_else(|_| utc.to_string())
+}
+
 #[derive(Clone)]
 struct SecurityReviewResumeCandidate {
     folder_name: String,
@@ -721,20 +729,12 @@ impl ChatWidget {
         mode: SecurityReviewMode,
         include_paths: Vec<String>,
         scope_prompt: Option<String>,
-        candidate: RunningSecurityReviewCandidate,
+        candidates: Vec<RunningSecurityReviewCandidate>,
         completed: Vec<SecurityReviewResumeCandidate>,
     ) {
+        const MAX_RUNNING_REVIEWS_IN_MENU: usize = 5;
+
         let repo_path = self.config.cwd.clone();
-        let display_path = display_path_for(&candidate.output_root, &repo_path);
-        let scope_summary = Self::scope_summary_label(&candidate.checkpoint.scope_display_paths);
-        let step_summary = candidate
-            .checkpoint
-            .plan_statuses
-            .iter()
-            .find(|(_, status)| matches!(status, StepStatus::InProgress))
-            .map(|(slug, _)| slug.clone())
-            .or_else(|| candidate.checkpoint.last_log.clone())
-            .unwrap_or_else(|| "pending".to_string());
 
         let include_paths_for_retry = include_paths;
         let scope_prompt_for_retry = scope_prompt;
@@ -756,29 +756,51 @@ impl ChatWidget {
             ..Default::default()
         });
 
-        let resume_candidate = candidate;
-        items.push(SelectionItem {
-            name: "Resume in-progress security review".to_string(),
-            description: Some(format!(
-                "Mode: {} • Scope: {} • Step: {}",
-                resume_candidate.checkpoint.mode.as_str(),
-                scope_summary,
-                step_summary
-            )),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::StartSecurityReview {
-                    mode: resume_candidate.checkpoint.mode,
-                    include_paths: Vec::new(),
-                    scope_prompt: None,
-                    linear_issue: None,
-                    force_new: false,
-                    resume_from: Some(resume_candidate.output_root.clone()),
-                });
-            })],
-            dismiss_on_select: true,
-            search_value: Some(display_path.clone()),
-            ..Default::default()
-        });
+        let mut candidates = candidates;
+        candidates.sort_by(|a, b| b.checkpoint.started_at.cmp(&a.checkpoint.started_at));
+        let total_running = candidates.len();
+        let shown_running = total_running.min(MAX_RUNNING_REVIEWS_IN_MENU);
+        for candidate in candidates.into_iter().take(MAX_RUNNING_REVIEWS_IN_MENU) {
+            let display_path = display_path_for(&candidate.output_root, &repo_path);
+            let folder_name = candidate
+                .output_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("security review")
+                .to_string();
+            let scope_summary =
+                Self::scope_summary_label(&candidate.checkpoint.scope_display_paths);
+            let step_summary = candidate
+                .checkpoint
+                .plan_statuses
+                .iter()
+                .find(|(_, status)| matches!(status, StepStatus::InProgress))
+                .map(|(slug, _)| slug.clone())
+                .or_else(|| candidate.checkpoint.last_log.clone())
+                .unwrap_or_else(|| "pending".to_string());
+            let started_at = format_review_datetime(candidate.checkpoint.started_at);
+            let mode_label = candidate.checkpoint.mode.as_str();
+
+            items.push(SelectionItem {
+                name: format!("Resume in-progress {folder_name}"),
+                description: Some(format!(
+                    "{started_at} • Mode: {mode_label} • Scope: {scope_summary} • Step: {step_summary}"
+                )),
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::StartSecurityReview {
+                        mode: candidate.checkpoint.mode,
+                        include_paths: Vec::new(),
+                        scope_prompt: None,
+                        linear_issue: None,
+                        force_new: false,
+                        resume_from: Some(candidate.output_root.clone()),
+                    });
+                })],
+                dismiss_on_select: true,
+                search_value: Some(display_path),
+                ..Default::default()
+            });
+        }
 
         for candidate in completed {
             let scope_summary = Self::scope_summary_label(&candidate.metadata.scope_paths);
@@ -803,8 +825,10 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("In-progress security review found".to_string()),
-            subtitle: Some(format!("Latest output at {display_path}")),
+            title: Some("In-progress security review(s) found".to_string()),
+            subtitle: Some(format!(
+                "Showing {shown_running} of {total_running} in-progress review(s)"
+            )),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -4282,21 +4306,20 @@ impl ChatWidget {
             return;
         }
 
-        if resume_from.is_none()
-            && !force_new
-            && let Some(candidate) =
-                crate::security_review::latest_running_review_candidate(&repo_path)
-        {
-            let storage_root = crate::security_review_storage_root(&repo_path);
-            let completed = completed_security_review_candidates(&storage_root);
-            self.prompt_running_security_review_resume(
-                mode,
-                include_paths,
-                scope_prompt,
-                candidate,
-                completed,
-            );
-            return;
+        if resume_from.is_none() && !force_new {
+            let running = crate::security_review::running_review_candidates(&repo_path);
+            if !running.is_empty() {
+                let storage_root = crate::security_review_storage_root(&repo_path);
+                let completed = completed_security_review_candidates(&storage_root);
+                self.prompt_running_security_review_resume(
+                    mode,
+                    include_paths,
+                    scope_prompt,
+                    running,
+                    completed,
+                );
+                return;
+            }
         }
 
         let storage_root = crate::security_review_storage_root(&repo_path);

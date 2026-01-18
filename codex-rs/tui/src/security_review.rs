@@ -375,10 +375,15 @@ pub struct RunningSecurityReviewCandidate {
     pub checkpoint: SecurityReviewCheckpoint,
 }
 
-pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecurityReviewCandidate> {
+pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
     let storage_root = security_review_storage_root(repo_path);
-    let entries = fs::read_dir(storage_root).ok()?;
-    let mut candidates: Vec<(String, PathBuf, SecurityReviewCheckpoint)> = Vec::new();
+    let entries = match fs::read_dir(storage_root) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut candidates: Vec<(OffsetDateTime, String, PathBuf, SecurityReviewCheckpoint)> =
+        Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -400,19 +405,21 @@ pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecuri
                     .unwrap_or("")
                     .to_string()
             });
-        candidates.push((name, path, checkpoint));
+        candidates.push((checkpoint.started_at, name, path, checkpoint));
     }
 
-    if candidates.is_empty() {
-        return None;
-    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    candidates
+        .into_iter()
+        .map(|(_, _, path, checkpoint)| RunningSecurityReviewCandidate {
+            output_root: path,
+            checkpoint,
+        })
+        .collect()
+}
 
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
-    let (_, path, checkpoint) = candidates.into_iter().next()?;
-    Some(RunningSecurityReviewCandidate {
-        output_root: path,
-        checkpoint,
-    })
+pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecurityReviewCandidate> {
+    running_review_candidates(repo_path).into_iter().next()
 }
 
 pub fn latest_completed_review_candidate(
