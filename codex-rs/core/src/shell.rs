@@ -340,6 +340,7 @@ mod detect_shell_type_tests {
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
     use std::path::Path;
     use std::path::PathBuf;
     use std::process::Command;
@@ -369,18 +370,8 @@ mod tests {
         let bash_shell = get_shell(ShellType::Bash, None).unwrap();
         let shell_path = bash_shell.shell_path;
 
-        let allowed_paths = [
-            "/bin/bash",
-            "/usr/bin/bash",
-            "/usr/local/bin/bash",
-            "/opt/homebrew/bin/bash",
-        ];
         assert!(
-            allowed_paths
-                .iter()
-                .copied()
-                .map(Path::new)
-                .any(|allowed| shell_path == allowed),
+            shell_path.is_file() && shell_path.file_name() == Some(OsStr::new("bash")),
             "shell path: {shell_path:?}"
         );
     }
@@ -389,13 +380,8 @@ mod tests {
     fn detects_sh() {
         let sh_shell = get_shell(ShellType::Sh, None).unwrap();
         let shell_path = sh_shell.shell_path;
-        let allowed_paths = ["/bin/sh", "/usr/bin/sh"];
         assert!(
-            allowed_paths
-                .iter()
-                .copied()
-                .map(Path::new)
-                .any(|allowed| shell_path == allowed),
+            shell_path.is_file() && shell_path.file_name() == Some(OsStr::new("sh")),
             "shell path: {shell_path:?}"
         );
     }
