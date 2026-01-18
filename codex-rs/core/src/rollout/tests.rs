@@ -89,6 +89,7 @@ fn write_session_file_with_provider(
         "cwd": ".",
         "originator": "test_originator",
         "cli_version": "test_version",
+        "base_instructions": null,
     });
 
     if let Some(source) = source {
@@ -206,6 +207,7 @@ async fn test_list_conversations_latest_first() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -215,6 +217,7 @@ async fn test_list_conversations_latest_first() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let head_1 = vec![serde_json::json!({
         "id": u1,
@@ -224,6 +227,7 @@ async fn test_list_conversations_latest_first() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
 
     let updated_times: Vec<Option<String>> =
@@ -344,6 +348,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let head_4 = vec![serde_json::json!({
         "id": u4,
@@ -353,6 +358,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let updated_page1: Vec<Option<String>> =
         page1.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -410,6 +416,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -419,6 +426,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let updated_page2: Vec<Option<String>> =
         page2.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -470,6 +478,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let updated_page3: Vec<Option<String>> =
         page3.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -527,6 +536,7 @@ async fn test_get_thread_contents() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let expected_page = ThreadsPage {
         items: vec![ThreadItem {
@@ -553,6 +563,7 @@ async fn test_get_thread_contents() {
             "cli_version": "test_version",
             "source": "vscode",
             "model_provider": "test-provider",
+            "base_instructions": null,
         }
     });
     let user_event = serde_json::json!({
@@ -637,6 +648,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 cli_version: "test_version".into(),
                 source: SessionSource::VSCode,
                 model_provider: Some("test-provider".into()),
+                base_instructions: None,
             },
             git: None,
         }),
@@ -744,6 +756,7 @@ async fn test_stable_ordering_same_second_pagination() {
             "cli_version": "test_version",
             "source": "vscode",
             "model_provider": "test-provider",
+            "base_instructions": null,
         })]
     };
     let updated_page1: Vec<Option<String>> =
