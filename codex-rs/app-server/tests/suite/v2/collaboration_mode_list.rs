@@ -56,7 +56,7 @@ fn plan_preset() -> CollaborationMode {
     presets
         .into_iter()
         .find(|p| matches!(p, CollaborationMode::Plan(_)))
-        .expect("plan preset should exist")
+        .unwrap()
 }
 
 /// Builds the pair programming preset that the list response is expected to return.
@@ -68,7 +68,7 @@ fn pair_programming_preset() -> CollaborationMode {
     presets
         .into_iter()
         .find(|p| matches!(p, CollaborationMode::PairProgramming(_)))
-        .expect("pair programming preset should exist")
+        .unwrap()
 }
 
 /// Builds the execute preset that the list response is expected to return.
@@ -80,5 +80,5 @@ fn execute_preset() -> CollaborationMode {
     presets
         .into_iter()
         .find(|p| matches!(p, CollaborationMode::Execute(_)))
-        .expect("execute preset should exist")
+        .unwrap()
 }
