@@ -64,10 +64,20 @@ impl ActiveTurn {
 }
 
 /// Mutable state for a single turn.
-#[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
+    accepting_input: bool,
+}
+
+impl Default for TurnState {
+    fn default() -> Self {
+        Self {
+            pending_approvals: HashMap::new(),
+            pending_input: Vec::new(),
+            accepting_input: true,
+        }
+    }
 }
 
 impl TurnState {
@@ -89,10 +99,15 @@ impl TurnState {
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
         self.pending_input.clear();
+        self.accepting_input = true;
     }
 
-    pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
+    pub(crate) fn try_push_pending_input(&mut self, input: ResponseInputItem) -> bool {
+        if !self.accepting_input {
+            return false;
+        }
         self.pending_input.push(input);
+        true
     }
 
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
@@ -107,6 +122,19 @@ impl TurnState {
 
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
+    }
+
+    pub(crate) fn accepts_input(&self) -> bool {
+        self.accepting_input
+    }
+
+    pub(crate) fn close_input_if_idle(&mut self) -> bool {
+        if self.pending_input.is_empty() {
+            self.accepting_input = false;
+            true
+        } else {
+            false
+        }
     }
 }
 

@@ -2,6 +2,13 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
 
+const COLLABORATION_MODE_PLAN: &str =
+    include_str!("../../../protocol/src/prompts/collaboration_mode/plan.md");
+const COLLABORATION_MODE_COLLABORATE: &str =
+    include_str!("../../../protocol/src/prompts/collaboration_mode/collaborate.md");
+const COLLABORATION_MODE_EXECUTE: &str =
+    include_str!("../../../protocol/src/prompts/collaboration_mode/execute.md");
+
 pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationMode> {
     vec![plan_preset(), collaborate_preset(), execute_preset()]
 }
@@ -10,7 +17,7 @@ fn plan_preset() -> CollaborationMode {
     CollaborationMode::Plan(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::Medium),
-        developer_instructions: None,
+        developer_instructions: Some(COLLABORATION_MODE_PLAN.to_string()),
     })
 }
 
@@ -18,16 +25,7 @@ fn collaborate_preset() -> CollaborationMode {
     CollaborationMode::Collaborate(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::Medium),
-        developer_instructions: Some(
-            r#"# Collaboration Style: Pair Programming
-
-## Build together as you go
-You treat collaboration as pairing by default. The user is right with you in the terminal, so avoid taking steps that are too large or take a lot of time (like running long tests), unless asked for it. You check for alignment and comfort before moving forward, explain reasoning step by step, and dynamically adjust depth based on the user's signals. There is no need to ask multiple rounds of questions—build as you go. When there are multiple viable paths, you present clear options with friendly framing, ground them in examples and intuition, and explicitly invite the user into the decision so the choice feels empowering rather than burdensome. When you do more complex work you use the planning tool liberally to keep the user updated on what you are doing.
-
-## Debugging
-If you are debugging something with the user, assume you are a team. You can ask them what they see and ask them to provide you with information you don't have access to, for example you can ask them to check error messages in developer tools or provide you with screenshots."#
-                .to_string(),
-        ),
+        developer_instructions: Some(COLLABORATION_MODE_COLLABORATE.to_string()),
     })
 }
 
@@ -35,6 +33,6 @@ fn execute_preset() -> CollaborationMode {
     CollaborationMode::Execute(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::XHigh),
-        developer_instructions: None,
+        developer_instructions: Some(COLLABORATION_MODE_EXECUTE.to_string()),
     })
 }
