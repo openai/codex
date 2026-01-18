@@ -1558,6 +1558,16 @@ pub(crate) struct PlanUpdateCell {
 
 impl HistoryCell for PlanUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let current_index = self
+            .plan
+            .iter()
+            .position(|item| matches!(item.status, StepStatus::InProgress))
+            .or_else(|| {
+                self.plan
+                    .iter()
+                    .position(|item| matches!(item.status, StepStatus::Pending))
+            });
+
         let render_note = |text: &str| -> Vec<Line<'static>> {
             let wrap_width = width.saturating_sub(4).max(1) as usize;
             textwrap::wrap(text, wrap_width)
@@ -1566,16 +1576,23 @@ impl HistoryCell for PlanUpdateCell {
                 .collect()
         };
 
-        let render_step = |item: &PlanItemArg| -> Vec<Line<'static>> {
+        let render_step = |idx: usize, item: &PlanItemArg| -> Vec<Line<'static>> {
             let PlanItemArg {
                 step: text,
                 status,
                 model,
                 reasoning_effort,
             } = item;
+            let is_current = current_index == Some(idx);
+            let status = if matches!(status, StepStatus::Pending) && is_current {
+                StepStatus::InProgress
+            } else {
+                status.clone()
+            };
+
             let (box_str, step_style) = match status {
                 StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
-                StepStatus::InProgress => ("■ ", Style::default().cyan().bold()),
+                StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
                 StepStatus::Pending => ("□ ", Style::default().dim()),
             };
             let mut meta_parts: Vec<String> = Vec::new();
@@ -1592,13 +1609,16 @@ impl HistoryCell for PlanUpdateCell {
             };
 
             let available_width = width.saturating_sub(4).max(1) as usize;
-            let mut spans: Vec<Span<'static>> =
-                vec![Span::from(text.clone()).set_style(step_style)];
+            let step_text = if is_current {
+                format!("▶ {text}")
+            } else {
+                text.clone()
+            };
+            let mut spans: Vec<Span<'static>> = vec![Span::from(step_text).set_style(step_style)];
             if !meta.is_empty() {
                 let meta_style = match status {
                     StepStatus::Completed => Style::default().crossed_out().dim(),
-                    StepStatus::InProgress => Style::default().dim(),
-                    StepStatus::Pending => Style::default().dim(),
+                    StepStatus::InProgress | StepStatus::Pending => Style::default().dim(),
                 };
                 spans.push(Span::from(meta).set_style(meta_style));
             }
@@ -1627,8 +1647,8 @@ impl HistoryCell for PlanUpdateCell {
         if self.plan.is_empty() {
             indented_lines.push(Line::from("(no steps provided)".dim().italic()));
         } else {
-            for item in &self.plan {
-                indented_lines.extend(render_step(item));
+            for (idx, item) in self.plan.iter().enumerate() {
+                indented_lines.extend(render_step(idx, item));
             }
         }
         lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));

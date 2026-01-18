@@ -538,6 +538,13 @@ fn format_review_datetime(dt: OffsetDateTime) -> String {
         .unwrap_or_else(|_| utc.to_string())
 }
 
+fn percent_of(completed: usize, total: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    completed.saturating_mul(100) / total
+}
+
 #[derive(Clone)]
 struct SecurityReviewResumeCandidate {
     folder_name: String,
@@ -696,7 +703,7 @@ impl ChatWidget {
             let scope_summary = Self::scope_summary_label(&candidate.metadata.scope_paths);
             let age = candidate.age_label.clone();
             items.push(SelectionItem {
-                name: format!("Resume {}", candidate.folder_name),
+                name: format!("View {}", candidate.folder_name),
                 description: Some(format!(
                     "Mode: {} • Scope: {} • Age: {}",
                     candidate.metadata.mode.as_str(),
@@ -717,7 +724,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Existing security review(s) found".to_string()),
-            subtitle: Some("Pick a completed review to resume or start fresh".to_string()),
+            subtitle: Some("Pick a completed review to view or start fresh".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -770,21 +777,20 @@ impl ChatWidget {
                 .to_string();
             let scope_summary =
                 Self::scope_summary_label(&candidate.checkpoint.scope_display_paths);
-            let step_summary = candidate
-                .checkpoint
-                .plan_statuses
-                .iter()
-                .find(|(_, status)| matches!(status, StepStatus::InProgress))
-                .map(|(slug, _)| slug.clone())
-                .or_else(|| candidate.checkpoint.last_log.clone())
-                .unwrap_or_else(|| "pending".to_string());
+            let (completed_steps, total_steps, current_step) =
+                crate::security_review::plan_progress_and_current_step(
+                    &candidate.checkpoint.plan_statuses,
+                    candidate.checkpoint.mode,
+                );
+            let progress_pct = percent_of(completed_steps, total_steps);
+            let current_step = current_step.unwrap_or_else(|| "pending".to_string());
             let started_at = format_review_datetime(candidate.checkpoint.started_at);
             let mode_label = candidate.checkpoint.mode.as_str();
 
             items.push(SelectionItem {
                 name: format!("Resume in-progress {folder_name}"),
                 description: Some(format!(
-                    "{started_at} • Mode: {mode_label} • Scope: {scope_summary} • Step: {step_summary}"
+                    "{started_at} • Mode: {mode_label} • Scope: {scope_summary} • Progress: {completed_steps}/{total_steps} ({progress_pct}%) • Current: {current_step}"
                 )),
                 actions: vec![Box::new(move |tx: &AppEventSender| {
                     tx.send(AppEvent::StartSecurityReview {
@@ -808,7 +814,7 @@ impl ChatWidget {
             let display_path = display_path_for(&candidate.output_root, &repo_path);
             let mode_label = candidate.metadata.mode.as_str();
             items.push(SelectionItem {
-                name: format!("Resume {}", candidate.folder_name),
+                name: format!("View {}", candidate.folder_name),
                 description: Some(format!(
                     "Mode: {mode_label} • Scope: {scope_summary} • Age: {age}"
                 )),

@@ -136,6 +136,10 @@ const COMMAND_PREVIEW_MAX_LINES: usize = 2;
 const COMMAND_PREVIEW_MAX_GRAPHEMES: usize = 96;
 const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
 const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
+const BUG_REPOSITORY_SUMMARY_MAX_CHARS: usize = 20_000;
+const BUG_SPEC_CONTEXT_MAX_CHARS: usize = 40_000;
+const BUG_FILE_CONTEXT_MAX_CHARS: usize = 60_000;
+const BUG_FILE_CONTEXT_RETRY_MAX_CHARS: usize = 20_000;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
 const FILE_TRIAGE_MODEL: &str = "gpt-5.2-codex";
@@ -373,6 +377,41 @@ fn write_checkpoint(
 pub struct RunningSecurityReviewCandidate {
     pub output_root: PathBuf,
     pub checkpoint: SecurityReviewCheckpoint,
+}
+
+pub(crate) fn plan_progress_and_current_step(
+    statuses: &HashMap<String, StepStatus>,
+    mode: SecurityReviewMode,
+) -> (usize, usize, Option<String>) {
+    let steps = plan_steps_for_mode(mode);
+    let total = steps.len();
+    let mut completed = 0usize;
+    let mut current: Option<String> = None;
+
+    for step in &steps {
+        let slug = plan_step_slug(step.kind);
+        match statuses.get(slug) {
+            Some(StepStatus::Completed) => completed = completed.saturating_add(1),
+            Some(StepStatus::InProgress) => {
+                if current.is_none() {
+                    current = Some(step.title.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if current.is_none() {
+        current = steps
+            .iter()
+            .find(|step| {
+                let slug = plan_step_slug(step.kind);
+                !matches!(statuses.get(slug), Some(StepStatus::Completed))
+            })
+            .map(|step| step.title.clone());
+    }
+
+    (completed, total, current)
 }
 
 pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
@@ -1034,6 +1073,10 @@ impl SecurityReviewLogSink {
         Ok(sink)
     }
 
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
     fn write(&self, message: &str) {
         if let Some(callback) = self.callback.as_ref() {
             callback(message.to_string());
@@ -1415,6 +1458,7 @@ struct FileBugResult {
     duration: Duration,
     logs: Vec<String>,
     bug_section: Option<String>,
+    error_message: Option<String>,
     snippet: Option<FileSnippet>,
     findings_count: usize,
 }
@@ -5521,17 +5565,6 @@ pub async fn run_security_review(
         }
     };
 
-    if is_open_source {
-        let _ = run_trufflehog_scan(
-            &repo_path,
-            &request.output_root,
-            progress_sender.clone(),
-            log_sink.clone(),
-            &mut logs,
-        )
-        .await;
-    }
-
     // Intentionally avoid logging the output path pre-write to keep logs concise.
     let (git_commit, git_branch, git_commit_timestamp) = match git_revision.as_ref() {
         Some((commit, branch, ts)) => (Some(commit.clone()), branch.clone(), *ts),
@@ -5594,6 +5627,17 @@ pub async fn run_security_review(
             });
         }
     };
+
+    if is_open_source {
+        let _ = run_trufflehog_scan(
+            &repo_path,
+            &request.output_root,
+            progress_sender.clone(),
+            log_sink.clone(),
+            &mut logs,
+        )
+        .await;
+    }
 
     let mut validation_target_additions: Vec<String> = Vec::new();
     if let Some(task) = validation_target_prep_task.take() {
@@ -8667,6 +8711,7 @@ mod bug_analysis_progress_tests {
             findings_count: 1,
             duration_ms: 123,
             bug_section: Some("### [1] Example\n\nDetails".to_string()),
+            error_message: None,
         });
 
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
@@ -11826,6 +11871,8 @@ struct BugAnalysisProgressFile {
     findings_count: i32,
     duration_ms: i32,
     bug_section: Option<String>,
+    #[serde(default)]
+    error_message: Option<String>,
 }
 
 impl BugAnalysisProgress {
@@ -12021,6 +12068,7 @@ async fn analyze_files_individually(
     let mut sections: Vec<(usize, String)> = Vec::new();
     let mut snippets_with_findings: Vec<(usize, FileSnippet)> = Vec::new();
     let mut findings_count = 0usize;
+    let mut failed_files: Vec<(String, String)> = Vec::new();
     let mut per_file_durations: Vec<(String, Duration, usize)> = Vec::new();
     let mut bug_details: Vec<BugDetail> = Vec::new();
     let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
@@ -12065,6 +12113,9 @@ async fn analyze_files_individually(
         if let Some(section) = entry.bug_section.as_ref() {
             sections.push((index, section.clone()));
             snippets_with_findings.push((index, snippets[index].clone()));
+        }
+        if let Some(message) = entry.error_message.as_ref() {
+            failed_files.push((entry.path_display.clone(), message.clone()));
         }
 
         let duration = Duration::from_millis(entry.duration_ms.max(0) as u64);
@@ -12119,90 +12170,108 @@ async fn analyze_files_individually(
         }
     }
 
-    while let Some(result) = in_flight.next().await {
-        match result {
-            Ok(file_result) => {
-                let FileBugResult {
-                    index,
-                    path_display,
-                    duration,
-                    logs,
-                    bug_section,
-                    snippet,
-                    findings_count: file_findings_count,
-                } = file_result;
+    while let Some(file_result) = in_flight.next().await {
+        let FileBugResult {
+            index,
+            path_display,
+            duration,
+            logs,
+            bug_section,
+            error_message,
+            snippet,
+            findings_count: file_findings_count,
+        } = file_result;
 
-                aggregated_logs.extend(logs);
-                findings_count = findings_count.saturating_add(file_findings_count);
-                if let Some(section) = bug_section.as_ref() {
-                    sections.push((index, section.clone()));
-                }
-                if let Some(snippet) = snippet {
-                    snippets_with_findings.push((index, snippet));
-                }
-                per_file_durations.push((path_display.clone(), duration, file_findings_count));
-                completed_files = completed_files.saturating_add(1);
-
-                let duration_ms_u128 = duration.as_millis().min(i32::MAX as u128);
-                let progress_file = BugAnalysisProgressFile {
-                    index: index.try_into().unwrap_or(i32::MAX),
-                    path_display: path_display.clone(),
-                    relative_path: snippets[index].relative_path.display().to_string(),
-                    findings_count: file_findings_count.try_into().unwrap_or(i32::MAX),
-                    duration_ms: duration_ms_u128.try_into().unwrap_or(i32::MAX),
-                    bug_section,
-                };
-                progress.upsert_file(progress_file);
-                write_bug_analysis_progress(&progress_path, &progress).await?;
-
-                if let Some(tx) = progress_sender.as_ref() {
-                    let percent = if total_files == 0 {
-                        0
-                    } else {
-                        (completed_files * 100) / total_files
-                    };
-                    tx.send(AppEvent::SecurityReviewLog(format!(
-                        "Bug analysis progress: {}/{} - {percent}%.",
-                        completed_files.min(total_files),
-                        total_files
-                    )));
-                }
-                if let Some((index, snippet)) = remaining.next() {
-                    in_flight.push(analyze_single_file(
-                        client,
-                        provider,
-                        auth,
-                        model,
-                        reasoning_effort,
-                        config,
-                        auth_manager.clone(),
-                        repository_summary,
-                        spec_markdown,
-                        scope_prompt,
-                        repo_root,
-                        snippet.clone(),
-                        index,
-                        snippets.len(),
-                        progress_sender.clone(),
-                        log_sink.clone(),
-                        metrics.clone(),
-                    ));
-                }
-            }
-            Err(failure) => {
-                if let Some(tx) = progress_sender.as_ref() {
-                    for line in &failure.logs {
-                        tx.send(AppEvent::SecurityReviewLog(line.clone()));
-                    }
-                }
-                let mut combined_logs = aggregated_logs;
-                combined_logs.extend(failure.logs);
-                return Err(SecurityReviewFailure {
-                    message: failure.message,
-                    logs: combined_logs,
-                });
-            }
+        aggregated_logs.extend(logs);
+        findings_count = findings_count.saturating_add(file_findings_count);
+        if let Some(message) = error_message.as_ref() {
+            failed_files.push((path_display.clone(), message.clone()));
         }
+        if let Some(section) = bug_section.as_ref() {
+            sections.push((index, section.clone()));
+        }
+        if let Some(snippet) = snippet {
+            snippets_with_findings.push((index, snippet));
+        }
+        per_file_durations.push((path_display.clone(), duration, file_findings_count));
+        completed_files = completed_files.saturating_add(1);
+
+        let duration_ms_u128 = duration.as_millis().min(i32::MAX as u128);
+        let progress_file = BugAnalysisProgressFile {
+            index: index.try_into().unwrap_or(i32::MAX),
+            path_display: path_display.clone(),
+            relative_path: snippets[index].relative_path.display().to_string(),
+            findings_count: file_findings_count.try_into().unwrap_or(i32::MAX),
+            duration_ms: duration_ms_u128.try_into().unwrap_or(i32::MAX),
+            bug_section,
+            error_message,
+        };
+        progress.upsert_file(progress_file);
+        write_bug_analysis_progress(&progress_path, &progress).await?;
+
+        if let Some(tx) = progress_sender.as_ref() {
+            let percent = if total_files == 0 {
+                0
+            } else {
+                (completed_files * 100) / total_files
+            };
+            tx.send(AppEvent::SecurityReviewLog(format!(
+                "Bug analysis progress: {}/{} - {percent}%.",
+                completed_files.min(total_files),
+                total_files
+            )));
+        }
+        if let Some((index, snippet)) = remaining.next() {
+            in_flight.push(analyze_single_file(
+                client,
+                provider,
+                auth,
+                model,
+                reasoning_effort,
+                config,
+                auth_manager.clone(),
+                repository_summary,
+                spec_markdown,
+                scope_prompt,
+                repo_root,
+                snippet.clone(),
+                index,
+                snippets.len(),
+                progress_sender.clone(),
+                log_sink.clone(),
+                metrics.clone(),
+            ));
+        }
+    }
+
+    let successful_files = completed_files.saturating_sub(failed_files.len());
+    aggregated_logs.push(format!(
+        "Bug analysis summary: {total_files} file(s) total; {successful_files} succeeded; {} failed.",
+        failed_files.len()
+    ));
+    if !failed_files.is_empty() {
+        let failures = failed_files.len();
+        aggregated_logs.push(format!(
+            "Bug agent failures: {failures} file(s) encountered errors and were skipped."
+        ));
+        let sample = failed_files
+            .iter()
+            .take(10)
+            .map(|(path, message)| format!("{path}: {}", truncate_text(message, 240)))
+            .collect::<Vec<_>>()
+            .join("; ");
+        aggregated_logs.push(format!("Bug agent failure samples (up to 10): {sample}"));
+
+        if let Some(path) = log_sink.as_ref().and_then(|sink| sink.path()) {
+            aggregated_logs.push(format!(
+                "Security review log written to {}.",
+                path.display()
+            ));
+        }
+        aggregated_logs.push(format!(
+            "Bug analysis progress saved to {}.",
+            display_path_for(&progress_path, repo_root)
+        ));
     }
 
     if sections.is_empty() {
@@ -12501,7 +12570,7 @@ async fn analyze_single_file(
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
-) -> Result<FileBugResult, SecurityReviewFailure> {
+) -> FileBugResult {
     let started_at = Instant::now();
     let mut logs = Vec::new();
     let path_display = snippet.relative_path.display().to_string();
@@ -12510,7 +12579,10 @@ async fn analyze_single_file(
     let start_message = format!("Analyzing file {prefix}: {path_display} ({file_size}).");
     push_progress_log(&progress_sender, &log_sink, &mut logs, start_message);
 
-    let base_context = build_single_file_context(&snippet);
+    let (base_context, context_logs) = build_single_file_context_for_bug_prompt(&snippet);
+    for line in context_logs {
+        push_progress_log(&progress_sender, &log_sink, &mut logs, line);
+    }
     let prompt_data = build_bugs_user_prompt(
         repository_summary,
         spec_markdown,
@@ -12524,12 +12596,12 @@ async fn analyze_single_file(
     let outcome = match run_bug_agent(
         config,
         provider,
-        auth_manager,
+        auth_manager.clone(),
         repo_root,
         prompt_data.prompt.clone(),
         progress_sender.clone(),
         log_sink.clone(),
-        metrics,
+        metrics.clone(),
         model,
         reasoning_effort,
     )
@@ -12538,12 +12610,90 @@ async fn analyze_single_file(
         Ok(outcome) => outcome,
         Err(agent_failure) => {
             logs.extend(agent_failure.logs);
-            let message = format!(
+            let failure_message = format!(
                 "Bug agent loop failed for {path_display}: {}",
                 agent_failure.message
             );
-            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-            return Err(SecurityReviewFailure { message, logs });
+
+            let lower = agent_failure.message.to_ascii_lowercase();
+            let is_context_window_error =
+                lower.contains("context window") || lower.contains("ran out of room");
+            if is_context_window_error {
+                let retry_notice = format!(
+                    "Bug agent hit context window limits for {path_display}; retrying with a compacted prompt."
+                );
+                push_progress_log(&progress_sender, &log_sink, &mut logs, retry_notice);
+
+                let compact_repo_summary = format!(
+                    "Included file:\n- {} ({file_size})\n",
+                    snippet.relative_path.display()
+                );
+                let (retry_context, retry_logs) = build_single_file_context_for_bug_retry(&snippet);
+                for line in retry_logs {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, line);
+                }
+                let retry_prompt_data = build_bugs_user_prompt(
+                    compact_repo_summary.as_str(),
+                    None,
+                    &retry_context,
+                    scope_prompt,
+                );
+                for line in &retry_prompt_data.logs {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, line.clone());
+                }
+
+                match run_bug_agent(
+                    config,
+                    provider,
+                    auth_manager,
+                    repo_root,
+                    retry_prompt_data.prompt,
+                    progress_sender.clone(),
+                    log_sink.clone(),
+                    metrics,
+                    model,
+                    reasoning_effort,
+                )
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(retry_failure) => {
+                        logs.extend(retry_failure.logs);
+                        let message = format!(
+                            "Bug agent loop failed for {path_display} after compaction retry: {}",
+                            retry_failure.message
+                        );
+                        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                        return FileBugResult {
+                            index,
+                            path_display,
+                            duration: started_at.elapsed(),
+                            logs,
+                            bug_section: None,
+                            error_message: Some(message),
+                            snippet: None,
+                            findings_count: 0,
+                        };
+                    }
+                }
+            } else {
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    failure_message.clone(),
+                );
+                return FileBugResult {
+                    index,
+                    path_display,
+                    duration: started_at.elapsed(),
+                    logs,
+                    bug_section: None,
+                    error_message: Some(failure_message),
+                    snippet: None,
+                    findings_count: 0,
+                };
+            }
         }
     };
 
@@ -12555,29 +12705,31 @@ async fn analyze_single_file(
         );
         push_progress_log(&progress_sender, &log_sink, &mut logs, warn.clone());
         logs.push(warn);
-        return Ok(FileBugResult {
+        return FileBugResult {
             index,
             path_display,
             duration: started_at.elapsed(),
             logs,
             bug_section: None,
+            error_message: None,
             snippet: None,
             findings_count: 0,
-        });
+        };
     }
     if trimmed.eq_ignore_ascii_case("no bugs found") {
         let message = format!("No bugs found in {path_display}.");
         push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
         logs.push(message);
-        return Ok(FileBugResult {
+        return FileBugResult {
             index,
             path_display,
             duration: started_at.elapsed(),
             logs,
             bug_section: None,
+            error_message: None,
             snippet: None,
             findings_count: 0,
-        });
+        };
     }
 
     let file_findings = trimmed
@@ -12592,15 +12744,16 @@ async fn analyze_single_file(
     };
     push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
     logs.push(message);
-    Ok(FileBugResult {
+    FileBugResult {
         index,
         path_display,
         duration: started_at.elapsed(),
         logs,
         bug_section: Some(outcome.section),
+        error_message: None,
         snippet: Some(snippet),
         findings_count: file_findings,
-    })
+    }
 }
 
 async fn run_content_search(
@@ -15999,6 +16152,60 @@ fn build_single_file_context(snippet: &FileSnippet) -> String {
     )
 }
 
+fn build_single_file_context_for_bug_prompt(snippet: &FileSnippet) -> (String, Vec<String>) {
+    if snippet.content.len() <= BUG_FILE_CONTEXT_MAX_CHARS {
+        return (build_single_file_context(snippet), Vec::new());
+    }
+
+    let mut logs = Vec::new();
+    let head_chars = BUG_FILE_CONTEXT_MAX_CHARS / 2;
+    let tail_chars = BUG_FILE_CONTEXT_MAX_CHARS.saturating_sub(head_chars);
+    let head: String = snippet.content.chars().take(head_chars).collect();
+    let tail_rev: String = snippet.content.chars().rev().take(tail_chars).collect();
+    let tail: String = tail_rev.chars().rev().collect();
+
+    logs.push(format!(
+        "Truncated {path} content to {limit} chars for bug analysis.",
+        path = snippet.relative_path.display(),
+        limit = BUG_FILE_CONTEXT_MAX_CHARS
+    ));
+
+    (
+        format!(
+            "### {}\n```{}\n{}\n\n... [truncated] ...\n\n{}\n```\n",
+            snippet.relative_path.display(),
+            snippet.language,
+            head,
+            tail
+        ),
+        logs,
+    )
+}
+
+fn build_single_file_context_for_bug_retry(snippet: &FileSnippet) -> (String, Vec<String>) {
+    if snippet.content.len() <= BUG_FILE_CONTEXT_RETRY_MAX_CHARS {
+        return (build_single_file_context(snippet), Vec::new());
+    }
+
+    let mut logs = Vec::new();
+    logs.push(format!(
+        "Retrying {path} with truncated content ({limit} chars).",
+        path = snippet.relative_path.display(),
+        limit = BUG_FILE_CONTEXT_RETRY_MAX_CHARS
+    ));
+
+    let prefix = truncate_text(snippet.content.as_str(), BUG_FILE_CONTEXT_RETRY_MAX_CHARS);
+    (
+        format!(
+            "### {}\n```{}\n{}\n\n... [truncated] ...\n```\n",
+            snippet.relative_path.display(),
+            snippet.language,
+            prefix
+        ),
+        logs,
+    )
+}
+
 fn build_threat_model_prompt(repository_summary: &str, spec: &SpecGenerationOutcome) -> String {
     let locations_block = if spec.locations.is_empty() {
         "repository root".to_string()
@@ -16148,7 +16355,14 @@ fn build_bugs_user_prompt(
             Some(format!("- User scope prompt: {scope_summary}\n- After reading the file, if it does not meaningfully relate to that scope, skip it and move on (respond with `no bugs found` for this file).\n"))
         })
         .unwrap_or_default();
-    let repository_section = format!("# Repository context\n{repository_summary}\n");
+    let repo_context = repository_summary.trim();
+    let repo_context_truncated = truncate_text(repo_context, BUG_REPOSITORY_SUMMARY_MAX_CHARS);
+    if repo_context_truncated.len() < repo_context.len() {
+        logs.push(format!(
+            "Repository context truncated to {BUG_REPOSITORY_SUMMARY_MAX_CHARS} chars for bug analysis."
+        ));
+    }
+    let repository_section = format!("# Repository context\n{repo_context_truncated}\n");
     let code_and_task = BUGS_USER_CODE_AND_TASK
         .replace("{code_context}", code_context)
         .replace("{scope_reminder}", scope_reminder.as_str());
@@ -16161,13 +16375,19 @@ fn build_bugs_user_prompt(
     if let Some(raw_spec) = spec_markdown {
         let trimmed_spec = raw_spec.trim();
         if !trimmed_spec.is_empty() {
+            let spec_context = truncate_text(trimmed_spec, BUG_SPEC_CONTEXT_MAX_CHARS);
+            if spec_context.len() < trimmed_spec.len() {
+                logs.push(format!(
+                    "Specification context truncated to {BUG_SPEC_CONTEXT_MAX_CHARS} chars for bug analysis."
+                ));
+            }
             let available_for_spec = MAX_PROMPT_BYTES.saturating_sub(base_len);
             const SPEC_HEADER: &str = "\n# Specification context\n";
             if available_for_spec > SPEC_HEADER.len() {
                 let max_spec_bytes = available_for_spec - SPEC_HEADER.len();
                 let mut spec_section = String::from(SPEC_HEADER);
-                if trimmed_spec.len() <= max_spec_bytes {
-                    spec_section.push_str(trimmed_spec);
+                if spec_context.len() <= max_spec_bytes {
+                    spec_section.push_str(spec_context.as_str());
                     spec_section.push('\n');
                     prompt.push_str(spec_section.as_str());
                 } else {
@@ -16181,7 +16401,7 @@ fn build_bugs_user_prompt(
                     } else {
                         let available_for_content = max_spec_bytes - SPEC_TRUNCATION_NOTE.len();
                         let truncated =
-                            truncate_to_char_boundary(trimmed_spec, available_for_content);
+                            truncate_to_char_boundary(spec_context.as_str(), available_for_content);
                         spec_section.push_str(truncated);
                         spec_section.push_str(SPEC_TRUNCATION_NOTE);
                         spec_section.push('\n');

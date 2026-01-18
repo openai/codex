@@ -11,7 +11,7 @@ expression: rendered
     ✔ Investigate existing error
       paths and logging around
       HTTP timeouts
-    □ Harden Grafana client
+    □ ▶ Harden Grafana client
       error handling with retry/
       backoff and user‑friendly
       messages
