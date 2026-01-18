@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use tracing::Event;
 use tracing::Level;
@@ -88,7 +88,7 @@ impl CodexFeedback {
         .with_filter(Targets::new().with_target(FEEDBACK_TAGS_TARGET, Level::TRACE))
     }
 
-    pub fn snapshot(&self, session_id: Option<ConversationId>) -> CodexLogSnapshot {
+    pub fn snapshot(&self, session_id: Option<ThreadId>) -> CodexLogSnapshot {
         let bytes = {
             let guard = self.inner.ring.lock().expect("mutex poisoned");
             guard.snapshot_bytes()
@@ -102,7 +102,7 @@ impl CodexFeedback {
             tags,
             thread_id: session_id
                 .map(|id| id.to_string())
-                .unwrap_or("no-active-thread-".to_string() + &ConversationId::new().to_string()),
+                .unwrap_or("no-active-thread-".to_string() + &ThreadId::new().to_string()),
         }
     }
 }

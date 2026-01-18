@@ -1,45 +1,7 @@
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
-
-use crate::sandboxing::SandboxPermissions;
-
 use crate::bash::parse_shell_lc_plain_commands;
-use crate::is_safe_command::is_known_safe_command;
 #[cfg(windows)]
 #[path = "windows_dangerous_commands.rs"]
 mod windows_dangerous_commands;
-
-pub fn requires_initial_appoval(
-    policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
-    command: &[String],
-    sandbox_permissions: SandboxPermissions,
-) -> bool {
-    if is_known_safe_command(command) {
-        return false;
-    }
-    match policy {
-        AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest => {
-            // In DangerFullAccess or ExternalSandbox, only prompt if the command looks dangerous.
-            if matches!(
-                sandbox_policy,
-                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-            ) {
-                return command_might_be_dangerous(command);
-            }
-
-            // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
-            // non‑escalated, non‑dangerous commands — let the sandbox enforce
-            // restrictions (e.g., block network/write) without a user prompt.
-            if sandbox_permissions.requires_escalated_permissions() {
-                return true;
-            }
-            command_might_be_dangerous(command)
-        }
-        AskForApproval::UnlessTrusted => !is_known_safe_command(command),
-    }
-}
 
 pub fn command_might_be_dangerous(command: &[String]) -> bool {
     #[cfg(windows)]
@@ -86,7 +48,6 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::NetworkAccess;
 
     fn vec_str(items: &[&str]) -> Vec<String> {
         items.iter().map(std::string::ToString::to_string).collect()
@@ -153,24 +114,5 @@ mod tests {
     #[test]
     fn rm_f_is_dangerous() {
         assert!(command_might_be_dangerous(&vec_str(&["rm", "-f", "/"])));
-    }
-
-    #[test]
-    fn external_sandbox_only_prompts_for_dangerous_commands() {
-        let external_policy = SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Restricted,
-        };
-        assert!(!requires_initial_appoval(
-            AskForApproval::OnRequest,
-            &external_policy,
-            &vec_str(&["ls"]),
-            SandboxPermissions::UseDefault,
-        ));
-        assert!(requires_initial_appoval(
-            AskForApproval::OnRequest,
-            &external_policy,
-            &vec_str(&["rm", "-rf", "/"]),
-            SandboxPermissions::UseDefault,
-        ));
     }
 }

@@ -12,7 +12,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::get_responses_requests;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::TestCodexHarness;
@@ -90,7 +89,7 @@ async fn subagent_directive_is_visible_to_main_and_subagent_runs_without_history
     // Turn 2 (main): request the subagent tool.
     // Turn 2 (subagent): returns output.
     // Turn 2 (main follow-up): produces final assistant message after tool output.
-    mount_sse_sequence(
+    let resp_mock = mount_sse_sequence(
         harness.server(),
         vec![
             sse(vec![
@@ -124,6 +123,7 @@ async fn subagent_directive_is_visible_to_main_and_subagent_runs_without_history
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: format!("seed {secret}"),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
@@ -136,7 +136,7 @@ async fn subagent_directive_is_visible_to_main_and_subagent_runs_without_history
         .await?;
 
     let _ = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TaskComplete(_) => Some(()),
+        EventMsg::TurnComplete(_) => Some(()),
         _ => None,
     })
     .await;
@@ -146,6 +146,7 @@ async fn subagent_directive_is_visible_to_main_and_subagent_runs_without_history
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "@general-purpose do it".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
@@ -158,14 +159,14 @@ async fn subagent_directive_is_visible_to_main_and_subagent_runs_without_history
         .await?;
 
     let last_message = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TaskComplete(ev) => Some(ev.last_agent_message.clone()),
+        EventMsg::TurnComplete(ev) => Some(ev.last_agent_message.clone()),
         _ => None,
     })
     .await;
 
     assert_eq!(last_message, Some("main output".to_string()));
 
-    let reqs = get_responses_requests(harness.server()).await;
+    let reqs = resp_mock.requests();
     assert_eq!(
         reqs.len(),
         4,
@@ -174,10 +175,7 @@ async fn subagent_directive_is_visible_to_main_and_subagent_runs_without_history
 
     let bodies = reqs
         .into_iter()
-        .map(|req| {
-            req.body_json::<serde_json::Value>()
-                .expect("valid JSON body")
-        })
+        .map(|req| req.body_json())
         .collect::<Vec<_>>();
 
     let bodies_text = bodies

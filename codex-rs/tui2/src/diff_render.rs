@@ -299,7 +299,18 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
     }
 }
 
+/// Format a path for display relative to the current working directory when
+/// possible, keeping output stable in jj/no-`.git` workspaces (e.g. image
+/// tool calls should show `example.png` instead of an absolute path).
 pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
+    if path.is_relative() {
+        return path.display().to_string();
+    }
+
+    if let Ok(stripped) = path.strip_prefix(cwd) {
+        return stripped.display().to_string();
+    }
+
     // Prefer a stable, user-local relative path when the file is under the current working
     // directory. This keeps output deterministic in jj-only repos (no `.git`) and matches user
     // expectations for "files in this project".
@@ -431,6 +442,7 @@ fn style_del() -> Style {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;
@@ -468,6 +480,26 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_snapshot!(name, text);
+    }
+
+    #[test]
+    fn display_path_prefers_cwd_without_git_repo() {
+        let cwd = if cfg!(windows) {
+            PathBuf::from(r"C:\workspace\codex")
+        } else {
+            PathBuf::from("/workspace/codex")
+        };
+        let path = cwd.join("tui").join("example.png");
+
+        let rendered = display_path_for(&path, &cwd);
+
+        assert_eq!(
+            rendered,
+            PathBuf::from("tui")
+                .join("example.png")
+                .display()
+                .to_string()
+        );
     }
 
     #[test]

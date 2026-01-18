@@ -1,0 +1,110 @@
+name: Bazel (experimental)
+
+# Note this workflow was originally derived from:
+# https://github.com/cerisier/toolchains_llvm_bootstrapped/blob/main/.github/workflows/ci.yaml
+
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  # Cancel previous actions from the same PR or branch except 'main' branch.
+  # See https://docs.github.com/en/actions/using-jobs/using-concurrency and https://docs.github.com/en/actions/learn-github-actions/contexts for more info.
+  group: concurrency-group::${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS
+          - os: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - os: macos-15-xlarge
+            target: x86_64-apple-darwin
+
+          # Linux
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          # TODO: Enable Windows once we fix the toolchain issues there.
+          #- os: windows-latest
+          #  target: x86_64-pc-windows-gnullvm
+    runs-on: ${{ matrix.os }}
+
+    # Configure a human readable name for each job
+    name: Local Bazel build on ${{ matrix.os }} for ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Some integration tests rely on DotSlash being installed.
+      # See https://github.com/openai/codex/pull/7617.
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@v2
+
+      - name: Make DotSlash available in PATH (Unix)
+        if: runner.os != 'Windows'
+        run: cp "$(which dotslash)" /usr/local/bin
+
+      - name: Make DotSlash available in PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
+
+      # Install Bazel via Bazelisk
+      - name: Set up Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      # TODO(mbolin): Bring this back once we have caching working. Currently,
+      # we never seem to get a cache hit but we still end up paying the cost of
+      # uploading at the end of the build, which takes over a minute!
+      #
+      # Cache build and external artifacts so that the next ci build is incremental.
+      # Because github action caches cannot be updated after a build, we need to
+      # store the contents of each build in a unique cache key, then fall back to loading
+      # it on the next ci run. We use hashFiles(...) in the key and restore-keys- with
+      # the prefix to load the most recent cache for the branch on a cache miss. You
+      # should customize the contents of hashFiles to capture any bazel input sources,
+      # although this doesn't need to be perfect. If none of the input sources change
+      # then a cache hit will load an existing cache and bazel won't have to do any work.
+      # In the case of a cache miss, you want the fallback cache to contain most of the
+      # previously built artifacts to minimize build time. The more precise you are with
+      # hashFiles sources the less work bazel will have to do.
+      # - name: Mount bazel caches
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: |
+      #       ~/.cache/bazel-repo-cache
+      #       ~/.cache/bazel-repo-contents-cache
+      #     key: bazel-cache-${{ matrix.os }}-${{ hashFiles('**/BUILD.bazel', '**/*.bzl', 'MODULE.bazel') }}
+      #     restore-keys: |
+      #       bazel-cache-${{ matrix.os }}
+
+      - name: Configure Bazel startup args (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Use a very short path to reduce argv/path length issues.
+          "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: bazel test //...
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          bazel $BAZEL_STARTUP_ARGS --bazelrc=.github/workflows/ci.bazelrc test //... \
+            --build_metadata=REPO_URL=https://github.com/openai/codex.git \
+            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD) \
+            --build_metadata=ROLE=CI \
+            --build_metadata=VISIBILITY=PUBLIC \
+            "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"

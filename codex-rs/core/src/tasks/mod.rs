@@ -21,9 +21,9 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
-use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
+use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
@@ -159,7 +159,7 @@ impl Session {
         for task in self.take_all_running_tasks().await {
             self.handle_task_abort(task, reason.clone()).await;
         }
-        self.close_unified_exec_sessions().await;
+        self.close_unified_exec_processes().await;
     }
 
     pub async fn on_task_finished(
@@ -168,7 +168,7 @@ impl Session {
         last_agent_message: Option<String>,
     ) {
         let mut active = self.active_turn.lock().await;
-        let should_close_sessions = if let Some(at) = active.as_mut()
+        let should_close_processes = if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
             *active = None;
@@ -177,10 +177,10 @@ impl Session {
             false
         };
         drop(active);
-        if should_close_sessions {
-            self.close_unified_exec_sessions().await;
+        if should_close_processes {
+            self.close_unified_exec_processes().await;
         }
-        let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
+        let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
     }
 
@@ -203,10 +203,10 @@ impl Session {
         }
     }
 
-    async fn close_unified_exec_sessions(&self) {
+    async fn close_unified_exec_processes(&self) {
         self.services
             .unified_exec_manager
-            .terminate_all_sessions()
+            .terminate_all_processes()
             .await;
     }
 

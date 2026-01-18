@@ -1,7 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server_unchecked;
+use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::create_shell_command_sse_response_raw;
 use app_test_support::format_with_current_shell;
@@ -66,7 +66,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
         )?,
         create_final_assistant_message_sse_response("Enjoy your new git repo!")?,
     ];
-    let server = create_mock_chat_completions_server_unchecked(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(&codex_home, &server.uri())?;
 
     // Start MCP server and initialize.
@@ -146,9 +146,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
 
     // 4) removeConversationListener
     let remove_listener_id = mcp
-        .send_remove_conversation_listener_request(RemoveConversationListenerParams {
-            subscription_id,
-        })
+        .send_remove_thread_listener_request(RemoveConversationListenerParams { subscription_id })
         .await?;
     let remove_listener_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -192,7 +190,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         )?,
         create_final_assistant_message_sse_response("done 2")?,
     ];
-    let server = create_mock_chat_completions_server_unchecked(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(&codex_home, &server.uri())?;
 
     // Start MCP server and initialize.
@@ -278,7 +276,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     )
     .await?;
 
-    // Wait for first TaskComplete
+    // Wait for first TurnComplete
     let _ = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
@@ -298,6 +296,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            output_schema: None,
         })
         .await?;
     // Acknowledge sendUserTurn
@@ -357,7 +356,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
         )?,
         create_final_assistant_message_sse_response("done second")?,
     ];
-    let server = create_mock_chat_completions_server_unchecked(responses).await;
+    let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(&codex_home, &server.uri())?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
@@ -411,6 +410,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            output_schema: None,
         })
         .await?;
     timeout(
@@ -423,6 +423,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
     )
     .await??;
+    mcp.clear_message_buffer();
 
     let second_turn_id = mcp
         .send_send_user_turn_request(SendUserTurnParams {
@@ -436,6 +437,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            output_schema: None,
         })
         .await?;
     timeout(
@@ -491,7 +493,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "chat"
+wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

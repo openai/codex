@@ -1,6 +1,25 @@
+//! Orchestrates streaming assistant output into immutable transcript cells.
+//!
+//! The UI receives assistant output as a sequence of deltas. TUI2 wants to:
+//!
+//! - render incrementally during streaming,
+//! - keep the transcript model append-only (emit immutable history cells),
+//! - avoid duplicating content or showing partial final lines, and
+//! - preserve resize reflow by not baking width-derived wraps into stored cells.
+//!
+//! [`StreamController`] glues together:
+//!
+//! - newline-gated delta accumulation (`MarkdownStreamCollector`),
+//! - commit-tick animation (`StreamState` queue), and
+//! - history cell emission (`AgentMessageCell::new_logical`).
+//!
+//! Each emitted cell contains **logical markdown lines** plus wrap metadata. The cell wraps those
+//! lines at render time using the current viewport width and returns soft-wrap joiners for
+//! copy/paste fidelity.
+
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
-use ratatui::text::Line;
+use crate::markdown_render::MarkdownLogicalLine;
 
 use super::StreamState;
 
@@ -13,15 +32,19 @@ pub(crate) struct StreamController {
 }
 
 impl StreamController {
-    pub(crate) fn new(width: Option<usize>) -> Self {
+    /// Create a new controller for one assistant message stream.
+    pub(crate) fn new() -> Self {
         Self {
-            state: StreamState::new(width),
+            state: StreamState::new(),
             finishing_after_drain: false,
             header_emitted: false,
         }
     }
 
-    /// Push a delta; if it contains a newline, commit completed lines and start animation.
+    /// Push a streaming delta and enqueue newly completed logical lines.
+    ///
+    /// Returns `true` when at least one logical line was committed and should trigger commit-tick
+    /// animation.
     pub(crate) fn push(&mut self, delta: &str) -> bool {
         let state = &mut self.state;
         if !delta.is_empty() {
@@ -38,7 +61,10 @@ impl StreamController {
         false
     }
 
-    /// Finalize the active stream. Drain and emit now.
+    /// Finalize the active stream and emit any remaining logical lines.
+    ///
+    /// This forces the final "partial" line to be committed (if present) and resets the controller
+    /// so it is ready for the next stream.
     pub(crate) fn finalize(&mut self) -> Option<Box<dyn HistoryCell>> {
         // Finalize collector first.
         let remaining = {
@@ -62,21 +88,28 @@ impl StreamController {
         self.emit(out_lines)
     }
 
-    /// Step animation: commit at most one queued line and handle end-of-drain cleanup.
+    /// Advance the commit-tick animation by at most one logical line.
+    ///
+    /// Returns `(cell, idle)` where:
+    /// - `cell` is a new immutable history cell to append to the transcript (if any output is ready)
+    /// - `idle` is `true` once the queue is fully drained.
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.state.step();
         (self.emit(step), self.state.is_idle())
     }
 
-    fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
+    fn emit(&mut self, lines: Vec<MarkdownLogicalLine>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
         }
-        Some(Box::new(history_cell::AgentMessageCell::new(lines, {
-            let header_emitted = self.header_emitted;
-            self.header_emitted = true;
-            !header_emitted
-        })))
+        Some(Box::new(history_cell::AgentMessageCell::new_logical(
+            lines,
+            {
+                let header_emitted = self.header_emitted;
+                self.header_emitted = true;
+                !header_emitted
+            },
+        )))
     }
 }
 
@@ -99,7 +132,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let mut ctrl = StreamController::new(None);
+        let mut ctrl = StreamController::new();
         let mut lines = Vec::new();
 
         // Exact deltas from the session log (section: Loose vs. tight list items)

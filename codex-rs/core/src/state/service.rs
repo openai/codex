@@ -2,23 +2,24 @@ use std::sync::Arc;
 
 use crate::AuthManager;
 use crate::RolloutRecorder;
+use crate::agent::AgentControl;
 use crate::exec_policy::ExecPolicyManager;
 use crate::hooks::HookRunner;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
 use crate::tools::sandboxing::ApprovalStore;
-use crate::unified_exec::UnifiedExecSessionManager;
+use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotifier;
-use codex_otel::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
-    pub(crate) mcp_startup_cancellation_token: CancellationToken,
-    pub(crate) unified_exec_manager: UnifiedExecSessionManager,
+    pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
+    pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     pub(crate) notifier: UserNotifier,
     pub(crate) hook_runner: HookRunner,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
@@ -30,4 +31,5 @@ pub(crate) struct SessionServices {
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,
+    pub(crate) agent_control: AgentControl,
 }

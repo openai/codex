@@ -1,29 +1,29 @@
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
-use codex_core::ConversationManager;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
 use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
+use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
+use codex_core::ThreadManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_otel::otel_manager::OtelManager;
-use codex_protocol::ConversationId;
+use codex_otel::OtelManager;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
@@ -32,9 +32,9 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::ev_completed_with_tokens;
-use core_test_support::responses::get_responses_requests;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
 use core_test_support::skip_if_no_network;
@@ -59,7 +59,7 @@ use wiremock::matchers::query_param;
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[expect(clippy::unwrap_used)]
@@ -259,19 +259,19 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     // Also configure user instructions to ensure they are NOT delivered on resume.
     config.user_instructions = Some("be nice".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let NewConversation {
-        conversation: codex,
+    let NewThread {
+        thread: codex,
         session_configured,
         ..
-    } = conversation_manager
-        .resume_conversation_from_rollout(config, session_path.clone(), auth_manager)
+    } = thread_manager
+        .resume_thread_from_rollout(config, session_path.clone(), auth_manager)
         .await
         .expect("resume conversation");
 
@@ -284,37 +284,70 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let expected_initial_json = json!([]);
     assert_eq!(initial_json, expected_initial_json);
 
-    // 2) Submit new input; the request body must include the prior item followed by the new user input.
+    // 2) Submit new input; the request body must include the prior items, then initial context, then new user input.
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
-    let expected_input = json!([
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{ "type": "input_text", "text": "resumed user message" }]
-        },
-        {
-            "type": "message",
-            "role": "assistant",
-            "content": [{ "type": "output_text", "text": "resumed assistant message" }]
-        },
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{ "type": "input_text", "text": "hello" }]
-        }
-    ]);
-    assert_eq!(request_body["input"], expected_input);
+    let input = request_body["input"].as_array().expect("input array");
+    let messages: Vec<(String, String)> = input
+        .iter()
+        .filter_map(|item| {
+            let role = item.get("role")?.as_str()?;
+            let text = item
+                .get("content")?
+                .as_array()?
+                .first()?
+                .get("text")?
+                .as_str()?;
+            Some((role.to_string(), text.to_string()))
+        })
+        .collect();
+    let pos_prior_user = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "resumed user message")
+        .expect("prior user message");
+    let pos_prior_assistant = messages
+        .iter()
+        .position(|(role, text)| role == "assistant" && text == "resumed assistant message")
+        .expect("prior assistant message");
+    let pos_permissions = messages
+        .iter()
+        .position(|(role, text)| role == "developer" && text.contains("`approval_policy`"))
+        .expect("permissions message");
+    let pos_user_instructions = messages
+        .iter()
+        .position(|(role, text)| {
+            role == "user"
+                && text.contains("be nice")
+                && (text.starts_with("# AGENTS.md instructions for ")
+                    || text.starts_with("<user_instructions>"))
+        })
+        .expect("user instructions");
+    let pos_environment = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text.contains("<environment_context>"))
+        .expect("environment context");
+    let pos_new_user = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "hello")
+        .expect("new user message");
+
+    assert!(pos_prior_user < pos_prior_assistant);
+    assert!(pos_prior_assistant < pos_permissions);
+    assert!(pos_permissions < pos_user_instructions);
+    assert!(pos_user_instructions < pos_environment);
+    assert!(pos_environment < pos_new_user);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -324,17 +357,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     // Mock server
     let server = MockServer::start().await;
 
-    // First request – must NOT include `previous_response_id`.
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -346,17 +369,18 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        conversation_id,
+    let NewThread {
+        thread: codex,
+        thread_id: session_id,
         session_configured: _,
-    } = conversation_manager
-        .new_conversation(config)
+        ..
+    } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -364,31 +388,26 @@ async fn includes_conversation_id_and_model_headers_in_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    // get request from the server
-    let requests = get_responses_requests(&server).await;
-    let request = requests
-        .first()
-        .expect("expected POST request to /responses");
-    let request_conversation_id = request.headers.get("conversation_id").unwrap();
-    let request_authorization = request.headers.get("authorization").unwrap();
-    let request_originator = request.headers.get("originator").unwrap();
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let request_session_id = request.header("session_id").expect("session_id header");
+    let request_authorization = request
+        .header("authorization")
+        .expect("authorization header");
+    let request_originator = request.header("originator").expect("originator header");
 
-    assert_eq!(
-        request_conversation_id.to_str().unwrap(),
-        conversation_id.to_string()
-    );
-    assert_eq!(request_originator.to_str().unwrap(), "codex_cli_rs");
-    assert_eq!(
-        request_authorization.to_str().unwrap(),
-        "Bearer Test API Key"
-    );
+    assert_eq!(request_session_id, session_id.to_string());
+    assert_eq!(request_originator, "codex_cli_rs");
+    assert_eq!(request_authorization, "Bearer Test API Key");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -408,27 +427,29 @@ async fn includes_base_instructions_override_in_request() {
     config.base_instructions = Some("test instructions".to_string());
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -448,17 +469,7 @@ async fn chatgpt_auth_sends_correct_request() {
     // Mock server
     let server = MockServer::start().await;
 
-    // First request – must NOT include `previous_response_id`.
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/api/codex/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/api/codex", server.uri())),
@@ -469,17 +480,18 @@ async fn chatgpt_auth_sends_correct_request() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        conversation_id,
+    let NewThread {
+        thread: codex,
+        thread_id,
         session_configured: _,
-    } = conversation_manager
-        .new_conversation(config)
+        ..
+    } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -487,34 +499,32 @@ async fn chatgpt_auth_sends_correct_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    // get request from the server
-    let requests = get_responses_requests(&server).await;
-    let request = requests
-        .first()
-        .expect("expected POST request to /responses");
-    let request_conversation_id = request.headers.get("conversation_id").unwrap();
-    let request_authorization = request.headers.get("authorization").unwrap();
-    let request_originator = request.headers.get("originator").unwrap();
-    let request_chatgpt_account_id = request.headers.get("chatgpt-account-id").unwrap();
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/api/codex/responses");
+    let request_authorization = request
+        .header("authorization")
+        .expect("authorization header");
+    let request_originator = request.header("originator").expect("originator header");
+    let request_chatgpt_account_id = request
+        .header("chatgpt-account-id")
+        .expect("chatgpt-account-id header");
+    let request_body = request.body_json();
 
-    assert_eq!(
-        request_conversation_id.to_str().unwrap(),
-        conversation_id.to_string()
-    );
-    assert_eq!(request_originator.to_str().unwrap(), "codex_cli_rs");
-    assert_eq!(
-        request_authorization.to_str().unwrap(),
-        "Bearer Access Token"
-    );
-    assert_eq!(request_chatgpt_account_id.to_str().unwrap(), "account_id");
+    let session_id = request.header("session_id").expect("session_id header");
+    assert_eq!(session_id, thread_id.to_string());
+
+    assert_eq!(request_originator, "codex_cli_rs");
+    assert_eq!(request_authorization, "Bearer Access Token");
+    assert_eq!(request_chatgpt_account_id, "account_id");
     assert!(request_body["stream"].as_bool().unwrap());
     assert_eq!(
         request_body["include"][0].as_str().unwrap(),
@@ -568,12 +578,13 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
-    let conversation_manager = ConversationManager::new(auth_manager, SessionSource::Exec);
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
+    let thread_manager = ThreadManager::new(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        SessionSource::Exec,
+    );
+    let NewThread { thread: codex, .. } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
@@ -581,12 +592,14 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -606,27 +619,29 @@ async fn includes_user_instructions_message_in_request() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be nice".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -637,17 +652,26 @@ async fn includes_user_instructions_message_in_request() {
             .unwrap()
             .contains("be nice")
     );
-    assert_message_role(&request_body["input"][0], "user");
-    assert_message_starts_with(&request_body["input"][0], "# AGENTS.md instructions for ");
-    assert_message_ends_with(&request_body["input"][0], "</INSTRUCTIONS>");
-    let ui_text = request_body["input"][0]["content"][0]["text"]
+    assert_message_role(&request_body["input"][0], "developer");
+    let permissions_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid permissions message content");
+    assert!(
+        permissions_text.contains("`sandbox_mode`"),
+        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+    );
+
+    assert_message_role(&request_body["input"][1], "user");
+    assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][1]["content"][0]["text"]
         .as_str()
         .expect("invalid message content");
     assert!(ui_text.contains("<INSTRUCTIONS>"));
     assert!(ui_text.contains("be nice"));
-    assert_message_role(&request_body["input"][1], "user");
-    assert_message_starts_with(&request_body["input"][1], "<environment_context>");
-    assert_message_ends_with(&request_body["input"][1], "</environment_context>");
+    assert_message_role(&request_body["input"][2], "user");
+    assert_message_starts_with(&request_body["input"][2], "<environment_context>");
+    assert_message_ends_with(&request_body["input"][2], "</environment_context>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -674,35 +698,38 @@ async fn skills_append_to_instructions() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
     config.cwd = codex_home.path().to_path_buf();
-    config.features.enable(Feature::Skills);
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert_message_role(&request_body["input"][0], "user");
-    let instructions_text = request_body["input"][0]["content"][0]["text"]
+    assert_message_role(&request_body["input"][0], "developer");
+
+    assert_message_role(&request_body["input"][1], "user");
+    let instructions_text = request_body["input"][1]["content"][0]["text"]
         .as_str()
         .expect("instructions text");
     assert!(
@@ -740,12 +767,14 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -776,12 +805,14 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -798,7 +829,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_default_reasoning_effort_in_request_when_defined_by_model_family()
+async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
@@ -810,12 +841,14 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_fami
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -848,12 +881,14 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -886,12 +921,14 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -918,12 +955,14 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -957,12 +996,14 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -995,12 +1036,14 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -1034,30 +1077,36 @@ async fn includes_developer_instructions_message_in_request() {
     config.user_instructions = Some("be nice".to_string());
     config.developer_instructions = Some("be useful".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
+
+    let permissions_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid permissions message content");
 
     assert!(
         !request_body["instructions"]
@@ -1066,18 +1115,24 @@ async fn includes_developer_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "developer");
-    assert_message_equals(&request_body["input"][0], "be useful");
-    assert_message_role(&request_body["input"][1], "user");
-    assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
-    assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");
-    let ui_text = request_body["input"][1]["content"][0]["text"]
+    assert!(
+        permissions_text.contains("`sandbox_mode`"),
+        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+    );
+
+    assert_message_role(&request_body["input"][1], "developer");
+    assert_message_equals(&request_body["input"][1], "be useful");
+    assert_message_role(&request_body["input"][2], "user");
+    assert_message_starts_with(&request_body["input"][2], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][2], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][2]["content"][0]["text"]
         .as_str()
         .expect("invalid message content");
     assert!(ui_text.contains("<INSTRUCTIONS>"));
     assert!(ui_text.contains("be nice"));
-    assert_message_role(&request_body["input"][2], "user");
-    assert_message_starts_with(&request_body["input"][2], "<environment_context>");
-    assert_message_ends_with(&request_body["input"][2], "</environment_context>");
+    assert_message_role(&request_body["input"][3], "user");
+    assert_message_starts_with(&request_body["input"][3], "<environment_context>");
+    assert_message_ends_with(&request_body["input"][3], "</environment_context>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1090,17 +1145,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n",
     );
-
-    let template = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_body, "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/openai/responses"))
-        .respond_with(template)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock = mount_sse_once(&server, sse_body.to_string()).await;
 
     let provider = ModelProviderInfo {
         name: "azure".into(),
@@ -1127,13 +1172,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let model = ModelsManager::get_model_offline(config.model.as_deref());
     config.model = Some(model.clone());
     let config = Arc::new(config);
-    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
-    let conversation_id = ConversationId::new();
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let conversation_id = ThreadId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
-        model_family.slug.as_str(),
+        model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         auth_manager.get_auth_mode(),
@@ -1142,17 +1187,18 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         SessionSource::Exec,
     );
 
-    let client = ModelClient::new(
+    let mut client = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_family,
+        model_info,
         otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
         SessionSource::Exec,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
@@ -1185,6 +1231,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         arguments: "{}".into(),
         call_id: "function-call-id".into(),
     });
+    prompt.input.push(ResponseItem::FunctionCallOutput {
+        call_id: "function-call-id".into(),
+        output: FunctionCallOutputPayload {
+            content: "ok".into(),
+            ..Default::default()
+        },
+    });
     prompt.input.push(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
         call_id: Some("local-shell-call-id".into()),
@@ -1204,6 +1257,10 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         name: "custom_tool".into(),
         input: "{}".into(),
     });
+    prompt.input.push(ResponseItem::CustomToolCallOutput {
+        call_id: "custom-tool-call-id".into(),
+        output: "ok".into(),
+    });
 
     let mut stream = client
         .stream(&prompt)
@@ -1216,21 +1273,27 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         }
     }
 
-    let requests = get_responses_requests(&server).await;
-    assert_eq!(requests.len(), 1, "expected a single POST request");
-    let body: serde_json::Value = requests[0]
-        .body_json()
-        .expect("request body to be valid JSON");
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/openai/responses");
+    let body = request.body_json();
 
     assert_eq!(body["store"], serde_json::Value::Bool(true));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    assert_eq!(body["input"].as_array().map(Vec::len), Some(6));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(8));
     assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
     assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
     assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
     assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
-    assert_eq!(body["input"][4]["id"].as_str(), Some("local-shell-id"));
-    assert_eq!(body["input"][5]["id"].as_str(), Some("custom-tool-id"));
+    assert_eq!(
+        body["input"][4]["call_id"].as_str(),
+        Some("function-call-id")
+    );
+    assert_eq!(body["input"][5]["id"].as_str(), Some("local-shell-id"));
+    assert_eq!(body["input"][6]["id"].as_str(), Some("custom-tool-id"));
+    assert_eq!(
+        body["input"][7]["call_id"].as_str(),
+        Some("custom-tool-call-id")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1264,22 +1327,24 @@ async fn token_count_includes_rate_limits_snapshot() {
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -1383,7 +1448,7 @@ async fn token_count_includes_rate_limits_snapshot() {
         Some(1704069000)
     );
 
-    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1436,7 +1501,9 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .expect("submission should succeed while emitting usage limit error events");
@@ -1505,17 +1572,21 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "seed turn".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "trigger context window".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -1555,7 +1626,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         "expected context window error; got {error_event:?}"
     );
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     Ok(())
 }
@@ -1619,27 +1690,29 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1701,27 +1774,29 @@ async fn env_var_overrides_loaded_auth() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let codex = conversation_manager
-        .new_conversation(config)
+    let codex = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation")
-        .conversation;
+        .thread;
 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
 fn create_dummy_codex_auth() -> CodexAuth {
@@ -1761,16 +1836,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     ]"##;
     let sse1 = core_test_support::load_sse_fixture_with_id_from_str(sse_raw, "resp1");
 
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(sse1.clone(), "text/event-stream"),
-        )
-        .expect(3) // respond identically to the three sequential turns
-        .mount(&server)
-        .await;
+    let request_log = mount_sse_sequence(&server, vec![sse1.clone(), sse1.clone(), sse1]).await;
 
     // Configure provider to point to mock server (Responses API) and use API key auth.
     let model_provider = ModelProviderInfo {
@@ -1783,49 +1849,61 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider_and_home(
+    let thread_manager = ThreadManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
+    let NewThread { thread: codex, .. } = thread_manager
+        .start_thread(config)
         .await
         .expect("create new conversation");
 
     // Turn 1: user sends U1; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: "U1".into() }],
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Turn 2: user sends U2; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: "U2".into() }],
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Turn 3: user sends U3; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: "U3".into() }],
+            items: vec![UserInput::Text {
+                text: "U3".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // Inspect the three captured requests.
-    let requests = get_responses_requests(&server).await;
+    let requests = request_log.requests();
     assert_eq!(requests.len(), 3, "expected 3 requests (one per turn)");
+    for request in &requests {
+        assert_eq!(request.path(), "/v1/responses");
+    }
 
     // Replace full-array compare with tail-only raw JSON compare using a single hard-coded value.
     let r3_tail_expected = json!([
@@ -1857,8 +1935,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     ]);
 
     let r3_input_array = requests[2]
-        .body_json::<serde_json::Value>()
-        .unwrap()
+        .body_json()
         .get("input")
         .and_then(|v| v.as_array())
         .cloned()
