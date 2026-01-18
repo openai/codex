@@ -1,4 +1,4 @@
-use crate::key_hint::is_altgr;
+use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -8,6 +8,11 @@ use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
+use reedline::EditCommand;
+use reedline::EditMode as _;
+use reedline::Emacs;
+use reedline::ReedlineEvent;
+use reedline::ReedlineRawEvent;
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::ops::Range;
@@ -19,6 +24,24 @@ const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 
 fn is_word_separator(ch: char) -> bool {
     WORD_SEPARATORS.contains(ch)
+}
+
+#[derive(Default)]
+struct ReedlineEmacs {
+    emacs: Emacs,
+}
+
+impl ReedlineEmacs {
+    fn parse_key_event(&mut self, key_event: KeyEvent) -> Option<ReedlineEvent> {
+        let raw = ReedlineRawEvent::try_from(Event::Key(key_event)).ok()?;
+        Some(self.emacs.parse_event(raw))
+    }
+}
+
+impl std::fmt::Debug for ReedlineEmacs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReedlineEmacs { .. }")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +57,7 @@ pub(crate) struct TextArea {
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
     kill_buffer: String,
+    reedline: ReedlineEmacs,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +81,7 @@ impl TextArea {
             preferred_col: None,
             elements: Vec::new(),
             kill_buffer: String::new(),
+            reedline: ReedlineEmacs::default(),
         }
     }
 
@@ -214,215 +239,57 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
+        #[cfg(feature = "debug-logs")]
+        let original = event;
+
+        // Some terminals (or configurations) send Control key chords as
+        // C0 control characters without reporting the CONTROL modifier.
+        // Handle common fallbacks for Ctrl-B/F/P/N here so they don't get
+        // inserted as literal control bytes.
         match event {
-            // Some terminals (or configurations) send Control key chords as
-            // C0 control characters without reporting the CONTROL modifier.
-            // Handle common fallbacks for Ctrl-B/F/P/N here so they don't get
-            // inserted as literal control bytes.
-            KeyEvent { code: KeyCode::Char('\u{0002}'), modifiers: KeyModifiers::NONE, .. } /* ^B */ => {
-                self.move_cursor_left();
-            }
-            KeyEvent { code: KeyCode::Char('\u{0006}'), modifiers: KeyModifiers::NONE, .. } /* ^F */ => {
-                self.move_cursor_right();
-            }
-            KeyEvent { code: KeyCode::Char('\u{0010}'), modifiers: KeyModifiers::NONE, .. } /* ^P */ => {
-                self.move_cursor_up();
-            }
-            KeyEvent { code: KeyCode::Char('\u{000e}'), modifiers: KeyModifiers::NONE, .. } /* ^N */ => {
-                self.move_cursor_down();
-            }
             KeyEvent {
-                code: KeyCode::Char(c),
-                // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held,
-                // because many terminals map Option/Meta combos to ALT+<char> (e.g. ESC f/ESC b)
-                // for word navigation. Those are handled explicitly below.
-                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
-                ..
-            } => self.insert_str(&c.to_string()),
-            KeyEvent {
-                code: KeyCode::Char('j' | 'm'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Enter,
-                ..
-            } => self.insert_str("\n"),
-            KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers,
-                ..
-            } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.delete_backward_word()
-            },
-            // Windows AltGr generates ALT|CONTROL; treat as a plain character input unless
-            // we match a specific Control+Alt binding above.
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                ..
-            } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
-            KeyEvent {
-                code: KeyCode::Backspace,
-                modifiers: KeyModifiers::ALT,
-                ..
-            } => self.delete_backward_word(),
-            KeyEvent {
-                code: KeyCode::Backspace,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => self.delete_backward(1),
-            KeyEvent {
-                code: KeyCode::Delete,
-                modifiers: KeyModifiers::ALT,
-                ..
-            }  => self.delete_forward_word(),
-            KeyEvent {
-                code: KeyCode::Delete,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => self.delete_forward(1),
-
-            KeyEvent {
-                code: KeyCode::Char('w'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.delete_backward_word();
-            }
-            // Meta-b -> move to beginning of previous word
-            // Meta-f -> move to end of next word
-            // Many terminals map Option (macOS) to Alt. Some send Alt|Shift, so match contains(ALT).
-            KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers: KeyModifiers::ALT,
-                ..
-            } => {
-                self.set_cursor(self.beginning_of_previous_word());
-            }
-            KeyEvent {
-                code: KeyCode::Char('f'),
-                modifiers: KeyModifiers::ALT,
-                ..
-            } => {
-                self.set_cursor(self.end_of_next_word());
-            }
-            KeyEvent {
-                code: KeyCode::Char('u'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.kill_to_beginning_of_line();
-            }
-            KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.kill_to_end_of_line();
-            }
-            KeyEvent {
-                code: KeyCode::Char('y'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.yank();
-            }
-
-            // Cursor movement
-            KeyEvent {
-                code: KeyCode::Left,
+                code: KeyCode::Char('\u{0002}'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => {
+            } /* ^B */ => {
                 self.move_cursor_left();
+                return;
             }
             KeyEvent {
-                code: KeyCode::Right,
+                code: KeyCode::Char('\u{0006}'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => {
+            } /* ^F */ => {
                 self.move_cursor_right();
+                return;
             }
             KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('\u{0010}'),
+                modifiers: KeyModifiers::NONE,
                 ..
-            } => {
-                self.move_cursor_left();
-            }
-            KeyEvent {
-                code: KeyCode::Char('f'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.move_cursor_right();
-            }
-            KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+            } /* ^P */ => {
                 self.move_cursor_up();
+                return;
             }
             KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('\u{000e}'),
+                modifiers: KeyModifiers::NONE,
                 ..
-            } => {
+            } /* ^N */ => {
                 self.move_cursor_down();
+                return;
             }
-            // Some terminals send Alt+Arrow for word-wise movement:
-            // Option/Left -> Alt+Left (previous word start)
-            // Option/Right -> Alt+Right (next word end)
-            KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::ALT,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.set_cursor(self.beginning_of_previous_word());
-            }
-            KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::ALT,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.set_cursor(self.end_of_next_word());
-            }
-            KeyEvent {
-                code: KeyCode::Up, ..
-            } => {
-                self.move_cursor_up();
-            }
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            } => {
-                self.move_cursor_down();
-            }
+            _ => {}
+        }
+
+        // Match Codex-specific multiline Home/End behavior.
+        match event {
             KeyEvent {
                 code: KeyCode::Home,
                 ..
             } => {
                 self.move_cursor_to_beginning_of_line(false);
+                return;
             }
             KeyEvent {
                 code: KeyCode::Char('a'),
@@ -430,12 +297,13 @@ impl TextArea {
                 ..
             } => {
                 self.move_cursor_to_beginning_of_line(true);
+                return;
             }
-
             KeyEvent {
                 code: KeyCode::End, ..
             } => {
                 self.move_cursor_to_end_of_line(false);
+                return;
             }
             KeyEvent {
                 code: KeyCode::Char('e'),
@@ -443,11 +311,208 @@ impl TextArea {
                 ..
             } => {
                 self.move_cursor_to_end_of_line(true);
+                return;
             }
-            _o => {
-                #[cfg(feature = "debug-logs")]
-                tracing::debug!("Unhandled key event in TextArea: {:?}", _o);
+            _ => {}
+        }
+
+        // Some terminals map Alt+Backspace to Ctrl+Alt+H. Preserve that binding.
+        if event.code == KeyCode::Char('h')
+            && event.modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            self.delete_backward_word();
+            return;
+        }
+
+        // Some terminals map Enter to Ctrl+J or Ctrl+M.
+        if matches!(event.code, KeyCode::Char('j' | 'm'))
+            && event.modifiers == KeyModifiers::CONTROL
+        {
+            self.insert_str("\n");
+            return;
+        }
+
+        // Codex historically treated Up/Down cursor movement as independent of modifiers.
+        // Keep that behavior so e.g. Shift+Up still moves the cursor (selection is not supported).
+        match event {
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers,
+                ..
+            } if modifiers != KeyModifiers::NONE => {
+                self.move_cursor_up();
+                return;
             }
+            KeyEvent {
+                code: KeyCode::Down,
+                modifiers,
+                ..
+            } if modifiers != KeyModifiers::NONE => {
+                self.move_cursor_down();
+                return;
+            }
+            _ => {}
+        }
+
+        let Some(reedline_event) = self.reedline.parse_key_event(event) else {
+            return;
+        };
+        if !self.apply_reedline_event(reedline_event) {
+            #[cfg(feature = "debug-logs")]
+            tracing::debug!("Unhandled key event in TextArea: {:?}", original);
+        }
+    }
+
+    fn apply_reedline_event(&mut self, event: ReedlineEvent) -> bool {
+        match event {
+            ReedlineEvent::None => false,
+            ReedlineEvent::CtrlD => {
+                // Reedline treats Ctrl-D specially (EOF on empty line). For Codex, Ctrl-D is
+                // handled by the parent UI (quit), and when it reaches the textarea we keep
+                // Emacs-style "delete forward" behavior.
+                self.delete_forward(1);
+                true
+            }
+            ReedlineEvent::Enter => {
+                self.insert_str("\n");
+                true
+            }
+            ReedlineEvent::Left => {
+                self.move_cursor_left();
+                true
+            }
+            ReedlineEvent::Right => {
+                self.move_cursor_right();
+                true
+            }
+            ReedlineEvent::Up => {
+                self.move_cursor_up();
+                true
+            }
+            ReedlineEvent::Down => {
+                self.move_cursor_down();
+                true
+            }
+            ReedlineEvent::Edit(commands) => {
+                let mut handled = false;
+                for command in commands {
+                    handled |= self.apply_reedline_edit_command(command);
+                }
+                handled
+            }
+            ReedlineEvent::Multiple(events) => {
+                let mut handled = false;
+                for e in events {
+                    handled |= self.apply_reedline_event(e);
+                }
+                handled
+            }
+            ReedlineEvent::UntilFound(events) => {
+                for e in events {
+                    if self.apply_reedline_event(e) {
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn apply_reedline_edit_command(&mut self, command: EditCommand) -> bool {
+        match command {
+            EditCommand::InsertChar(c) => {
+                self.insert_str(&c.to_string());
+                true
+            }
+            EditCommand::InsertString(s) => {
+                self.insert_str(&s);
+                true
+            }
+            EditCommand::InsertNewline => {
+                self.insert_str("\n");
+                true
+            }
+            EditCommand::Backspace => {
+                self.delete_backward(1);
+                true
+            }
+            EditCommand::Delete => {
+                self.delete_forward(1);
+                true
+            }
+            EditCommand::BackspaceWord | EditCommand::CutWordLeft | EditCommand::CutBigWordLeft => {
+                self.delete_backward_word();
+                true
+            }
+            EditCommand::DeleteWord
+            | EditCommand::CutWordRight
+            | EditCommand::CutBigWordRight
+            | EditCommand::CutWordRightToNext
+            | EditCommand::CutBigWordRightToNext => {
+                self.delete_forward_word();
+                true
+            }
+            EditCommand::MoveToStart { .. } => {
+                self.set_cursor(0);
+                true
+            }
+            EditCommand::MoveToEnd { .. } => {
+                self.set_cursor(self.text.len());
+                true
+            }
+            EditCommand::MoveToLineStart { .. } => {
+                self.move_cursor_to_beginning_of_line(false);
+                true
+            }
+            EditCommand::MoveToLineEnd { .. } => {
+                self.move_cursor_to_end_of_line(false);
+                true
+            }
+            EditCommand::MoveLeft { .. } => {
+                self.move_cursor_left();
+                true
+            }
+            EditCommand::MoveRight { .. } => {
+                self.move_cursor_right();
+                true
+            }
+            EditCommand::MoveWordLeft { .. } | EditCommand::MoveBigWordLeft { .. } => {
+                self.set_cursor(self.beginning_of_previous_word());
+                true
+            }
+            EditCommand::MoveWordRight { .. }
+            | EditCommand::MoveWordRightStart { .. }
+            | EditCommand::MoveWordRightEnd { .. }
+            | EditCommand::MoveBigWordRightStart { .. }
+            | EditCommand::MoveBigWordRightEnd { .. } => {
+                self.set_cursor(self.end_of_next_word());
+                true
+            }
+            EditCommand::Clear => {
+                self.set_text("");
+                true
+            }
+            EditCommand::ClearToLineEnd => {
+                let start = self.cursor_pos;
+                let end = self.end_of_current_line();
+                self.replace_range(start..end, "");
+                true
+            }
+            EditCommand::KillLine | EditCommand::CutToLineEnd | EditCommand::CutToEnd => {
+                // We don't implement a separate "cut buffer" here; reuse the existing kill buffer.
+                self.kill_to_end_of_line();
+                true
+            }
+            EditCommand::CutFromStart | EditCommand::CutFromLineStart => {
+                self.kill_to_beginning_of_line();
+                true
+            }
+            EditCommand::PasteCutBufferBefore | EditCommand::PasteCutBufferAfter => {
+                self.yank();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -1582,6 +1647,36 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(t.text(), "ello");
         assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn ctrl_left_and_right_move_by_word() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len());
+
+        t.input(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+        assert_eq!(t.cursor(), 6);
+
+        t.input(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+        assert_eq!(t.cursor(), 0);
+
+        t.input(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert_eq!(t.cursor(), 5);
+
+        t.input(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
+    fn cursor_vertical_movement_ignores_modifiers() {
+        let mut t = ta_with("foo\nbar");
+        t.set_cursor(5); // after 'a'
+
+        t.input(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        assert_eq!(t.cursor(), 1); // after 'o'
+
+        t.input(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+        assert_eq!(t.cursor(), 5); // back after 'a'
     }
 
     #[test]
