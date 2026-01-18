@@ -1,7 +1,7 @@
 //! Validates that the collaboration mode list endpoint returns the expected default presets.
 //!
 //! The test drives the app server through the MCP harness and asserts that the list response
-//! includes the plan, collaborate, and execute modes with their default model and reasoning
+//! includes the plan, pair programming, and execute modes with their default model and reasoning
 //! effort settings, which keeps the API contract visible in one place.
 
 use std::time::Duration;
@@ -43,7 +43,7 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 
-    let expected = vec![plan_preset(), collaborate_preset(), execute_preset()];
+    let expected = vec![plan_preset(), pair_programming_preset(), execute_preset()];
     assert_eq!(expected, items);
     Ok(())
 }
@@ -60,11 +60,11 @@ fn plan_preset() -> CollaborationMode {
     })
 }
 
-/// Builds the collaborate preset that the list response is expected to return.
+/// Builds the pair programming preset that the list response is expected to return.
 ///
 /// The helper keeps the expected model and reasoning defaults co-located with the test
 /// so that mismatches point directly at the API contract being exercised.
-fn collaborate_preset() -> CollaborationMode {
+fn pair_programming_preset() -> CollaborationMode {
     CollaborationMode::PairProgramming(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::Medium),

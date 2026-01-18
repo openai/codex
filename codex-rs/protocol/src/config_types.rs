@@ -182,7 +182,9 @@ impl CollaborationMode {
 
         match self {
             CollaborationMode::Plan(_) => CollaborationMode::Plan(updated_settings),
-            CollaborationMode::PairProgramming(_) => CollaborationMode::PairProgramming(updated_settings),
+            CollaborationMode::PairProgramming(_) => {
+                CollaborationMode::PairProgramming(updated_settings)
+            }
             CollaborationMode::Execute(_) => CollaborationMode::Execute(updated_settings),
             CollaborationMode::Custom(_) => CollaborationMode::Custom(updated_settings),
         }
