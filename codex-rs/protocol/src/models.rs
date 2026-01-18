@@ -10,8 +10,11 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
+use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -228,6 +231,25 @@ impl DeveloperInstructions {
             approval_policy,
             writable_roots,
         )
+    }
+
+    /// Returns developer instructions from a collaboration mode if they exist and are non-empty.
+    pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
+        let settings = match collaboration_mode {
+            CollaborationMode::Plan(settings)
+            | CollaborationMode::Collaborate(settings)
+            | CollaborationMode::Execute(settings)
+            | CollaborationMode::Custom(settings) => settings,
+        };
+        settings
+            .developer_instructions
+            .as_ref()
+            .filter(|instructions| !instructions.is_empty())
+            .map(|instructions| {
+                DeveloperInstructions::new(format!(
+                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
+                ))
+            })
     }
 
     fn from_permissions_with_network(
