@@ -369,11 +369,19 @@ mod tests {
         let bash_shell = get_shell(ShellType::Bash, None).unwrap();
         let shell_path = bash_shell.shell_path;
 
+        let allowed_paths = [
+            "/bin/bash",
+            "/usr/bin/bash",
+            "/usr/local/bin/bash",
+            "/opt/homebrew/bin/bash",
+        ];
         assert!(
-            shell_path == Path::new("/bin/bash")
-                || shell_path == Path::new("/usr/bin/bash")
-                || shell_path == Path::new("/usr/local/bin/bash"),
-            "shell path: {shell_path:?}",
+            allowed_paths
+                .iter()
+                .copied()
+                .map(Path::new)
+                .any(|allowed| shell_path == allowed),
+            "shell path: {shell_path:?}"
         );
     }
 
@@ -381,9 +389,14 @@ mod tests {
     fn detects_sh() {
         let sh_shell = get_shell(ShellType::Sh, None).unwrap();
         let shell_path = sh_shell.shell_path;
+        let allowed_paths = ["/bin/sh", "/usr/bin/sh"];
         assert!(
-            shell_path == Path::new("/bin/sh") || shell_path == Path::new("/usr/bin/sh"),
-            "shell path: {shell_path:?}",
+            allowed_paths
+                .iter()
+                .copied()
+                .map(Path::new)
+                .any(|allowed| shell_path == allowed),
+            "shell path: {shell_path:?}"
         );
     }
 

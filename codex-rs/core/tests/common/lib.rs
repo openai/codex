@@ -75,12 +75,22 @@ pub fn test_tmp_path_buf() -> PathBuf {
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
-    ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .build()
         .await
-        .expect("defaults for test should always succeed")
+        .expect("defaults for test should always succeed");
+
+    // Make spawned shells hermetic: many tests run `shell_command`, which uses the user's shell
+    // by default. Pointing `$HOME` (and dotfile locations like `ZDOTDIR`) at a developer's real
+    // home directory can introduce unexpected output or side effects.
+    let home = codex_home.path().to_string_lossy().to_string();
+    let env = &mut config.shell_environment_policy.r#set;
+    env.insert("HOME".to_string(), home.clone());
+    env.insert("ZDOTDIR".to_string(), home);
+
+    config
 }
 
 #[cfg(target_os = "linux")]
