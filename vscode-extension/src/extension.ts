@@ -754,6 +754,64 @@ export function activate(context: vscode.ExtensionContext): void {
         getSessionModelState(),
       );
     },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.listAccounts(session);
+    },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.readAccount(session);
+    },
+    async (session, params) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.switchAccount(session, params);
+    },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.logoutAccount(session);
+    },
+    async ({ variant, restartMode }) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!outputChannel) throw new Error("outputChannel is not initialized");
+
+      const cfg = vscode.workspace.getConfiguration("codexMine");
+      const mineCmd =
+        cfg.get<string>("cli.commands.codexMine") ??
+        cfg.get<string>("cli.commands.mine") ??
+        "codex-mine";
+
+      const next = normalizeCliVariant(variant);
+      if (next === "codex-mine") {
+        const mineProbe = await probeCliVersion(mineCmd);
+        const mineDetected = mineProbe.ok && mineProbe.version.includes("-mine.");
+        if (!mineDetected) {
+          throw new Error(
+            mineProbe.ok
+              ? `codex-mine not detected (found: ${mineProbe.version})`
+              : `codex-mine not detected (${mineProbe.error})`,
+          );
+        }
+      }
+
+      await cfg.update("cli.variant", next, vscode.ConfigurationTarget.Global);
+
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      if (restartMode === "restartAll") {
+        for (const f of folders) {
+          await ensureBackendMatchesConfiguredCli(f, "newSession", false);
+        }
+      } else if (restartMode === "forceRestartAll") {
+        for (const f of folders) {
+          await backendManager.restartForWorkspaceFolder(f);
+          if (next !== "auto") {
+            cliVariantByBackendKey.set(
+              f.uri.toString(),
+              next === "codex-mine" ? "codex-mine" : "codex",
+            );
+          }
+        }
+      }
+    },
     async (sessionId, query, cancellationToken) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
@@ -3508,6 +3566,7 @@ function desiredCliCommandFromConfig(cfg: vscode.WorkspaceConfiguration): {
 async function ensureBackendMatchesConfiguredCli(
   folder: vscode.WorkspaceFolder,
   reason: "newSession" | "agents" | "mineFeature",
+  notifyUser = true,
 ): Promise<void> {
   if (!backendManager) throw new Error("backendManager is not initialized");
   if (!outputChannel) throw new Error("outputChannel is not initialized");
@@ -3534,9 +3593,11 @@ async function ensureBackendMatchesConfiguredCli(
     folder.uri.toString(),
     desired.variant === "codex-mine" ? "codex-mine" : "codex",
   );
-  void vscode.window.showInformationMessage(
-    `Backend restarted to use ${desired.variant}.`,
-  );
+  if (notifyUser) {
+    void vscode.window.showInformationMessage(
+      `Backend restarted to use ${desired.variant}.`,
+    );
+  }
 }
 
 async function probeCliVersion(

@@ -249,6 +249,9 @@ function main(): void {
   const resumeBtn = mustGet<HTMLButtonElement>("resume");
   const reloadBtn = mustGet<HTMLButtonElement>("reload");
   const settingsBtn = mustGet<HTMLButtonElement>("settings");
+  const settingsOverlayEl = mustGet<HTMLDivElement>("settingsOverlay");
+  const settingsCloseBtn = mustGet<HTMLButtonElement>("settingsClose");
+  const settingsBodyEl = mustGet<HTMLDivElement>("settingsBody");
   const diffBtn = maybeGet<HTMLButtonElement>("diff");
   const statusBtn = maybeGet<HTMLButtonElement>("status");
   const tabsEl = mustGet("tabs");
@@ -1238,6 +1241,360 @@ function main(): void {
   let tabsSig: string | null = null;
   const tabElBySessionId = new Map<string, HTMLDivElement>();
   let isComposing = false;
+
+  type SettingsResponseResult =
+    | { ok: true; data: unknown }
+    | { ok: false; error: string };
+  const pendingSettingsRequestsById = new Map<
+    string,
+    { resolve: (r: SettingsResponseResult) => void }
+  >();
+
+  const settingsRequest = async (
+    op: string,
+    payload: Record<string, unknown>,
+  ): Promise<SettingsResponseResult> => {
+    const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    const p = new Promise<SettingsResponseResult>((resolve) => {
+      pendingSettingsRequestsById.set(requestId, { resolve });
+    });
+    vscode.postMessage({ type: "settingsRequest", op, requestId, ...payload });
+    return await p;
+  };
+
+  let settingsOpen = false;
+  let settingsBusy = false;
+  let settingsSelectedCliVariant: "auto" | "codex" | "codex-mine" = "auto";
+  let settingsRestartMode: "later" | "restartAll" | "forceRestartAll" = "later";
+  let settingsActiveAccount: string | null = null;
+  let settingsSelectedAccount: string | null = null;
+  let settingsAccounts: Array<{
+    name: string;
+    kind?: string;
+    email?: string;
+  }> = [];
+
+  const closeSettings = (): void => {
+    settingsOpen = false;
+    settingsOverlayEl.style.display = "none";
+    settingsOverlayEl.setAttribute("aria-hidden", "true");
+    settingsBodyEl.textContent = "";
+  };
+
+  const openSettings = async (): Promise<void> => {
+    if (settingsOpen) return;
+    settingsOpen = true;
+    settingsOverlayEl.style.display = "flex";
+    settingsOverlayEl.setAttribute("aria-hidden", "false");
+    settingsBodyEl.textContent = "Loading…";
+    await loadSettings();
+  };
+
+  const validateAccountName = (name: string): string | null => {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return "Account name cannot be empty.";
+    if (trimmed.length > 64) return "Account name is too long (max 64 chars).";
+    if (!/^[A-Za-z0-9_-]+$/.test(trimmed))
+      return "Invalid account name. Use only [A-Za-z0-9_-].";
+    return null;
+  };
+
+  const renderSettings = (): void => {
+    settingsBodyEl.textContent = "";
+
+    const sectionCli = document.createElement("div");
+    sectionCli.className = "settingsSection";
+    const cliTitle = document.createElement("div");
+    cliTitle.className = "settingsSectionTitle";
+    cliTitle.textContent = "CLI";
+    sectionCli.appendChild(cliTitle);
+
+    const cliRow = document.createElement("div");
+    cliRow.className = "settingsRow";
+    const cliLabel = document.createElement("div");
+    const detected = state.capabilities?.detectedCliVariant ?? "unknown";
+    const selected = state.capabilities?.selectedCliVariant ?? "auto";
+    cliLabel.textContent = `Selected: ${selected} (detected: ${detected})`;
+    cliRow.appendChild(cliLabel);
+    sectionCli.appendChild(cliRow);
+
+    const choiceRow = document.createElement("div");
+    choiceRow.className = "settingsRow";
+    const mkRadio = (
+      variant: "auto" | "codex" | "codex-mine",
+      label: string,
+    ): HTMLLabelElement => {
+      const wrap = document.createElement("label");
+      wrap.style.display = "inline-flex";
+      wrap.style.gap = "8px";
+      wrap.style.alignItems = "center";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "cliVariant";
+      radio.value = variant;
+      radio.checked = settingsSelectedCliVariant === variant;
+      radio.addEventListener("change", () => {
+        settingsSelectedCliVariant = variant;
+      });
+      const span = document.createElement("span");
+      span.textContent = label;
+      wrap.appendChild(radio);
+      wrap.appendChild(span);
+      return wrap;
+    };
+    choiceRow.appendChild(mkRadio("auto", "Auto"));
+    choiceRow.appendChild(mkRadio("codex", "codex"));
+    choiceRow.appendChild(mkRadio("codex-mine", "codex-mine"));
+
+    const restartSelect = document.createElement("select");
+    restartSelect.className = "settingsSelect";
+    const restartOptions: Array<{
+      value: typeof settingsRestartMode;
+      label: string;
+    }> = [
+      { value: "later", label: "Restart: later" },
+      { value: "restartAll", label: "Restart: all" },
+      { value: "forceRestartAll", label: "Restart: force all" },
+    ];
+    for (const opt of restartOptions) {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.label;
+      if (opt.value === settingsRestartMode) o.selected = true;
+      restartSelect.appendChild(o);
+    }
+    restartSelect.addEventListener("change", () => {
+      const v = restartSelect.value as typeof settingsRestartMode;
+      settingsRestartMode =
+        v === "restartAll" || v === "forceRestartAll" ? v : "later";
+    });
+    choiceRow.appendChild(restartSelect);
+    sectionCli.appendChild(choiceRow);
+
+    const cliBtnRow = document.createElement("div");
+    cliBtnRow.className = "settingsRow";
+    const applyCliBtn = document.createElement("button");
+    applyCliBtn.className = "settingsBtn primary";
+    applyCliBtn.textContent = "Apply CLI";
+    applyCliBtn.disabled = settingsBusy;
+    applyCliBtn.addEventListener("click", async () => {
+      if (settingsBusy) return;
+      settingsBusy = true;
+      renderSettings();
+      const res = await settingsRequest("setCliVariant", {
+        variant: settingsSelectedCliVariant,
+        restartMode: settingsRestartMode,
+      });
+      settingsBusy = false;
+      if (res.ok) {
+        showToast("success", "CLI setting updated.");
+      } else {
+        showToast("error", res.error);
+      }
+      renderSettings();
+    });
+    cliBtnRow.appendChild(applyCliBtn);
+    sectionCli.appendChild(cliBtnRow);
+
+    const sectionAcct = document.createElement("div");
+    sectionAcct.className = "settingsSection";
+    const acctTitle = document.createElement("div");
+    acctTitle.className = "settingsSectionTitle";
+    acctTitle.textContent = "Accounts";
+    sectionAcct.appendChild(acctTitle);
+
+    if (!state.activeSession) {
+      const msg = document.createElement("div");
+      msg.className = "settingsHelp";
+      msg.textContent = "No active session. Create or select a session first.";
+      sectionAcct.appendChild(msg);
+    } else {
+      const acctRow = document.createElement("div");
+      acctRow.className = "settingsRow";
+      const activeText = document.createElement("div");
+      activeText.textContent = settingsActiveAccount
+        ? `Active: ${settingsActiveAccount}`
+        : "Active: (none)";
+      acctRow.appendChild(activeText);
+      sectionAcct.appendChild(acctRow);
+
+      const list = document.createElement("div");
+      list.className = "settingsList";
+      for (const a of settingsAccounts) {
+        const row = document.createElement("div");
+        row.className =
+          "settingsListItem" +
+          (settingsSelectedAccount === a.name ? " active" : "");
+        row.addEventListener("click", () => {
+          settingsSelectedAccount = a.name;
+          renderSettings();
+        });
+
+        const left = document.createElement("div");
+        left.textContent = a.name;
+        row.appendChild(left);
+
+        const meta = document.createElement("div");
+        meta.className = "settingsListMeta";
+        const kind = a.kind ? String(a.kind) : "";
+        const email = a.email ? String(a.email) : "";
+        meta.textContent =
+          kind === "chatgpt"
+            ? email
+              ? `chatgpt (${email})`
+              : "chatgpt"
+            : kind === "apiKey"
+              ? "apiKey"
+              : "";
+        row.appendChild(meta);
+
+        list.appendChild(row);
+      }
+      sectionAcct.appendChild(list);
+
+      const acctBtnRow2 = document.createElement("div");
+      acctBtnRow2.className = "settingsRow";
+
+      const refreshBtn = document.createElement("button");
+      refreshBtn.className = "settingsBtn";
+      refreshBtn.textContent = "Refresh";
+      refreshBtn.disabled = settingsBusy;
+      refreshBtn.addEventListener("click", async () => {
+        if (settingsBusy) return;
+        await loadSettings();
+      });
+      acctBtnRow2.appendChild(refreshBtn);
+
+      const switchBtn = document.createElement("button");
+      switchBtn.className = "settingsBtn primary";
+      switchBtn.textContent = "Switch";
+      switchBtn.disabled =
+        settingsBusy || !settingsSelectedAccount || settingsSelectedAccount === settingsActiveAccount;
+      switchBtn.addEventListener("click", async () => {
+        if (!settingsSelectedAccount) return;
+        settingsBusy = true;
+        renderSettings();
+        const res = await settingsRequest("accountSwitch", {
+          name: settingsSelectedAccount,
+          createIfMissing: false,
+        });
+        settingsBusy = false;
+        if (res.ok) {
+          showToast("success", `Switched to ${settingsSelectedAccount}.`);
+          await loadSettings();
+        } else {
+          showToast("error", res.error);
+          renderSettings();
+        }
+      });
+      acctBtnRow2.appendChild(switchBtn);
+
+      const logoutBtn = document.createElement("button");
+      logoutBtn.className = "settingsBtn";
+      logoutBtn.textContent = "Logout (active)";
+      logoutBtn.disabled = settingsBusy;
+      logoutBtn.addEventListener("click", async () => {
+        settingsBusy = true;
+        renderSettings();
+        const res = await settingsRequest("accountLogout", {});
+        settingsBusy = false;
+        if (res.ok) {
+          showToast("success", "Logged out (active account).");
+          await loadSettings();
+        } else {
+          showToast("error", res.error);
+          renderSettings();
+        }
+      });
+      acctBtnRow2.appendChild(logoutBtn);
+
+      sectionAcct.appendChild(acctBtnRow2);
+
+      const createRow = document.createElement("div");
+      createRow.className = "settingsRow";
+      const createInput = document.createElement("input");
+      createInput.className = "settingsInput";
+      createInput.placeholder = "new-account-name";
+      createInput.addEventListener("input", () => {
+        const v = createInput.value;
+        const err = validateAccountName(v);
+        createInput.title = err ?? "";
+      });
+      const createBtn = document.createElement("button");
+      createBtn.className = "settingsBtn primary";
+      createBtn.textContent = "Create & Switch";
+      createBtn.disabled = settingsBusy;
+      createBtn.addEventListener("click", async () => {
+        const name = createInput.value.trim();
+        const err = validateAccountName(name);
+        if (err) {
+          showToast("error", err);
+          return;
+        }
+        settingsBusy = true;
+        renderSettings();
+        const res = await settingsRequest("accountSwitch", {
+          name,
+          createIfMissing: true,
+        });
+        settingsBusy = false;
+        if (res.ok) {
+          showToast("success", `Created and switched to ${name}.`);
+          await loadSettings();
+        } else {
+          showToast("error", res.error);
+          renderSettings();
+        }
+      });
+      createRow.appendChild(createInput);
+      createRow.appendChild(createBtn);
+      sectionAcct.appendChild(createRow);
+
+      const help = document.createElement("div");
+      help.className = "settingsHelp";
+      help.textContent =
+        "Account names: [A-Za-z0-9_-], 1..64 chars\nLogout logs out the active account only.";
+      sectionAcct.appendChild(help);
+    }
+
+    settingsBodyEl.appendChild(sectionCli);
+    settingsBodyEl.appendChild(sectionAcct);
+  };
+
+  const loadSettings = async (): Promise<void> => {
+    settingsBusy = true;
+    renderSettings();
+    const res = await settingsRequest("load", {});
+    settingsBusy = false;
+    if (!res.ok) {
+      settingsBodyEl.textContent = "";
+      const err = document.createElement("div");
+      err.className = "askError";
+      err.textContent = res.error;
+      settingsBodyEl.appendChild(err);
+      return;
+    }
+    const data = res.data as any;
+    const accounts = data?.accounts ?? null;
+    const activeAccount =
+      typeof accounts?.activeAccount === "string" ? accounts.activeAccount : null;
+    const list = Array.isArray(accounts?.accounts) ? accounts.accounts : [];
+    settingsActiveAccount = activeAccount;
+    settingsAccounts = list
+      .filter((x: any) => x && typeof x.name === "string")
+      .map((x: any) => ({
+        name: String(x.name),
+        kind: typeof x.kind === "string" ? x.kind : undefined,
+        email: typeof x.email === "string" ? x.email : undefined,
+      }));
+    settingsSelectedAccount =
+      settingsSelectedAccount && settingsAccounts.some((a) => a.name === settingsSelectedAccount)
+        ? settingsSelectedAccount
+        : settingsActiveAccount ??
+          (settingsAccounts.length > 0 ? settingsAccounts[0]!.name : null);
+    settingsSelectedCliVariant = state.capabilities?.selectedCliVariant ?? "auto";
+    renderSettings();
+  };
 
   type ImageLoadResult =
     | { ok: true; imageKey: string; mimeType: string; base64: string }
@@ -2530,7 +2887,14 @@ function main(): void {
     statusTextEl.style.maxWidth = `${availablePx}px`;
 
     statusPopoverDetails = fullStatus;
-    statusHoverDetails = statusTooltip !== fullStatus ? statusTooltip : "";
+    // Include the full status (e.g. percentages) in the hover popover so users can
+    // see both the compact headline and the tooltip details (e.g. reset time).
+    statusHoverDetails =
+      statusTooltip !== fullStatus
+        ? fullStatus
+          ? `${fullStatus}\n\n${statusTooltip}`
+          : statusTooltip
+        : "";
     statusPopoverEnabled = false;
 
     // Do not dismiss the hover popover during refresh. Rate limit updates (and other
@@ -3700,8 +4064,21 @@ function main(): void {
       vscode.postMessage({ type: "openDiff" }),
     );
   }
-  settingsBtn.addEventListener("click", () =>
-    vscode.postMessage({ type: "selectCliVariant" }),
+  settingsBtn.addEventListener("click", () => void openSettings());
+  settingsCloseBtn.addEventListener("click", () => closeSettings());
+  settingsOverlayEl.addEventListener("click", (e) => {
+    if (e.target === settingsOverlayEl) closeSettings();
+  });
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (!settingsOpen) return;
+      if ((e as KeyboardEvent).key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeSettings();
+    },
+    true,
   );
 
   inputEl.addEventListener("input", () => updateSuggestions());
@@ -3891,6 +4268,7 @@ function main(): void {
       mimeType?: unknown;
       base64?: unknown;
       error?: unknown;
+      data?: unknown;
     };
     if (anyMsg.type === "toast") {
       const kind =
@@ -3905,6 +4283,24 @@ function main(): void {
           ? Math.max(0, Math.trunc(anyMsg.timeoutMs))
           : 2500;
       showToast(kind, message, timeoutMs);
+      return;
+    }
+    if (anyMsg.type === "settingsResponse") {
+      const requestId =
+        typeof anyMsg.requestId === "string" ? anyMsg.requestId : null;
+      if (!requestId) return;
+      const pending = pendingSettingsRequestsById.get(requestId);
+      if (!pending) return;
+      pendingSettingsRequestsById.delete(requestId);
+      if (anyMsg.ok) {
+        pending.resolve({ ok: true, data: (anyMsg as any).data });
+      } else {
+        pending.resolve({
+          ok: false,
+          error:
+            typeof anyMsg.error === "string" ? anyMsg.error : "Unknown error",
+        });
+      }
       return;
     }
     if (anyMsg.type === "imageData") {

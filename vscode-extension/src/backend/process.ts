@@ -32,6 +32,7 @@ import type { GetAccountParams } from "../generated/v2/GetAccountParams";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { ListAccountsResponse } from "../generated/v2/ListAccountsResponse";
+import type { LogoutAccountResponse } from "../generated/v2/LogoutAccountResponse";
 import type { SwitchAccountParams } from "../generated/v2/SwitchAccountParams";
 import type { SwitchAccountResponse } from "../generated/v2/SwitchAccountResponse";
 import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
@@ -279,6 +280,13 @@ export class BackendProcess implements vscode.Disposable {
     return this.rpc.request<SwitchAccountResponse>({
       method: "account/switch",
       params,
+    });
+  }
+
+  public async accountLogout(): Promise<LogoutAccountResponse> {
+    return this.rpc.request<LogoutAccountResponse>({
+      method: "account/logout",
+      params: undefined,
     });
   }
 

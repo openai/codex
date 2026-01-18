@@ -225,6 +225,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       images?: Array<{ name: string; url: string }>,
       rewind?: RewindRequest | null,
     ) => Promise<void>,
+    private readonly onAccountList: (
+      session: Session,
+    ) => Promise<{ activeAccount?: string; accounts: Array<unknown> }>,
+    private readonly onAccountRead: (session: Session) => Promise<unknown>,
+    private readonly onAccountSwitch: (
+      session: Session,
+      params: { name: string; createIfMissing: boolean },
+    ) => Promise<unknown>,
+    private readonly onAccountLogout: (session: Session) => Promise<unknown>,
+    private readonly onSetCliVariant: (args: {
+      variant: "auto" | "codex" | "codex-mine";
+      restartMode: "later" | "restartAll" | "forceRestartAll";
+    }) => Promise<void>,
     private readonly onFileSearch: (
       sessionId: string,
       query: string,
@@ -652,6 +665,112 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (type === "selectCliVariant") {
       await vscode.commands.executeCommand("codexMine.selectCliVariant");
+      return;
+    }
+
+    if (type === "settingsRequest") {
+      const requestId = anyMsg["requestId"];
+      const op = anyMsg["op"];
+      if (typeof requestId !== "string" || !requestId) return;
+      if (typeof op !== "string" || !op) return;
+      if (!this.view) return;
+
+      const respondOk = async (data: unknown): Promise<void> => {
+        await this.view?.webview.postMessage({
+          type: "settingsResponse",
+          requestId,
+          ok: true,
+          data,
+        });
+      };
+      const respondErr = async (error: string): Promise<void> => {
+        await this.view?.webview.postMessage({
+          type: "settingsResponse",
+          requestId,
+          ok: false,
+          error,
+        });
+      };
+
+      const st = this.getState();
+      const active = st.activeSession;
+      try {
+        if (op === "load") {
+          if (!active) {
+            await respondOk({
+              hasActiveSession: false,
+              capabilities: st.capabilities ?? null,
+              account: null,
+              accounts: null,
+            });
+            return;
+          }
+          const [accounts, account] = await Promise.all([
+            this.onAccountList(active),
+            this.onAccountRead(active),
+          ]);
+          await respondOk({
+            hasActiveSession: true,
+            capabilities: st.capabilities ?? null,
+            account,
+            accounts,
+          });
+          return;
+        }
+
+        if (!active) {
+          await respondErr("No active session.");
+          return;
+        }
+
+        if (op === "accountSwitch") {
+          const name = anyMsg["name"];
+          const createIfMissing = anyMsg["createIfMissing"];
+          if (typeof name !== "string" || !name.trim()) {
+            await respondErr("Missing account name.");
+            return;
+          }
+          const create =
+            typeof createIfMissing === "boolean" ? createIfMissing : false;
+          await this.onAccountSwitch(active, {
+            name: name.trim(),
+            createIfMissing: create,
+          });
+          await respondOk({ activeAccount: name.trim() });
+          return;
+        }
+
+        if (op === "accountLogout") {
+          await this.onAccountLogout(active);
+          await respondOk({});
+          return;
+        }
+
+        if (op === "setCliVariant") {
+          const variant = anyMsg["variant"];
+          const restartMode = anyMsg["restartMode"];
+          if (
+            variant !== "auto" &&
+            variant !== "codex" &&
+            variant !== "codex-mine"
+          ) {
+            await respondErr("Invalid CLI variant.");
+            return;
+          }
+          const restart =
+            restartMode === "restartAll" || restartMode === "forceRestartAll"
+              ? restartMode
+              : "later";
+          await this.onSetCliVariant({ variant, restartMode: restart });
+          await respondOk({});
+          this.refresh();
+          return;
+        }
+
+        await respondErr(`Unknown settings operation: ${op}`);
+      } catch (err) {
+        await respondErr(String((err as Error)?.message ?? err));
+      }
       return;
     }
 
@@ -1314,12 +1433,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .askOptionLabel { font-weight: 500; }
       .askOptionMeta { opacity: 0.85; font-size: 12px; }
       .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: min(820px, calc(100vw - 32px)); border-radius: 10px; padding: 10px 12px; border: 1px solid rgba(127,127,127,0.35); box-shadow: 0 10px 30px rgba(0,0,0,0.35); background: var(--vscode-notifications-background, rgba(30,30,30,0.95)); color: var(--vscode-notifications-foreground, inherit); display: none; }
-      .toast.info { border-color: rgba(127,127,127,0.35); }
-      .toast.success { border-color: rgba(0,200,120,0.55); }
-      .toast.error { border-color: rgba(220,60,60,0.60); }
-	    </style>
-	  </head>
-	  <body>
+	      .toast.info { border-color: rgba(127,127,127,0.35); }
+	      .toast.success { border-color: rgba(0,200,120,0.55); }
+	      .toast.error { border-color: rgba(220,60,60,0.60); }
+        .settingsOverlay { position: fixed; inset: 0; z-index: 900; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.35); }
+        .settingsPanel { width: min(760px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 32px)); overflow: auto; border-radius: 12px; border: 1px solid rgba(127,127,127,0.35); background: var(--vscode-editor-background, rgba(30,30,30,0.98)); box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+        .settingsHeader { position: sticky; top: 0; background: inherit; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(127,127,127,0.25); }
+        .settingsTitle { font-weight: 600; }
+        .settingsCloseBtn { border: 1px solid rgba(127,127,127,0.35); border-radius: 8px; width: 30px; height: 28px; background: transparent; cursor: pointer; color: inherit; }
+        .settingsCloseBtn:hover { background: rgba(127,127,127,0.12); }
+        .settingsBody { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+        .settingsSection { border: 1px solid rgba(127,127,127,0.25); border-radius: 12px; padding: 12px; }
+        .settingsSectionTitle { font-weight: 600; margin-bottom: 10px; }
+        .settingsRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .settingsHelp { margin-top: 6px; opacity: 0.75; font-size: 12px; white-space: pre-wrap; }
+        .settingsBtn { padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; cursor: pointer; }
+        .settingsBtn.primary { background: rgba(0,120,212,0.18); border-color: rgba(0,120,212,0.45); }
+        .settingsBtn:disabled { opacity: 0.5; cursor: default; }
+        .settingsInput { border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; background: transparent; color: inherit; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); }
+        .settingsSelect { border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; background: transparent; color: inherit; }
+        .settingsList { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+        .settingsListItem { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(127,127,127,0.2); cursor: pointer; }
+        .settingsListItem:hover { border-color: rgba(127,127,127,0.35); background: rgba(127,127,127,0.06); }
+        .settingsListItem.active { border-color: rgba(0,120,212,0.55); background: rgba(0,120,212,0.12); }
+        .settingsListMeta { opacity: 0.8; font-size: 12px; }
+		    </style>
+		  </head>
+		  <body>
     <div class="top">
       <div class="topRow">
         <div id="title" class="title">Codex UI</div>
@@ -1332,9 +1472,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       </div>
       <div id="tabs" class="tabs"></div>
     </div>
-    <div id="approvals" class="approvals" style="display:none"></div>
-    <div id="log" class="log"></div>
-	    <div id="composer" class="composer">
+	    <div id="approvals" class="approvals" style="display:none"></div>
+      <div id="settingsOverlay" class="settingsOverlay" aria-hidden="true">
+        <div class="settingsPanel" role="dialog" aria-label="Settings">
+          <div class="settingsHeader">
+            <div class="settingsTitle">Settings</div>
+            <button id="settingsClose" class="settingsCloseBtn" aria-label="Close settings" title="Close">×</button>
+          </div>
+          <div id="settingsBody" class="settingsBody"></div>
+        </div>
+      </div>
+	    <div id="log" class="log"></div>
+		    <div id="composer" class="composer">
 	      <div id="editBanner" class="editBanner" style="display:none"></div>
 	      <div id="askUserQuestion" class="askUserQuestion"></div>
 	      <div id="attachments" class="attachments"></div>
