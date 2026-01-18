@@ -254,20 +254,26 @@ mod send_input {
 mod wait {
     use super::*;
     use crate::agent::status::is_final;
+    use futures::FutureExt;
+    use futures::StreamExt;
+    use futures::stream::FuturesUnordered;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
+    use tokio::sync::watch::Receiver;
     use tokio::time::Instant;
+
     use tokio::time::timeout_at;
 
     #[derive(Debug, Deserialize)]
     struct WaitArgs {
-        id: String,
+        ids: Vec<String>,
         timeout_ms: Option<i64>,
     }
 
     #[derive(Debug, Serialize)]
     struct WaitResult {
-        status: AgentStatus,
+        status: HashMap<ThreadId, AgentStatus>,
         timed_out: bool,
     }
 
@@ -278,7 +284,16 @@ mod wait {
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: WaitArgs = parse_arguments(&arguments)?;
-        let receiver_thread_id = agent_id(&args.id)?;
+        if args.ids.is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "ids must be non-empty".to_owned(),
+            ));
+        }
+        let receiver_thread_ids = args
+            .ids
+            .iter()
+            .map(|id| agent_id(id))
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Validate timeout.
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
@@ -296,105 +311,131 @@ mod wait {
                 &turn,
                 CollabWaitingBeginEvent {
                     sender_thread_id: session.conversation_id,
-                    receiver_thread_id,
+                    receiver_thread_ids: receiver_thread_ids.clone(),
                     call_id: call_id.clone(),
                 }
                 .into(),
             )
             .await;
-        let status_rx = match session
-            .services
-            .agent_control
-            .subscribe_status(receiver_thread_id)
-            .await
-        {
-            Ok(status_rx) => status_rx,
-            Err(err) => {
-                let status = session
-                    .services
-                    .agent_control
-                    .get_status(receiver_thread_id)
-                    .await;
-                session
-                    .send_event(
-                        &turn,
-                        CollabWaitingEndEvent {
-                            sender_thread_id: session.conversation_id,
-                            receiver_thread_id,
-                            call_id: call_id.clone(),
-                            status,
-                        }
-                        .into(),
-                    )
-                    .await;
-                return Err(collab_agent_error(receiver_thread_id, err));
+
+        let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
+        let mut initial_final_statuses = Vec::new();
+        for id in &receiver_thread_ids {
+            match session.services.agent_control.subscribe_status(*id).await {
+                Ok(rx) => {
+                    let status = rx.borrow().clone();
+                    if is_final(&status) {
+                        initial_final_statuses.push((*id, status));
+                    }
+                    status_rxs.push((*id, rx));
+                }
+                Err(CodexErr::ThreadNotFound(_)) => {
+                    initial_final_statuses.push((*id, AgentStatus::NotFound));
+                }
+                Err(err) => {
+                    let mut statuses = HashMap::with_capacity(1);
+                    statuses.insert(*id, session.services.agent_control.get_status(*id).await);
+                    session
+                        .send_event(
+                            &turn,
+                            CollabWaitingEndEvent {
+                                sender_thread_id: session.conversation_id,
+                                call_id: call_id.clone(),
+                                statuses,
+                            }
+                            .into(),
+                        )
+                        .await;
+                    return Err(collab_agent_error(*id, err));
+                }
             }
+        }
+
+        let statuses = if !initial_final_statuses.is_empty() {
+            initial_final_statuses
+        } else {
+            // Wait for the first agent to reach a final status.
+            let mut futures = FuturesUnordered::new();
+            for (id, rx) in status_rxs.into_iter() {
+                let session = session.clone();
+                futures.push(wait_for_final_status(session, id, rx));
+            }
+            let mut results = Vec::new();
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+            loop {
+                match timeout_at(deadline, futures.next()).await {
+                    Ok(Some(Some(result))) => {
+                        results.push(result);
+                        break;
+                    }
+                    Ok(Some(None)) => continue,
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            if !results.is_empty() {
+                // Drain the unlikely last elements to prevent race.
+                loop {
+                    match futures.next().now_or_never() {
+                        Some(Some(Some(result))) => results.push(result),
+                        Some(Some(None)) => continue,
+                        Some(None) | None => break,
+                    }
+                }
+            }
+            results
         };
-        let result =
-            wait_for_status(session.as_ref(), receiver_thread_id, timeout_ms, status_rx).await;
+
+        // Convert payload.
+        let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let result = WaitResult {
+            status: statuses_map.clone(),
+            timed_out: statuses.is_empty(),
+        };
+
+        // Final event emission.
         session
             .send_event(
                 &turn,
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
-                    receiver_thread_id,
                     call_id,
-                    status: result.status.clone(),
+                    statuses: statuses_map,
                 }
                 .into(),
             )
             .await;
 
-        if matches!(result.status, AgentStatus::NotFound) {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "agent with id {receiver_thread_id} not found"
-            )));
-        }
-
         let content = serde_json::to_string(&result).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
         })?;
 
-        let success = !result.timed_out && !matches!(result.status, AgentStatus::Errored(_));
-
         Ok(ToolOutput::Function {
             content,
-            success: Some(success),
+            success: None,
             content_items: None,
         })
     }
 
-    async fn wait_for_status(
-        session: &Session,
-        agent_id: ThreadId,
-        timeout_ms: i64,
-        mut status_rx: tokio::sync::watch::Receiver<AgentStatus>,
-    ) -> WaitResult {
-        // Get last known status.
-        let mut status = status_rx.borrow_and_update().clone();
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+    async fn wait_for_final_status(
+        session: Arc<Session>,
+        thread_id: ThreadId,
+        mut status_rx: Receiver<AgentStatus>,
+    ) -> Option<(ThreadId, AgentStatus)> {
+        let mut status = status_rx.borrow().clone();
+        if is_final(&status) {
+            return Some((thread_id, status));
+        }
 
-        let timed_out = loop {
+        loop {
+            if status_rx.changed().await.is_err() {
+                let latest = session.services.agent_control.get_status(thread_id).await;
+                return is_final(&latest).then_some((thread_id, latest));
+            }
+            status = status_rx.borrow().clone();
             if is_final(&status) {
-                break false;
+                return Some((thread_id, status));
             }
-
-            match timeout_at(deadline, status_rx.changed()).await {
-                Ok(Ok(())) => status = status_rx.borrow().clone(),
-                Ok(Err(_)) => {
-                    let last_status = session.services.agent_control.get_status(agent_id).await;
-                    if last_status != AgentStatus::NotFound {
-                        // On-purpose we keep the last known status if the agent gets dropped. This
-                        // event is not supposed to happen.
-                        status = last_status;
-                    }
-                    break false;
-                }
-                Err(_) => break true,
-            }
-        };
-
-        WaitResult { status, timed_out }
+        }
     }
 }
 
@@ -560,7 +601,9 @@ mod tests {
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
+    use serde::Deserialize;
     use serde_json::json;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -772,6 +815,12 @@ mod tests {
             .expect("shutdown should submit");
     }
 
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct WaitResult {
+        status: HashMap<ThreadId, AgentStatus>,
+        timed_out: bool,
+    }
+
     #[tokio::test]
     async fn wait_rejects_non_positive_timeout() {
         let (session, turn) = make_session_and_context().await;
@@ -779,7 +828,10 @@ mod tests {
             Arc::new(session),
             Arc::new(turn),
             "wait",
-            function_payload(json!({"id": ThreadId::new().to_string(), "timeout_ms": 0})),
+            function_payload(json!({
+                "ids": [ThreadId::new().to_string()],
+                "timeout_ms": 0
+            })),
         );
         let Err(err) = CollabHandler.handle(invocation).await else {
             panic!("non-positive timeout should be rejected");
@@ -797,7 +849,7 @@ mod tests {
             Arc::new(session),
             Arc::new(turn),
             "wait",
-            function_payload(json!({"id": "invalid"})),
+            function_payload(json!({"ids": ["invalid"]})),
         );
         let Err(err) = CollabHandler.handle(invocation).await else {
             panic!("invalid id should be rejected");
@@ -806,6 +858,65 @@ mod tests {
             panic!("expected respond-to-model error");
         };
         assert!(msg.starts_with("invalid agent id invalid:"));
+    }
+
+    #[tokio::test]
+    async fn wait_rejects_empty_ids() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({"ids": []})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("empty ids should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel("ids must be non-empty".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_returns_not_found_for_missing_agents() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let id_a = ThreadId::new();
+        let id_b = ThreadId::new();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({
+                "ids": [id_a.to_string(), id_b.to_string()],
+                "timeout_ms": 1000
+            })),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(
+            result,
+            WaitResult {
+                status: HashMap::from([
+                    (id_a, AgentStatus::NotFound),
+                    (id_b, AgentStatus::NotFound),
+                ]),
+                timed_out: false
+            }
+        );
+        assert_eq!(success, None);
     }
 
     #[tokio::test]
@@ -820,7 +931,10 @@ mod tests {
             Arc::new(session),
             Arc::new(turn),
             "wait",
-            function_payload(json!({"id": agent_id.to_string(), "timeout_ms": 10})),
+            function_payload(json!({
+                "ids": [agent_id.to_string()],
+                "timeout_ms": 10
+            })),
         );
         let output = CollabHandler
             .handle(invocation)
@@ -832,8 +946,16 @@ mod tests {
         else {
             panic!("expected function output");
         };
-        assert_eq!(content, r#"{"status":"pending_init","timed_out":true}"#);
-        assert_eq!(success, Some(false));
+        let result: WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(
+            result,
+            WaitResult {
+                status: HashMap::new(),
+                timed_out: true
+            }
+        );
+        assert_eq!(success, None);
 
         let _ = thread
             .thread
@@ -869,7 +991,10 @@ mod tests {
             Arc::new(session),
             Arc::new(turn),
             "wait",
-            function_payload(json!({"id": agent_id.to_string(), "timeout_ms": 1000})),
+            function_payload(json!({
+                "ids": [agent_id.to_string()],
+                "timeout_ms": 1000
+            })),
         );
         let output = CollabHandler
             .handle(invocation)
@@ -881,8 +1006,16 @@ mod tests {
         else {
             panic!("expected function output");
         };
-        assert_eq!(content, r#"{"status":"shutdown","timed_out":false}"#);
-        assert_eq!(success, Some(true));
+        let result: WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(
+            result,
+            WaitResult {
+                status: HashMap::from([(agent_id, AgentStatus::Shutdown)]),
+                timed_out: false
+            }
+        );
+        assert_eq!(success, None);
     }
 
     #[tokio::test]

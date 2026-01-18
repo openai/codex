@@ -8,6 +8,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_utils_json_to_toml::json_to_toml;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
+use mcp_types::ToolOutputSchema;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
@@ -127,12 +128,22 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
         name: "codex".to_string(),
         title: Some("Codex".to_string()),
         input_schema: tool_input_schema,
-        // TODO(mbolin): This should be defined.
-        output_schema: None,
+        output_schema: Some(codex_tool_output_schema()),
         description: Some(
             "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.".to_string(),
         ),
         annotations: None,
+    }
+}
+
+fn codex_tool_output_schema() -> ToolOutputSchema {
+    ToolOutputSchema {
+        properties: Some(serde_json::json!({
+            "threadId": { "type": "string" },
+            "content": { "type": "string" }
+        })),
+        required: Some(vec!["threadId".to_string(), "content".to_string()]),
+        r#type: "object".to_string(),
     }
 }
 
@@ -239,7 +250,7 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         name: "codex-reply".to_string(),
         title: Some("Codex Reply".to_string()),
         input_schema: tool_input_schema,
-        output_schema: None,
+        output_schema: Some(codex_tool_output_schema()),
         description: Some(
             "Continue a Codex conversation by providing the thread id and prompt.".to_string(),
         ),
@@ -330,6 +341,21 @@ mod tests {
             "type": "object"
           },
           "name": "codex",
+          "outputSchema": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "content"
+            ],
+            "type": "object"
+          },
           "title": "Codex"
         });
         assert_eq!(expected_tool_json, tool_json);
@@ -362,6 +388,21 @@ mod tests {
             "type": "object",
           },
           "name": "codex-reply",
+          "outputSchema": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "content"
+            ],
+            "type": "object"
+          },
           "title": "Codex Reply",
         });
         assert_eq!(expected_tool_json, tool_json);

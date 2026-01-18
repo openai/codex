@@ -36,6 +36,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -97,6 +98,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::instructions::UserInstructions;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
@@ -120,6 +122,7 @@ use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::SkillErrorInfo;
+use crate::protocol::SkillInterface as ProtocolSkillInterface;
 use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
@@ -153,17 +156,17 @@ use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -248,7 +251,8 @@ impl Codex {
             );
         }
 
-        let user_instructions = get_user_instructions(&config, Some(&loaded_skills.skills)).await;
+        let enabled_skills = loaded_skills.enabled_skills();
+        let user_instructions = get_user_instructions(&config, Some(&enabled_skills)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
             .await
@@ -268,10 +272,16 @@ impl Codex {
                 crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
+        // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
+        // to avoid extracting these fields separately and constructing CollaborationMode here.
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model: model.clone(),
+            reasoning_effort: config.model_reasoning_effort,
+            developer_instructions: None,
+        });
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
-            model: model.clone(),
-            model_reasoning_effort: config.model_reasoning_effort,
+            collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
@@ -420,10 +430,7 @@ pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
     provider: ModelProviderInfo,
 
-    /// If not specified, server will use its default model.
-    model: String,
-
-    model_reasoning_effort: Option<ReasoningEffortConfig>,
+    collaboration_mode: CollaborationMode,
     model_reasoning_summary: ReasoningSummaryConfig,
 
     /// Developer instructions that supplement the base instructions.
@@ -461,11 +468,8 @@ pub(crate) struct SessionConfiguration {
 impl SessionConfiguration {
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
-        if let Some(model) = updates.model.clone() {
-            next_configuration.model = model;
-        }
-        if let Some(effort) = updates.reasoning_effort {
-            next_configuration.model_reasoning_effort = effort;
+        if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
+            next_configuration.collaboration_mode = collaboration_mode;
         }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = summary;
@@ -488,8 +492,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
-    pub(crate) model: Option<String>,
-    pub(crate) reasoning_effort: Option<Option<ReasoningEffortConfig>>,
+    pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
 }
@@ -500,7 +503,8 @@ impl Session {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
-        per_turn_config.model_reasoning_effort = session_configuration.model_reasoning_effort;
+        per_turn_config.model_reasoning_effort =
+            session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.features = config.features.clone();
         per_turn_config
@@ -518,7 +522,7 @@ impl Session {
         sub_id: String,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
-            session_configuration.model.as_str(),
+            session_configuration.collaboration_mode.model(),
             model_info.slug.as_str(),
         );
 
@@ -529,7 +533,7 @@ impl Session {
             model_info.clone(),
             otel_manager,
             provider,
-            session_configuration.model_reasoning_effort,
+            session_configuration.collaboration_mode.reasoning_effort(),
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
@@ -577,7 +581,8 @@ impl Session {
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
-            session_configuration.model, session_configuration.provider
+            session_configuration.collaboration_mode.model(),
+            session_configuration.provider
         );
         if !session_configuration.cwd.is_absolute() {
             return Err(anyhow::anyhow!(
@@ -586,16 +591,14 @@ impl Session {
             ));
         }
 
+        let forked_from_id = initial_history.forked_from_id();
+
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        session_configuration.user_instructions.clone(),
-                        session_source,
-                    ),
+                    RolloutRecorderParams::new(conversation_id, forked_from_id, session_source),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (
@@ -650,8 +653,8 @@ impl Session {
         let auth = auth.as_ref();
         let otel_manager = OtelManager::new(
             conversation_id,
-            session_configuration.model.as_str(),
-            session_configuration.model.as_str(),
+            session_configuration.collaboration_mode.model(),
+            session_configuration.collaboration_mode.model(),
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
             auth.map(|a| a.mode),
@@ -675,7 +678,7 @@ impl Session {
 
         otel_manager.conversation_starts(
             config.model_provider.name.as_str(),
-            config.model_reasoning_effort,
+            session_configuration.collaboration_mode.reasoning_effort(),
             config.model_reasoning_summary,
             config.model_context_window,
             config.model_auto_compact_token_limit,
@@ -731,12 +734,13 @@ impl Session {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
-                model: session_configuration.model.clone(),
+                forked_from_id,
+                model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
                 cwd: session_configuration.cwd.clone(),
-                reasoning_effort: session_configuration.model_reasoning_effort,
+                reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                 history_log_id,
                 history_entry_count,
                 initial_messages,
@@ -811,7 +815,7 @@ impl Session {
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
-                let items = self.build_initial_context(&turn_context);
+                let items = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &items).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
@@ -849,8 +853,9 @@ impl Session {
                 }
 
                 // Always add response items to conversation history
-                let reconstructed_history =
-                    self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+                let reconstructed_history = self
+                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                    .await;
                 if !reconstructed_history.is_empty() {
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
@@ -869,7 +874,7 @@ impl Session {
                 }
 
                 // Append the current session's initial context after the reconstructed history.
-                let initial_context = self.build_initial_context(&turn_context);
+                let initial_context = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &initial_context)
                     .await;
                 // Flush after seeding history and any persisted rollout copy.
@@ -972,7 +977,10 @@ impl Session {
         let model_info = self
             .services
             .models_manager
-            .get_model_info(session_configuration.model.as_str(), &per_turn_config)
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config,
+            )
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -1052,6 +1060,50 @@ impl Session {
             )
             .into(),
         )
+    }
+
+    fn build_collaboration_mode_update_item(
+        &self,
+        previous_collaboration_mode: &CollaborationMode,
+        next_collaboration_mode: Option<&CollaborationMode>,
+    ) -> Option<ResponseItem> {
+        if let Some(next_mode) = next_collaboration_mode {
+            if previous_collaboration_mode == next_mode {
+                return None;
+            }
+            // If the next mode has empty developer instructions, this returns None and we emit no
+            // update, so prior collaboration instructions remain in the prompt history.
+            Some(DeveloperInstructions::from_collaboration_mode(next_mode)?.into())
+        } else {
+            None
+        }
+    }
+
+    fn build_settings_update_items(
+        &self,
+        previous_context: Option<&Arc<TurnContext>>,
+        current_context: &TurnContext,
+        previous_collaboration_mode: &CollaborationMode,
+        next_collaboration_mode: Option<&CollaborationMode>,
+    ) -> Vec<ResponseItem> {
+        let mut update_items = Vec::new();
+        if let Some(env_item) =
+            self.build_environment_update_item(previous_context, current_context)
+        {
+            update_items.push(env_item);
+        }
+        if let Some(permissions_item) =
+            self.build_permissions_update_item(previous_context, current_context)
+        {
+            update_items.push(permissions_item);
+        }
+        if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
+            previous_collaboration_mode,
+            next_collaboration_mode,
+        ) {
+            update_items.push(collaboration_mode_item);
+        }
+        update_items
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -1292,7 +1344,7 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
-    fn reconstruct_history_from_rollout(
+    async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
@@ -1312,7 +1364,7 @@ impl Session {
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
-                            self.build_initial_context(turn_context),
+                            self.build_initial_context(turn_context).await,
                             &user_messages,
                             &compacted.message,
                         );
@@ -1382,7 +1434,10 @@ impl Session {
         }
     }
 
-    pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
+    pub(crate) async fn build_initial_context(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
         let mut items = Vec::<ResponseItem>::with_capacity(4);
         let shell = self.user_shell();
         items.push(
@@ -1395,6 +1450,16 @@ impl Session {
         );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
+        }
+        // Add developer instructions from collaboration_mode if they exist and are non-empty
+        let collaboration_mode = {
+            let state = self.state.lock().await;
+            state.session_configuration.collaboration_mode.clone()
+        };
+        if let Some(collab_instructions) =
+            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
+        {
+            items.push(collab_instructions.into());
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
@@ -1522,6 +1587,22 @@ impl Session {
             self.emit_turn_item_started(turn_context, &item).await;
             self.emit_turn_item_completed(turn_context, item).await;
         }
+    }
+
+    pub(crate) async fn record_user_prompt_and_emit_turn_item(
+        &self,
+        turn_context: &TurnContext,
+        input: &[UserInput],
+        response_item: ResponseItem,
+    ) {
+        // Persist the user message to history, but emit the turn item from `UserInput` so
+        // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
+        // those spans, and `record_response_item_and_emit_turn_item` would drop them.
+        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+            .await;
+        let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
+        self.emit_turn_item_started(turn_context, &turn_item).await;
+        self.emit_turn_item_completed(turn_context, turn_item).await;
     }
 
     pub(crate) async fn notify_background_event(
@@ -1814,7 +1895,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 model,
                 effort,
                 summary,
+                collaboration_mode,
             } => {
+                let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
+                    collab_mode
+                } else {
+                    let state = sess.state.lock().await;
+                    state.session_configuration.collaboration_mode.with_updates(
+                        model.clone(),
+                        effort,
+                        None,
+                    )
+                };
                 handlers::override_turn_context(
                     &sess,
                     sub.id.clone(),
@@ -1822,8 +1914,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         cwd,
                         approval_policy,
                         sandbox_policy,
-                        model,
-                        reasoning_effort: effort,
+                        collaboration_mode: Some(collaboration_mode),
                         reasoning_summary: summary,
                         ..Default::default()
                     },
@@ -1931,6 +2022,8 @@ mod handlers {
     use codex_protocol::protocol::WarningEvent;
 
     use crate::context_manager::is_user_turn_boundary;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -1949,6 +2042,18 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
+        let previous_context = sess
+            .new_default_turn_with_sub_id(sess.next_internal_sub_id())
+            .await;
+        let previous_collaboration_mode = sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .collaboration_mode
+            .clone();
+        let next_collaboration_mode = updates.collaboration_mode.clone();
+
         if let Err(err) = sess.update_settings(updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -1958,6 +2063,19 @@ mod handlers {
                 }),
             })
             .await;
+            return;
+        }
+
+        let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let update_items = sess.build_settings_update_items(
+            Some(&previous_context),
+            &current_context,
+            &previous_collaboration_mode,
+            next_collaboration_mode.as_ref(),
+        );
+        if !update_items.is_empty() {
+            sess.record_conversation_items(&current_context, &update_items)
+                .await;
         }
     }
 
@@ -1977,18 +2095,27 @@ mod handlers {
                 summary,
                 final_output_json_schema,
                 items,
-            } => (
-                items,
-                SessionSettingsUpdate {
-                    cwd: Some(cwd),
-                    approval_policy: Some(approval_policy),
-                    sandbox_policy: Some(sandbox_policy),
-                    model: Some(model),
-                    reasoning_effort: Some(effort),
-                    reasoning_summary: Some(summary),
-                    final_output_json_schema: Some(final_output_json_schema),
-                },
-            ),
+                collaboration_mode,
+            } => {
+                let collaboration_mode = collaboration_mode.or_else(|| {
+                    Some(CollaborationMode::Custom(Settings {
+                        model: model.clone(),
+                        reasoning_effort: effort,
+                        developer_instructions: None,
+                    }))
+                });
+                (
+                    items,
+                    SessionSettingsUpdate {
+                        cwd: Some(cwd),
+                        approval_policy: Some(approval_policy),
+                        sandbox_policy: Some(sandbox_policy),
+                        collaboration_mode,
+                        reasoning_summary: Some(summary),
+                        final_output_json_schema: Some(final_output_json_schema),
+                    },
+                )
+            }
             Op::UserInput {
                 items,
                 final_output_json_schema,
@@ -2002,6 +2129,14 @@ mod handlers {
             _ => unreachable!(),
         };
 
+        let previous_collaboration_mode = sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .collaboration_mode
+            .clone();
+        let next_collaboration_mode = updates.collaboration_mode.clone();
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -2013,17 +2148,12 @@ mod handlers {
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
-            let mut update_items = Vec::new();
-            if let Some(env_item) =
-                sess.build_environment_update_item(previous_context.as_ref(), &current_context)
-            {
-                update_items.push(env_item);
-            }
-            if let Some(permissions_item) =
-                sess.build_permissions_update_item(previous_context.as_ref(), &current_context)
-            {
-                update_items.push(permissions_item);
-            }
+            let update_items = sess.build_settings_update_items(
+                previous_context.as_ref(),
+                &current_context,
+                &previous_collaboration_mode,
+                next_collaboration_mode.as_ref(),
+            );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
@@ -2064,10 +2194,13 @@ mod handlers {
             codex_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
             codex_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
         };
-        let response = ElicitationResponse {
-            action,
-            content: None,
+        // When accepting, send an empty object as content to satisfy MCP servers
+        // that expect non-null content on Accept. For Decline/Cancel, content is None.
+        let content = match action {
+            ElicitationAction::Accept => Some(serde_json::json!({})),
+            ElicitationAction::Decline | ElicitationAction::Cancel => None,
         };
+        let response = ElicitationResponse { action, content };
         if let Err(err) = sess
             .resolve_elicitation(server_name, request_id, response)
             .await
@@ -2220,7 +2353,8 @@ mod handlers {
         for cwd in cwds {
             let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
             let errors = super::errors_to_info(&outcome.errors);
-            let skills_metadata = super::skills_to_info(&outcome.skills);
+            let enabled_skills = outcome.enabled_skills();
+            let skills_metadata = super::skills_to_info(&enabled_skills);
             skills.push(SkillsListEntry {
                 cwd,
                 skills: skills_metadata,
@@ -2404,7 +2538,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
-        web_search_mode: review_web_search_mode,
+        web_search_mode: Some(review_web_search_mode),
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -2417,7 +2551,7 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.web_search_mode = review_web_search_mode;
+    per_turn_config.web_search_mode = Some(review_web_search_mode);
 
     let otel_manager = parent_turn_context
         .client
@@ -2480,6 +2614,17 @@ fn skills_to_info(skills: &[SkillMetadata]) -> Vec<ProtocolSkillMetadata> {
             name: skill.name.clone(),
             description: skill.description.clone(),
             short_description: skill.short_description.clone(),
+            interface: skill
+                .interface
+                .clone()
+                .map(|interface| ProtocolSkillInterface {
+                    display_name: interface.display_name,
+                    short_description: interface.short_description,
+                    icon_small: interface.icon_small,
+                    icon_large: interface.icon_large,
+                    brand_color: interface.brand_color,
+                    default_prompt: interface.default_prompt,
+                }),
             path: skill.path.clone(),
             scope: skill.scope,
         })
@@ -2496,17 +2641,17 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
         .collect()
 }
 
-/// Takes a user message as input and runs a loop where, at each turn, the model
+/// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
 ///
 /// - requested function calls
 /// - an assistant message
 ///
 /// While it is possible for the model to return multiple of these items in a
-/// single turn, in practice, we generally one item per turn:
+/// single sampling request, in practice, we generally one item per sampling request:
 ///
 /// - If the model requests a function call, we execute it and send the output
-///   back to the model in the next turn.
+///   back to the model in the next sampling request.
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the turn complete.
 ///
@@ -2548,9 +2693,9 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
+    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
 
     if !skill_items.is_empty() {
@@ -2579,13 +2724,13 @@ pub(crate) async fn run_turn(
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
-        let turn_input: Vec<ResponseItem> = {
+        let sampling_request_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
             sess.clone_history().await.for_prompt()
         };
 
-        let turn_input_messages = turn_input
+        let sampling_request_input_messages = sampling_request_input
             .iter()
             .filter_map(|item| match parse_turn_item(item) {
                 Some(TurnItem::UserMessage(user_message)) => Some(user_message),
@@ -2593,21 +2738,21 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
-        match run_model_turn(
+        match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
-            turn_input,
+            sampling_request_input,
             cancellation_token.child_token(),
         )
         .await
         {
-            Ok(turn_output) => {
-                let TurnRunResult {
+            Ok(sampling_request_output) => {
+                let SamplingRequestResult {
                     needs_follow_up,
-                    last_agent_message: turn_last_agent_message,
-                } = turn_output;
+                    last_agent_message: sampling_request_last_agent_message,
+                } = sampling_request_output;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -2618,13 +2763,13 @@ pub(crate) async fn run_turn(
                 }
 
                 if !needs_follow_up {
-                    last_agent_message = turn_last_agent_message;
+                    last_agent_message = sampling_request_last_agent_message;
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             thread_id: sess.conversation_id.to_string(),
                             turn_id: turn_context.sub_id.clone(),
                             cwd: turn_context.cwd.display().to_string(),
-                            input_messages: turn_input_messages,
+                            input_messages: sampling_request_input_messages,
                             last_assistant_message: last_agent_message.clone(),
                         });
                     break;
@@ -2680,14 +2825,14 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
         cwd = %turn_context.cwd.display()
     )
 )]
-async fn run_model_turn(
+async fn run_sampling_request(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
-) -> CodexResult<TurnRunResult> {
+) -> CodexResult<SamplingRequestResult> {
     let mcp_tools = sess
         .services
         .mcp_connection_manager
@@ -2721,7 +2866,7 @@ async fn run_model_turn(
 
     let mut retries = 0;
     loop {
-        let err = match try_run_turn(
+        let err = match try_run_sampling_request(
             Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -2761,7 +2906,9 @@ async fn run_model_turn(
                 }
                 _ => backoff(retries),
             };
-            warn!("stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",);
+            warn!(
+                "stream disconnected - retrying sampling request ({retries}/{max_retries} in {delay:?})...",
+            );
 
             // Surface retry information to any UI/front‑end so the
             // user understands what is happening instead of staring
@@ -2781,7 +2928,7 @@ async fn run_model_turn(
 }
 
 #[derive(Debug)]
-struct TurnRunResult {
+struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
 }
@@ -2813,7 +2960,7 @@ async fn drain_in_flight(
         model = %turn_context.client.get_model()
     )
 )]
-async fn try_run_turn(
+async fn try_run_sampling_request(
     router: Arc<ToolRouter>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -2821,7 +2968,7 @@ async fn try_run_turn(
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
-) -> CodexResult<TurnRunResult> {
+) -> CodexResult<SamplingRequestResult> {
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
@@ -2865,7 +3012,7 @@ async fn try_run_turn(
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
     let receiving_span = trace_span!("receiving_stream");
-    let outcome: CodexResult<TurnRunResult> = loop {
+    let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
             "handle_responses",
@@ -2950,9 +3097,8 @@ async fn try_run_turn(
                 should_emit_turn_diff = true;
 
                 needs_follow_up |= sess.has_pending_input().await;
-                error!("needs_follow_up: {needs_follow_up}");
 
-                break Ok(TurnRunResult {
+                break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
                 });
@@ -3118,9 +3264,11 @@ mod tests {
     #[tokio::test]
     async fn reconstruct_history_matches_live_compactions() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
-        let reconstructed = session.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+        let reconstructed = session
+            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .await;
 
         assert_eq!(expected, reconstructed);
     }
@@ -3128,7 +3276,7 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
 
         session
             .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -3138,7 +3286,7 @@ mod tests {
             }))
             .await;
 
-        expected.extend(session.build_initial_context(&turn_context));
+        expected.extend(session.build_initial_context(&turn_context).await);
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }
@@ -3146,7 +3294,7 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_seeds_token_info_from_rollout() {
         let (session, turn_context) = make_session_and_context().await;
-        let (mut rollout_items, _expected) = sample_rollout(&session, &turn_context);
+        let (mut rollout_items, _expected) = sample_rollout(&session, &turn_context).await;
 
         let info1 = TokenUsageInfo {
             total_token_usage: TokenUsage {
@@ -3223,13 +3371,13 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_reconstructs_forked_transcript() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
 
         session
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        expected.extend(session.build_initial_context(&turn_context));
+        expected.extend(session.build_initial_context(&turn_context).await);
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }
@@ -3238,7 +3386,7 @@ mod tests {
     async fn thread_rollback_drops_last_turn_from_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref());
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -3295,7 +3443,7 @@ mod tests {
     async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref());
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -3321,7 +3469,7 @@ mod tests {
     async fn thread_rollback_fails_when_turn_in_progress() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref());
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -3342,7 +3490,7 @@ mod tests {
     async fn thread_rollback_fails_when_num_turns_is_zero() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref());
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -3365,10 +3513,15 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let reasoning_effort = config.model_reasoning_effort;
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort,
+            developer_instructions: None,
+        });
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
-            model,
-            model_reasoning_effort: config.model_reasoning_effort,
+            collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
@@ -3431,10 +3584,15 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let reasoning_effort = config.model_reasoning_effort;
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort,
+            developer_instructions: None,
+        });
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
-            model,
-            model_reasoning_effort: config.model_reasoning_effort,
+            collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
@@ -3681,10 +3839,15 @@ mod tests {
         let exec_policy = ExecPolicyManager::default();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let reasoning_effort = config.model_reasoning_effort;
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort,
+            developer_instructions: None,
+        });
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
-            model,
-            model_reasoning_effort: config.model_reasoning_effort,
+            collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
@@ -3698,7 +3861,7 @@ mod tests {
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline(
-            session_configuration.model.as_str(),
+            session_configuration.collaboration_mode.model(),
             &per_turn_config,
         );
         let otel_manager = otel_manager(
@@ -3776,10 +3939,15 @@ mod tests {
         let exec_policy = ExecPolicyManager::default();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let reasoning_effort = config.model_reasoning_effort;
+        let collaboration_mode = CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort,
+            developer_instructions: None,
+        });
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
-            model,
-            model_reasoning_effort: config.model_reasoning_effort,
+            collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
@@ -3793,7 +3961,7 @@ mod tests {
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline(
-            session_configuration.model.as_str(),
+            session_configuration.collaboration_mode.model(),
             &per_turn_config,
         );
         let otel_manager = otel_manager(
@@ -4108,14 +4276,14 @@ mod tests {
         }
     }
 
-    fn sample_rollout(
+    async fn sample_rollout(
         session: &Session,
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
         let mut live_history = ContextManager::new();
 
-        let initial_context = session.build_initial_context(turn_context);
+        let initial_context = session.build_initial_context(turn_context).await;
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
@@ -4145,7 +4313,7 @@ mod tests {
         let snapshot1 = live_history.clone().for_prompt();
         let user_messages1 = collect_user_messages(&snapshot1);
         let rebuilt1 = compact::build_compacted_history(
-            session.build_initial_context(turn_context),
+            session.build_initial_context(turn_context).await,
             &user_messages1,
             summary1,
         );
@@ -4179,7 +4347,7 @@ mod tests {
         let snapshot2 = live_history.clone().for_prompt();
         let user_messages2 = collect_user_messages(&snapshot2);
         let rebuilt2 = compact::build_compacted_history(
-            session.build_initial_context(turn_context),
+            session.build_initial_context(turn_context).await,
             &user_messages2,
             summary2,
         );
@@ -4197,7 +4365,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(user3.clone()));
+        rollout_items.push(RolloutItem::ResponseItem(user3));
 
         let assistant3 = ResponseItem::Message {
             id: None,
@@ -4207,7 +4375,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
+        rollout_items.push(RolloutItem::ResponseItem(assistant3));
 
         (rollout_items, live_history.for_prompt())
     }
