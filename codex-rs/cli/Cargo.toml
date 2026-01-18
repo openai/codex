@@ -29,6 +29,7 @@ codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-login = { workspace = true }
+codex-lsp = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
@@ -40,6 +41,7 @@ codex-utils-absolute-path = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
 tokio = { workspace = true, features = [

@@ -21,6 +21,7 @@ members = [
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
+    "lsp",
     "file-search",
     "linux-sandbox",
     "lmstudio",
@@ -81,6 +82,7 @@ codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
+codex-lsp = { path = "lsp" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
@@ -155,6 +157,7 @@ lazy_static = "1"
 libc = "0.2.177"
 log = "0.4"
 lru = "0.16.3"
+lsp-types = "0.97.0"
 maplit = "1.0.2"
 mime_guess = "2.0.5"
 multimap = "0.10.0"

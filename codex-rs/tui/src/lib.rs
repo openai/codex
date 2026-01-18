@@ -132,6 +132,13 @@ pub async fn run_main(
             .push("web_search=\"live\"".to_string());
     }
 
+    if let Some(lsp_mode) = cli.lsp_mode {
+        let mode = lsp_mode.as_str();
+        cli.config_overrides
+            .raw_overrides
+            .push(format!("lsp.mode=\"{mode}\""));
+    }
+
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
     let raw_overrides = cli.config_overrides.raw_overrides.clone();

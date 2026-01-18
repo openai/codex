@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
@@ -127,6 +128,11 @@ impl ToolHandler for ApplyPatchHandler {
                         );
                         emitter.begin(event_ctx).await;
 
+                        let changed_paths: Vec<PathBuf> = file_paths
+                            .iter()
+                            .map(|path| path.as_path().to_path_buf())
+                            .collect();
+
                         let req = ApplyPatchRequest {
                             action: apply.action,
                             file_paths,
@@ -154,6 +160,11 @@ impl ToolHandler for ApplyPatchHandler {
                             Some(&tracker),
                         );
                         let content = emitter.finish(event_ctx, out).await?;
+                        if let Some(lsp_manager) = session.services.lsp_manager.as_ref() {
+                            if let Err(err) = lsp_manager.on_files_changed(changed_paths).await {
+                                tracing::debug!("lsp update skipped: {err}");
+                            }
+                        }
                         Ok(ToolOutput::Function {
                             content,
                             content_items: None,

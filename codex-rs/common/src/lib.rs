@@ -14,6 +14,12 @@ mod sandbox_mode_cli_arg;
 pub use sandbox_mode_cli_arg::SandboxModeCliArg;
 
 #[cfg(feature = "cli")]
+mod lsp_mode_cli_arg;
+
+#[cfg(feature = "cli")]
+pub use lsp_mode_cli_arg::LspModeCliArg;
+
+#[cfg(feature = "cli")]
 pub mod format_env_display;
 
 #[cfg(feature = "cli")]

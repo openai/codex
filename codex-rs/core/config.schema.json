@@ -200,6 +200,15 @@
       "description": "System instructions.",
       "type": "string"
     },
+    "lsp": {
+      "description": "Language server configuration.",
+      "default": null,
+      "allOf": [
+        {
+          "$ref": "#/definitions/LspConfigToml"
+        }
+      ]
+    },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
       "type": "integer",
@@ -356,12 +365,12 @@
     },
     "shell_environment_policy": {
       "default": {
-        "exclude": null,
-        "experimental_use_profile": null,
-        "ignore_default_excludes": null,
-        "include_only": null,
         "inherit": null,
-        "set": null
+        "ignore_default_excludes": null,
+        "exclude": null,
+        "set": null,
+        "include_only": null,
+        "experimental_use_profile": null
       },
       "allOf": [
         {
@@ -735,6 +744,85 @@
           ]
         }
       ]
+    },
+    "LspConfigToml": {
+      "type": "object",
+      "properties": {
+        "auto_install": {
+          "default": null,
+          "type": "boolean"
+        },
+        "diagnostics_in_prompt": {
+          "default": null,
+          "allOf": [
+            {
+              "$ref": "#/definitions/LspDiagnosticsInPrompt"
+            }
+          ]
+        },
+        "install_dir": {
+          "default": null,
+          "type": "string"
+        },
+        "max_diagnostics_per_file": {
+          "default": null,
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "max_files": {
+          "default": null,
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "mode": {
+          "default": null,
+          "allOf": [
+            {
+              "$ref": "#/definitions/LspMode"
+            }
+          ]
+        },
+        "servers": {
+          "default": null,
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/LspServerConfigToml"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LspDiagnosticsInPrompt": {
+      "type": "string",
+      "enum": [
+        "off",
+        "errors",
+        "errors_and_warnings"
+      ]
+    },
+    "LspMode": {
+      "type": "string",
+      "enum": [
+        "off",
+        "auto",
+        "on"
+      ]
+    },
+    "LspServerConfigToml": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "default": null,
+          "type": "string"
+        },
+        "enabled": {
+          "default": null,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "ModelProviderInfo": {
       "description": "Serializable representation of a provider definition.",

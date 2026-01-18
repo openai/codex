@@ -10,6 +10,7 @@ use crate::skills::SkillsManager;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotifier;
+use codex_lsp::LspManager;
 use codex_otel::OtelManager;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -30,4 +31,5 @@ pub(crate) struct SessionServices {
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) agent_control: AgentControl,
+    pub(crate) lsp_manager: Option<Arc<LspManager>>,
 }

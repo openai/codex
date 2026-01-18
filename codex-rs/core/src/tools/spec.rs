@@ -28,12 +28,14 @@ pub(crate) struct ToolsConfig {
     pub web_search_mode: Option<WebSearchMode>,
     pub collab_tools: bool,
     pub experimental_supported_tools: Vec<String>,
+    pub lsp_enabled: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
+    pub(crate) lsp_enabled: bool,
 }
 
 impl ToolsConfig {
@@ -42,6 +44,7 @@ impl ToolsConfig {
             model_info,
             features,
             web_search_mode,
+            lsp_enabled,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
@@ -77,6 +80,7 @@ impl ToolsConfig {
             web_search_mode: *web_search_mode,
             collab_tools: include_collab_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
+            lsp_enabled: *lsp_enabled,
         }
     }
 }
@@ -774,6 +778,167 @@ fn create_read_file_tool() -> ToolSpec {
     })
 }
 
+fn create_lsp_diagnostics_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "file_path".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional path to a specific file to query. Defaults to all open diagnostics."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "severity".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Filter diagnostics by severity: \"errors\", \"warnings\", or \"all\"."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "lsp_diagnostics".to_string(),
+        description: "Fetch diagnostics from the active language server.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_lsp_definition_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "file_path".to_string(),
+            JsonSchema::String {
+                description: Some("Path to the file containing the symbol.".to_string()),
+            },
+        ),
+        (
+            "line".to_string(),
+            JsonSchema::Number {
+                description: Some("1-indexed line number of the symbol.".to_string()),
+            },
+        ),
+        (
+            "character".to_string(),
+            JsonSchema::Number {
+                description: Some("1-indexed character position in the line.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "lsp_definition".to_string(),
+        description: "Find definition locations for a symbol using LSP.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "file_path".to_string(),
+                "line".to_string(),
+                "character".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_lsp_references_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "file_path".to_string(),
+            JsonSchema::String {
+                description: Some("Path to the file containing the symbol.".to_string()),
+            },
+        ),
+        (
+            "line".to_string(),
+            JsonSchema::Number {
+                description: Some("1-indexed line number of the symbol.".to_string()),
+            },
+        ),
+        (
+            "character".to_string(),
+            JsonSchema::Number {
+                description: Some("1-indexed character position in the line.".to_string()),
+            },
+        ),
+        (
+            "include_declaration".to_string(),
+            JsonSchema::Boolean {
+                description: Some("Whether to include the symbol declaration.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "lsp_references".to_string(),
+        description: "Find references to a symbol using LSP.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "file_path".to_string(),
+                "line".to_string(),
+                "character".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_lsp_rename_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "file_path".to_string(),
+            JsonSchema::String {
+                description: Some("Path to the file containing the symbol.".to_string()),
+            },
+        ),
+        (
+            "line".to_string(),
+            JsonSchema::Number {
+                description: Some("1-indexed line number of the symbol.".to_string()),
+            },
+        ),
+        (
+            "character".to_string(),
+            JsonSchema::Number {
+                description: Some("1-indexed character position in the line.".to_string()),
+            },
+        ),
+        (
+            "new_name".to_string(),
+            JsonSchema::String {
+                description: Some("New name for the symbol.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "lsp_rename".to_string(),
+        description: "Rename a symbol across the workspace using LSP.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "file_path".to_string(),
+                "line".to_string(),
+                "character".to_string(),
+                "new_name".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_list_dir_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -1136,6 +1301,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
+    use crate::tools::handlers::LspHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
@@ -1157,6 +1323,7 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
+    let lsp_handler = Arc::new(LspHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1244,6 +1411,17 @@ pub(crate) fn build_specs(
         let test_sync_handler = Arc::new(TestSyncHandler);
         builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
         builder.register_handler("test_sync_tool", test_sync_handler);
+    }
+
+    if config.lsp_enabled {
+        builder.push_spec_with_parallel_support(create_lsp_diagnostics_tool(), true);
+        builder.push_spec_with_parallel_support(create_lsp_definition_tool(), true);
+        builder.push_spec_with_parallel_support(create_lsp_references_tool(), true);
+        builder.push_spec(create_lsp_rename_tool());
+        builder.register_handler("lsp_diagnostics", lsp_handler.clone());
+        builder.register_handler("lsp_definition", lsp_handler.clone());
+        builder.register_handler("lsp_references", lsp_handler.clone());
+        builder.register_handler("lsp_rename", lsp_handler);
     }
 
     match config.web_search_mode {
@@ -1402,6 +1580,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -1464,6 +1643,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
         assert_contains_tool_names(
@@ -1484,6 +1664,7 @@ mod tests {
             model_info: &model_info,
             features,
             web_search_mode,
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
@@ -1500,6 +1681,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1522,6 +1704,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1735,6 +1918,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
 
@@ -1757,6 +1941,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1776,6 +1961,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1807,6 +1993,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -1902,6 +2089,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -1979,6 +2167,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
 
         let (tools, _) = build_specs(
@@ -2036,6 +2225,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
 
         let (tools, _) = build_specs(
@@ -2090,6 +2280,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
 
         let (tools, _) = build_specs(
@@ -2146,6 +2337,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
 
         let (tools, _) = build_specs(
@@ -2258,6 +2450,7 @@ Examples of valid command strings:
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            lsp_enabled: false,
         });
         let (tools, _) = build_specs(
             &tools_config,

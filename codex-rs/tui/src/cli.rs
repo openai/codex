@@ -76,6 +76,10 @@ pub struct Cli {
     #[arg(long = "ask-for-approval", short = 'a')]
     pub approval_policy: Option<ApprovalModeCliArg>,
 
+    /// Configure LSP integration (off, auto, on).
+    #[arg(long = "lsp")]
+    pub lsp_mode: Option<codex_common::LspModeCliArg>,
+
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,

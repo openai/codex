@@ -91,9 +91,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         last_message_file,
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
+        lsp_mode,
         prompt,
         output_schema: output_schema_path,
-        config_overrides,
+        mut config_overrides,
     } = cli;
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
@@ -125,6 +126,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     } else {
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
+
+    if let Some(lsp_mode) = lsp_mode {
+        let mode = lsp_mode.as_str();
+        config_overrides
+            .raw_overrides
+            .push(format!("lsp.mode=\"{mode}\""));
+    }
 
     // Parse `-c` overrides from the CLI.
     let cli_kv_overrides = match config_overrides.parse_overrides() {

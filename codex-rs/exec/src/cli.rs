@@ -38,6 +38,10 @@ pub struct Cli {
     #[arg(long = "sandbox", short = 's', value_enum)]
     pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
 
+    /// Configure LSP integration (off, auto, on).
+    #[arg(long = "lsp", value_enum)]
+    pub lsp_mode: Option<codex_common::LspModeCliArg>,
+
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,

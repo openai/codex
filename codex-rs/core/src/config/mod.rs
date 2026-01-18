@@ -39,6 +39,8 @@ use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_lsp::LspConfig;
+use codex_lsp::LspConfigToml;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
@@ -342,6 +344,9 @@ pub struct Config {
 
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Option<WebSearchMode>,
+
+    /// LSP configuration (mode, servers, diagnostics limits).
+    pub lsp: LspConfig,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -912,6 +917,10 @@ pub struct ConfigToml {
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
+    /// Language server configuration.
+    #[serde(default)]
+    pub lsp: Option<LspConfigToml>,
+
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
 
@@ -1279,6 +1288,7 @@ impl Config {
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
+        let lsp = LspConfig::resolve(cfg.lsp.as_ref(), &codex_home);
         #[cfg(target_os = "windows")]
         {
             // Base flag controls sandbox on/off; elevated only applies when base is enabled.
@@ -1539,6 +1549,7 @@ impl Config {
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode,
+            lsp,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
@@ -3624,6 +3635,7 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 web_search_mode: None,
+                lsp: LspConfig::resolve(fixture.cfg.lsp.as_ref(), &fixture.codex_home()),
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3711,6 +3723,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
+            lsp: LspConfig::resolve(fixture.cfg.lsp.as_ref(), &fixture.codex_home()),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3813,6 +3826,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
+            lsp: LspConfig::resolve(fixture.cfg.lsp.as_ref(), &fixture.codex_home()),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3901,6 +3915,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
+            lsp: LspConfig::resolve(fixture.cfg.lsp.as_ref(), &fixture.codex_home()),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
