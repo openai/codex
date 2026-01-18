@@ -547,10 +547,12 @@ impl Session {
             web_search_mode: per_turn_config.web_search_mode,
         });
 
-        let developer_instructions = if matches!(
+        let is_plan_mode = matches!(
             session_configuration.collaboration_mode,
             CollaborationMode::Plan(_)
-        ) {
+        );
+
+        let developer_instructions = if is_plan_mode {
             match session_configuration.developer_instructions.as_deref() {
                 Some(base) => Some(format!("{base}\n\n{PLAN_MODE_PROMPT}")),
                 None => Some(PLAN_MODE_PROMPT.to_string()),
@@ -559,12 +561,18 @@ impl Session {
             session_configuration.developer_instructions.clone()
         };
 
+        let base_instructions = if is_plan_mode {
+            Some(PLAN_MODE_PROMPT.to_string())
+        } else {
+            session_configuration.base_instructions.clone()
+        };
+
         TurnContext {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
             developer_instructions,
-            base_instructions: session_configuration.base_instructions.clone(),
+            base_instructions,
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
