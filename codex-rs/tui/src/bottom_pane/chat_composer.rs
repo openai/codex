@@ -541,6 +541,7 @@ impl ChatComposer {
     }
 
     /// Replace the entire composer content with `text` and reset cursor.
+    /// This clears any pending paste payloads.
     pub(crate) fn set_text_content(
         &mut self,
         text: String,
@@ -1536,6 +1537,7 @@ impl ChatComposer {
             .iter()
             .map(|img| img.path.clone())
             .collect::<Vec<_>>();
+        let original_pending_pastes = self.pending_pastes.clone();
         let mut text_elements = original_text_elements.clone();
         let input_starts_with_space = original_input.starts_with(' ');
         self.textarea.set_text_clearing_elements("");
@@ -1582,6 +1584,7 @@ impl ChatComposer {
                         original_text_elements,
                         original_local_image_paths,
                     );
+                    self.pending_pastes.clone_from(&original_pending_pastes);
                     self.textarea.set_cursor(original_input.len());
                     return None;
                 }
@@ -1599,6 +1602,7 @@ impl ChatComposer {
                     original_text_elements,
                     original_local_image_paths,
                 );
+                self.pending_pastes.clone_from(&original_pending_pastes);
                 self.textarea.set_cursor(original_input.len());
                 return None;
             }
