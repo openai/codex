@@ -1,12 +1,12 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::instructions::SkillInstructions;
+use crate::instructions::UserInstructions;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
-use crate::user_instructions::SkillInstructions;
-use crate::user_instructions::UserInstructions;
 use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;

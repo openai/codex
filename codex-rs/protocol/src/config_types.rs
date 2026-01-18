@@ -4,6 +4,8 @@ use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 
+use crate::openai_models::ReasoningEffort;
+
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
@@ -126,4 +128,71 @@ pub enum AltScreenMode {
     Always,
     /// Never use alternate screen (inline mode only).
     Never,
+}
+
+/// Collaboration mode for a Codex session.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum CollaborationMode {
+    Plan(Settings),
+    Collaborate(Settings),
+    Execute(Settings),
+    Custom(Settings),
+}
+
+impl CollaborationMode {
+    /// Returns a reference to the settings, regardless of variant.
+    fn settings(&self) -> &Settings {
+        match self {
+            CollaborationMode::Plan(settings)
+            | CollaborationMode::Collaborate(settings)
+            | CollaborationMode::Execute(settings)
+            | CollaborationMode::Custom(settings) => settings,
+        }
+    }
+
+    pub fn model(&self) -> &str {
+        self.settings().model.as_str()
+    }
+
+    pub fn reasoning_effort(&self) -> Option<ReasoningEffort> {
+        self.settings().reasoning_effort
+    }
+
+    /// Updates the collaboration mode with new model and/or effort values.
+    ///
+    /// - `model`: `Some(s)` to update the model, `None` to keep the current model
+    /// - `effort`: `Some(Some(e))` to set effort to `e`, `Some(None)` to clear effort, `None` to keep current effort
+    /// - `developer_instructions`: `Some(s)` to update developer instructions, `None` to keep current
+    ///
+    /// Returns a new `CollaborationMode` with updated values, preserving the variant.
+    pub fn with_updates(
+        &self,
+        model: Option<String>,
+        effort: Option<Option<ReasoningEffort>>,
+        developer_instructions: Option<String>,
+    ) -> Self {
+        let settings = self.settings();
+        let updated_settings = Settings {
+            model: model.unwrap_or_else(|| settings.model.clone()),
+            reasoning_effort: effort.unwrap_or(settings.reasoning_effort),
+            developer_instructions: developer_instructions
+                .or_else(|| settings.developer_instructions.clone()),
+        };
+
+        match self {
+            CollaborationMode::Plan(_) => CollaborationMode::Plan(updated_settings),
+            CollaborationMode::Collaborate(_) => CollaborationMode::Collaborate(updated_settings),
+            CollaborationMode::Execute(_) => CollaborationMode::Execute(updated_settings),
+            CollaborationMode::Custom(_) => CollaborationMode::Custom(updated_settings),
+        }
+    }
+}
+
+/// Settings for a collaboration mode.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
+pub struct Settings {
+    pub model: String,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub developer_instructions: Option<String>,
 }

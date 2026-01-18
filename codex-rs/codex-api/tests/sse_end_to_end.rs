@@ -129,6 +129,7 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
             serde_json::json!({"echo": true}),
             HeaderMap::new(),
             Compression::None,
+            None,
         )
         .await?;
 
@@ -198,6 +199,7 @@ async fn responses_stream_aggregates_output_text_deltas() -> Result<()> {
             serde_json::json!({"echo": true}),
             HeaderMap::new(),
             Compression::None,
+            None,
         )
         .await?;
 

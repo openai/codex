@@ -13,6 +13,7 @@ use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ScrollInputMode;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
+use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::ConfigLayerStack;
@@ -910,6 +911,9 @@ pub struct ConfigToml {
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
+
+    /// User-level skill config entries keyed by SKILL.md path.
+    pub skills: Option<SkillsConfig>,
 
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
