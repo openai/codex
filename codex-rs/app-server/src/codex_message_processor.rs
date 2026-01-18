@@ -638,15 +638,15 @@ impl CodexMessageProcessor {
             Ok(()) => {
                 self.auth_manager.reload();
 
-                if let Ok(Some(account)) = resolve_active_account_core(&self.config.codex_home) {
-                    if let Err(err) = update_account_meta(
+                if let Ok(Some(account)) = resolve_active_account_core(&self.config.codex_home)
+                    && let Err(err) = update_account_meta(
                         &self.config.codex_home,
                         &account,
                         AccountKind::ApiKey,
                         None,
-                    ) {
-                        tracing::warn!("failed to update account metadata: {err}");
-                    }
+                    )
+                {
+                    tracing::warn!("failed to update account metadata: {err}");
                 }
 
                 Ok(())
