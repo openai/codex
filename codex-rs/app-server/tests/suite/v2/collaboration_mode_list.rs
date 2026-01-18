@@ -65,7 +65,7 @@ fn plan_preset() -> CollaborationMode {
 /// The helper keeps the expected model and reasoning defaults co-located with the test
 /// so that mismatches point directly at the API contract being exercised.
 fn collaborate_preset() -> CollaborationMode {
-    CollaborationMode::Collaborate(Settings {
+    CollaborationMode::PairProgramming(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::Medium),
         developer_instructions: None,

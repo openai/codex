@@ -22,7 +22,7 @@ fn plan_preset() -> CollaborationMode {
 }
 
 fn collaborate_preset() -> CollaborationMode {
-    CollaborationMode::Collaborate(Settings {
+    CollaborationMode::PairProgramming(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::Medium),
         developer_instructions: Some(COLLABORATION_MODE_COLLABORATE.to_string()),
