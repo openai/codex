@@ -70,7 +70,7 @@ impl ContextManager {
     /// Returns the history prepared for sending to the model. This applies a proper
     /// normalization and drop un-suited items.
     pub(crate) fn for_prompt(mut self) -> Vec<ResponseItem> {
-        self.normalize_history();
+        let _ = self.normalize_history();
         self.items
             .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
         self.items
@@ -246,12 +246,18 @@ impl ContextManager {
     /// This function enforces a couple of invariants on the in-memory history:
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry
-    fn normalize_history(&mut self) {
+    /// 3. every output is immediately adjacent to its call (required for Claude/Bedrock)
+    ///
+    /// Returns `true` if any reordering was needed to ensure adjacency.
+    fn normalize_history(&mut self) -> bool {
         // all function/tool calls must have a corresponding output
         normalize::ensure_call_outputs_present(&mut self.items);
 
         // all outputs must have a corresponding function/tool call
         normalize::remove_orphan_outputs(&mut self.items);
+
+        // ensure outputs are immediately after their calls (required for Claude/Bedrock)
+        normalize::ensure_call_outputs_adjacency(&mut self.items)
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {

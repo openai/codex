@@ -206,6 +206,12 @@ fn maybe_push_chat_wire_api_deprecation(
         return;
     }
 
+    // Don't show deprecation warning for Bedrock - it requires Chat wire API
+    // (the Responses API is OpenAI-specific and not supported by Bedrock)
+    if config.model_provider.is_bedrock() {
+        return;
+    }
+
     if CHAT_WIRE_API_DEPRECATION_EMITTED
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()

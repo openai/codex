@@ -70,6 +70,44 @@ pub struct Reasoning {
     pub summary: Option<ReasoningSummaryConfig>,
 }
 
+/// Claude/Anthropic extended thinking configuration.
+///
+/// Used for Bedrock and direct Anthropic API requests.
+#[derive(Debug, Serialize, Clone)]
+pub struct ClaudeThinking {
+    /// Must be "enabled" to activate extended thinking.
+    #[serde(rename = "type")]
+    pub thinking_type: String,
+    /// Maximum tokens for internal reasoning (minimum 1024).
+    pub budget_tokens: u32,
+}
+
+impl ClaudeThinking {
+    /// Create a new thinking configuration with the given budget.
+    ///
+    /// Enforces the minimum budget of 1024 tokens.
+    pub fn enabled(budget_tokens: u32) -> Self {
+        Self {
+            thinking_type: "enabled".to_string(),
+            budget_tokens: budget_tokens.max(1024),
+        }
+    }
+}
+
+/// Maps OpenAI-style reasoning effort levels to Claude thinking budget tokens.
+///
+/// Returns None for ReasoningEffort::None (thinking disabled).
+pub fn effort_to_budget_tokens(effort: ReasoningEffortConfig) -> Option<u32> {
+    match effort {
+        ReasoningEffortConfig::None => None,
+        ReasoningEffortConfig::Minimal => Some(1024),
+        ReasoningEffortConfig::Low => Some(4096),
+        ReasoningEffortConfig::Medium => Some(10000),
+        ReasoningEffortConfig::High => Some(32000),
+        ReasoningEffortConfig::XHigh => Some(64000),
+    }
+}
+
 #[derive(Debug, Serialize, Default, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TextFormatType {

@@ -7,11 +7,11 @@ use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
+use codex_api::ChatRequestBuilder;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Prompt as ApiPrompt;
 use codex_api::RequestTelemetry;
-use codex_api::ReqwestTransport;
 use codex_api::ResponseAppendWsRequest;
 use codex_api::ResponseCreateWsRequest;
 use codex_api::ResponseStream as ApiResponseStream;
@@ -22,12 +22,16 @@ use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
 use codex_api::build_conversation_headers;
+use codex_api::common::ClaudeThinking;
 use codex_api::common::Reasoning;
 use codex_api::common::ResponsesWsRequest;
+use codex_api::common::effort_to_budget_tokens;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
 use codex_app_server_protocol::AuthMode;
+use codex_client::AwsAuthProvider;
+use codex_client::TransportKind;
 use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
@@ -61,6 +65,7 @@ use crate::error::Result;
 use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
+use crate::model_provider_info::AuthType;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
@@ -194,6 +199,38 @@ impl ModelClient {
         self.state.auth_manager.clone()
     }
 
+    /// Creates the appropriate transport based on the provider's auth type.
+    ///
+    /// For Bearer auth (most providers), creates a standard transport.
+    /// For AWS SigV4 auth (Bedrock), creates a signing transport.
+    async fn create_transport(&self) -> Result<TransportKind> {
+        match &self.state.provider.auth_type {
+            AuthType::Bearer => Ok(TransportKind::standard(build_reqwest_client())),
+            AuthType::AwsSigV4 { region, profile } => {
+                tracing::debug!(
+                    "Creating AWS auth provider: region={}, profile={:?}",
+                    region,
+                    profile
+                );
+                let aws_auth = AwsAuthProvider::new(region, profile.clone())
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("AWS credentials error: {e}");
+                        CodexErr::Io(std::io::Error::other(format!(
+                            "Failed to load AWS credentials: {e}"
+                        )))
+                    })?;
+                tracing::debug!("AWS credentials loaded successfully");
+                Ok(TransportKind::sigv4(
+                    build_reqwest_client(),
+                    aws_auth,
+                    "bedrock",
+                    region,
+                ))
+            }
+        }
+    }
+
     /// Compacts the current conversation history using the Compact endpoint.
     ///
     /// This is a unary call (no streaming) that returns a new list of
@@ -212,7 +249,7 @@ impl ModelClient {
             .provider
             .to_api_provider(auth.as_ref().map(|a| a.mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let transport = self.create_transport().await?;
         let request_telemetry = self.build_request_telemetry();
         let client = ApiCompactClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));
@@ -436,24 +473,76 @@ impl ModelClientSession {
         }
     }
 
-    /// Streams a turn via the OpenAI Chat Completions API.
-    ///
-    /// This path is only used when the provider is configured with
-    /// `WireApi::Chat`; it does not support `output_schema` today.
-    async fn stream_chat_completions(&self, prompt: &Prompt) -> Result<ApiResponseStream> {
-        if prompt.output_schema.is_some() {
-            return Err(CodexErr::UnsupportedOperation(
-                "output_schema is not supported for Chat Completions API".to_string(),
-            ));
+    /// Creates the appropriate transport based on the provider's auth type.
+    async fn create_transport(&self) -> Result<TransportKind> {
+        match &self.state.provider.auth_type {
+            AuthType::Bearer => Ok(TransportKind::standard(build_reqwest_client())),
+            AuthType::AwsSigV4 { region, profile } => {
+                tracing::debug!(
+                    "Creating AWS auth provider: region={}, profile={:?}",
+                    region,
+                    profile
+                );
+                let aws_auth = AwsAuthProvider::new(region, profile.clone())
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("AWS credentials error: {e}");
+                        CodexErr::Io(std::io::Error::other(format!(
+                            "Failed to load AWS credentials: {e}"
+                        )))
+                    })?;
+                tracing::debug!("AWS credentials loaded successfully");
+                Ok(TransportKind::sigv4(
+                    build_reqwest_client(),
+                    aws_auth,
+                    "bedrock",
+                    region,
+                ))
+            }
         }
+    }
 
+    /// Streams a turn via the Chat Completions API.
+    ///
+    /// This path is used when the provider is configured with `WireApi::Chat`.
+    /// For Claude/Anthropic providers (Bedrock), this supports:
+    /// - Structured output via `output_format` parameter
+    /// - Extended thinking via `thinking` parameter
+    async fn stream_chat_completions(&self, prompt: &Prompt) -> Result<ApiResponseStream> {
         let auth_manager = self.state.auth_manager.clone();
         let model_info = self.state.model_info.clone();
         let instructions = prompt.get_full_instructions(&model_info).into_owned();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-        let api_prompt = build_api_prompt(prompt, instructions, tools_json);
         let conversation_id = self.state.conversation_id.to_string();
         let session_source = self.state.session_source.clone();
+
+        // Determine Claude-specific features based on provider
+        let is_claude = self.state.provider.is_bedrock();
+
+        // For non-Claude providers, output_schema is still unsupported
+        if prompt.output_schema.is_some() && !is_claude {
+            return Err(CodexErr::UnsupportedOperation(
+                "output_schema is not supported for Chat Completions API (only Claude/Bedrock)"
+                    .to_string(),
+            ));
+        }
+
+        // Build Claude extended thinking configuration if effort is set
+        let thinking = if is_claude {
+            self.state
+                .effort
+                .and_then(effort_to_budget_tokens)
+                .map(ClaudeThinking::enabled)
+        } else {
+            None
+        };
+
+        // Get output_schema for Claude providers
+        let output_schema = if is_claude {
+            prompt.output_schema.clone()
+        } else {
+            None
+        };
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -468,19 +557,26 @@ impl ModelClientSession {
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
+            let transport = self.create_transport().await?;
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let client = ApiChatClient::new(transport, api_provider, api_auth)
+            let client = ApiChatClient::new(transport, api_provider.clone(), api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-            let stream_result = client
-                .stream_prompt(
-                    &self.state.model_info.slug,
-                    &api_prompt,
-                    Some(conversation_id.clone()),
-                    Some(session_source.clone()),
-                )
-                .await;
+            // Build request with Claude-specific features
+            let request = ChatRequestBuilder::new(
+                &self.state.model_info.slug,
+                &instructions,
+                &prompt.input,
+                &tools_json,
+            )
+            .conversation_id(Some(conversation_id.clone()))
+            .session_source(Some(session_source.clone()))
+            .output_schema(output_schema.clone())
+            .thinking(thinking.clone())
+            .build(&api_provider)
+            .map_err(map_api_error)?;
+
+            let stream_result = client.stream_request(request).await;
 
             match stream_result {
                 Ok(stream) => return Ok(stream),
@@ -524,7 +620,7 @@ impl ModelClientSession {
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
+            let transport = self.create_transport().await?;
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let compression = self.responses_request_compression(auth.as_ref());
 

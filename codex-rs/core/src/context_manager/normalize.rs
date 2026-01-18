@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -5,6 +6,7 @@ use codex_protocol::models::ResponseItem;
 
 use crate::util::error_or_panic;
 use tracing::info;
+use tracing::warn;
 
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
     // Collect synthetic outputs to insert immediately after their calls.
@@ -209,4 +211,126 @@ where
     if let Some(pos) = items.iter().position(predicate) {
         items.remove(pos);
     }
+}
+
+
+/// Ensures tool outputs immediately follow their corresponding calls.
+/// This is required for Claude/Bedrock's Messages API which requires tool_result
+/// to immediately follow tool_use in the conversation.
+///
+/// Returns `true` if any reordering was needed, `false` otherwise.
+pub(crate) fn ensure_call_outputs_adjacency(items: &mut Vec<ResponseItem>) -> bool {
+    // Build set of call_ids that have outputs
+    let mut output_call_ids: HashSet<String> = HashSet::new();
+
+    for item in items.iter() {
+        match item {
+            ResponseItem::FunctionCallOutput { call_id, .. }
+            | ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                output_call_ids.insert(call_id.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // Check if any outputs are not immediately after their calls
+    let mut needs_reorder = false;
+    let mut prev_was_call_with_id: Option<String> = None;
+
+    for item in items.iter() {
+        match item {
+            ResponseItem::FunctionCall { call_id, .. }
+            | ResponseItem::CustomToolCall { call_id, .. } => {
+                if let Some(prev_id) = &prev_was_call_with_id {
+                    if output_call_ids.contains(prev_id) {
+                        needs_reorder = true;
+                        break;
+                    }
+                }
+                prev_was_call_with_id = Some(call_id.clone());
+            }
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => {
+                if let Some(prev_id) = &prev_was_call_with_id {
+                    if output_call_ids.contains(prev_id) {
+                        needs_reorder = true;
+                        break;
+                    }
+                }
+                prev_was_call_with_id = Some(call_id.clone());
+            }
+            ResponseItem::FunctionCallOutput { call_id, .. }
+            | ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                if prev_was_call_with_id.as_ref() != Some(call_id) {
+                    needs_reorder = true;
+                    break;
+                }
+                prev_was_call_with_id = None;
+            }
+            _ => {
+                if let Some(prev_id) = &prev_was_call_with_id {
+                    if output_call_ids.contains(prev_id) {
+                        needs_reorder = true;
+                        break;
+                    }
+                }
+                prev_was_call_with_id = None;
+            }
+        }
+    }
+
+    if !needs_reorder {
+        return false;
+    }
+
+    warn!("Reordering tool outputs to ensure adjacency with their calls");
+
+    // Extract all outputs into a map
+    let mut outputs_by_call_id: HashMap<String, ResponseItem> = HashMap::new();
+    let mut idx = 0;
+    while idx < items.len() {
+        match &items[idx] {
+            ResponseItem::FunctionCallOutput { call_id, .. }
+            | ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                let call_id = call_id.clone();
+                let output = items.remove(idx);
+                outputs_by_call_id.insert(call_id, output);
+            }
+            _ => {
+                idx += 1;
+            }
+        }
+    }
+
+    // Insert outputs immediately after their calls
+    let mut idx = 0;
+    while idx < items.len() {
+        let call_id = match &items[idx] {
+            ResponseItem::FunctionCall { call_id, .. }
+            | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(call_id.clone()),
+            _ => None,
+        };
+
+        if let Some(id) = call_id {
+            if let Some(output) = outputs_by_call_id.remove(&id) {
+                items.insert(idx + 1, output);
+                idx += 2;
+                continue;
+            }
+        }
+        idx += 1;
+    }
+
+    // Append any remaining orphaned outputs
+    for (_, output) in outputs_by_call_id {
+        items.push(output);
+    }
+
+    true
 }

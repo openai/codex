@@ -217,7 +217,7 @@ fn create_exec_command_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
         description:
-            "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
+            "Runs a command in a PTY, returning output or a session ID for ongoing interaction. IMPORTANT: Do NOT use this for file editing (no sed, awk, echo >, cat <<). Use the apply_patch tool instead."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -324,7 +324,8 @@ Examples of valid command strings:
     } else {
         r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
+- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary.
+- IMPORTANT: Do NOT use this tool for file editing (no sed, awk, echo >, cat <<). Use the apply_patch tool instead."#
     }.to_string();
 
     ToolSpec::Function(ResponsesApiTool {
@@ -397,7 +398,8 @@ Examples of valid command strings:
 - running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
     } else {
         r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary.
+- IMPORTANT: Do NOT use this tool for file editing (no sed, awk, echo >, cat <<). Use the apply_patch tool instead."#
     }.to_string();
 
     ToolSpec::Function(ResponsesApiTool {

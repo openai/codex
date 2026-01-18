@@ -32,6 +32,7 @@ result
 CLAUDE.md
 .claude/
 AGENTS.override.md
+.kiro/
 
 # caches
 .cache/
@@ -90,4 +91,3 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
-

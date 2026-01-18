@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
+use tracing::debug;
 
 pub(crate) struct StreamingClient<T: HttpTransport, A: AuthProvider> {
     transport: T,
@@ -65,13 +66,32 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
         spawner: StreamSpawner,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
+        // Bedrock uses non-streaming invoke endpoint with JSON response
+        let is_bedrock = self.provider.is_claude_provider();
+
+        // Log request details for debugging
+        if is_bedrock {
+            debug!("=== Bedrock Request ===");
+            debug!("Path: {}", path);
+            debug!("max_tokens: {:?}", body.get("max_tokens"));
+            debug!("tool_choice: {:?}", body.get("tool_choice"));
+            let tools = body.get("tools").and_then(|t| t.as_array());
+            debug!("tools count: {:?}", tools.map(std::vec::Vec::len));
+            debug!("=== End Bedrock Request ===");
+        }
+
         let builder = || {
             let mut req = self.provider.build_request(Method::POST, path);
             req.headers.extend(extra_headers.clone());
-            req.headers.insert(
-                http::header::ACCEPT,
-                http::HeaderValue::from_static("text/event-stream"),
-            );
+
+            // Bedrock streaming uses AWS Event Stream format
+            let accept = if is_bedrock {
+                "application/vnd.amazon.eventstream"
+            } else {
+                "text/event-stream"
+            };
+            req.headers
+                .insert(http::header::ACCEPT, http::HeaderValue::from_static(accept));
             req.body = Some(body.clone());
             req.compression = compression;
             add_auth_headers(&self.auth, req)
@@ -84,6 +104,13 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
             |req| self.transport.stream(req),
         )
         .await?;
+
+        // For Bedrock, use the streaming event stream handler
+        if is_bedrock {
+            return Ok(crate::sse::bedrock_stream::spawn_bedrock_stream(
+                stream_response,
+            ));
+        }
 
         Ok(spawner(
             stream_response,

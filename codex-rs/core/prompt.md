@@ -130,6 +130,7 @@ You MUST adhere to the following criteria when solving queries:
 - Analyzing code for vulnerabilities is allowed.
 - Showing user code and tool call details is allowed.
 - Use the `apply_patch` tool to edit files (NEVER try `applypatch` or `apply-patch`, only `apply_patch`): {"command":["apply_patch","*** Begin Patch\\n*** Update File: path/to/file.py\\n@@ def example():\\n- pass\\n+ return 123\\n*** End Patch"]}
+- NEVER use `sed`, `awk`, `echo >`, `cat <<`, or similar shell commands to edit files. Always use `apply_patch` for any file modifications. The `apply_patch` tool is specifically designed for this purpose and provides better safety, undo support, and user visibility.
 
 If completing the user's task requires writing or modifying files, your code and final answer should follow these coding guidelines, though user instructions (i.e. AGENTS.md) may override these guidelines:
 

@@ -1368,6 +1368,24 @@ impl Config {
             })?
             .clone();
 
+        // Bedrock requires network access for AWS API calls.
+        // Automatically enable network if using Bedrock provider with WorkspaceWrite sandbox.
+        let is_bedrock_provider = model_provider_id == "bedrock"
+            || model_provider
+                .base_url
+                .as_ref()
+                .is_some_and(|url| url.contains("bedrock"));
+        if is_bedrock_provider {
+            if let SandboxPolicy::WorkspaceWrite { network_access, .. } = &mut sandbox_policy {
+                if !*network_access {
+                    tracing::info!(
+                        "Enabling network access for Bedrock provider (was disabled in sandbox)"
+                    );
+                    *network_access = true;
+                }
+            }
+        }
+
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let history = cfg.history.unwrap_or_default();
@@ -3530,6 +3548,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            auth_type: crate::model_provider_info::AuthType::Bearer,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();

@@ -52,6 +52,27 @@ pub enum WireApi {
     Chat,
 }
 
+/// Authentication type for the provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", tag = "type")]
+pub enum AuthType {
+    /// Standard Bearer token authentication (Authorization: Bearer <token>).
+    /// This is the default for most OpenAI-compatible providers.
+    #[default]
+    Bearer,
+
+    /// AWS SigV4 request signing for AWS services like Bedrock.
+    /// Uses AWS credentials from profiles, environment variables, or IAM roles.
+    #[serde(rename = "aws-sigv4")]
+    AwsSigV4 {
+        /// AWS region for the service (e.g., "us-east-1").
+        region: String,
+        /// Optional AWS profile name. If not set, uses default credential chain.
+        #[serde(default)]
+        profile: Option<String>,
+    },
+}
+
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -105,9 +126,19 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+
+    /// Authentication type for this provider.
+    /// Defaults to Bearer token authentication.
+    #[serde(default)]
+    pub auth_type: AuthType,
 }
 
 impl ModelProviderInfo {
+    /// Check if the provider is AWS Bedrock.
+    pub fn is_bedrock(&self) -> bool {
+        matches!(self.auth_type, AuthType::AwsSigV4 { .. })
+    }
+
     fn build_header_map(&self) -> crate::error::Result<HeaderMap> {
         let mut headers = HeaderMap::new();
         if let Some(extra) = &self.http_headers {
@@ -254,6 +285,7 @@ impl ModelProviderInfo {
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: true,
+            auth_type: AuthType::Bearer,
         }
     }
 
@@ -268,15 +300,61 @@ pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
 pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
 pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
 pub const OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
+pub const BEDROCK_PROVIDER_ID: &str = "bedrock";
+
+/// Default AWS region for Bedrock if not specified.
+pub const DEFAULT_BEDROCK_REGION: &str = "us-east-1";
+
+/// Beta header for Claude structured outputs feature.
+const ANTHROPIC_BETA_HEADER: &str = "structured-outputs-2025-11-13";
+
+/// Create a Bedrock provider for AWS Claude models.
+pub fn create_bedrock_provider(region: &str, profile: Option<String>) -> ModelProviderInfo {
+    // Add anthropic-beta header for structured outputs and extended thinking support
+    let mut headers = HashMap::new();
+    headers.insert(
+        "anthropic-beta".to_string(),
+        ANTHROPIC_BETA_HEADER.to_string(),
+    );
+
+    ModelProviderInfo {
+        name: "Bedrock".into(),
+        base_url: Some(format!("https://bedrock-runtime.{region}.amazonaws.com")),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: WireApi::Chat,
+        query_params: None,
+        http_headers: Some(headers),
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        requires_openai_auth: false,
+        auth_type: AuthType::AwsSigV4 {
+            region: region.to_string(),
+            profile,
+        },
+    }
+}
 
 /// Built-in default provider list.
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
 
     // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI and
-    // open source ("oss") providers by default. Users are encouraged to add to
-    // `model_providers` in config.toml to add their own providers.
+    // providers are bundled with Codex CLI, so we only include the OpenAI,
+    // open source ("oss"), and AWS Bedrock providers by default. Users are
+    // encouraged to add to `model_providers` in config.toml to add their own providers.
+    //
+    // For Bedrock, we use environment variables for region/profile configuration:
+    // - AWS_REGION or AWS_DEFAULT_REGION for the region (defaults to us-east-1)
+    // - AWS_PROFILE for the profile (uses default credential chain if not set)
+    let bedrock_region = std::env::var("AWS_REGION")
+        .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+        .unwrap_or_else(|_| DEFAULT_BEDROCK_REGION.to_string());
+    let bedrock_profile = std::env::var("AWS_PROFILE").ok();
+
     [
         ("openai", P::create_openai_provider()),
         (
@@ -290,6 +368,10 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
         (
             LMSTUDIO_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_LMSTUDIO_PORT, WireApi::Responses),
+        ),
+        (
+            BEDROCK_PROVIDER_ID,
+            create_bedrock_provider(&bedrock_region, bedrock_profile),
         ),
     ]
     .into_iter()
@@ -332,6 +414,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        auth_type: AuthType::Bearer,
     }
 }
 
@@ -360,6 +443,7 @@ base_url = "http://localhost:11434/v1"
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            auth_type: AuthType::Bearer,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -390,6 +474,7 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            auth_type: AuthType::Bearer,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -423,6 +508,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            auth_type: AuthType::Bearer,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -454,6 +540,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                auth_type: AuthType::Bearer,
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(
@@ -476,6 +563,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            auth_type: AuthType::Bearer,
         };
         let named_api = named_provider.to_api_provider(None).expect("api provider");
         assert!(named_api.is_azure_responses_endpoint());
@@ -500,6 +588,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                auth_type: AuthType::Bearer,
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(

@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+aws-smithy-eventstream = { workspace = true }
+base64 = { workspace = true }
 bytes = { workspace = true }
 codex-client = { workspace = true }
 codex-protocol = { workspace = true }

@@ -158,6 +158,7 @@ pub async fn process_chat_sse<S>(
 
         for choice in choices {
             if let Some(delta) = choice.get("delta") {
+                // Parse OpenAI-style reasoning (delta.reasoning)
                 if let Some(reasoning) = delta.get("reasoning") {
                     if let Some(text) = reasoning.as_str() {
                         append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string())
@@ -171,10 +172,38 @@ pub async fn process_chat_sse<S>(
                     }
                 }
 
+                // Parse Claude-style thinking (delta.thinking)
+                // Claude extended thinking returns thinking blocks in the content array
+                // with type: "thinking" and the thinking text in the "thinking" field
+                if let Some(thinking) = delta.get("thinking") {
+                    if let Some(text) = thinking.as_str() {
+                        append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string())
+                            .await;
+                    } else if let Some(text) = thinking.get("thinking").and_then(|v| v.as_str()) {
+                        append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string())
+                            .await;
+                    } else if let Some(text) = thinking.get("text").and_then(|v| v.as_str()) {
+                        append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string())
+                            .await;
+                    }
+                }
+
                 if let Some(content) = delta.get("content") {
                     if content.is_array() {
                         for item in content.as_array().unwrap_or(&vec![]) {
-                            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            // Check if this is a Claude thinking block
+                            let item_type = item.get("type").and_then(|t| t.as_str());
+                            if item_type == Some("thinking") {
+                                // Claude thinking block: { type: "thinking", thinking: "..." }
+                                if let Some(text) = item.get("thinking").and_then(|t| t.as_str()) {
+                                    append_reasoning_text(
+                                        &tx_event,
+                                        &mut reasoning_item,
+                                        text.to_string(),
+                                    )
+                                    .await;
+                                }
+                            } else if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                                 append_assistant_text(
                                     &tx_event,
                                     &mut assistant_item,

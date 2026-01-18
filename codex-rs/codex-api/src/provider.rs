@@ -105,6 +105,18 @@ impl Provider {
         self.base_url.to_ascii_lowercase().contains("openai.azure.")
             || matches_azure_responses_base_url(&self.base_url)
     }
+
+    /// Returns true if this provider targets Claude/Anthropic (Bedrock or direct API).
+    pub fn is_claude_provider(&self) -> bool {
+        let name_lower = self.name.to_ascii_lowercase();
+        let url_lower = self.base_url.to_ascii_lowercase();
+
+        name_lower.contains("bedrock")
+            || name_lower.contains("anthropic")
+            || name_lower.contains("claude")
+            || url_lower.contains("bedrock")
+            || url_lower.contains("anthropic")
+    }
 }
 
 fn matches_azure_responses_base_url(base_url: &str) -> bool {

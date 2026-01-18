@@ -6,6 +6,11 @@ version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-sigv4 = { workspace = true }
+aws-smithy-eventstream = { workspace = true }
+aws-smithy-runtime-api = { workspace = true }
 bytes = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
