@@ -1216,7 +1216,7 @@ impl ChatComposer {
             let replacement = placeholder
                 .as_deref()
                 .and_then(|ph| pending_by_placeholder.get_mut(ph))
-                .and_then(|queue| queue.pop_front());
+                .and_then(VecDeque::pop_front);
             if let Some(actual) = replacement {
                 rebuilt.push_str(actual);
             } else {
@@ -1481,10 +1481,12 @@ impl ChatComposer {
             text_elements = expanded_elements;
         }
 
+        let expanded_input = text.clone();
+
         // If there is neither text nor attachments, suppress submission entirely.
         let has_attachments = !self.attached_images.is_empty();
         text = text.trim().to_string();
-        text_elements = Self::trim_text_elements(&original_input, &text, text_elements);
+        text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
         if let Some((name, _rest)) = parse_slash_name(&text) {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
@@ -4260,6 +4262,50 @@ mod tests {
                     ByteRange {
                         start: large_content.len() + 1,
                         end: large_content.len() + 1 + "[Image #1]".len(),
+                    }
+                );
+            }
+            _ => panic!("expected Submitted"),
+        }
+        let imgs = composer.take_recent_submission_images();
+        assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn large_paste_with_leading_whitespace_trims_and_shifts_elements() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let large_content = format!("  {}", "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
+        composer.handle_paste(large_content.clone());
+        composer.handle_paste(" ".into());
+        let path = PathBuf::from("/tmp/image_with_trim.png");
+        composer.attach_image(path.clone());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                let trimmed = large_content.trim().to_string();
+                assert_eq!(text, format!("{trimmed} [Image #1]"));
+                assert_eq!(text_elements.len(), 1);
+                assert_eq!(text_elements[0].placeholder.as_deref(), Some("[Image #1]"));
+                assert_eq!(
+                    text_elements[0].byte_range,
+                    ByteRange {
+                        start: trimmed.len() + 1,
+                        end: trimmed.len() + 1 + "[Image #1]".len(),
                     }
                 );
             }
