@@ -174,16 +174,14 @@ pub fn switch_account(
 /// Resolve the account scope for auth operations.
 ///
 /// - When `accounts.json` does not exist: legacy single-account mode.
-/// - When `accounts.json` exists: an active account must be selected.
+/// - When `accounts.json` exists but no active account is selected: legacy single-account mode.
+/// - When `accounts.json` exists and an active account is selected: account-scoped mode.
 pub fn resolve_active_account(codex_home: &Path) -> std::io::Result<Option<String>> {
     let Some(accounts) = load_accounts(codex_home)? else {
         return Ok(None);
     };
     let Some(active) = accounts.active_account else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no active account selected",
-        ));
+        return Ok(None);
     };
     validate_account_name(&active)?;
     Ok(Some(active))

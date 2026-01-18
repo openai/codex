@@ -1414,7 +1414,7 @@ function main(): void {
       const activeText = document.createElement("div");
       activeText.textContent = settingsActiveAccount
         ? `Active: ${settingsActiveAccount}`
-        : "Active: (none)";
+        : "Active: (none) (legacy auth)";
       acctRow.appendChild(activeText);
       sectionAcct.appendChild(acctRow);
 

@@ -133,8 +133,8 @@ use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::ThreadManager;
 use codex_core::accounts::AccountKind;
-use codex_core::accounts::is_accounts_initialized;
 use codex_core::accounts::list_accounts as list_accounts_core;
+use codex_core::accounts::load_accounts as load_accounts_core;
 use codex_core::accounts::resolve_active_account as resolve_active_account_core;
 use codex_core::accounts::switch_account as switch_account_core;
 use codex_core::accounts::update_account_meta;
@@ -1114,13 +1114,40 @@ impl CodexMessageProcessor {
 
     async fn switch_account_v2(&mut self, request_id: RequestId, params: SwitchAccountParams) {
         let name = params.name;
-        let was_initialized = is_accounts_initialized(&self.config.codex_home);
         let create_if_missing = params.create_if_missing;
+        let mut should_migrate_legacy = false;
+
+        if create_if_missing {
+            match load_accounts_core(&self.config.codex_home) {
+                Ok(Some(existing)) => {
+                    let is_first_account = existing.accounts.is_empty();
+                    let name_exists = existing.accounts.contains_key(&name);
+                    should_migrate_legacy = is_first_account && !name_exists;
+                }
+                Ok(None) => {
+                    // No accounts file yet; if this creates the first account, migrate legacy.
+                    should_migrate_legacy = true;
+                }
+                Err(err) => {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("failed to read accounts file: {err}"),
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                }
+            }
+        }
 
         match switch_account_core(&self.config.codex_home, &name, create_if_missing) {
             Ok(()) => {
                 let mut migrated_legacy = None;
-                if !was_initialized && create_if_missing {
+                if should_migrate_legacy {
                     match self.auth_manager.migrate_legacy_auth_to_account(&name) {
                         Ok(true) => {
                             migrated_legacy = Some(true);

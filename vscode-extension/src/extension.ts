@@ -3022,7 +3022,7 @@ async function handleSlashCommand(
 
     if (!arg) {
       const accounts = await backendManager.listAccounts(session);
-      const active = accounts.activeAccount ?? "(none)";
+      const active = accounts.activeAccount ?? "(none) (legacy auth)";
       const lines = [
         `Active: ${active}`,
         "",
