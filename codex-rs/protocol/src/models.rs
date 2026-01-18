@@ -20,6 +20,8 @@ use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
+pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("../../core/prompt.md");
+
 /// Controls whether a command should use the session sandbox or bypass it.
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
@@ -169,6 +171,14 @@ pub enum ResponseItem {
 #[serde(rename = "base_instructions", rename_all = "snake_case")]
 pub struct BaseInstructions {
     pub text: String,
+}
+
+impl Default for BaseInstructions {
+    fn default() -> Self {
+        Self {
+            text: BASE_INSTRUCTIONS_DEFAULT.to_string(),
+        }
+    }
 }
 
 /// Developer-provided guidance that is injected into a turn as a developer role

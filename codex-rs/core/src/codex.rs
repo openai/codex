@@ -830,6 +830,13 @@ impl Session {
         state.get_total_token_usage()
     }
 
+    pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
+        let state = self.state.lock().await;
+        BaseInstructions {
+            text: state.session_configuration.base_instructions.clone(),
+        }
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
         match conversation_history {
@@ -2790,11 +2797,13 @@ async fn run_sampling_request(
         .get_model_info()
         .supports_parallel_tool_calls;
 
+    let base_instructions = sess.get_base_instructions().await;
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
-        base_instructions_override: turn_context.base_instructions.clone(),
+        base_instructions,
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
@@ -3152,6 +3161,7 @@ mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::config::ConfigBuilder;
+    use crate::config::test_config;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
@@ -3194,6 +3204,77 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+
+    struct InstructionsTestCase {
+        slug: &'static str,
+        expects_apply_patch_instructions: bool,
+    }
+
+    #[tokio::test]
+    async fn get_base_instructions_no_user_content() {
+        let prompt_with_apply_patch_instructions =
+            include_str!("../prompt_with_apply_patch_instructions.md");
+        let test_cases = vec![
+            InstructionsTestCase {
+                slug: "gpt-3.5",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-4.1",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-4o",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "codex-mini-latest",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-oss:120b",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1-codex",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1-codex-max",
+                expects_apply_patch_instructions: false,
+            },
+        ];
+
+        let (session, _turn_context) = make_session_and_context().await;
+
+        for test_case in test_cases {
+            let config = test_config();
+            let model_info = ModelsManager::construct_model_info_offline(test_case.slug, &config);
+            if test_case.expects_apply_patch_instructions {
+                assert_eq!(
+                    model_info.base_instructions.as_str(),
+                    prompt_with_apply_patch_instructions
+                );
+            }
+
+            {
+                let mut state = session.state.lock().await;
+                state.session_configuration.base_instructions =
+                    model_info.base_instructions.clone();
+            }
+
+            let base_instructions = session.get_base_instructions().await;
+            assert_eq!(base_instructions.text, model_info.base_instructions);
+        }
+    }
 
     #[tokio::test]
     async fn reconstruct_history_matches_live_compactions() {
