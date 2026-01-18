@@ -18,6 +18,8 @@ import type { Model } from "../generated/v2/Model";
 import type { ReasoningEffort } from "../generated/ReasoningEffort";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
+import type { LoginAccountParams } from "../generated/v2/LoginAccountParams";
+import type { LoginAccountResponse } from "../generated/v2/LoginAccountResponse";
 import type { ListAccountsResponse } from "../generated/v2/ListAccountsResponse";
 import type { LogoutAccountResponse } from "../generated/v2/LogoutAccountResponse";
 import type { SwitchAccountParams } from "../generated/v2/SwitchAccountParams";
@@ -501,6 +503,23 @@ export class BackendManager implements vscode.Disposable {
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
     return await proc.accountRead({ refreshToken: false });
+  }
+
+  public async loginAccount(
+    session: Session,
+    params: LoginAccountParams,
+  ): Promise<LoginAccountResponse> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+    return await proc.accountLoginStart(params);
   }
 
   public async listAccounts(session: Session): Promise<ListAccountsResponse> {

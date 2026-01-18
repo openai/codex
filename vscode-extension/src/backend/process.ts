@@ -31,6 +31,8 @@ import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerS
 import type { GetAccountParams } from "../generated/v2/GetAccountParams";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
+import type { LoginAccountParams } from "../generated/v2/LoginAccountParams";
+import type { LoginAccountResponse } from "../generated/v2/LoginAccountResponse";
 import type { ListAccountsResponse } from "../generated/v2/ListAccountsResponse";
 import type { LogoutAccountResponse } from "../generated/v2/LogoutAccountResponse";
 import type { SwitchAccountParams } from "../generated/v2/SwitchAccountParams";
@@ -263,6 +265,15 @@ export class BackendProcess implements vscode.Disposable {
   ): Promise<GetAccountResponse> {
     return this.rpc.request<GetAccountResponse>({
       method: "account/read",
+      params,
+    });
+  }
+
+  public async accountLoginStart(
+    params: LoginAccountParams,
+  ): Promise<LoginAccountResponse> {
+    return this.rpc.request<LoginAccountResponse>({
+      method: "account/login/start",
       params,
     });
   }

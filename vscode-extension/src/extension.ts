@@ -770,6 +770,25 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!backendManager) throw new Error("backendManager is not initialized");
       return await backendManager.logoutAccount(session);
     },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      const res = await backendManager.loginAccount(session, { type: "chatgpt" });
+      if (res.type !== "chatgpt") {
+        throw new Error(`Unexpected login response: ${JSON.stringify(res)}`);
+      }
+      return { authUrl: res.authUrl, loginId: res.loginId };
+    },
+    async (session, apiKey) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      const res = await backendManager.loginAccount(session, {
+        type: "apiKey",
+        apiKey,
+      });
+      if (res.type !== "apiKey") {
+        throw new Error(`Unexpected login response: ${JSON.stringify(res)}`);
+      }
+      return res;
+    },
     async ({ variant, restartMode }) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!outputChannel) throw new Error("outputChannel is not initialized");
@@ -5322,12 +5341,26 @@ function applyGlobalNotification(
       return;
     }
     case "account/login/completed": {
-      const p = (n as any).params as { success?: boolean; provider?: string };
+      const p = (n as any).params as {
+        loginId: string | null;
+        success: boolean;
+        error: string | null;
+      };
       upsertGlobal({
         id: newLocalId("auth"),
         type: p?.success ? "info" : "error",
         title: p?.success ? "Login succeeded" : "Login failed",
-        text: `provider=${String(p?.provider ?? "unknown")}`,
+        text: [
+          `loginId=${String(p?.loginId ?? "null")}`,
+          p?.error ? `error=${p.error}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      });
+      chatView?.notifyAccountLoginCompleted({
+        loginId: p?.loginId ?? null,
+        success: Boolean(p?.success),
+        error: typeof p?.error === "string" ? p.error : null,
       });
       chatView?.refresh();
       return;

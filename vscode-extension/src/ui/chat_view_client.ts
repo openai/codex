@@ -1273,6 +1273,7 @@ function main(): void {
     kind?: string;
     email?: string;
   }> = [];
+  let settingsLoginInFlight: { loginId: string; authUrl: string } | null = null;
 
   const closeSettings = (): void => {
     settingsOpen = false;
@@ -1573,6 +1574,101 @@ function main(): void {
       help.textContent =
         "Account names: [A-Za-z0-9_-], 1..64 chars\nLogout logs out the active account only.";
       sectionAcct.appendChild(help);
+
+      const sectionLogin = document.createElement("div");
+      sectionLogin.className = "settingsSection";
+      const loginTitle = document.createElement("div");
+      loginTitle.className = "settingsSectionTitle";
+      loginTitle.textContent = "Login";
+      sectionLogin.appendChild(loginTitle);
+
+      const loginRow = document.createElement("div");
+      loginRow.className = "settingsRow";
+      const loginInfo = document.createElement("div");
+      loginInfo.textContent = settingsActiveAccount
+        ? `Active account: ${settingsActiveAccount}`
+        : "Active account: (none) (legacy auth)";
+      loginRow.appendChild(loginInfo);
+      sectionLogin.appendChild(loginRow);
+
+      const btnRow = document.createElement("div");
+      btnRow.className = "settingsRow";
+
+      const chatgptBtn = document.createElement("button");
+      chatgptBtn.className = "settingsBtn primary";
+      chatgptBtn.textContent = "Login with ChatGPT";
+      chatgptBtn.disabled = settingsBusy;
+      chatgptBtn.addEventListener("click", async () => {
+        settingsBusy = true;
+        renderSettings();
+        const res = await settingsRequest("accountLoginChatgptStart", {});
+        settingsBusy = false;
+        if (!res.ok) {
+          showToast("error", res.error);
+          renderSettings();
+          return;
+        }
+        const authUrl =
+          res.data && typeof (res.data as any).authUrl === "string"
+            ? String((res.data as any).authUrl)
+            : "";
+        const loginId =
+          res.data && typeof (res.data as any).loginId === "string"
+            ? String((res.data as any).loginId)
+            : "";
+        if (!authUrl || !loginId) {
+          showToast("error", "Login start returned invalid data.");
+          renderSettings();
+          return;
+        }
+        settingsLoginInFlight = { loginId, authUrl };
+        vscode.postMessage({ type: "openExternal", url: authUrl });
+        showToast("info", "Opened browser for ChatGPT login.");
+        renderSettings();
+      });
+      btnRow.appendChild(chatgptBtn);
+
+      const apiKeyInput = document.createElement("input");
+      apiKeyInput.className = "settingsInput";
+      apiKeyInput.placeholder = "API key";
+      apiKeyInput.type = "password";
+      apiKeyInput.disabled = settingsBusy;
+      btnRow.appendChild(apiKeyInput);
+
+      const apiKeyBtn = document.createElement("button");
+      apiKeyBtn.className = "settingsBtn";
+      apiKeyBtn.textContent = "Login with API key";
+      apiKeyBtn.disabled = settingsBusy;
+      apiKeyBtn.addEventListener("click", async () => {
+        const k = apiKeyInput.value.trim();
+        if (!k) {
+          showToast("error", "API key cannot be empty.");
+          return;
+        }
+        settingsBusy = true;
+        renderSettings();
+        const res = await settingsRequest("accountLoginApiKey", { apiKey: k });
+        settingsBusy = false;
+        apiKeyInput.value = "";
+        if (!res.ok) {
+          showToast("error", res.error);
+          renderSettings();
+          return;
+        }
+        showToast("success", "Logged in with API key.");
+        await loadSettings();
+      });
+      btnRow.appendChild(apiKeyBtn);
+
+      if (settingsLoginInFlight) {
+        const inflight = document.createElement("div");
+        inflight.className = "settingsHelp";
+        inflight.textContent =
+          `Login in progress…\nloginId=${settingsLoginInFlight.loginId}`;
+        sectionLogin.appendChild(inflight);
+      }
+
+      sectionAcct.appendChild(sectionLogin);
     }
 
     settingsBodyEl.appendChild(sectionCli);
@@ -4301,6 +4397,21 @@ function main(): void {
           ? Math.max(0, Math.trunc(anyMsg.timeoutMs))
           : 2500;
       showToast(kind, message, timeoutMs);
+      return;
+    }
+    if (anyMsg.type === "accountLoginCompleted") {
+      const success = Boolean((anyMsg as any).success);
+      const error =
+        typeof (anyMsg as any).error === "string" ? String((anyMsg as any).error) : null;
+      settingsLoginInFlight = null;
+      if (settingsOpen) {
+        if (success) {
+          showToast("success", "Login completed.");
+        } else {
+          showToast("error", error ? `Login failed: ${error}` : "Login failed.");
+        }
+        void loadSettings();
+      }
       return;
     }
     if (anyMsg.type === "settingsResponse") {

@@ -217,6 +217,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage({ type: "toast", kind, message });
   }
 
+  public notifyAccountLoginCompleted(args: {
+    loginId: string | null;
+    success: boolean;
+    error: string | null;
+  }): void {
+    this.view?.webview.postMessage({
+      type: "accountLoginCompleted",
+      ...args,
+    });
+  }
+
   public constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly getState: () => ChatViewState,
@@ -234,6 +245,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       params: { name: string; createIfMissing: boolean },
     ) => Promise<unknown>,
     private readonly onAccountLogout: (session: Session) => Promise<unknown>,
+    private readonly onAccountLoginChatgptStart: (
+      session: Session,
+    ) => Promise<{ authUrl: string; loginId: string }>,
+    private readonly onAccountLoginApiKey: (
+      session: Session,
+      apiKey: string,
+    ) => Promise<unknown>,
     private readonly onSetCliVariant: (args: {
       variant: "auto" | "codex" | "codex-mine";
       restartMode: "later" | "restartAll" | "forceRestartAll";
@@ -750,6 +768,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (op === "accountLogout") {
           await this.onAccountLogout(active);
           await respondOk({});
+          return;
+        }
+
+        if (op === "accountLoginChatgptStart") {
+          const res = await this.onAccountLoginChatgptStart(active);
+          await respondOk(res);
+          return;
+        }
+
+        if (op === "accountLoginApiKey") {
+          const apiKey = anyMsg["apiKey"];
+          if (typeof apiKey !== "string" || !apiKey.trim()) {
+            await respondErr("Missing API key.");
+            return;
+          }
+          const res = await this.onAccountLoginApiKey(active, apiKey.trim());
+          await respondOk(res);
           return;
         }
 
