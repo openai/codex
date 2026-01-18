@@ -1494,7 +1494,6 @@ pub struct SessionMeta {
     pub cwd: PathBuf,
     pub originator: String,
     pub cli_version: String,
-    pub instructions: Option<String>,
     #[serde(default)]
     pub source: SessionSource,
     pub model_provider: Option<String>,
@@ -1509,7 +1508,6 @@ impl Default for SessionMeta {
             cwd: PathBuf::new(),
             originator: String::new(),
             cli_version: String::new(),
-            instructions: None,
             source: SessionSource::default(),
             model_provider: None,
         }
