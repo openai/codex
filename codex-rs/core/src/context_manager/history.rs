@@ -1,12 +1,12 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::instructions::SkillInstructions;
+use crate::instructions::UserInstructions;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
-use crate::user_instructions::SkillInstructions;
-use crate::user_instructions::UserInstructions;
 use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -97,7 +97,11 @@ impl ContextManager {
                 }
                 | ResponseItem::Compaction {
                     encrypted_content: content,
-                } => estimate_reasoning_length(content.len()) as i64,
+                } => {
+                    let reasoning_bytes = estimate_reasoning_length(content.len());
+                    i64::try_from(approx_tokens_from_byte_count(reasoning_bytes))
+                        .unwrap_or(i64::MAX)
+                }
                 item => {
                     let serialized = serde_json::to_string(item).unwrap_or_default();
                     i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
