@@ -23,7 +23,6 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cwd;
 use crate::responses::WebSocketTestServer;
 use crate::responses::start_mock_server;
