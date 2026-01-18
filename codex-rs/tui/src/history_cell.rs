@@ -180,7 +180,7 @@ impl HistoryCell for UserHistoryCell {
 
         let wrapped = if self.text_elements.is_empty() {
             word_wrap_lines(
-                self.message.lines().map(|l| Line::from(l).style(style)),
+                self.message.split('\n').map(|l| Line::from(l).style(style)),
                 // Wrap algorithm matches textarea.rs.
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
@@ -190,7 +190,7 @@ impl HistoryCell for UserHistoryCell {
             elements.sort_by_key(|e| e.byte_range.start);
             let mut offset = 0usize;
             let mut raw_lines: Vec<Line<'static>> = Vec::new();
-            for line_text in self.message.lines() {
+            for line_text in self.message.split('\n') {
                 let line_start = offset;
                 let line_end = line_start + line_text.len();
                 let mut spans: Vec<Span<'static>> = Vec::new();
@@ -236,7 +236,8 @@ impl HistoryCell for UserHistoryCell {
                     Line::from(spans).style(style)
                 };
                 raw_lines.push(line);
-                // TextArea normalizes newlines to '\n', so advancing by 1 is correct.
+                // Split on '\n' so any '\r' stays in the line; advancing by 1 accounts
+                // for the separator byte.
                 offset = line_end + 1;
             }
             word_wrap_lines(

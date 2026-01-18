@@ -4374,6 +4374,7 @@ mod tests {
         composer.set_steer_enabled(true);
 
         composer.textarea.set_text_clearing_elements("/unknown ");
+        composer.textarea.set_cursor("/unknown ".len());
         let large_content = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
         composer.handle_paste(large_content.clone());
         let placeholder = composer
