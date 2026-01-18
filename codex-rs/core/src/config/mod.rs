@@ -41,7 +41,9 @@ use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
@@ -1609,6 +1611,14 @@ impl Config {
             },
         };
         Ok(config)
+    }
+
+    pub fn collaboration_mode(&self, model: String) -> CollaborationMode {
+        CollaborationMode::Custom(Settings {
+            model,
+            reasoning_effort: self.model_reasoning_effort,
+            developer_instructions: None,
+        })
     }
 
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {

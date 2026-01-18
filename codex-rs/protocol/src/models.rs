@@ -164,6 +164,13 @@ pub enum ResponseItem {
     Other,
 }
 
+/// Base instructions for the model in a thread. Corresponds to the `instructions` field in the ResponsesAPI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(rename = "base_instructions", rename_all = "snake_case")]
+pub struct BaseInstructions {
+    pub text: String,
+}
+
 /// Developer-provided guidance that is injected into a turn as a developer role
 /// message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]

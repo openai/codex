@@ -34,9 +34,11 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -162,7 +164,6 @@ use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -272,6 +273,18 @@ impl Codex {
                 crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
+
+        // Resolve base instructions for the session. Priority order:
+        // 1. config.base_instructions override
+        // 2. conversation history => session_meta.base_instructions
+        // 3. base_intructions for current model
+        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let base_instructions = config
+            .base_instructions
+            .clone()
+            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
+            .unwrap_or_else(|| model_info.base_instructions.clone());
+
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode::Custom(Settings {
@@ -285,7 +298,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
-            base_instructions: config.base_instructions.clone(),
+            base_instructions,
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -439,8 +452,8 @@ pub(crate) struct SessionConfiguration {
     /// Model instructions that are appended to the base instructions.
     user_instructions: Option<String>,
 
-    /// Base instructions override.
-    base_instructions: Option<String>,
+    /// Base instructions for the session.
+    base_instructions: String,
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
@@ -550,7 +563,7 @@ impl Session {
             client,
             cwd: session_configuration.cwd.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            base_instructions: session_configuration.base_instructions.clone(),
+            base_instructions: Some(session_configuration.base_instructions.clone()),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
@@ -598,7 +611,14 @@ impl Session {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
-                    RolloutRecorderParams::new(conversation_id, forked_from_id, session_source),
+                    RolloutRecorderParams::new(
+                        conversation_id,
+                        forked_from_id,
+                        session_source,
+                        BaseInstructions {
+                            text: session_configuration.base_instructions.clone(),
+                        },
+                    ),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (
@@ -3425,6 +3445,7 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Custom(Settings {
             model,
@@ -3437,7 +3458,10 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            base_instructions: config.base_instructions.clone(),
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.base_instructions.clone()),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
