@@ -373,6 +373,7 @@ impl ChatComposer {
     /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
+        let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = self.next_large_paste_placeholder(char_count);
@@ -4310,6 +4311,50 @@ mod tests {
                     ByteRange {
                         start: trimmed.len() + 1,
                         end: trimmed.len() + 1 + "[Image #1]".len(),
+                    }
+                );
+            }
+            _ => panic!("expected Submitted"),
+        }
+        let imgs = composer.take_recent_submission_images();
+        assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn pasted_crlf_normalizes_newlines_for_elements() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let pasted = "line1\r\nline2\r\n".to_string();
+        composer.handle_paste(pasted);
+        composer.handle_paste(" ".into());
+        let path = PathBuf::from("/tmp/image_crlf.png");
+        composer.attach_image(path.clone());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, "line1\nline2\n [Image #1]");
+                assert!(!text.contains('\r'));
+                assert_eq!(text_elements.len(), 1);
+                assert_eq!(text_elements[0].placeholder.as_deref(), Some("[Image #1]"));
+                assert_eq!(
+                    text_elements[0].byte_range,
+                    ByteRange {
+                        start: "line1\nline2\n ".len(),
+                        end: "line1\nline2\n [Image #1]".len(),
                     }
                 );
             }
