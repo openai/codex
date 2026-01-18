@@ -763,12 +763,7 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
     ConfigEditsBuilder::new(codex_home)
         .with_edits(edits)
         .apply_blocking()
-        .map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("failed to persist config.toml: {err}"),
-            )
-        })
+        .map_err(|err| std::io::Error::other(format!("failed to persist config.toml: {err}")))
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
