@@ -75,6 +75,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "child_agents_md": {
+          "type": "boolean"
+        },
         "collab": {
           "type": "boolean"
         },
@@ -97,9 +100,6 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
-          "type": "boolean"
-        },
-        "hierarchical_agents": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -373,6 +373,14 @@
       "description": "When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output. Defaults to `false`.",
       "type": "boolean"
     },
+    "skills": {
+      "description": "User-level skill config entries keyed by SKILL.md path.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SkillsConfig"
+        }
+      ]
+    },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",
       "type": "integer",
@@ -392,6 +400,14 @@
       "allOf": [
         {
           "$ref": "#/definitions/Tui"
+        }
+      ]
+    },
+    "web_search": {
+      "description": "Controls the web search tool mode: disabled, cached, or live.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/WebSearchMode"
         }
       ]
     },
@@ -535,6 +551,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "child_agents_md": {
+              "type": "boolean"
+            },
             "collab": {
               "type": "boolean"
             },
@@ -557,9 +576,6 @@
               "type": "boolean"
             },
             "experimental_windows_sandbox": {
-              "type": "boolean"
-            },
-            "hierarchical_agents": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -634,6 +650,9 @@
         },
         "tools_web_search": {
           "type": "boolean"
+        },
+        "web_search": {
+          "$ref": "#/definitions/WebSearchMode"
         }
       },
       "additionalProperties": false
@@ -1277,6 +1296,34 @@
       },
       "additionalProperties": false
     },
+    "SkillConfig": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "path"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillsConfig": {
+      "type": "object",
+      "properties": {
+        "config": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillConfig"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "ToolsToml": {
       "type": "object",
       "properties": {
@@ -1418,6 +1465,14 @@
         "low",
         "medium",
         "high"
+      ]
+    },
+    "WebSearchMode": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "cached",
+        "live"
       ]
     },
     "WireApi": {

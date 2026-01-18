@@ -270,6 +270,7 @@ impl TestCodex {
             .submit(Op::UserTurn {
                 items: vec![UserInput::Text {
                     text: prompt.into(),
+                    text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
                 cwd: self.cwd.path().to_path_buf(),
@@ -278,6 +279,7 @@ impl TestCodex {
                 model: session_model,
                 effort: None,
                 summary: ReasoningSummary::Auto,
+                collaboration_mode: None,
             })
             .await?;
 

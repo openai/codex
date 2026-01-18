@@ -19,6 +19,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -31,7 +32,10 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 use tracing::warn;
+
+const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
 /// Represents a newly created Codex thread (formerly called a conversation), including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -54,6 +58,7 @@ pub struct ThreadManager {
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
@@ -70,9 +75,11 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
     ) -> Self {
+        let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new(
                     codex_home.clone(),
                     auth_manager.clone(),
@@ -108,9 +115,11 @@ impl ThreadManager {
         codex_home: PathBuf,
     ) -> Self {
         let auth_manager = AuthManager::from_auth_for_testing(auth);
+        let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider(
                     codex_home.clone(),
                     auth_manager.clone(),
@@ -149,6 +158,10 @@ impl ThreadManager {
             .await
     }
 
+    pub fn list_collaboration_modes(&self) -> Vec<CollaborationMode> {
+        self.state.models_manager.list_collaboration_modes()
+    }
+
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.state.threads.read().await.keys().copied().collect()
     }
@@ -172,6 +185,10 @@ impl ThreadManager {
                 warn!("failed to request MCP server refresh: {err}");
             }
         }
+    }
+
+    pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
+        self.state.thread_created_tx.subscribe()
     }
 
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
@@ -348,6 +365,10 @@ impl ThreadManagerState {
             session_configured,
         })
     }
+
+    pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
+        let _ = self.thread_created_tx.send(thread_id);
+    }
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message
@@ -446,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn ignores_session_prefix_messages_when_truncating() {
         let (session, turn_context) = make_session_and_context().await;
-        let mut items = session.build_initial_context(&turn_context);
+        let mut items = session.build_initial_context(&turn_context).await;
         items.push(user_msg("feature request"));
         items.push(assistant_msg("ack"));
         items.push(user_msg("second question"));

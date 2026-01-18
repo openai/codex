@@ -891,16 +891,33 @@ pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
 }
 
 #[derive(Debug)]
-struct SessionHeaderHistoryCell {
+pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
     model: String,
+    model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
 }
 
 impl SessionHeaderHistoryCell {
-    fn new(
+    pub(crate) fn new(
         model: String,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+        directory: PathBuf,
+        version: &'static str,
+    ) -> Self {
+        Self::new_with_style(
+            model,
+            Style::default(),
+            reasoning_effort,
+            directory,
+            version,
+        )
+    }
+
+    pub(crate) fn new_with_style(
+        model: String,
+        model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
@@ -908,6 +925,7 @@ impl SessionHeaderHistoryCell {
         Self {
             version,
             model,
+            model_style,
             reasoning_effort,
             directory,
         }
@@ -980,7 +998,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let reasoning_label = self.reasoning_label();
         let mut model_spans: Vec<Span<'static>> = vec![
             Span::from(format!("{model_label} ")).dim(),
-            Span::from(self.model.clone()),
+            Span::styled(self.model.clone(), self.model_style),
         ];
         if let Some(reasoning) = reasoning_label {
             model_spans.push(Span::from(" "));
@@ -1340,7 +1358,6 @@ pub(crate) fn new_mcp_tools_output(
     if tools.is_empty() {
         lines.push("  • No MCP tools available.".italic().into());
         lines.push("".into());
-        return PlainHistoryCell { lines };
     }
 
     let mut servers: Vec<_> = config.mcp_servers.iter().collect();
@@ -1364,6 +1381,9 @@ pub(crate) fn new_mcp_tools_output(
             header.push(" ".into());
             header.push("(disabled)".red());
             lines.push(header.into());
+            if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
+                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
+            }
             lines.push(Line::from(""));
             continue;
         }
@@ -1646,10 +1666,16 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 }
 
 #[derive(Debug)]
+/// A visual divider between turns, optionally showing how long the assistant "worked for".
+///
+/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
+/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
+/// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
 }
 impl FinalMessageSeparator {
+    /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
     pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
         Self { elapsed_seconds }
     }
@@ -1818,6 +1844,7 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
@@ -1838,6 +1865,7 @@ mod tests {
                 env_http_headers: Some(env_headers),
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,

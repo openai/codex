@@ -426,6 +426,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -517,6 +518,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -536,6 +538,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "call the rmcp image tool".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
@@ -544,6 +547,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -776,6 +780,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
                 tool_timeout_sec: None,
                 enabled_tools: None,

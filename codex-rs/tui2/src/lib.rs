@@ -15,6 +15,7 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::ThreadSortKey;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -46,6 +47,7 @@ mod chatwidget;
 mod cli;
 mod clipboard_copy;
 mod clipboard_paste;
+mod collab;
 mod color;
 pub mod custom_terminal;
 mod diff_render;
@@ -138,7 +140,7 @@ pub async fn run_main(
     if cli.web_search {
         cli.config_overrides
             .raw_overrides
-            .push("features.web_search_request=true".to_string());
+            .push("web_search=\"live\"".to_string());
     }
 
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
@@ -499,6 +501,7 @@ async fn run_ratatui_app(
                 &config.codex_home,
                 1,
                 None,
+                ThreadSortKey::UpdatedAt,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 &config.model_provider_id,
@@ -544,22 +547,25 @@ async fn run_ratatui_app(
         }
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
-        match RolloutRecorder::list_threads(
+        let filter_cwd = if cli.resume_show_all {
+            None
+        } else {
+            Some(config.cwd.as_path())
+        };
+        match RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
             1,
             None,
+            ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(provider_filter.as_slice()),
             &config.model_provider_id,
+            filter_cwd,
         )
         .await
         {
-            Ok(page) => page
-                .items
-                .first()
-                .map(|it| resume_picker::SessionSelection::Resume(it.path.clone()))
-                .unwrap_or(resume_picker::SessionSelection::StartFresh),
-            Err(_) => resume_picker::SessionSelection::StartFresh,
+            Ok(Some(path)) => resume_picker::SessionSelection::Resume(path),
+            _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
         match resume_picker::run_resume_picker(

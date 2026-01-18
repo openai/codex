@@ -32,6 +32,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
+use codex_utils_pty::process_group::kill_child_process_group;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
 
@@ -748,38 +749,6 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
     // On Windows the raw status is a u32. Use a direct cast to avoid
     // panicking on negative i32 values produced by prior narrowing casts.
     std::process::ExitStatus::from_raw(code as u32)
-}
-
-#[cfg(unix)]
-fn kill_child_process_group(child: &mut Child) -> io::Result<()> {
-    use std::io::ErrorKind;
-
-    if let Some(pid) = child.id() {
-        let pid = pid as libc::pid_t;
-        let pgid = unsafe { libc::getpgid(pid) };
-        if pgid == -1 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() != ErrorKind::NotFound {
-                return Err(err);
-            }
-            return Ok(());
-        }
-
-        let result = unsafe { libc::killpg(pgid, libc::SIGKILL) };
-        if result == -1 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() != ErrorKind::NotFound {
-                return Err(err);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn kill_child_process_group(_: &mut Child) -> io::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]

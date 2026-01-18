@@ -117,6 +117,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
                 },
                 UserInput::Text {
                     text: "pasted image".to_string(),
+                    text_elements: Vec::new(),
                 },
             ],
             final_output_json_schema: None,
@@ -126,6 +127,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -194,6 +196,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
                 },
                 UserInput::Text {
                     text: "dropped image".to_string(),
+                    text_elements: Vec::new(),
                 },
             ],
             final_output_json_schema: None,
@@ -203,6 +206,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 

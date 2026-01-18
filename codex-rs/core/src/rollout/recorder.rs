@@ -22,12 +22,14 @@ use tracing::warn;
 
 use super::SESSIONS_SUBDIR;
 use super::list::Cursor;
+use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
 use super::list::get_threads;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
 use crate::git_info::collect_git_info;
+use crate::path_utils;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -55,7 +57,7 @@ pub struct RolloutRecorder {
 pub enum RolloutRecorderParams {
     Create {
         conversation_id: ThreadId,
-        instructions: Option<String>,
+        forked_from_id: Option<ThreadId>,
         source: SessionSource,
     },
     Resume {
@@ -77,12 +79,12 @@ enum RolloutCmd {
 impl RolloutRecorderParams {
     pub fn new(
         conversation_id: ThreadId,
-        instructions: Option<String>,
+        forked_from_id: Option<ThreadId>,
         source: SessionSource,
     ) -> Self {
         Self::Create {
             conversation_id,
-            instructions,
+            forked_from_id,
             source,
         }
     }
@@ -98,6 +100,7 @@ impl RolloutRecorder {
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -106,11 +109,46 @@ impl RolloutRecorder {
             codex_home,
             page_size,
             cursor,
+            sort_key,
             allowed_sources,
             model_providers,
             default_provider,
         )
         .await
+    }
+
+    /// Find the newest recorded thread path, optionally filtering to a matching cwd.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn find_latest_thread_path(
+        codex_home: &Path,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
+        allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
+        default_provider: &str,
+        filter_cwd: Option<&Path>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        let mut cursor = cursor.cloned();
+        loop {
+            let page = Self::list_threads(
+                codex_home,
+                page_size,
+                cursor.as_ref(),
+                sort_key,
+                allowed_sources,
+                model_providers,
+                default_provider,
+            )
+            .await?;
+            if let Some(path) = select_resume_path(&page, filter_cwd) {
+                return Ok(Some(path));
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                return Ok(None);
+            }
+        }
     }
 
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
@@ -120,7 +158,7 @@ impl RolloutRecorder {
         let (file, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
                 conversation_id,
-                instructions,
+                forked_from_id,
                 source,
             } => {
                 let LogFileInfo {
@@ -143,11 +181,11 @@ impl RolloutRecorder {
                     path,
                     Some(SessionMeta {
                         id: session_id,
+                        forked_from_id,
                         timestamp,
                         cwd: config.cwd.clone(),
                         originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                        instructions,
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                     }),
@@ -430,4 +468,37 @@ impl JsonlWriter {
         self.file.flush().await?;
         Ok(())
     }
+}
+
+fn select_resume_path(page: &ThreadsPage, filter_cwd: Option<&Path>) -> Option<PathBuf> {
+    match filter_cwd {
+        Some(cwd) => page.items.iter().find_map(|item| {
+            if session_cwd_matches(&item.head, cwd) {
+                Some(item.path.clone())
+            } else {
+                None
+            }
+        }),
+        None => page.items.first().map(|item| item.path.clone()),
+    }
+}
+
+fn session_cwd_matches(head: &[serde_json::Value], cwd: &Path) -> bool {
+    let Some(session_cwd) = extract_session_cwd(head) else {
+        return false;
+    };
+    if let (Ok(ca), Ok(cb)) = (
+        path_utils::normalize_for_path_comparison(&session_cwd),
+        path_utils::normalize_for_path_comparison(cwd),
+    ) {
+        return ca == cb;
+    }
+    session_cwd == cwd
+}
+
+fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
+    head.iter().find_map(|value| {
+        let meta_line = serde_json::from_value::<SessionMetaLine>(value.clone()).ok()?;
+        Some(meta_line.meta.cwd)
+    })
 }

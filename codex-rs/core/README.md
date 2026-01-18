@@ -10,6 +10,10 @@ Note that `codex-core` makes some assumptions about certain helper utilities bei
 
 Expects `/usr/bin/sandbox-exec` to be present.
 
+When using the workspace-write sandbox policy, the Seatbelt profile allows
+writes under the configured writable roots while keeping `.git` (directory or
+pointer file), the resolved `gitdir:` target, and `.codex` read-only.
+
 ### Linux
 
 Expects the binary containing `codex-core` to run the equivalent of `codex sandbox linux` (legacy alias: `codex debug landlock`) when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.

@@ -38,6 +38,7 @@ pub(crate) fn spawn_agent(
                     msg: EventMsg::Error(err.to_error_event(None)),
                 }));
                 app_event_tx_clone.send(AppEvent::FatalExitRequest(message));
+                tracing::error!("failed to initialize codex: {err}");
                 return;
             }
         };

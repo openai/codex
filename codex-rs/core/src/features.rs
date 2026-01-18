@@ -89,7 +89,7 @@ pub enum Feature {
     /// Experimental shell snapshotting.
     ShellSnapshot,
     /// Append additional AGENTS.md guidance to user instructions.
-    HierarchicalAgents,
+    ChildAgentsMd,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
     /// Enforce UTF8 output in Powershell.
@@ -359,8 +359,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::HierarchicalAgents,
-        key: "hierarchical_agents",
+        id: Feature::ChildAgentsMd,
+        key: "child_agents_md",
         stage: Stage::Experimental,
         default_enabled: false,
     },
@@ -403,7 +403,17 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
+        #[cfg(windows)]
+        stage: Stage::Beta {
+            name: "Powershell UTF-8 support",
+            menu_description: "Enable UTF-8 output in Powershell.",
+            announcement: "Codex now supports UTF-8 output in Powershell. If you are seeing problems, disable in /experimental.",
+        },
+        #[cfg(windows)]
+        default_enabled: true,
+        #[cfg(not(windows))]
         stage: Stage::Experimental,
+        #[cfg(not(windows))]
         default_enabled: false,
     },
     FeatureSpec {

@@ -44,7 +44,11 @@ pub(crate) async fn run_inline_auto_compact_task(
     turn_context: Arc<TurnContext>,
 ) {
     let prompt = turn_context.compact_prompt().to_string();
-    let input = vec![UserInput::Text { text: prompt }];
+    let input = vec![UserInput::Text {
+        text: prompt,
+        // Plain text conversion has no UI element ranges.
+        text_elements: Vec::new(),
+    }];
 
     run_compact_task_inner(sess, turn_context, input).await;
 }
@@ -163,7 +167,7 @@ async fn run_compact_task_inner(
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
 
-    let initial_context = sess.build_initial_context(turn_context.as_ref());
+    let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
