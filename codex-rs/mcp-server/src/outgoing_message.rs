@@ -257,6 +257,7 @@ mod tests {
             id: "1".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
+                forked_from_id: None,
                 thread_name: None,
                 model: "gpt-4o".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -297,6 +298,7 @@ mod tests {
         let rollout_file = NamedTempFile::new()?;
         let session_configured_event = SessionConfiguredEvent {
             session_id: conversation_id,
+            forked_from_id: None,
             thread_name: None,
             model: "gpt-4o".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -361,6 +363,7 @@ mod tests {
         let rollout_file = NamedTempFile::new()?;
         let session_configured_event = SessionConfiguredEvent {
             session_id: thread_id,
+            forked_from_id: None,
             thread_name: None,
             model: "gpt-4o".to_string(),
             model_provider_id: "test-provider".to_string(),

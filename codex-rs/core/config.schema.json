@@ -75,7 +75,13 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "child_agents_md": {
+          "type": "boolean"
+        },
         "collab": {
+          "type": "boolean"
+        },
+        "collaboration_modes": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -97,9 +103,6 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
-          "type": "boolean"
-        },
-        "child_agents_md": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -356,12 +359,12 @@
     },
     "shell_environment_policy": {
       "default": {
-        "exclude": null,
-        "experimental_use_profile": null,
-        "ignore_default_excludes": null,
-        "include_only": null,
         "inherit": null,
-        "set": null
+        "ignore_default_excludes": null,
+        "exclude": null,
+        "set": null,
+        "include_only": null,
+        "experimental_use_profile": null
       },
       "allOf": [
         {
@@ -372,6 +375,14 @@
     "show_raw_agent_reasoning": {
       "description": "When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output. Defaults to `false`.",
       "type": "boolean"
+    },
+    "skills": {
+      "description": "User-level skill config entries keyed by SKILL.md path.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SkillsConfig"
+        }
+      ]
     },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",
@@ -543,7 +554,13 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "child_agents_md": {
+              "type": "boolean"
+            },
             "collab": {
+              "type": "boolean"
+            },
+            "collaboration_modes": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {
@@ -565,9 +582,6 @@
               "type": "boolean"
             },
             "experimental_windows_sandbox": {
-              "type": "boolean"
-            },
-            "child_agents_md": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -1283,6 +1297,34 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillConfig": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "path"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillsConfig": {
+      "type": "object",
+      "properties": {
+        "config": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillConfig"
           }
         }
       },
