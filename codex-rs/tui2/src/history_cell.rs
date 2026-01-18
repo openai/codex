@@ -1458,7 +1458,7 @@ impl HistoryCell for PlanUpdateCell {
             } = item;
             let (box_str, step_style) = match status {
                 StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
-                StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+                StepStatus::InProgress => ("■ ", Style::default().cyan().bold()),
                 StepStatus::Pending => ("□ ", Style::default().dim()),
             };
             let mut meta_parts: Vec<String> = Vec::new();

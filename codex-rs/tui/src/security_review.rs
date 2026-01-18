@@ -6092,12 +6092,12 @@ fn render_checklist_markdown(statuses: &HashMap<String, StepStatus>) -> String {
     ];
     for (slug, title) in order {
         let status = statuses.get(slug);
-        let mark = match status {
-            Some(StepStatus::Completed) => "[x]",
-            Some(StepStatus::InProgress) => "[~]",
-            _ => "[ ]",
+        let line = match status {
+            Some(StepStatus::Completed) => format!("- [x] ~~{title}~~"),
+            Some(StepStatus::InProgress) => format!("- [ ] ▶ **{title}** (current)"),
+            _ => format!("- [ ] {title}"),
         };
-        lines.push(format!("- {mark} {title}"));
+        lines.push(line);
     }
     lines.join("\n")
 }

@@ -1575,7 +1575,7 @@ impl HistoryCell for PlanUpdateCell {
             } = item;
             let (box_str, step_style) = match status {
                 StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
-                StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+                StepStatus::InProgress => ("■ ", Style::default().cyan().bold()),
                 StepStatus::Pending => ("□ ", Style::default().dim()),
             };
             let mut meta_parts: Vec<String> = Vec::new();
@@ -1595,7 +1595,12 @@ impl HistoryCell for PlanUpdateCell {
             let mut spans: Vec<Span<'static>> =
                 vec![Span::from(text.clone()).set_style(step_style)];
             if !meta.is_empty() {
-                spans.push(meta.dim());
+                let meta_style = match status {
+                    StepStatus::Completed => Style::default().crossed_out().dim(),
+                    StepStatus::InProgress => Style::default().dim(),
+                    StepStatus::Pending => Style::default().dim(),
+                };
+                spans.push(Span::from(meta).set_style(meta_style));
             }
             let line: Line<'static> = spans.into();
             word_wrap_lines(
