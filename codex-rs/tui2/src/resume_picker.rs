@@ -1362,7 +1362,6 @@ mod tests {
                             "cwd": cwd,
                             "originator": "user",
                             "cli_version": "0.0.0",
-                            "instructions": null,
                             "source": "Cli",
                             "model_provider": "openai",
                         }

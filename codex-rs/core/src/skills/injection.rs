@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::instructions::SkillInstructions;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
-use crate::user_instructions::SkillInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio::fs;

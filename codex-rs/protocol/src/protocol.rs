@@ -51,6 +51,8 @@ pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
+pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
+pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
 /// Submission Queue Entry - requests from user
@@ -1492,7 +1494,6 @@ pub struct SessionMeta {
     pub cwd: PathBuf,
     pub originator: String,
     pub cli_version: String,
-    pub instructions: Option<String>,
     #[serde(default)]
     pub source: SessionSource,
     pub model_provider: Option<String>,
@@ -1507,7 +1508,6 @@ impl Default for SessionMeta {
             cwd: PathBuf::new(),
             originator: String::new(),
             cli_version: String::new(),
-            instructions: None,
             source: SessionSource::default(),
             model_provider: None,
         }

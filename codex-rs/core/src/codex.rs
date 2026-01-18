@@ -98,6 +98,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::instructions::UserInstructions;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
@@ -155,7 +156,6 @@ use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
@@ -598,12 +598,7 @@ impl Session {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        forked_from_id,
-                        session_configuration.user_instructions.clone(),
-                        session_source,
-                    ),
+                    RolloutRecorderParams::new(conversation_id, forked_from_id, session_source),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (
@@ -820,7 +815,7 @@ impl Session {
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
-                let items = self.build_initial_context(&turn_context);
+                let items = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &items).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
@@ -858,8 +853,9 @@ impl Session {
                 }
 
                 // Always add response items to conversation history
-                let reconstructed_history =
-                    self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+                let reconstructed_history = self
+                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                    .await;
                 if !reconstructed_history.is_empty() {
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
@@ -878,7 +874,7 @@ impl Session {
                 }
 
                 // Append the current session's initial context after the reconstructed history.
-                let initial_context = self.build_initial_context(&turn_context);
+                let initial_context = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &initial_context)
                     .await;
                 // Flush after seeding history and any persisted rollout copy.
@@ -1064,6 +1060,50 @@ impl Session {
             )
             .into(),
         )
+    }
+
+    fn build_collaboration_mode_update_item(
+        &self,
+        previous_collaboration_mode: &CollaborationMode,
+        next_collaboration_mode: Option<&CollaborationMode>,
+    ) -> Option<ResponseItem> {
+        if let Some(next_mode) = next_collaboration_mode {
+            if previous_collaboration_mode == next_mode {
+                return None;
+            }
+            // If the next mode has empty developer instructions, this returns None and we emit no
+            // update, so prior collaboration instructions remain in the prompt history.
+            Some(DeveloperInstructions::from_collaboration_mode(next_mode)?.into())
+        } else {
+            None
+        }
+    }
+
+    fn build_settings_update_items(
+        &self,
+        previous_context: Option<&Arc<TurnContext>>,
+        current_context: &TurnContext,
+        previous_collaboration_mode: &CollaborationMode,
+        next_collaboration_mode: Option<&CollaborationMode>,
+    ) -> Vec<ResponseItem> {
+        let mut update_items = Vec::new();
+        if let Some(env_item) =
+            self.build_environment_update_item(previous_context, current_context)
+        {
+            update_items.push(env_item);
+        }
+        if let Some(permissions_item) =
+            self.build_permissions_update_item(previous_context, current_context)
+        {
+            update_items.push(permissions_item);
+        }
+        if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
+            previous_collaboration_mode,
+            next_collaboration_mode,
+        ) {
+            update_items.push(collaboration_mode_item);
+        }
+        update_items
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -1304,7 +1344,7 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
-    fn reconstruct_history_from_rollout(
+    async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
@@ -1324,7 +1364,7 @@ impl Session {
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
-                            self.build_initial_context(turn_context),
+                            self.build_initial_context(turn_context).await,
                             &user_messages,
                             &compacted.message,
                         );
@@ -1394,7 +1434,10 @@ impl Session {
         }
     }
 
-    pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
+    pub(crate) async fn build_initial_context(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
         let mut items = Vec::<ResponseItem>::with_capacity(4);
         let shell = self.user_shell();
         items.push(
@@ -1407,6 +1450,16 @@ impl Session {
         );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
+        }
+        // Add developer instructions from collaboration_mode if they exist and are non-empty
+        let collaboration_mode = {
+            let state = self.state.lock().await;
+            state.session_configuration.collaboration_mode.clone()
+        };
+        if let Some(collab_instructions) =
+            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
+        {
+            items.push(collab_instructions.into());
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
@@ -1989,6 +2042,18 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
+        let previous_context = sess
+            .new_default_turn_with_sub_id(sess.next_internal_sub_id())
+            .await;
+        let previous_collaboration_mode = sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .collaboration_mode
+            .clone();
+        let next_collaboration_mode = updates.collaboration_mode.clone();
+
         if let Err(err) = sess.update_settings(updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -1998,6 +2063,19 @@ mod handlers {
                 }),
             })
             .await;
+            return;
+        }
+
+        let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let update_items = sess.build_settings_update_items(
+            Some(&previous_context),
+            &current_context,
+            &previous_collaboration_mode,
+            next_collaboration_mode.as_ref(),
+        );
+        if !update_items.is_empty() {
+            sess.record_conversation_items(&current_context, &update_items)
+                .await;
         }
     }
 
@@ -2051,6 +2129,14 @@ mod handlers {
             _ => unreachable!(),
         };
 
+        let previous_collaboration_mode = sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .collaboration_mode
+            .clone();
+        let next_collaboration_mode = updates.collaboration_mode.clone();
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -2062,17 +2148,12 @@ mod handlers {
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
-            let mut update_items = Vec::new();
-            if let Some(env_item) =
-                sess.build_environment_update_item(previous_context.as_ref(), &current_context)
-            {
-                update_items.push(env_item);
-            }
-            if let Some(permissions_item) =
-                sess.build_permissions_update_item(previous_context.as_ref(), &current_context)
-            {
-                update_items.push(permissions_item);
-            }
+            let update_items = sess.build_settings_update_items(
+                previous_context.as_ref(),
+                &current_context,
+                &previous_collaboration_mode,
+                next_collaboration_mode.as_ref(),
+            );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
@@ -3183,9 +3264,11 @@ mod tests {
     #[tokio::test]
     async fn reconstruct_history_matches_live_compactions() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
-        let reconstructed = session.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+        let reconstructed = session
+            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .await;
 
         assert_eq!(expected, reconstructed);
     }
@@ -3193,7 +3276,7 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
 
         session
             .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -3203,7 +3286,7 @@ mod tests {
             }))
             .await;
 
-        expected.extend(session.build_initial_context(&turn_context));
+        expected.extend(session.build_initial_context(&turn_context).await);
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }
@@ -3211,7 +3294,7 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_seeds_token_info_from_rollout() {
         let (session, turn_context) = make_session_and_context().await;
-        let (mut rollout_items, _expected) = sample_rollout(&session, &turn_context);
+        let (mut rollout_items, _expected) = sample_rollout(&session, &turn_context).await;
 
         let info1 = TokenUsageInfo {
             total_token_usage: TokenUsage {
@@ -3288,13 +3371,13 @@ mod tests {
     #[tokio::test]
     async fn record_initial_history_reconstructs_forked_transcript() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
 
         session
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        expected.extend(session.build_initial_context(&turn_context));
+        expected.extend(session.build_initial_context(&turn_context).await);
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }
@@ -3303,7 +3386,7 @@ mod tests {
     async fn thread_rollback_drops_last_turn_from_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref());
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -3360,7 +3443,7 @@ mod tests {
     async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref());
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -3386,7 +3469,7 @@ mod tests {
     async fn thread_rollback_fails_when_turn_in_progress() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref());
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -3407,7 +3490,7 @@ mod tests {
     async fn thread_rollback_fails_when_num_turns_is_zero() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref());
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -4227,14 +4310,14 @@ mod tests {
         }
     }
 
-    fn sample_rollout(
+    async fn sample_rollout(
         session: &Session,
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
         let mut live_history = ContextManager::new();
 
-        let initial_context = session.build_initial_context(turn_context);
+        let initial_context = session.build_initial_context(turn_context).await;
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
@@ -4264,7 +4347,7 @@ mod tests {
         let snapshot1 = live_history.clone().for_prompt();
         let user_messages1 = collect_user_messages(&snapshot1);
         let rebuilt1 = compact::build_compacted_history(
-            session.build_initial_context(turn_context),
+            session.build_initial_context(turn_context).await,
             &user_messages1,
             summary1,
         );
@@ -4298,7 +4381,7 @@ mod tests {
         let snapshot2 = live_history.clone().for_prompt();
         let user_messages2 = collect_user_messages(&snapshot2);
         let rebuilt2 = compact::build_compacted_history(
-            session.build_initial_context(turn_context),
+            session.build_initial_context(turn_context).await,
             &user_messages2,
             summary2,
         );
@@ -4316,7 +4399,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(user3.clone()));
+        rollout_items.push(RolloutItem::ResponseItem(user3));
 
         let assistant3 = ResponseItem::Message {
             id: None,
@@ -4326,7 +4409,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
+        rollout_items.push(RolloutItem::ResponseItem(assistant3));
 
         (rollout_items, live_history.for_prompt())
     }
