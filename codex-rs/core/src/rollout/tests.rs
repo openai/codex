@@ -561,9 +561,9 @@ async fn test_get_thread_contents() {
             "cwd": ".",
             "originator": "test_originator",
             "cli_version": "test_version",
+            "base_instructions": null,
             "source": "vscode",
             "model_provider": "test-provider",
-            "base_instructions": null,
         }
     });
     let user_event = serde_json::json!({
