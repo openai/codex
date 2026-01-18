@@ -47,12 +47,18 @@ use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::UnifiedExecProcess;
 use crate::unified_exec::resolve_max_tokens;
 
-const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
+/// Platform-appropriate UTF-8 locale. `C.UTF-8` is available on Linux but not
+/// macOS; use `en_US.UTF-8` on macOS instead (which is universally available).
+#[cfg(target_os = "macos")]
+const UNIFIED_EXEC_LOCALE: &str = "en_US.UTF-8";
+
+#[cfg(not(target_os = "macos"))]
+const UNIFIED_EXEC_LOCALE: &str = "C.UTF-8";
+
+/// Non-locale environment variables applied to unified exec processes.
+const UNIFIED_EXEC_ENV_BASE: [(&str, &str); 7] = [
     ("NO_COLOR", "1"),
     ("TERM", "dumb"),
-    ("LANG", "C.UTF-8"),
-    ("LC_CTYPE", "C.UTF-8"),
-    ("LC_ALL", "C.UTF-8"),
     ("COLORTERM", ""),
     ("PAGER", "cat"),
     ("GIT_PAGER", "cat"),
@@ -61,9 +67,13 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
 ];
 
 fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
-    for (key, value) in UNIFIED_EXEC_ENV {
+    for (key, value) in UNIFIED_EXEC_ENV_BASE {
         env.insert(key.to_string(), value.to_string());
     }
+    // Apply platform-appropriate locale settings.
+    env.insert("LANG".to_string(), UNIFIED_EXEC_LOCALE.to_string());
+    env.insert("LC_CTYPE".to_string(), UNIFIED_EXEC_LOCALE.to_string());
+    env.insert("LC_ALL".to_string(), UNIFIED_EXEC_LOCALE.to_string());
     env
 }
 
@@ -691,9 +701,9 @@ mod tests {
         let expected = HashMap::from([
             ("NO_COLOR".to_string(), "1".to_string()),
             ("TERM".to_string(), "dumb".to_string()),
-            ("LANG".to_string(), "C.UTF-8".to_string()),
-            ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
-            ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+            ("LANG".to_string(), UNIFIED_EXEC_LOCALE.to_string()),
+            ("LC_CTYPE".to_string(), UNIFIED_EXEC_LOCALE.to_string()),
+            ("LC_ALL".to_string(), UNIFIED_EXEC_LOCALE.to_string()),
             ("COLORTERM".to_string(), String::new()),
             ("PAGER".to_string(), "cat".to_string()),
             ("GIT_PAGER".to_string(), "cat".to_string()),
