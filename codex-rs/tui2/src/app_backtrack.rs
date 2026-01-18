@@ -577,6 +577,8 @@ mod tests {
         let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
             Arc::new(UserHistoryCell {
                 message: "first user".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
                 as Arc<dyn HistoryCell>,
@@ -593,6 +595,8 @@ mod tests {
                 as Arc<dyn HistoryCell>,
             Arc::new(UserHistoryCell {
                 message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
                 as Arc<dyn HistoryCell>,
@@ -621,11 +625,15 @@ mod tests {
                 as Arc<dyn HistoryCell>,
             Arc::new(UserHistoryCell {
                 message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("between")], false))
                 as Arc<dyn HistoryCell>,
             Arc::new(UserHistoryCell {
                 message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("tail")], false))
                 as Arc<dyn HistoryCell>,
