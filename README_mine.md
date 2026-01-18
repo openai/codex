@@ -26,6 +26,10 @@ macOS/Linux 向けに GitHub Releases に prebuilt バイナリ（`codex-<target
 
 ラッパーは `--config check_for_update_on_startup=false` を常に付けて起動する（本家 `codex` の挙動に寄せる）。
 
+NOTE: `~/.local/bin` が `PATH` に入っていない環境では `codex-mine` が見つからないので、`~/.zshrc` 等に `export PATH="$HOME/.local/bin:$PATH"` を追加するか、`CODEX_MINE_BIN_DIR` で `PATH` 上のディレクトリを指定する。
+
+WSL（Ubuntu 等）で `codex-mine` が見つからない場合は、まず `echo $PATH` に `~/.local/bin` が入っているか確認し、入っていなければ `~/.bashrc` に `export PATH="$HOME/.local/bin:$PATH"` を追記してシェルを再起動する。`install.sh` は `CODEX_MINE_UPDATE_PATH=1` を指定すると、必要な場合に限り `~/.bashrc`（bash）/`~/.zshrc`（zsh）へ追記する。
+
 ## 起動コマンド
 
 - npm 版: `codex`

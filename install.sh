@@ -8,16 +8,18 @@ set -eu
 #   CODEX_MINE_VERSION=mine-vX.Y.Z-mine.N sh install.sh
 #
 # Environment variables:
-#   CODEX_MINE_GITHUB_REPO   (default: inoueryo/codex-mine)
+#   CODEX_MINE_GITHUB_REPO   (default: harukary/codex-mine)
 #   CODEX_MINE_VERSION       (default: latest)
 #   CODEX_MINE_ROOT          (default: ~/.local/codex-mine)
 #   CODEX_MINE_BIN_DIR       (default: ~/.local/bin)
+#   CODEX_MINE_UPDATE_PATH   (default: 0) If 1, append PATH export to your shell rc file when needed.
 
 repo="${CODEX_MINE_GITHUB_REPO:-harukary/codex-mine}"
 version="${CODEX_MINE_VERSION:-latest}"
 
 install_root="${CODEX_MINE_ROOT:-$HOME/.local/codex-mine}"
 bin_dir="${CODEX_MINE_BIN_DIR:-$HOME/.local/bin}"
+update_path="${CODEX_MINE_UPDATE_PATH:-0}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -32,6 +34,12 @@ need_cmd mkdir
 need_cmd rm
 need_cmd tar
 need_cmd curl
+need_cmd chmod
+need_cmd mv
+need_cmd cat
+need_cmd grep
+need_cmd awk
+need_cmd head
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -136,4 +144,55 @@ SH
 chmod +x "$bin_dir/codex-mine"
 
 printf '\nOK: %s\n' "$bin_dir/codex-mine" >&2
+
+path_has_bindir() {
+  case ":$PATH:" in
+    *":$bin_dir:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+append_path_to_shell_rc() {
+  shell_name="${SHELL##*/}"
+  case "$shell_name" in
+    zsh) rc="$HOME/.zshrc" ;;
+    bash) rc="$HOME/.bashrc" ;;
+    sh|"")
+      printf 'WARN: $SHELL is not set to a specific interactive shell; skipping auto PATH update.\n' >&2
+      return 1
+      ;;
+    *)
+      printf 'WARN: unsupported shell for auto PATH update: %s\n' "$shell_name" >&2
+      return 1
+      ;;
+  esac
+
+  if grep -F "$bin_dir" "$rc" >/dev/null 2>&1; then
+    printf 'NOTE: %s already references %s\n' "$rc" "$bin_dir" >&2
+    return 0
+  fi
+
+  printf '==> Updating PATH in %s\n' "$rc" >&2
+  cat >> "$rc" <<SH
+
+# Added by codex-mine installer: ensure wrapper is on PATH
+export PATH="$bin_dir:\$PATH"
+SH
+  return 0
+}
+
+if ! path_has_bindir; then
+  if [ "$update_path" = "1" ]; then
+    if append_path_to_shell_rc; then
+      printf 'NOTE: restart your shell or run:\n' >&2
+      printf '  export PATH="%s:$PATH"\n' "$bin_dir" >&2
+    fi
+  else
+    printf 'NOTE: %s is not on your PATH.\n' "$bin_dir" >&2
+    printf 'Add this to your shell config (e.g. ~/.zshrc):\n' >&2
+    printf '  export PATH="%s:$PATH"\n' "$bin_dir" >&2
+    printf 'Or set CODEX_MINE_BIN_DIR to a directory already on PATH.\n' >&2
+    printf 'If you want this script to append it for you, rerun with CODEX_MINE_UPDATE_PATH=1.\n' >&2
+  fi
+fi
 printf 'Try: %s\n' "codex-mine --version" >&2
