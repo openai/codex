@@ -160,7 +160,6 @@ use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
-use codex_core::config::log_dir;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
@@ -505,6 +504,48 @@ fn build_percent_prefix(percent: u8) -> String {
     format!("{pct}% {bar} ")
 }
 
+fn tail_security_review_log_messages(
+    path: &Path,
+    max_bytes: usize,
+    max_lines: usize,
+) -> Vec<String> {
+    let bytes = fs::read(path).ok();
+    let Some(bytes) = bytes else {
+        return Vec::new();
+    };
+    let bytes = if bytes.len() > max_bytes {
+        &bytes[bytes.len().saturating_sub(max_bytes)..]
+    } else {
+        bytes.as_slice()
+    };
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if lines.len() > max_lines {
+        lines = lines[lines.len().saturating_sub(max_lines)..].to_vec();
+    }
+    lines
+        .into_iter()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let message = trimmed
+                .split_once(' ')
+                .map(|(_, rest)| rest)
+                .unwrap_or(trimmed)
+                .trim();
+            (!message.is_empty()).then(|| message.to_string())
+        })
+        .collect()
+}
+
+fn security_review_overall_progress_percent(output_root: &Path) -> Option<u8> {
+    let checkpoint = crate::security_review::load_checkpoint(output_root)?;
+    let snapshot = crate::security_review::resume_progress_snapshot(&checkpoint, output_root);
+    u8::try_from(snapshot.percent.min(100)).ok()
+}
+
 fn humanize_age(duration: time::Duration) -> Option<String> {
     let secs = duration.whole_seconds();
     if secs < 0 {
@@ -536,13 +577,6 @@ fn format_review_datetime(dt: OffsetDateTime) -> String {
     utc.format(&fmt)
         .map(|value| format!("{value}Z"))
         .unwrap_or_else(|_| utc.to_string())
-}
-
-fn percent_of(completed: usize, total: usize) -> usize {
-    if total == 0 {
-        return 0;
-    }
-    completed.saturating_mul(100) / total
 }
 
 #[derive(Clone)]
@@ -777,20 +811,26 @@ impl ChatWidget {
                 .to_string();
             let scope_summary =
                 Self::scope_summary_label(&candidate.checkpoint.scope_display_paths);
-            let (completed_steps, total_steps, current_step) =
-                crate::security_review::plan_progress_and_current_step(
-                    &candidate.checkpoint.plan_statuses,
-                    candidate.checkpoint.mode,
-                );
-            let progress_pct = percent_of(completed_steps, total_steps);
-            let current_step = current_step.unwrap_or_else(|| "pending".to_string());
+            let progress = crate::security_review::resume_progress_snapshot(
+                &candidate.checkpoint,
+                &candidate.output_root,
+            );
+            let current_step = progress
+                .current_step
+                .unwrap_or_else(|| "pending".to_string());
+            let progress_detail = progress
+                .detail
+                .as_ref()
+                .map(|detail| format!(" • {detail}"))
+                .unwrap_or_default();
             let started_at = format_review_datetime(candidate.checkpoint.started_at);
             let mode_label = candidate.checkpoint.mode.as_str();
 
             items.push(SelectionItem {
                 name: format!("Resume in-progress {folder_name}"),
                 description: Some(format!(
-                    "{started_at} • Mode: {mode_label} • Scope: {scope_summary} • Progress: {completed_steps}/{total_steps} ({progress_pct}%) • Current: {current_step}"
+                    "{started_at} • Mode: {mode_label} • Scope: {scope_summary} • Progress: {}% ({}/{}) • Current: {current_step}{progress_detail}",
+                    progress.percent, progress.completed_steps, progress.total_steps,
                 )),
                 actions: vec![Box::new(move |tx: &AppEventSender| {
                     tx.send(AppEvent::StartSecurityReview {
@@ -4433,34 +4473,6 @@ impl ChatWidget {
             }
         }
 
-        let log_sink = log_dir(&self.config).ok().and_then(|dir| {
-            if fs::create_dir_all(&dir).is_err() {
-                return None;
-            }
-            let path = dir.join("sec-review.log");
-            SecurityReviewLogSink::new(&path).map(Arc::new).ok()
-        });
-
-        if let Some(cp) = resume_checkpoint.as_ref()
-            && cp.status == SecurityReviewCheckpointStatus::Complete
-        {
-            match crate::security_review::resume_completed_review_from_checkpoint(
-                cp.clone(),
-                Some(self.app_event_tx.clone()),
-                log_sink,
-            ) {
-                Ok(result) => {
-                    self.on_security_review_complete(result);
-                }
-                Err(error) => {
-                    self.on_security_review_failed(error);
-                }
-            }
-            return;
-        }
-
-        let skip_auto_scope_confirmation = resume_from.is_some() || linear_issue.is_some();
-
         let context_paths = if let Some(cp) = resume_checkpoint.as_ref() {
             if cp.scope_display_paths.is_empty() {
                 Vec::new()
@@ -4486,6 +4498,30 @@ impl ChatWidget {
                 }
             }
         };
+
+        let log_sink = SecurityReviewLogSink::new(&output_root.join("sec-review.log"))
+            .map(Arc::new)
+            .ok();
+
+        if let Some(cp) = resume_checkpoint.as_ref()
+            && cp.status == SecurityReviewCheckpointStatus::Complete
+        {
+            match crate::security_review::resume_completed_review_from_checkpoint(
+                cp.clone(),
+                Some(self.app_event_tx.clone()),
+                log_sink,
+            ) {
+                Ok(result) => {
+                    self.on_security_review_complete(result);
+                }
+                Err(error) => {
+                    self.on_security_review_failed(error);
+                }
+            }
+            return;
+        }
+
+        let skip_auto_scope_confirmation = resume_from.is_some() || linear_issue.is_some();
 
         self.bottom_pane.set_task_running(true);
         self.bottom_pane
@@ -4548,6 +4584,23 @@ impl ChatWidget {
             log_lines: Vec::new(),
             progress_percent: Some(0),
         });
+
+        if resume_from.is_some() {
+            let log_path = output_root.join("sec-review.log");
+            let messages = tail_security_review_log_messages(&log_path, 256 * 1024, 30);
+            if messages.is_empty() {
+                if let Some(last_log) = resume_checkpoint
+                    .as_ref()
+                    .and_then(|cp| cp.last_log.clone())
+                {
+                    self.on_security_review_log(last_log);
+                }
+            } else {
+                for message in messages {
+                    self.on_security_review_log(message);
+                }
+            }
+        }
 
         // Enable auto-scope when a scope prompt is provided (options 3 and 4).
         // We annotate the prompt for both Full and Bugs modes.
@@ -4814,20 +4867,19 @@ impl ChatWidget {
                 return;
             }
             let previous_percent = ctx.progress_percent;
-            // Extract trailing percent in the form " - NN%" and move it to the front.
-            // Enhance with a small 10-slot progress bar.
             let mut percent_prefix = String::new();
             let mut core = message.as_str();
-            let progress_changed;
-            if let Some((percent, trimmed_core)) = parse_progress_suffix(message.as_str()) {
-                ctx.progress_percent = Some(percent);
+            let step_percent =
+                parse_progress_suffix(message.as_str()).map(|(percent, trimmed_core)| {
+                    core = trimmed_core;
+                    percent
+                });
+            let overall_percent = security_review_overall_progress_percent(&ctx.output_root);
+            ctx.progress_percent = overall_percent.or(step_percent);
+            if let Some(percent) = ctx.progress_percent {
                 percent_prefix = build_percent_prefix(percent);
-                core = trimmed_core;
-                progress_changed = previous_percent != Some(percent);
-            } else {
-                ctx.progress_percent = None;
-                progress_changed = previous_percent.is_some();
             }
+            let progress_changed = previous_percent != ctx.progress_percent;
 
             let mut added_to_log = false;
             if !message.starts_with("Model reasoning:") {

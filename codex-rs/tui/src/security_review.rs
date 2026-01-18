@@ -414,6 +414,194 @@ pub(crate) fn plan_progress_and_current_step(
     (completed, total, current)
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SecurityReviewResumeProgress {
+    pub completed_steps: usize,
+    pub total_steps: usize,
+    pub percent: usize,
+    pub current_step: Option<String>,
+    pub detail: Option<String>,
+}
+
+pub(crate) fn resume_progress_snapshot(
+    checkpoint: &SecurityReviewCheckpoint,
+    output_root: &Path,
+) -> SecurityReviewResumeProgress {
+    let repo_root = checkpoint.repo_root.as_path();
+    let steps = plan_steps_for_mode(checkpoint.mode);
+    let total_steps = steps.len();
+
+    let mut completed_steps = 0usize;
+    let mut current_step: Option<String> = None;
+    let mut total_fraction: f64 = 0.0;
+    let mut detail_parts: Vec<String> = Vec::new();
+
+    let spec_progress = resume_spec_generation_progress(output_root, repo_root);
+    let bug_progress = resume_bug_analysis_progress(output_root);
+
+    for step in &steps {
+        let slug = plan_step_slug(step.kind);
+        let status = checkpoint
+            .plan_statuses
+            .get(slug)
+            .cloned()
+            .unwrap_or(StepStatus::Pending);
+
+        match status {
+            StepStatus::Completed => {
+                completed_steps = completed_steps.saturating_add(1);
+                total_fraction += 1.0;
+            }
+            StepStatus::InProgress => {
+                if current_step.is_none() {
+                    current_step = Some(step.title.clone());
+                }
+
+                let progress_fraction = match step.kind {
+                    SecurityReviewPlanStep::GenerateSpecs => spec_progress
+                        .as_ref()
+                        .and_then(ResumeCountProgress::fraction)
+                        .inspect(|_| {
+                            if let Some(progress) = spec_progress.as_ref() {
+                                detail_parts.push(progress.label("spec dirs"));
+                            }
+                        }),
+                    SecurityReviewPlanStep::AnalyzeBugs => bug_progress
+                        .as_ref()
+                        .and_then(ResumeCountProgress::fraction)
+                        .inspect(|_| {
+                            if let Some(progress) = bug_progress.as_ref() {
+                                detail_parts.push(progress.label("files"));
+                            }
+                        }),
+                    _ => None,
+                };
+
+                if let Some(fraction) = progress_fraction {
+                    total_fraction += fraction.clamp(0.0, 1.0);
+                }
+            }
+            StepStatus::Pending => {}
+        }
+    }
+
+    if current_step.is_none() {
+        current_step = steps
+            .iter()
+            .find(|step| {
+                let slug = plan_step_slug(step.kind);
+                !matches!(
+                    checkpoint.plan_statuses.get(slug),
+                    Some(StepStatus::Completed)
+                )
+            })
+            .map(|step| step.title.clone());
+    }
+
+    let percent = if total_steps == 0 {
+        0
+    } else {
+        ((total_fraction / total_steps as f64) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as usize
+    };
+
+    let detail = detail_parts
+        .into_iter()
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    SecurityReviewResumeProgress {
+        completed_steps,
+        total_steps,
+        percent,
+        current_step,
+        detail: (!detail.is_empty()).then_some(detail),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResumeCountProgress {
+    done: usize,
+    total: usize,
+}
+
+impl ResumeCountProgress {
+    fn fraction(&self) -> Option<f64> {
+        if self.total == 0 {
+            return None;
+        }
+        Some(self.done.min(self.total) as f64 / self.total as f64)
+    }
+
+    fn label(&self, noun: &str) -> String {
+        format!("{noun}: {}/{}", self.done.min(self.total), self.total)
+    }
+}
+
+fn resume_spec_generation_progress(
+    output_root: &Path,
+    repo_root: &Path,
+) -> Option<ResumeCountProgress> {
+    let path = output_root
+        .join("context")
+        .join("spec_generation_progress.json");
+    let bytes = fs::read(path).ok()?;
+    let progress = serde_json::from_slice::<SpecGenerationProgress>(&bytes).ok()?;
+    if progress.version != 1 {
+        return None;
+    }
+    if progress.repo_root != repo_root.display().to_string() {
+        return None;
+    }
+    let total = progress.targets.len();
+    let done = progress.completed.len();
+    Some(ResumeCountProgress { done, total })
+}
+
+fn resume_bug_analysis_progress(output_root: &Path) -> Option<ResumeCountProgress> {
+    let context_dir = output_root.join("context");
+    let mut best_pass: Option<(i32, PathBuf)> = None;
+
+    if let Ok(entries) = fs::read_dir(&context_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(pass_str) = file_name
+                .strip_prefix("bug_analysis_pass_")
+                .and_then(|rest| rest.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            let Ok(pass) = pass_str.parse::<i32>() else {
+                continue;
+            };
+            let should_replace = best_pass.as_ref().is_none_or(|(best, _)| pass > *best);
+            if should_replace {
+                best_pass = Some((pass, path));
+            }
+        }
+    }
+
+    let path = best_pass.map(|(_, path)| path).or_else(|| {
+        let fallback = context_dir.join("bug_analysis_pass_1.json");
+        fallback.exists().then_some(fallback)
+    })?;
+
+    let bytes = fs::read(path).ok()?;
+    let progress = serde_json::from_slice::<BugAnalysisProgress>(&bytes).ok()?;
+    if progress.version != 1 {
+        return None;
+    }
+
+    let total = usize::try_from(progress.total_files.max(0)).unwrap_or(0);
+    let done = progress.files.len();
+    Some(ResumeCountProgress { done, total })
+}
+
 pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
     let storage_root = security_review_storage_root(repo_path);
     let entries = match fs::read_dir(storage_root) {
@@ -10706,6 +10894,38 @@ async fn write_testing_instructions(
 ) {
     let testing_path = specs_root.join("TESTING.md");
     let contents = build_testing_instructions(repo_root);
+    let existing = tokio_fs::read_to_string(&testing_path).await.ok();
+    if let Some(existing) = existing.as_deref()
+        && !existing.trim().is_empty()
+    {
+        if existing.trim() != contents.trim() {
+            let generated_path = specs_root.join("TESTING.generated.md");
+            let message = format!(
+                "Testing instructions already exist at {}; leaving unchanged and writing an updated copy to {}.",
+                display_path_for(&testing_path, repo_root),
+                display_path_for(&generated_path, repo_root)
+            );
+            push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), message);
+            if let Some(parent) = generated_path.parent() {
+                let _ = tokio_fs::create_dir_all(parent).await;
+            }
+            if let Err(err) = tokio_fs::write(&generated_path, contents.as_bytes()).await {
+                let warn = format!(
+                    "Failed to write generated testing instructions to {}: {err}",
+                    generated_path.display()
+                );
+                push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), warn);
+            }
+        } else {
+            let message = format!(
+                "Testing instructions already present at {}; leaving unchanged.",
+                display_path_for(&testing_path, repo_root)
+            );
+            push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), message);
+        }
+        return;
+    }
+
     let log_message = format!(
         "Writing testing instructions to {}.",
         display_path_for(&testing_path, repo_root)
