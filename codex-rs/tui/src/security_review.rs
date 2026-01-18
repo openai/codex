@@ -119,6 +119,7 @@ const MAX_PROMPT_BYTES: usize = 9_000_000; // ~8.6 MiB safety margin under API c
 const MAX_CONCURRENT_FILE_ANALYSIS: usize = 32;
 const FILE_TRIAGE_CHUNK_SIZE: usize = 50;
 const FILE_TRIAGE_CONCURRENCY: usize = 8;
+const DIR_TRIAGE_LOG_LIMIT: usize = 30;
 const MAX_SEARCH_REQUESTS_PER_FILE: usize = 3;
 const MAX_SEARCH_OUTPUT_CHARS: usize = 4_000;
 const MAX_COMMAND_ERROR_RETRIES: usize = 10;
@@ -202,7 +203,7 @@ const AUTO_SCOPE_MARKER_FILES: [&str; 25] = [
 pub(crate) const SECURITY_REVIEW_FOLLOW_UP_MARKER: &str = "[codex-security-review-follow-up]";
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 
-static EXCLUDED_DIR_NAMES: [&str; 13] = [
+static EXCLUDED_DIR_NAMES: [&str; 17] = [
     ".git",
     ".svn",
     ".hg",
@@ -212,11 +213,33 @@ static EXCLUDED_DIR_NAMES: [&str; 13] = [
     "__pycache__",
     "dist",
     "build",
+    "buck-out",
+    "bazel-out",
+    "coverage",
+    ".pytest_cache",
     ".idea",
     ".vscode",
     ".cache",
     "target",
 ];
+
+fn path_has_excluded_dir_component(path: &Path) -> bool {
+    let mut comps = path.components().peekable();
+    while let Some(comp) = comps.next() {
+        if comps.peek().is_none() {
+            break;
+        }
+        if let std::path::Component::Normal(part) = comp
+            && let Some(name) = part.to_str()
+            && EXCLUDED_DIR_NAMES
+                .iter()
+                .any(|excluded| excluded.eq_ignore_ascii_case(name))
+        {
+            return true;
+        }
+    }
+    false
+}
 
 pub fn sanitize_repo_slug(repo_path: &Path) -> String {
     let raw = repo_path
@@ -801,6 +824,7 @@ pub struct SecurityReviewCheckpoint {
     #[serde(with = "time::serde::rfc3339")]
     pub(crate) started_at: OffsetDateTime,
     pub(crate) plan_statuses: HashMap<String, StepStatus>,
+    pub(crate) triaged_dirs: Option<Vec<String>>,
     pub(crate) selected_snippets: Option<Vec<FileSnippet>>,
     pub(crate) spec: Option<StoredSpecOutcome>,
     pub(crate) threat_model: Option<StoredThreatModelOutcome>,
@@ -927,6 +951,8 @@ fn is_open_source_review(prompt: &Option<String>) -> bool {
 enum SecurityReviewPlanStep {
     GenerateSpecs,
     ThreatModel,
+    DirTriage,
+    FileTriage,
     AnalyzeBugs,
     PolishFindings,
     PrepareValidationTargets,
@@ -1148,6 +1174,15 @@ fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> 
     }
 
     steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::DirTriage,
+        "Triage directories",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::FileTriage,
+        "Triage files",
+    ));
+
+    steps.push(SecurityReviewPlanItem::new(
         SecurityReviewPlanStep::AnalyzeBugs,
         "Analyze code for bugs",
     ));
@@ -1178,6 +1213,8 @@ fn plan_step_slug(step: SecurityReviewPlanStep) -> &'static str {
     match step {
         SecurityReviewPlanStep::GenerateSpecs => "generate_specs",
         SecurityReviewPlanStep::ThreatModel => "threat_model",
+        SecurityReviewPlanStep::DirTriage => "dir_triage",
+        SecurityReviewPlanStep::FileTriage => "file_triage",
         SecurityReviewPlanStep::AnalyzeBugs => "analyze_bugs",
         SecurityReviewPlanStep::PolishFindings => "polish_findings",
         SecurityReviewPlanStep::PrepareValidationTargets => "prepare_validation_targets",
@@ -1191,6 +1228,8 @@ fn plan_step_from_slug(slug: &str) -> Option<SecurityReviewPlanStep> {
     match slug {
         "generate_specs" => Some(SecurityReviewPlanStep::GenerateSpecs),
         "threat_model" => Some(SecurityReviewPlanStep::ThreatModel),
+        "dir_triage" => Some(SecurityReviewPlanStep::DirTriage),
+        "file_triage" => Some(SecurityReviewPlanStep::FileTriage),
         "analyze_bugs" => Some(SecurityReviewPlanStep::AnalyzeBugs),
         "polish_findings" => Some(SecurityReviewPlanStep::PolishFindings),
         "prepare_validation_targets" => Some(SecurityReviewPlanStep::PrepareValidationTargets),
@@ -3914,6 +3953,7 @@ pub async fn run_security_review(
         repo_root: repo_path.clone(),
         started_at: OffsetDateTime::now_utc(),
         plan_statuses: default_plan_statuses(mode),
+        triaged_dirs: None,
         selected_snippets: None,
         spec: None,
         threat_model: None,
@@ -4390,6 +4430,13 @@ pub async fn run_security_review(
         );
     }
     plan_step_models.insert(
+        SecurityReviewPlanStep::FileTriage,
+        PlanStepModelInfo {
+            model: request.triage_model.clone(),
+            reasoning_effort: triage_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
         SecurityReviewPlanStep::AnalyzeBugs,
         PlanStepModelInfo {
             model: request.model.clone(),
@@ -4441,6 +4488,15 @@ pub async fn run_security_review(
         log_sink.clone(),
     );
     plan_tracker.restore_statuses(&checkpoint.plan_statuses);
+    if checkpoint.selected_snippets.is_some()
+        && !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::FileTriage),
+            Some(StepStatus::Completed)
+        )
+    {
+        plan_tracker.mark_complete(SecurityReviewPlanStep::DirTriage);
+        plan_tracker.mark_complete(SecurityReviewPlanStep::FileTriage);
+    }
     if !checkpoint
         .plan_statuses
         .contains_key("prepare_validation_targets")
@@ -4517,16 +4573,33 @@ pub async fn run_security_review(
 
         let triage_model = request.triage_model.as_str();
 
-        // First prune at the directory level to keep triage manageable.
+        // First prune at the directory level to keep triage manageable (and to avoid build/test
+        // artifacts).
+        let dir_key_for = |path: &Path| -> PathBuf {
+            let Some(parent) = path.parent() else {
+                return PathBuf::from(".");
+            };
+            if parent == Path::new("") || parent == Path::new(".") {
+                return PathBuf::from(".");
+            }
+            let mut components = parent.components();
+            match components.next() {
+                Some(std::path::Component::Normal(part)) => PathBuf::from(part),
+                _ => PathBuf::from("."),
+            }
+        };
+
         let mut directories: HashMap<PathBuf, Vec<FileSnippet>> = HashMap::new();
+        let mut excluded_files = 0usize;
         for snippet in collection.snippets {
-            let parent = snippet
-                .relative_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-            directories.entry(parent).or_default().push(snippet);
+            if path_has_excluded_dir_component(&snippet.relative_path) {
+                excluded_files = excluded_files.saturating_add(1);
+                continue;
+            }
+            let dir_key = dir_key_for(&snippet.relative_path);
+            directories.entry(dir_key).or_default().push(snippet);
         }
+
         let mut ranked_dirs: Vec<(PathBuf, Vec<FileSnippet>, usize)> = directories
             .into_iter()
             .map(|(dir, snippets)| {
@@ -4534,30 +4607,137 @@ pub async fn run_security_review(
                 (dir, snippets, bytes)
             })
             .collect();
-        ranked_dirs.sort_by(|a, b| b.2.cmp(&a.2));
+        ranked_dirs.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+
+        let mut refined_dirs: Vec<PathBuf> = Vec::new();
+        if matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::DirTriage),
+            Some(StepStatus::Completed)
+        ) && let Some(saved) = checkpoint.triaged_dirs.as_ref()
+        {
+            refined_dirs = saved
+                .iter()
+                .map(PathBuf::from)
+                .filter(|dir| !path_has_excluded_dir_component(dir))
+                .collect();
+            if !refined_dirs.is_empty() {
+                record(
+                    &mut logs,
+                    format!(
+                        "Using {} triaged directory(ies) from checkpoint resume.",
+                        refined_dirs.len()
+                    ),
+                );
+            }
+        }
+
+        if refined_dirs.is_empty() {
+            if !matches!(
+                plan_tracker.status_for(SecurityReviewPlanStep::DirTriage),
+                Some(StepStatus::Completed | StepStatus::InProgress)
+            ) {
+                plan_tracker.start_step(SecurityReviewPlanStep::DirTriage);
+                checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+                persist_checkpoint(&mut checkpoint, &mut logs);
+            }
+            refined_dirs = ranked_dirs.iter().map(|(dir, _, _)| dir.clone()).collect();
+            checkpoint.triaged_dirs = Some(
+                refined_dirs
+                    .iter()
+                    .map(|dir| dir.to_string_lossy().to_string())
+                    .collect(),
+            );
+            persist_checkpoint(&mut checkpoint, &mut logs);
+
+            plan_tracker.complete_and_start_next(
+                SecurityReviewPlanStep::DirTriage,
+                Some(SecurityReviewPlanStep::FileTriage),
+            );
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        }
+
+        if matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::FileTriage),
+            Some(StepStatus::Completed)
+        ) {
+            record(
+                &mut logs,
+                "File triage marked complete in checkpoint, but no triaged files were stored; re-running file triage."
+                    .to_string(),
+            );
+            plan_tracker.start_step(SecurityReviewPlanStep::FileTriage);
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        } else if !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::FileTriage),
+            Some(StepStatus::Completed | StepStatus::InProgress)
+        ) {
+            plan_tracker.start_step(SecurityReviewPlanStep::FileTriage);
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        }
+
+        let refined_set: HashSet<PathBuf> = refined_dirs.into_iter().collect();
         let mut pruned_snippets: Vec<FileSnippet> = Vec::new();
+        let mut refined_dir_count = 0usize;
+        let mut refined_bytes = 0usize;
+        let mut logged_dirs = 0usize;
         for (dir, snippets, bytes) in ranked_dirs {
+            if !refined_set.contains(&dir) {
+                continue;
+            }
+            refined_dir_count = refined_dir_count.saturating_add(1);
+            refined_bytes = refined_bytes.saturating_add(bytes);
+            if logged_dirs < DIR_TRIAGE_LOG_LIMIT {
+                record(
+                    &mut logs,
+                    format!(
+                        "Triaged directory {} ({} files, {}).",
+                        display_path_for(&repo_path.join(&dir), &repo_path),
+                        snippets.len(),
+                        human_readable_bytes(bytes),
+                    ),
+                );
+                logged_dirs = logged_dirs.saturating_add(1);
+            }
+            pruned_snippets.extend(snippets);
+        }
+
+        if excluded_files > 0 {
             record(
                 &mut logs,
                 format!(
-                    "Inspecting directory {} ({} files, {}).",
-                    display_path_for(&dir, &repo_path),
-                    snippets.len(),
-                    human_readable_bytes(bytes),
+                    "Directory triage excluded {excluded_files} file(s) from build/test artifacts."
                 ),
             );
-            pruned_snippets.extend(snippets);
+        }
+        if refined_dir_count > logged_dirs {
+            record(
+                &mut logs,
+                format!(
+                    "…and {} more triaged director{}.",
+                    refined_dir_count.saturating_sub(logged_dirs),
+                    if refined_dir_count.saturating_sub(logged_dirs) == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
+                ),
+            );
+        }
+        if pruned_snippets.is_empty() {
+            return Err(SecurityReviewFailure {
+                message: "No candidate files remain after directory triage.".to_string(),
+                logs,
+            });
         }
         record(
             &mut logs,
             format!(
                 "Running LLM file triage to prioritize analysis across {} files ({} directories) (model: {triage_model}, reasoning: {triage_reasoning_label}).",
                 pruned_snippets.len(),
-                pruned_snippets
-                    .iter()
-                    .filter_map(|s| s.relative_path.parent())
-                    .collect::<HashSet<_>>()
-                    .len(),
+                refined_dir_count,
                 triage_reasoning_label = reasoning_effort_label(
                     normalize_reasoning_effort_for_model(triage_model, triage_reasoning_effort,)
                 )
@@ -4620,6 +4800,13 @@ pub async fn run_security_review(
                 }
             }
         }
+
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::FileTriage,
+            Some(SecurityReviewPlanStep::AnalyzeBugs),
+        );
+        checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+        persist_checkpoint(&mut checkpoint, &mut logs);
     } else {
         let count = selected_snippets
             .as_ref()
@@ -6926,19 +7113,70 @@ fn collect_snippets_blocking(
     let mut logs = Vec::new();
 
     let targets = if include_paths.is_empty() {
-        vec![repo_path]
+        vec![repo_path.clone()]
     } else {
         include_paths
     };
 
-    for target in targets {
-        if state.limit_reached() {
-            break;
+    let mut used_git_ls_files = false;
+    if let Ok(output) = StdCommand::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(&repo_path)
+        .output()
+        && output.status.success()
+        && !output.stdout.is_empty()
+    {
+        used_git_ls_files = true;
+        state.emit_progress_message(
+            "Collecting tracked files (git ls-files) to avoid local build/test artifacts..."
+                .to_string(),
+        );
+        let mut tracked_files: Vec<PathBuf> = output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|chunk| !chunk.is_empty())
+            .map(|chunk| PathBuf::from(String::from_utf8_lossy(chunk).to_string()))
+            .collect();
+        tracked_files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+
+        let in_scope =
+            |path: &Path| -> bool { targets.iter().any(|target| path.starts_with(target)) };
+
+        for rel in tracked_files {
+            if state.limit_reached() {
+                break;
+            }
+            let abs = repo_path.join(&rel);
+            if !in_scope(&abs) {
+                continue;
+            }
+            if path_has_excluded_dir_component(&rel) {
+                continue;
+            }
+            let metadata = match fs::symlink_metadata(&abs) {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                continue;
+            }
+            if let Err(err) = state.visit_file(&abs, metadata.len() as usize) {
+                logs.push(err.clone());
+                return Err(SecurityReviewFailure { message: err, logs });
+            }
         }
-        state.emit_progress_message(format!("Scanning {}...", target.display()));
-        if let Err(err) = state.visit_path(&target) {
-            logs.push(err.clone());
-            return Err(SecurityReviewFailure { message: err, logs });
+    }
+
+    if !used_git_ls_files {
+        for target in targets {
+            if state.limit_reached() {
+                break;
+            }
+            state.emit_progress_message(format!("Scanning {}...", target.display()));
+            if let Err(err) = state.visit_path(&target) {
+                logs.push(err.clone());
+                return Err(SecurityReviewFailure { message: err, logs });
+            }
         }
     }
 
