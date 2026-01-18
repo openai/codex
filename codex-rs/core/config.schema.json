@@ -81,6 +81,9 @@
         "collab": {
           "type": "boolean"
         },
+        "collaboration_modes": {
+          "type": "boolean"
+        },
         "elevated_windows_sandbox": {
           "type": "boolean"
         },
@@ -356,12 +359,12 @@
     },
     "shell_environment_policy": {
       "default": {
-        "exclude": null,
-        "experimental_use_profile": null,
-        "ignore_default_excludes": null,
-        "include_only": null,
         "inherit": null,
-        "set": null
+        "ignore_default_excludes": null,
+        "exclude": null,
+        "set": null,
+        "include_only": null,
+        "experimental_use_profile": null
       },
       "allOf": [
         {
@@ -555,6 +558,9 @@
               "type": "boolean"
             },
             "collab": {
+              "type": "boolean"
+            },
+            "collaboration_modes": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {

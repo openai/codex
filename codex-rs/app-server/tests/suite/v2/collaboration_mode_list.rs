@@ -56,7 +56,7 @@ fn plan_preset() -> CollaborationMode {
     CollaborationMode::Plan(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::Medium),
-        developer_instructions: None,
+        developer_instructions: Some(include_str!("../../../../core/templates/collaboration_mode/plan.md").to_string()),
     })
 }
 
@@ -68,7 +68,7 @@ fn pair_programming_preset() -> CollaborationMode {
     CollaborationMode::PairProgramming(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::Medium),
-        developer_instructions: None,
+        developer_instructions: Some(include_str!("../../../../core/templates/collaboration_mode/pair_programming.md").to_string()),
     })
 }
 
@@ -80,6 +80,6 @@ fn execute_preset() -> CollaborationMode {
     CollaborationMode::Execute(Settings {
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::XHigh),
-        developer_instructions: None,
+        developer_instructions: Some(include_str!("../../../../core/templates/collaboration_mode/execute.md").to_string()),
     })
 }
