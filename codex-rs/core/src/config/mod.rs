@@ -162,8 +162,9 @@ pub struct Config {
     pub compact_prompt: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
-    /// program after each completed *turn* (i.e. when the agent finishes
-    /// processing a user submission). The value must be the full command
+    /// program when a turn starts and when a turn completes (i.e. when the
+    /// agent begins or finishes processing a user submission). The value must
+    /// be the full command
     /// broken into argv tokens **without** the trailing JSON argument - Codex
     /// appends one extra argument containing a JSON payload describing the
     /// event.
@@ -177,7 +178,7 @@ pub struct Config {
     /// which will be invoked as:
     ///
     /// ```shell
-    /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
+    /// notify-send Codex '{"type":"agent-turn-start","turn-id":"12345"}'
     /// ```
     ///
     /// If unset the feature is disabled.

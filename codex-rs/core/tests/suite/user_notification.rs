@@ -21,6 +21,7 @@ use responses::ev_completed;
 use responses::sse;
 use responses::start_mock_server;
 use std::time::Duration;
+use std::time::Instant;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "flaky on ubuntu-24.04-arm - aarch64-unknown-linux-gnu"]
@@ -43,7 +44,7 @@ async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<(
         &notify_script,
         r#"#!/bin/bash
 set -e
-echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
+echo "${@: -1}" >> $(dirname "${0}")/notify.txt"#,
     )?;
     std::fs::set_permissions(&notify_script, std::fs::Permissions::from_mode(0o755))?;
 
@@ -69,12 +70,56 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
 
     // We fork the notify script, so we need to wait for it to write to the file.
     fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
-    let notify_payload_raw = tokio::fs::read_to_string(&notify_file).await?;
-    let payload: Value = serde_json::from_str(&notify_payload_raw)?;
+    let payloads = {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let notify_payload_raw = tokio::fs::read_to_string(&notify_file).await?;
+            let lines = notify_payload_raw
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>();
+            if !lines.is_empty()
+                && let Ok(payloads) = lines
+                    .iter()
+                    .map(|line| serde_json::from_str::<Value>(line))
+                    .collect::<Result<Vec<_>, _>>()
+                    && payloads
+                        .iter()
+                        .any(|payload| payload["type"] == json!("agent-turn-complete"))
+                    {
+                        break payloads;
+                    }
+            if Instant::now() >= deadline {
+                let notify_payload_raw = tokio::fs::read_to_string(&notify_file).await?;
+                let payloads = notify_payload_raw
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                    .collect::<Vec<_>>();
+                if !payloads.is_empty() {
+                    break payloads;
+                }
+                let payload: Value = serde_json::from_str(&notify_payload_raw)?;
+                break vec![payload];
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
 
-    assert_eq!(payload["type"], json!("agent-turn-complete"));
-    assert_eq!(payload["input-messages"], json!(["hello world"]));
-    assert_eq!(payload["last-assistant-message"], json!("Done"));
+    let start_payload = payloads
+        .iter()
+        .find(|payload| payload["type"] == json!("agent-turn-start"))
+        .expect("agent-turn-start payload");
+    let complete_payload = payloads
+        .iter()
+        .find(|payload| payload["type"] == json!("agent-turn-complete"))
+        .expect("agent-turn-complete payload");
+
+    assert_eq!(start_payload["input-messages"], json!(["hello world"]));
+    assert_eq!(complete_payload["input-messages"], json!(["hello world"]));
+    assert_eq!(complete_payload["last-assistant-message"], json!("Done"));
 
     Ok(())
 }

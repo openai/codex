@@ -2675,6 +2675,19 @@ pub(crate) async fn run_turn(
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, event).await;
+    let input_messages = input
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+    sess.notifier().notify(&UserNotification::AgentTurnStart {
+        thread_id: sess.conversation_id.to_string(),
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.display().to_string(),
+        input_messages,
+    });
 
     let skills_outcome = Some(
         sess.services
