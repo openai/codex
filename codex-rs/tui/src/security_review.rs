@@ -1843,7 +1843,11 @@ async fn run_grep_files(
             } else {
                 let mut text = lines.join("\n");
                 if text.len() > MAX_SEARCH_OUTPUT_CHARS {
-                    text.truncate(MAX_SEARCH_OUTPUT_CHARS);
+                    let mut boundary = MAX_SEARCH_OUTPUT_CHARS;
+                    while boundary > 0 && !text.is_char_boundary(boundary) {
+                        boundary -= 1;
+                    }
+                    text.truncate(boundary);
                     text.push_str("\n... (truncated)");
                 }
                 SearchResult::Matches(text)
@@ -1894,7 +1898,11 @@ async fn run_grep_files(
                         } else {
                             let mut text = lines.join("\n");
                             if text.len() > MAX_SEARCH_OUTPUT_CHARS {
-                                text.truncate(MAX_SEARCH_OUTPUT_CHARS);
+                                let mut boundary = MAX_SEARCH_OUTPUT_CHARS;
+                                while boundary > 0 && !text.is_char_boundary(boundary) {
+                                    boundary -= 1;
+                                }
+                                text.truncate(boundary);
                                 text.push_str("\n... (truncated)");
                             }
                             SearchResult::Matches(text)
@@ -15683,7 +15691,11 @@ fn parse_search_term(input: &str) -> (SearchMode, &str) {
 fn summarize_search_term(term: &str, limit: usize) -> String {
     let mut summary = term.replace('\n', "\\n");
     if summary.len() > limit {
-        summary.truncate(limit);
+        let mut boundary = limit;
+        while boundary > 0 && !summary.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        summary.truncate(boundary);
         summary.push_str("...");
     }
     summary
