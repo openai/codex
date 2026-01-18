@@ -1,4 +1,4 @@
-pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- If a deployed target URL is provided, you may validate web/API findings against it using curl/playwright.\n- If you need to run the app to obtain a local target URL, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need an ASan build or no image exists.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
+pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- If a deployed target URL is provided, you may validate web/API findings against it using curl/playwright.\n- If you need to run the app to obtain a local target URL, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need an ASan build or no image exists.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- Do not emit `tool:\"none\"` solely because an ASan build is not already present. Attempt a best-effort ASan build and record exactly what you tried.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
 pub(crate) const VALIDATION_PLAN_PROMPT_TEMPLATE: &str = r#"
 Validate that this bug exists.
 
@@ -7,7 +7,7 @@ Validate that this bug exists.
 
 Shared TESTING.md (read this first):
 - The worker will follow these shared build/install/run instructions before running any per-bug PoC scripts.
-- Do NOT repeat shared setup steps inside the python script.
+- Do NOT repeat shared setup steps inside the python script unless it is required to produce the ASan build needed for validation (e.g., building an ASan-instrumented binary). If building is required, implement the build via subprocess calls in the python script and also record the same commands in `testing_md_additions`.
 - If you discover missing prerequisites or better shared setup, include them in `testing_md_additions` (markdown bullets/commands, no heading).
 - For web validation, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need ASan builds or no image exists; record the exact commands in `testing_md_additions`.
 
@@ -45,10 +45,11 @@ Crash/memory-safety findings:
 - Validate against a standard, shipped target (existing binary/service entrypoint) rather than a synthetic harness that calls an internal function.
 - Use only “real” entrypoints (CLI args, config, input files, HTTP requests, etc.) that exercise the same surface area as typical releases.
 - Do not create a new harness/test binary solely to call a vulnerable function; if you cannot plausibly reach the crash from a standard target, emit `tool:"none"` with a short reason.
-- Build an ASan-instrumented, ASan-compiled version of that standard target locally (if feasible).
+- Build an ASan-instrumented, ASan-compiled version of that standard target locally (best-effort).
 - Trigger the crash through that standard entrypoint against the ASan build.
 - Print the ASan stack trace.
 - Exit 0 only when an ASan signature is observed; otherwise exit non-zero.
+- If the ASan build is missing and requires a from-source build, still attempt it (do NOT mark it "too heavy" without trying). If the build fails or times out, print what happened and exit 2.
 
 Crypto/protocol/auth logic findings:
 - Build/run a minimal harness or test that deterministically demonstrates the bug (no ASan required).
