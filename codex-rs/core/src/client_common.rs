@@ -65,7 +65,60 @@ impl Prompt {
             reserialize_shell_outputs(&mut input);
         }
 
+        normalize_tool_names_for_openai_api(&mut input, &self.tools);
+
         input
+    }
+}
+
+fn normalize_tool_names_for_openai_api(items: &mut [ResponseItem], tools: &[ToolSpec]) {
+    let tool_names = tools.iter().map(ToolSpec::name).collect::<HashSet<_>>();
+    items.iter_mut().for_each(|item| match item {
+        ResponseItem::FunctionCall { name, .. } | ResponseItem::CustomToolCall { name, .. } => {
+            if name.as_str() == "container.exec" {
+                *name = "shell".to_string();
+                return;
+            }
+
+            if let Some(suffix) = name.as_str().split('.').next_back()
+                && suffix != name.as_str()
+                && tool_names.contains(suffix)
+            {
+                *name = suffix.to_string();
+                return;
+            }
+
+            if is_valid_openai_tool_name(name) {
+                return;
+            }
+
+            *name = sanitize_openai_tool_name(name);
+        }
+        _ => {}
+    })
+}
+
+fn is_valid_openai_tool_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn sanitize_openai_tool_name(name: &str) -> String {
+    let mut sanitized = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            sanitized.push(c);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    if sanitized.is_empty() {
+        "_".to_string()
+    } else {
+        sanitized
     }
 }
 
@@ -222,6 +275,94 @@ pub(crate) mod tools {
         /// `properties` must be present in `required`.
         pub(crate) strict: bool,
         pub(crate) parameters: JsonSchema,
+    }
+}
+
+#[cfg(test)]
+mod tool_name_tests {
+    use super::*;
+    use codex_protocol::models::ContentItem;
+
+    fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
+        Prompt {
+            input,
+            tools: Vec::new(),
+            parallel_tool_calls: false,
+            base_instructions_override: None,
+            output_schema: None,
+        }
+    }
+
+    #[test]
+    fn maps_container_exec_to_shell() {
+        let prompt = prompt_with_input(vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hi".to_string(),
+                }],
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "container.exec".to_string(),
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+        ]);
+
+        let formatted = prompt.get_formatted_input();
+        let ResponseItem::FunctionCall { name, .. } = &formatted[1] else {
+            panic!("expected function call");
+        };
+        assert_eq!(name, "shell");
+    }
+
+    #[test]
+    fn sanitizes_invalid_tool_names() {
+        let prompt = prompt_with_input(vec![ResponseItem::FunctionCall {
+            id: None,
+            name: "bad.name/with spaces".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        }]);
+
+        let formatted = prompt.get_formatted_input();
+        let ResponseItem::FunctionCall { name, .. } = &formatted[0] else {
+            panic!("expected function call");
+        };
+        assert_eq!(name, "bad_name_with_spaces");
+        assert!(is_valid_openai_tool_name(name));
+    }
+
+    #[test]
+    fn maps_namespaced_tool_name_to_known_tool_name() {
+        let prompt = Prompt {
+            input: vec![ResponseItem::FunctionCall {
+                id: None,
+                name: "functions.exec_command".to_string(),
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            }],
+            tools: vec![ToolSpec::Freeform(tools::FreeformTool {
+                name: "exec_command".to_string(),
+                description: "exec".to_string(),
+                format: tools::FreeformToolFormat {
+                    r#type: "text".to_string(),
+                    syntax: "plain".to_string(),
+                    definition: "n/a".to_string(),
+                },
+            })],
+            parallel_tool_calls: false,
+            base_instructions_override: None,
+            output_schema: None,
+        };
+
+        let formatted = prompt.get_formatted_input();
+        let ResponseItem::FunctionCall { name, .. } = &formatted[0] else {
+            panic!("expected function call");
+        };
+        assert_eq!(name, "exec_command");
     }
 }
 

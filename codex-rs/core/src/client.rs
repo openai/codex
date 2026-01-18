@@ -220,9 +220,10 @@ impl ModelClient {
         let instructions = prompt
             .get_full_instructions(&self.state.model_info)
             .into_owned();
+        let formatted_input = prompt.get_formatted_input();
         let payload = ApiCompactionInput {
             model: &self.state.model_info.slug,
-            input: &prompt.input,
+            input: &formatted_input,
             instructions: &instructions,
         };
 
