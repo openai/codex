@@ -840,6 +840,18 @@ impl AuthManager {
         Ok(removed)
     }
 
+    /// Copy legacy single-account credentials into the given account scope.
+    ///
+    /// This is intended to help users adopt multi-account mode without having to re-login.
+    /// Returns `Ok(true)` if credentials were migrated, `Ok(false)` if there was nothing to do.
+    pub fn migrate_legacy_auth_to_account(&self, account_name: &str) -> std::io::Result<bool> {
+        migrate_legacy_auth_to_account(
+            &self.codex_home,
+            self.auth_credentials_store_mode,
+            account_name,
+        )
+    }
+
     pub fn get_auth_mode(&self) -> Option<AuthMode> {
         self.auth_cached().map(|a| a.mode)
     }
@@ -887,6 +899,36 @@ impl AuthManager {
 
         Ok(())
     }
+}
+
+/// Copy legacy single-account credentials into the given account scope.
+///
+/// This does not delete legacy credentials. It also avoids overwriting an account that already
+/// has credentials.
+pub fn migrate_legacy_auth_to_account(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    account_name: &str,
+) -> std::io::Result<bool> {
+    crate::accounts::validate_account_name(account_name)?;
+
+    let legacy_storage =
+        create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode, None);
+    let Some(legacy_auth) = legacy_storage.load()? else {
+        return Ok(false);
+    };
+
+    let account_storage = create_auth_storage(
+        codex_home.to_path_buf(),
+        auth_credentials_store_mode,
+        Some(account_name.to_string()),
+    );
+    if account_storage.load()?.is_some() {
+        return Ok(false);
+    }
+
+    account_storage.save(&legacy_auth)?;
+    Ok(true)
 }
 
 #[cfg(test)]

@@ -1480,7 +1480,16 @@ function main(): void {
         });
         settingsBusy = false;
         if (res.ok) {
-          showToast("success", `Switched to ${settingsSelectedAccount}.`);
+          const migratedLegacy =
+            res.data &&
+            typeof (res.data as any).migratedLegacy === "boolean" &&
+            Boolean((res.data as any).migratedLegacy);
+          showToast(
+            "success",
+            migratedLegacy
+              ? `Switched to ${settingsSelectedAccount} (migrated legacy auth).`
+              : `Switched to ${settingsSelectedAccount}.`,
+          );
           await loadSettings();
         } else {
           showToast("error", res.error);
@@ -1539,7 +1548,16 @@ function main(): void {
         });
         settingsBusy = false;
         if (res.ok) {
-          showToast("success", `Created and switched to ${name}.`);
+          const migratedLegacy =
+            res.data &&
+            typeof (res.data as any).migratedLegacy === "boolean" &&
+            Boolean((res.data as any).migratedLegacy);
+          showToast(
+            "success",
+            migratedLegacy
+              ? `Created and switched to ${name} (migrated legacy auth).`
+              : `Created and switched to ${name}.`,
+          );
           await loadSettings();
         } else {
           showToast("error", res.error);

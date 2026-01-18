@@ -133,6 +133,7 @@ use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::ThreadManager;
 use codex_core::accounts::AccountKind;
+use codex_core::accounts::is_accounts_initialized;
 use codex_core::accounts::list_accounts as list_accounts_core;
 use codex_core::accounts::resolve_active_account as resolve_active_account_core;
 use codex_core::accounts::switch_account as switch_account_core;
@@ -1113,11 +1114,56 @@ impl CodexMessageProcessor {
 
     async fn switch_account_v2(&mut self, request_id: RequestId, params: SwitchAccountParams) {
         let name = params.name;
-        match switch_account_core(&self.config.codex_home, &name, params.create_if_missing) {
+        let was_initialized = is_accounts_initialized(&self.config.codex_home);
+        let create_if_missing = params.create_if_missing;
+
+        match switch_account_core(&self.config.codex_home, &name, create_if_missing) {
             Ok(()) => {
+                let mut migrated_legacy = None;
+                if !was_initialized && create_if_missing {
+                    match self.auth_manager.migrate_legacy_auth_to_account(&name) {
+                        Ok(true) => {
+                            migrated_legacy = Some(true);
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            self.outgoing
+                                .send_error(
+                                    request_id,
+                                    JSONRPCErrorError {
+                                        code: INTERNAL_ERROR_CODE,
+                                        message: format!("failed to migrate legacy auth: {err}"),
+                                        data: None,
+                                    },
+                                )
+                                .await;
+                            return;
+                        }
+                    }
+                }
+
                 self.auth_manager.reload();
+
+                if migrated_legacy.is_some()
+                    && let (Ok(Some(account)), Some(auth)) = (
+                        resolve_active_account_core(&self.config.codex_home),
+                        self.auth_manager.auth_cached(),
+                    )
+                {
+                    let (kind, email) = match auth.mode {
+                        AuthMode::ChatGPT => (AccountKind::Chatgpt, auth.get_account_email()),
+                        AuthMode::ApiKey => (AccountKind::ApiKey, None),
+                    };
+                    if let Err(err) =
+                        update_account_meta(&self.config.codex_home, &account, kind, email)
+                    {
+                        tracing::warn!("failed to update account metadata: {err}");
+                    }
+                }
+
                 let response = SwitchAccountResponse {
                     active_account: name,
+                    migrated_legacy,
                 };
                 self.outgoing.send_response(request_id, response).await;
 

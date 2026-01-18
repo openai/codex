@@ -260,7 +260,7 @@
     "format:fix": "prettier --write .",
     "vsix:package": "pnpm run compile && mkdir -p vsix && npx --yes @vscode/vsce package --out vsix/codex-ui-vscode-extension-${npm_package_version}.vsix",
     "vsix:install": "pnpm run vsix:package && code --install-extension vsix/codex-ui-vscode-extension-${npm_package_version}.vsix --force",
-    "regen:protocol": "node ./scripts/regen-protocol.js"
+    "regen:protocol": "node ./scripts/regen-protocol.js --codex-bin ../codex-rs/target/debug/codex"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",

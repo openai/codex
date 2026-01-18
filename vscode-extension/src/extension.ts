@@ -3001,6 +3001,165 @@ async function handleSlashCommand(
     });
     return true;
   }
+  if (cmd === "account") {
+    const validateAccountName = (name: string): string | null => {
+      const trimmedName = name.trim();
+      if (!trimmedName) return "Missing account name.";
+      if (trimmedName.length > 64) return "Account name is too long (max 64 chars).";
+      if (!/^[A-Za-z0-9_-]+$/.test(trimmedName))
+        return "Invalid account name. Use only [A-Za-z0-9_-].";
+      return null;
+    };
+
+    if (!backendManager) throw new Error("backendManager is not initialized");
+
+    const args = arg.split(/\s+/).filter(Boolean);
+    const sub = args[0] ?? "";
+    const nameArg = args[1] ?? "";
+    const hasExtra = args.length > 2;
+
+    const usage = "Usage: /account [<name>] | /account create <name> | /account logout";
+
+    if (!arg) {
+      const accounts = await backendManager.listAccounts(session);
+      const active = accounts.activeAccount ?? "(none)";
+      const lines = [
+        `Active: ${active}`,
+        "",
+        "Accounts:",
+        ...(accounts.accounts ?? []).map((a) => {
+          const meta =
+            a.kind === "chatgpt"
+              ? a.email
+                ? `chatgpt (${a.email})`
+                : "chatgpt"
+              : a.kind === "apiKey"
+                ? "apiKey"
+                : "";
+          return meta ? `- ${a.name} — ${meta}` : `- ${a.name}`;
+        }),
+        "",
+        usage,
+      ].filter(Boolean);
+      upsertBlock(session.id, {
+        id: newLocalId("account"),
+        type: "system",
+        title: "Account",
+        text: lines.join("\n"),
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (sub === "create") {
+      if (hasExtra) {
+        upsertBlock(session.id, {
+          id: newLocalId("accountError"),
+          type: "error",
+          title: "Slash command error",
+          text: usage,
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+      const err = validateAccountName(nameArg);
+      if (err) {
+        upsertBlock(session.id, {
+          id: newLocalId("accountError"),
+          type: "error",
+          title: "Slash command error",
+          text: `${err}\n${usage}`,
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+
+      const res = await backendManager.switchAccount(session, {
+        name: nameArg.trim(),
+        createIfMissing: true,
+      });
+      const migrated = Boolean((res as any).migratedLegacy);
+      upsertBlock(session.id, {
+        id: newLocalId("accountCreate"),
+        type: "info",
+        title: "Account",
+        text: migrated
+          ? `Created and switched to ${res.activeAccount} (migrated legacy auth).`
+          : `Created and switched to ${res.activeAccount}.`,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (sub === "logout") {
+      if (hasExtra) {
+        upsertBlock(session.id, {
+          id: newLocalId("accountError"),
+          type: "error",
+          title: "Slash command error",
+          text: usage,
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+      await backendManager.logoutAccount(session);
+      upsertBlock(session.id, {
+        id: newLocalId("accountLogout"),
+        type: "info",
+        title: "Account",
+        text: "Logged out (active account).",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (hasExtra) {
+      upsertBlock(session.id, {
+        id: newLocalId("accountError"),
+        type: "error",
+        title: "Slash command error",
+        text: usage,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const err = validateAccountName(sub);
+    if (err) {
+      upsertBlock(session.id, {
+        id: newLocalId("accountError"),
+        type: "error",
+        title: "Slash command error",
+        text: `${err}\n${usage}`,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+    const res = await backendManager.switchAccount(session, {
+      name: sub.trim(),
+      createIfMissing: false,
+    });
+    const migrated = Boolean((res as any).migratedLegacy);
+    upsertBlock(session.id, {
+      id: newLocalId("accountSwitch"),
+      type: "info",
+      title: "Account",
+      text: migrated
+        ? `Switched to ${res.activeAccount} (migrated legacy auth).`
+        : `Switched to ${res.activeAccount}.`,
+    });
+    chatView?.refresh();
+    schedulePersistRuntime(session.id);
+    return true;
+  }
   if (cmd === "help") {
     const rt = ensureRuntime(session.id);
     const customList = customPrompts
@@ -3029,6 +3188,7 @@ async function handleSlashCommand(
         mineSelected
           ? "- /agents: Browse agents"
           : "- /agents: Browse agents (codex-mine 選択時のみ対応)",
+        "- /account: Account management",
         "- /help: Show help",
         customList ? "\nCustom prompts:" : null,
         customList || null,

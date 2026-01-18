@@ -732,11 +732,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           const create =
             typeof createIfMissing === "boolean" ? createIfMissing : false;
-          await this.onAccountSwitch(active, {
+          const res = await this.onAccountSwitch(active, {
             name: name.trim(),
             createIfMissing: create,
           });
-          await respondOk({ activeAccount: name.trim() });
+          const migratedLegacy =
+            res && typeof (res as any).migratedLegacy === "boolean"
+              ? Boolean((res as any).migratedLegacy)
+              : null;
+          await respondOk({
+            activeAccount: name.trim(),
+            migratedLegacy,
+          });
           return;
         }
 

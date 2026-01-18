@@ -840,6 +840,9 @@ pub struct SwitchAccountParams {
 #[ts(export_to = "v2/")]
 pub struct SwitchAccountResponse {
     pub active_account: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub migrated_legacy: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
