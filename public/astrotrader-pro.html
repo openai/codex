@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AstroTrader Pro</title>
+  <style>
+    :root {
+      --bg: #020617;
+      --panel: #0b1224;
+      --panel-soft: #111a30;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --border: #1f2937;
+      --accent: #6366f1;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 20% 20%, rgba(99, 102, 241, 0.08), transparent 32%),
+        radial-gradient(circle at 80% 0%, rgba(16, 185, 129, 0.08), transparent 30%),
+        linear-gradient(135deg, #0b1120, #000000 55%);
+      color: var(--text);
+      font-family: "Inter", "SF Pro Text", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 28px 18px 48px;
+    }
+
+    .page {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      padding-bottom: 18px;
+      margin-bottom: 26px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .title {
+      font-size: 32px;
+      font-weight: 300;
+      margin: 0 0 6px 0;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 0.08em;
+    }
+
+    .lunar-label {
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    .lunar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+
+    .btn {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 12px 16px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+    }
+
+    .btn:hover {
+      background: #11182c;
+      border-color: #27334d;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: transparent;
+    }
+
+    .date-label {
+      color: #6b7280;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 3fr 1fr;
+      gap: 18px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .tab {
+      background: none;
+      border: none;
+      padding: 10px 8px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      letter-spacing: 0.06em;
+      border-bottom: 2px solid transparent;
+      transition: color 120ms ease, border-color 120ms ease;
+    }
+
+    .tab.active {
+      color: var(--text);
+      border-color: #a5b4fc;
+    }
+
+    .chart-box {
+      background: #050811;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      height: 260px;
+      overflow: hidden;
+    }
+
+    .chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .asset-name {
+      font-size: 22px;
+      font-weight: 300;
+      letter-spacing: -0.01em;
+      margin: 0 0 4px 0;
+    }
+
+    .value {
+      font-size: 30px;
+      font-weight: 300;
+      letter-spacing: -0.02em;
+      margin: 0;
+      text-align: right;
+    }
+
+    .natal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 18px;
+      margin-top: 12px;
+    }
+
+    .badge {
+      display: inline-block;
+      text-transform: uppercase;
+      color: #6b7280;
+      letter-spacing: 0.12em;
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .signal {
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .signal:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .bar {
+      height: 6px;
+      background: #0f172a;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid #1f2937;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+    }
+
+    .aspects {
+      display: grid;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .tutorial {
+      margin-bottom: 18px;
+    }
+
+    .tutorial h3 {
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 11px;
+      margin: 0 0 8px 0;
+    }
+
+    .tutorial .section-block {
+      margin-bottom: 14px;
+    }
+
+    .tutorial p {
+      margin: 4px 0 0 0;
+      color: #9ca3af;
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 28px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .footer button {
+      border: none;
+      background: none;
+      color: var(--muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tagline {
+      color: var(--muted);
+      margin: 0;
+      font-size: 13px;
+    }
+
+    @media (max-width: 980px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .controls {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+    const { useEffect, useState } = React;
+
+    const Icon = ({ children }) => (
+      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{children}</span>
+    );
+
+    const PlayIcon = () => (
+      <Icon>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3" />
+        </svg>
+      </Icon>
+    );
+
+    const PauseIcon = () => (
+      <Icon>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="6" y="4" width="4" height="16" rx="1" />
+          <rect x="14" y="4" width="4" height="16" rx="1" />
+        </svg>
+      </Icon>
+    );
+
+    const InfoIcon = () => (
+      <Icon>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="8" x2="12.01" y2="8" />
+          <line x1="12" y1="12" x2="12" y2="16" />
+        </svg>
+      </Icon>
+    );
+
+    const DownloadIcon = () => (
+      <Icon>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+      </Icon>
+    );
+
+    const TrendingUpIcon = () => (
+      <Icon>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+          <polyline points="17 6 23 6 23 12" />
+        </svg>
+      </Icon>
+    );
+
+    const MoonIcon = () => (
+      <Icon>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      </Icon>
+    );
+
+    const assetBirthCharts = [
+      {
+        symbol: "BTC",
+        name: "Bitcoin",
+        color: "#F7931A",
+        birthDate: "2009-01-03T18:15:05Z",
+        birthChart: {
+          sun: { sign: "Capricorn", degree: 13, house: 10 },
+          moon: { sign: "Cancer", degree: 28, house: 4 },
+          ascendant: { sign: "Libra", degree: 5 },
+        },
+        currentPrice: 100,
+        priceHistory: [],
+      },
+      {
+        symbol: "ETH",
+        name: "Ethereum",
+        color: "#627EEA",
+        birthDate: "2015-07-30T15:26:13Z",
+        birthChart: {
+          sun: { sign: "Leo", degree: 7, house: 5 },
+          moon: { sign: "Aquarius", degree: 15, house: 11 },
+          ascendant: { sign: "Sagittarius", degree: 22 },
+        },
+        currentPrice: 100,
+        priceHistory: [],
+      },
+      {
+        symbol: "SPX",
+        name: "S&P 500",
+        color: "#00A3E0",
+        birthDate: "1957-03-04T09:30:00Z",
+        birthChart: {
+          sun: { sign: "Pisces", degree: 13, house: 12 },
+          moon: { sign: "Taurus", degree: 8, house: 2 },
+          ascendant: { sign: "Gemini", degree: 10 },
+        },
+        currentPrice: 100,
+        priceHistory: [],
+      },
+    ];
+
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    const calculateMoonPhase = (timestamp) => {
+      const lunarCycle = 29.53059 * DAY_MS;
+      const knownNewMoon = new Date("2000-01-06T18:14:00Z").getTime();
+      const phase = ((timestamp - knownNewMoon) % lunarCycle) / lunarCycle;
+      return phase < 0 ? phase + 1 : phase;
+    };
+
+    const getMoonPhaseName = (phase) => {
+      if (phase < 0.03 || phase > 0.97) return "New Moon";
+      if (phase < 0.22) return "Waxing Crescent";
+      if (phase < 0.28) return "First Quarter";
+      if (phase < 0.47) return "Waxing Gibbous";
+      if (phase < 0.53) return "Full Moon";
+      if (phase < 0.72) return "Waning Gibbous";
+      if (phase < 0.78) return "Last Quarter";
+      return "Waning Crescent";
+    };
+
+    const getMoonPhaseIcon = (phase) => {
+      if (phase < 0.03 || phase > 0.97) return "🌑";
+      if (phase < 0.22) return "🌒";
+      if (phase < 0.28) return "🌓";
+      if (phase < 0.47) return "🌔";
+      if (phase < 0.53) return "🌕";
+      if (phase < 0.72) return "🌖";
+      if (phase < 0.78) return "🌗";
+      return "🌘";
+    };
+
+    const normalizePrice = (history, price) => {
+      if (!history || history.length === 0) return 100;
+      const prices = history.map((p) => p.price);
+      const min = Math.min(...prices, 80);
+      const max = Math.max(...prices, 120);
+      if (max === min) return 100;
+      const ratio = (price - min) / (max - min);
+      return 200 - ratio * 200;
+    };
+
+    const calculateTransits = (asset, currentDate, phaseOverride = null) => {
+      const aspects = [];
+      const signals = { buy: [], sell: [] };
+
+      const phase = phaseOverride ?? calculateMoonPhase(currentDate);
+      const daysSinceBirth = (currentDate - new Date(asset.birthDate).getTime()) / DAY_MS;
+      const sunTransit = ((daysSinceBirth % 365) / 365) * 360;
+
+      const normalizeAngle = (deg) => {
+        const v = deg % 360;
+        return v < 0 ? v + 360 : v;
+      };
+
+      const diff = (a, b) => {
+        const d = Math.abs(normalizeAngle(a) - normalizeAngle(b));
+        return d > 180 ? 360 - d : d;
+      };
+
+      const orb = diff(sunTransit, asset.birthChart.sun.degree);
+
+      if (orb < 8) {
+        aspects.push({ type: "☌ Conjunction", strength: "STRONG" });
+        signals.buy.push({ reason: "Solar Return — Annual cycle beginning", strength: 0.9 });
+      }
+
+      if (Math.abs(orb - 120) < 8 || Math.abs(orb - 240) < 8) {
+        aspects.push({ type: "△ Trine", strength: "MODERATE" });
+        signals.buy.push({ reason: "Trine Aspect — Favorable momentum", strength: 0.7 });
+      }
+
+      if (Math.abs(orb - 90) < 8 || Math.abs(orb - 270) < 8) {
+        aspects.push({ type: "□ Square", strength: "STRONG" });
+        signals.sell.push({ reason: "Square Aspect — Increased volatility", strength: 0.6 });
+      }
+
+      if (phase < 0.1 || phase > 0.9) {
+        signals.buy.push({ reason: "New Moon Phase — Entry window", strength: 0.6 });
+      } else if (phase > 0.45 && phase < 0.55) {
+        signals.sell.push({ reason: "Full Moon Phase — Profit-taking zone", strength: 0.6 });
+      }
+
+      return { aspects, signals };
+    };
+
+    const PriceChart = ({ asset, buySignals, sellSignals }) => (
+      <div className="panel">
+        <div className="chart-header">
+          <div>
+            <h2 className="asset-name" style={{ color: asset.color }}>{asset.name}</h2>
+            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+              Genesis: {new Date(asset.birthDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+            </p>
+          </div>
+          <div>
+            <p className="value">{asset.currentPrice.toFixed(2)}</p>
+            <p className="muted" style={{ margin: 0, fontSize: 11, letterSpacing: "0.08em" }}>Current Value</p>
+          </div>
+        </div>
+
+        <div className="chart-box">
+          <svg viewBox="0 0 800 200" width="100%" height="100%">
+            {[0, 50, 100, 150, 200].map((y) => (
+              <line key={y} x1="0" y1={y} x2="800" y2={y} stroke="#1f2937" strokeWidth="1" />
+            ))}
+
+            {asset.priceHistory.length > 1 && (
+              <polyline
+                points={asset.priceHistory
+                  .map((p, i) => {
+                    const x = (i / asset.priceHistory.length) * 800;
+                    const y = normalizePrice(asset.priceHistory, p.price);
+                    return `${x},${y}`;
+                  })
+                  .join(" ")}
+                fill="none"
+                stroke={asset.color}
+                strokeWidth="2"
+                opacity="0.85"
+              />
+            )}
+
+            {asset.priceHistory.map((p, i) => {
+              if (asset.priceHistory.length < 2) return null;
+              const baseX = (i / asset.priceHistory.length) * 800;
+              const baseY = normalizePrice(asset.priceHistory, p.price);
+
+              if (i % 20 === 0 && buySignals.length > 0) {
+                return <circle key={`buy-${i}`} cx={baseX} cy={baseY} r="3" fill="#10b981" opacity="0.7" />;
+              }
+              if (i % 15 === 0 && sellSignals.length > 0) {
+                return <circle key={`sell-${i}`} cx={baseX} cy={baseY} r="3" fill="#ef4444" opacity="0.7" />;
+              }
+              return null;
+            })}
+          </svg>
+        </div>
+      </div>
+    );
+
+    const NatalChart = ({ asset }) => (
+      <div className="panel">
+        <h3 style={{ margin: "0 0 16px 0", color: "#9ca3af" }}>Natal Configuration</h3>
+        <div className="natal-grid">
+          <svg viewBox="0 0 300 300" width="100%" height="100%">
+            <circle cx="150" cy="150" r="140" fill="none" stroke="#1f2937" strokeWidth="1" />
+            <circle cx="150" cy="150" r="100" fill="none" stroke="#374151" strokeWidth="1" />
+            {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((deg) => {
+              const rad = (deg * Math.PI) / 180;
+              return (
+                <line
+                  key={deg}
+                  x1="150"
+                  y1="150"
+                  x2={150 + Math.cos(rad) * 140}
+                  y2={150 + Math.sin(rad) * 140}
+                  stroke="#1f2937"
+                  strokeWidth="0.5"
+                  opacity="0.5"
+                />
+              );
+            })}
+            <circle cx="150" cy="30" r="8" fill="#FFD700" opacity="0.8" />
+            <text x="150" y="34" fontSize="12" fill="white" textAnchor="middle">
+              ☉
+            </text>
+            <circle cx="250" cy="150" r="6" fill="#C0C0C0" opacity="0.8" />
+            <text x="250" y="154" fontSize="10" fill="white" textAnchor="middle">
+              ☽
+            </text>
+          </svg>
+          <div>
+            <div className="section-block" style={{ paddingBottom: 10, borderBottom: "1px solid #1f2937" }}>
+              <div className="badge">☉ Sun</div>
+              <div>{asset.birthChart.sun.sign} {asset.birthChart.sun.degree}°</div>
+            </div>
+            <div className="section-block" style={{ paddingBottom: 10, borderBottom: "1px solid #1f2937", marginTop: 10 }}>
+              <div className="badge">☽ Moon</div>
+              <div>{asset.birthChart.moon.sign} {asset.birthChart.moon.degree}°</div>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <div className="badge">Ascendant</div>
+              <div>{asset.birthChart.ascendant.sign} {asset.birthChart.ascendant.degree}°</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+
+    const SignalsPanel = ({ title, signals, tone }) => (
+      <div className="panel">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          {tone === "buy" ? <TrendingUpIcon /> : <MoonIcon />}
+          <h3 className="badge" style={{ margin: 0 }}>{title}</h3>
+        </div>
+        {signals.length === 0 ? (
+          <p className="muted" style={{ fontSize: 12, margin: 0 }}>No active signals</p>
+        ) : (
+          signals.map((signal, i) => (
+            <div key={i} className="signal">
+              <div style={{ color: "#e5e7eb", marginBottom: 6 }}>{signal.reason}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div className="bar">
+                  <div
+                    className="bar-fill"
+                    style={{ width: `${signal.strength * 100}%`, background: tone === "buy" ? "#10b981" : "#ef4444" }}
+                  ></div>
+                </div>
+                <span className="muted" style={{ fontSize: 12 }}>{(signal.strength * 100).toFixed(0)}%</span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    );
+
+    const AspectsPanel = ({ aspects }) => (
+      <div className="panel">
+        <h3 className="badge" style={{ marginBottom: 12 }}>Active Aspects</h3>
+        <div className="aspects">
+          {aspects.map((aspect, i) => (
+            <div key={i}>{aspect.type} <span style={{ color: "#6b7280" }}>({aspect.strength})</span></div>
+          ))}
+        </div>
+      </div>
+    );
+
+    const Tutorial = () => (
+      <div className="panel tutorial">
+        <h2 style={{ margin: "0 0 16px 0", fontWeight: 300 }}>Signal Interpretation Framework</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 18 }}>
+          <div>
+            <h3>Aspect Analysis</h3>
+            <div className="section-block">
+              <strong>Conjunction (0°)</strong>
+              <p>Cycle initiation. Entry consideration at solar returns.</p>
+            </div>
+            <div className="section-block">
+              <strong>Trine (120°)</strong>
+              <p>Favorable momentum. Accumulation phase indicator.</p>
+            </div>
+            <div className="section-block">
+              <strong>Square (90°)</strong>
+              <p>Volatility warning. Position sizing adjustment recommended.</p>
+            </div>
+          </div>
+          <div>
+            <h3>Lunar Cycle Protocol</h3>
+            <div className="section-block">
+              <strong>New Moon Phase</strong>
+              <p>Entry window. Initiate positions for waxing phase.</p>
+            </div>
+            <div className="section-block">
+              <strong>Full Moon Phase</strong>
+              <p>Profit-taking zone. Elevated volatility expected.</p>
+            </div>
+            <div className="section-block">
+              <strong>Waning Phase</strong>
+              <p>Consolidation period. Reduced position exposure.</p>
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #1f2937" }}>
+          <p className="muted" style={{ lineHeight: 1.6, fontSize: 12 }}>
+            This platform integrates natal chart analysis with simulated market dynamics. Each asset maintains a birth chart derived from its genesis date, providing a framework for exploring cyclical patterns and temporal correlations. This is for research and educational purposes only, not financial advice.
+          </p>
+        </div>
+      </div>
+    );
+
+    const Sidebar = ({ buySignals, sellSignals, transitAspects }) => (
+      <div style={{ display: "grid", gap: 12 }}>
+        <SignalsPanel title="Entry Signals" signals={buySignals} tone="buy" />
+        <SignalsPanel title="Exit Signals" signals={sellSignals} tone="sell" />
+        {transitAspects.length > 0 && <AspectsPanel aspects={transitAspects} />}
+      </div>
+    );
+
+    const AstroTraderPro = () => {
+      const [assets, setAssets] = useState(assetBirthCharts);
+      const [selectedAsset, setSelectedAsset] = useState(assetBirthCharts[0]);
+      const [isPlaying, setIsPlaying] = useState(false);
+      const [currentTime, setCurrentTime] = useState(Date.now());
+      const [moonPhase, setMoonPhase] = useState(0);
+      const [transitAspects, setTransitAspects] = useState([]);
+      const [buySignals, setBuySignals] = useState([]);
+      const [sellSignals, setSellSignals] = useState([]);
+      const [showTutorial, setShowTutorial] = useState(false);
+
+      useEffect(() => {
+        const now = Date.now();
+        const phase = calculateMoonPhase(now);
+        setMoonPhase(phase);
+        setCurrentTime(now);
+        const { aspects, signals } = calculateTransits(selectedAsset, now, phase);
+        setTransitAspects(aspects);
+        setBuySignals(signals.buy);
+        setSellSignals(signals.sell);
+        setAssets((prev) =>
+          prev.map((asset) => ({
+            ...asset,
+            priceHistory: asset.priceHistory.length === 0 ? [{ time: now, price: asset.currentPrice }] : asset.priceHistory,
+          }))
+        );
+      }, []);
+
+      useEffect(() => {
+        if (!isPlaying) return;
+
+        const interval = setInterval(() => {
+          setCurrentTime((prev) => {
+            const newTime = prev + DAY_MS;
+            const phase = calculateMoonPhase(newTime);
+            setMoonPhase(phase);
+
+            setAssets((prevAssets) => {
+              const updatedAssets = prevAssets.map((asset) => {
+                const { aspects, signals } = calculateTransits(asset, newTime, phase);
+
+                if (asset.symbol === selectedAsset.symbol) {
+                  setTransitAspects(aspects);
+                  setBuySignals(signals.buy);
+                  setSellSignals(signals.sell);
+                }
+
+                const bias = signals.buy.length > signals.sell.length ? 2 : -1;
+                const drift = (Math.random() - 0.5 + bias * 0.1) * 5;
+                const newPrice = Math.max(10, asset.currentPrice + drift);
+
+                return {
+                  ...asset,
+                  currentPrice: newPrice,
+                  priceHistory: [...asset.priceHistory.slice(-100), { time: newTime, price: newPrice }],
+                };
+              });
+
+              const updatedSelected = updatedAssets.find((a) => a.symbol === selectedAsset.symbol);
+              if (updatedSelected) {
+                setSelectedAsset(updatedSelected);
+              }
+
+              return updatedAssets;
+            });
+
+            return newTime;
+          });
+        }, 120);
+
+        return () => clearInterval(interval);
+      }, [isPlaying, selectedAsset.symbol]);
+
+      const handleSelectAsset = (asset) => {
+        setSelectedAsset(asset);
+        const phase = calculateMoonPhase(currentTime);
+        const { aspects, signals } = calculateTransits(asset, currentTime, phase);
+        setTransitAspects(aspects);
+        setBuySignals(signals.buy);
+        setSellSignals(signals.sell);
+      };
+
+      const handleExport = () => {
+        const exportPayload = {
+          asset: selectedAsset.symbol,
+          name: selectedAsset.name,
+          birthDate: selectedAsset.birthDate,
+          birthChart: selectedAsset.birthChart,
+          priceHistory: selectedAsset.priceHistory,
+          lastUpdate: new Date(currentTime).toISOString(),
+          currentMoonPhase: { phase: moonPhase, name: getMoonPhaseName(moonPhase), icon: getMoonPhaseIcon(moonPhase) },
+          signals: { buy: buySignals, sell: sellSignals },
+        };
+
+        const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `astrotrader_${selectedAsset.symbol}_${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      return (
+        <div className="page">
+          <header className="header">
+            <div>
+              <h1 className="title">Astro<span style={{ color: "#9ca3af" }}>Trader</span></h1>
+              <p className="subtitle">Celestial market intelligence platform</p>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div className="lunar-label">Lunar Phase</div>
+              <div className="lunar-row">
+                <span style={{ fontSize: 22 }}>{getMoonPhaseIcon(moonPhase)}</span>
+                <span style={{ fontSize: 13 }}>{getMoonPhaseName(moonPhase)}</span>
+              </div>
+            </div>
+          </header>
+
+          <div className="controls">
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="btn" onClick={() => setIsPlaying((prev) => !prev)}>
+                {isPlaying ? <PauseIcon /> : <PlayIcon />}
+                {isPlaying ? "Pause" : "Initialize"}
+              </button>
+              <button className="btn btn-secondary" onClick={() => setShowTutorial((prev) => !prev)}>
+                <InfoIcon />
+                Methodology
+              </button>
+            </div>
+            <div className="date-label">
+              {new Date(currentTime).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+            </div>
+          </div>
+
+          {showTutorial && <Tutorial />}
+
+          <div className="grid">
+            <div>
+              <div className="tabs">
+                {assets.map((asset) => (
+                  <button
+                    key={asset.symbol}
+                    className={`tab ${selectedAsset.symbol === asset.symbol ? "active" : ""}`}
+                    onClick={() => handleSelectAsset(asset)}
+                  >
+                    {asset.symbol}
+                  </button>
+                ))}
+              </div>
+
+              <PriceChart asset={selectedAsset} buySignals={buySignals} sellSignals={sellSignals} />
+
+              <div style={{ marginTop: 14 }}>
+                <NatalChart asset={selectedAsset} />
+              </div>
+            </div>
+
+            <Sidebar buySignals={buySignals} sellSignals={sellSignals} transitAspects={transitAspects} />
+          </div>
+
+          <footer className="footer">
+            <div>
+              <p className="tagline">© {new Date().getFullYear()} AstroTrader Intelligence Platform</p>
+              <p className="tagline">Celestial correlation analysis for research &amp; education</p>
+            </div>
+            <button onClick={handleExport}>
+              <DownloadIcon />
+              Export Data
+            </button>
+          </footer>
+        </div>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<AstroTraderPro />);
+  </script>
+</body>
+</html>
