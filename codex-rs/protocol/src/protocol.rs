@@ -194,7 +194,8 @@ pub enum Op {
     },
 
     /// Resolve a request_user_input tool call.
-    RequestUserInputResponse {
+    #[serde(rename = "user_input_answer", alias = "request_user_input_response")]
+    UserInputAnswer {
         /// Turn id for the in-flight request.
         id: String,
         /// User-provided answers.

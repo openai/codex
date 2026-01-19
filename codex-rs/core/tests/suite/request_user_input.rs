@@ -131,7 +131,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
     );
     let response = RequestUserInputResponse { answers };
     codex
-        .submit(Op::RequestUserInputResponse {
+        .submit(Op::UserInputAnswer {
             id: request.turn_id.clone(),
             response,
         })

@@ -372,9 +372,7 @@ async fn handle_request_user_input(
         cancel_token,
     )
     .await;
-    let _ = codex
-        .submit(Op::RequestUserInputResponse { id, response })
-        .await;
+    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
 }
 
 async fn await_user_input_with_cancel<F>(

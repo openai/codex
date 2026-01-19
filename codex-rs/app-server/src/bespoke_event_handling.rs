@@ -305,13 +305,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                     answers: HashMap::new(),
                 };
                 if let Err(err) = conversation
-                    .submit(Op::RequestUserInputResponse {
+                    .submit(Op::UserInputAnswer {
                         id: event_turn_id,
                         response: empty,
                     })
                     .await
                 {
-                    error!("failed to submit RequestUserInputResponse: {err}");
+                    error!("failed to submit UserInputAnswer: {err}");
                 }
             }
         }
@@ -1418,13 +1418,13 @@ async fn on_request_user_input_response(
                 answers: HashMap::new(),
             };
             if let Err(err) = conversation
-                .submit(Op::RequestUserInputResponse {
+                .submit(Op::UserInputAnswer {
                     id: event_turn_id,
                     response: empty,
                 })
                 .await
             {
-                error!("failed to submit RequestUserInputResponse: {err}");
+                error!("failed to submit UserInputAnswer: {err}");
             }
             return;
         }
@@ -1454,13 +1454,13 @@ async fn on_request_user_input_response(
     };
 
     if let Err(err) = conversation
-        .submit(Op::RequestUserInputResponse {
+        .submit(Op::UserInputAnswer {
             id: event_turn_id,
             response,
         })
         .await
     {
-        error!("failed to submit RequestUserInputResponse: {err}");
+        error!("failed to submit UserInputAnswer: {err}");
     }
 }
 
