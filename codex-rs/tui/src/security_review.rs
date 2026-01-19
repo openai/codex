@@ -493,14 +493,21 @@ pub(crate) fn resume_progress_snapshot(
 
     let spec_progress = resume_spec_generation_progress(output_root, repo_root);
     let bug_progress = resume_bug_analysis_progress(output_root);
+    let validation_prep_complete = validation_target_prep_complete(output_root, repo_root);
 
     for step in &steps {
         let slug = plan_step_slug(step.kind);
-        let status = checkpoint
+        let mut status = checkpoint
             .plan_statuses
             .get(slug)
             .cloned()
             .unwrap_or(StepStatus::Pending);
+        if !matches!(status, StepStatus::Completed)
+            && step.kind == SecurityReviewPlanStep::PrepareValidationTargets
+            && validation_prep_complete
+        {
+            status = StepStatus::Completed;
+        }
 
         match status {
             StepStatus::Completed => {
@@ -655,6 +662,31 @@ fn resume_bug_analysis_progress(output_root: &Path) -> Option<ResumeCountProgres
     let total = usize::try_from(progress.total_files.max(0)).unwrap_or(0);
     let done = progress.files.len();
     Some(ResumeCountProgress { done, total })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ValidationTargetPrepProgress {
+    version: i32,
+    repo_root: String,
+}
+
+fn validation_target_prep_progress_path(output_root: &Path) -> PathBuf {
+    output_root
+        .join("context")
+        .join("validation_target_prep.json")
+}
+
+fn validation_target_prep_complete(output_root: &Path, repo_root: &Path) -> bool {
+    let path = validation_target_prep_progress_path(output_root);
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let progress = match serde_json::from_slice::<ValidationTargetPrepProgress>(&bytes) {
+        Ok(progress) => progress,
+        Err(_) => return false,
+    };
+    progress.version == 1 && progress.repo_root == repo_root.display().to_string()
 }
 
 pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
@@ -4570,6 +4602,13 @@ pub async fn run_security_review(
             plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
             Some(StepStatus::Completed | StepStatus::InProgress)
         )
+    {
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+    }
+    if !matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::Completed)
+    ) && validation_target_prep_complete(&request.output_root, &repo_path)
     {
         plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
     }
@@ -11202,18 +11241,71 @@ fn build_testing_instructions(repo_root: &Path) -> String {
         repo_label,
     ) = guess_testing_defaults(repo_root);
 
+    let cargo_build_cmd = if repo_root.join("Cargo.lock").exists() {
+        "cargo build --locked"
+    } else {
+        "cargo build"
+    };
+
+    fn has_package_json_script(package_json: &Value, script_name: &str) -> bool {
+        package_json
+            .get("scripts")
+            .and_then(Value::as_object)
+            .and_then(|scripts| scripts.get(script_name))
+            .and_then(Value::as_str)
+            .is_some_and(|script| !script.trim().is_empty())
+    }
+
+    let package_json = if has_package_json {
+        fs::read_to_string(repo_root.join("package.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    } else {
+        None
+    };
+
+    let npm_install_cmd = if repo_root.join("package-lock.json").exists()
+        || repo_root.join("npm-shrinkwrap.json").exists()
+    {
+        "npm ci"
+    } else {
+        "npm install"
+    };
+    let npm_has_build_script = package_json
+        .as_ref()
+        .is_some_and(|package_json| has_package_json_script(package_json, "build"));
+    let npm_run_cmd = if package_json
+        .as_ref()
+        .is_some_and(|package_json| has_package_json_script(package_json, "dev"))
+    {
+        format!("npm run dev -- --port {default_port}")
+    } else if package_json
+        .as_ref()
+        .is_some_and(|package_json| has_package_json_script(package_json, "start"))
+    {
+        "npm start".to_string()
+    } else {
+        format!("npm run dev -- --port {default_port}")
+    };
+
+    let has_go = repo_root.join("go.mod").exists();
+
     let mut sections: Vec<String> = Vec::new();
 
     let mut quickstart: Vec<String> = Vec::new();
     if has_cargo {
-        quickstart.push("- cargo build --locked".to_string());
+        quickstart.push(format!("- {cargo_build_cmd}"));
         quickstart.push("- cargo run --release".to_string());
     }
+    if has_go {
+        quickstart.push("- go build ./...".to_string());
+    }
     if has_package_json {
-        quickstart.push("- npm install".to_string());
-        quickstart.push(format!(
-            "- npm run build && npm run dev -- --port {default_port}"
-        ));
+        quickstart.push(format!("- {npm_install_cmd}"));
+        if npm_has_build_script {
+            quickstart.push("- npm run build".to_string());
+        }
+        quickstart.push(format!("- {npm_run_cmd}"));
     }
     if quickstart.is_empty() {
         quickstart.push(
@@ -11224,16 +11316,28 @@ fn build_testing_instructions(repo_root: &Path) -> String {
     sections.push(format!("## Quickstart\n{}\n", quickstart.join("\n")));
 
     if has_cargo {
+        sections.push(format!(
+            "## Native build\n- {cargo_build_cmd}\n- Artifacts: `target/debug` (or `target/release` after `cargo build --release`).\n- Run: `cargo run --release`\n"
+        ));
+    }
+
+    if has_go {
         sections.push(
-            "## Native build\n- cargo build --locked\n- Artifacts: `target/debug` (or `target/release` after `cargo build --release`).\n- Run: `cargo run --release`\n"
+            "## Native build (Go)\n- go build ./...\n- If this is a service, run the project's entrypoint (Makefile/taskfile/etc) and confirm it starts.\n"
                 .to_string(),
         );
     }
 
     if has_package_json {
-        sections.push(format!(
-            "## Web/Node\n- npm install\n- npm run build\n- npm run dev -- --port {default_port}\n- Verify: `curl -i http://localhost:{default_port}` (adjust if your app uses a different port).\n"
+        let mut lines = vec![format!("## Web/Node\n- {npm_install_cmd}")];
+        if npm_has_build_script {
+            lines.push("- npm run build".to_string());
+        }
+        lines.push(format!("- {npm_run_cmd}"));
+        lines.push(format!(
+            "- Verify: `curl -i http://localhost:{default_port}` (adjust if your app uses a different port).\n"
         ));
+        sections.push(lines.join("\n"));
     }
 
     if has_dockerfile || has_compose {
@@ -11393,7 +11497,8 @@ async fn prepare_validation_targets(
         .collect();
     let has_dockerfile = repo_root.join("Dockerfile").exists();
 
-    let testing_path = output_root.join("specs").join("TESTING.md");
+    let specs_root = output_root.join("specs");
+    let testing_path = specs_root.join("TESTING.md");
     if compose_paths.is_empty() && !has_dockerfile {
         push_progress_log(
             &progress_sender,
@@ -11415,6 +11520,40 @@ async fn prepare_validation_targets(
         if !has_cargo && !has_package_json {
             additions.push("- Native build: no Docker config found. Build and run the project with its native build system (cargo/make/cmake/npm/etc) before attempting validation.".to_string());
         }
+        if tokio_fs::read_to_string(&testing_path)
+            .await
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            write_testing_instructions(
+                repo_root,
+                &specs_root,
+                progress_sender.clone(),
+                log_sink.clone(),
+            )
+            .await;
+        }
+        if !additions.is_empty() {
+            apply_validation_testing_md_additions(
+                &testing_path,
+                repo_root,
+                &additions,
+                &progress_sender,
+                &mut logs,
+            )
+            .await;
+        }
+
+        persist_validation_target_prep_progress(
+            output_root,
+            repo_root,
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+        )
+        .await;
+
         return ValidationTargetPrepOutcome {
             logs,
             testing_md_additions: additions,
@@ -11487,9 +11626,122 @@ async fn prepare_validation_targets(
         ));
     }
 
+    if tokio_fs::read_to_string(&testing_path)
+        .await
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
+        write_testing_instructions(
+            repo_root,
+            &specs_root,
+            progress_sender.clone(),
+            log_sink.clone(),
+        )
+        .await;
+    }
+    if !additions.is_empty() {
+        apply_validation_testing_md_additions(
+            &testing_path,
+            repo_root,
+            &additions,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+    }
+
+    persist_validation_target_prep_progress(
+        output_root,
+        repo_root,
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+    )
+    .await;
+
     ValidationTargetPrepOutcome {
         logs,
         testing_md_additions: additions,
+    }
+}
+
+async fn persist_validation_target_prep_progress(
+    output_root: &Path,
+    repo_root: &Path,
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    logs: &mut Vec<String>,
+) {
+    let progress_path = validation_target_prep_progress_path(output_root);
+    let progress = ValidationTargetPrepProgress {
+        version: 1,
+        repo_root: repo_root.display().to_string(),
+    };
+    let bytes = match serde_json::to_vec_pretty(&progress) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            push_progress_log(
+                progress_sender,
+                log_sink,
+                logs,
+                format!(
+                    "Validation target prep: failed to serialize progress file {}: {err}",
+                    progress_path.display()
+                ),
+            );
+            return;
+        }
+    };
+
+    if let Some(parent) = progress_path.parent()
+        && let Err(err) = tokio_fs::create_dir_all(parent).await
+    {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            format!(
+                "Validation target prep: failed to create progress directory {}: {err}",
+                parent.display()
+            ),
+        );
+        return;
+    }
+
+    let file_name = progress_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("validation_target_prep.json");
+    let tmp_path = progress_path.with_file_name(format!("{file_name}.tmp"));
+    let _ = tokio_fs::remove_file(&tmp_path).await;
+
+    if let Err(err) = tokio_fs::write(&tmp_path, bytes).await {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            format!(
+                "Validation target prep: failed to write progress file {}: {err}",
+                tmp_path.display()
+            ),
+        );
+        return;
+    }
+
+    if let Err(err) = tokio_fs::rename(&tmp_path, &progress_path).await {
+        let _ = tokio_fs::remove_file(&progress_path).await;
+        if let Err(second_err) = tokio_fs::rename(&tmp_path, &progress_path).await {
+            push_progress_log(
+                progress_sender,
+                log_sink,
+                logs,
+                format!(
+                    "Validation target prep: failed to replace progress file {}: {err}; retry failed: {second_err}",
+                    progress_path.display()
+                ),
+            );
+        }
     }
 }
 
@@ -20255,20 +20507,6 @@ async fn run_asan_validation(
         }
     }
 
-    apply_validation_testing_md_additions(
-        &testing_path,
-        &repo_path,
-        &testing_md_additions,
-        &progress_sender,
-        &mut logs,
-    )
-    .await;
-    let updated_testing_md = tokio_fs::read_to_string(&testing_path)
-        .await
-        .unwrap_or_default();
-    testing_md_context =
-        trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
-
     let planned_snapshot = snapshot.clone();
     let requested_ids: Vec<BugIdentifier> = requests.iter().map(|req| req.id).collect();
 
@@ -20540,6 +20778,20 @@ async fn run_asan_validation(
             let _ = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await;
             return Ok(());
         }
+
+        apply_validation_testing_md_additions(
+            &testing_path,
+            &repo_path,
+            &testing_md_additions,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+        let updated_testing_md = tokio_fs::read_to_string(&testing_path)
+            .await
+            .unwrap_or_default();
+        testing_md_context =
+            trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
         if let Some(tx) = progress_sender.as_ref() {
             tx.send(AppEvent::SecurityReviewLog(
