@@ -11,6 +11,7 @@ Use /init to create an AGENTS.md with project-specific guidance.
 Use /mcp to list configured MCP tools.
 You can run any shell command from Codex using `!` (e.g. `!ls`)
 Type / to open the command popup; Tab autocompletes slash commands and saved prompts.
+Use /review <instructions> to run a focused review (e.g. `/review check error handling`).
 You can define your own `/` commands with custom prompts. More info: https://developers.openai.com/codex/guides/slash-commands#create-your-own-slash-commands-with-custom-prompts
 When the composer is empty, press Esc to step back and edit your last message; Enter confirms.
 Press Tab to queue a message instead of sending it immediately; Enter always sends immediately.
