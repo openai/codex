@@ -1268,6 +1268,13 @@ pub(crate) struct FileSnippet {
     bytes: usize,
 }
 
+fn dedupe_file_snippets(snippets: &mut Vec<FileSnippet>) -> usize {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let original = snippets.len();
+    snippets.retain(|snippet| seen.insert(snippet.relative_path.clone()));
+    original.saturating_sub(snippets.len())
+}
+
 struct FileCollectionResult {
     snippets: Vec<FileSnippet>,
     logs: Vec<String>,
@@ -4663,6 +4670,53 @@ pub async fn run_security_review(
                 );
             }
         }
+        if refined_dirs.is_empty()
+            && checkpoint.triaged_dirs.is_none()
+            && let Some(spec) = checkpoint.spec.as_ref()
+        {
+            let mut seeded_dirs: Vec<PathBuf> = spec
+                .locations
+                .iter()
+                .filter_map(|loc| {
+                    let trimmed = loc.trim();
+                    if trimmed.is_empty() {
+                        return None;
+                    }
+                    if trimmed == "." {
+                        return Some(PathBuf::from("."));
+                    }
+                    let mut path = PathBuf::from(trimmed);
+                    if path.is_absolute() {
+                        path = path.strip_prefix(&repo_path).ok()?.to_path_buf();
+                    }
+                    let mut components = path.components();
+                    match components.next() {
+                        Some(std::path::Component::Normal(part)) => Some(PathBuf::from(part)),
+                        _ => Some(PathBuf::from(".")),
+                    }
+                })
+                .filter(|dir| !path_has_excluded_dir_component(dir))
+                .collect();
+            seeded_dirs.sort();
+            seeded_dirs.dedup();
+            if !seeded_dirs.is_empty() {
+                let count = seeded_dirs.len();
+                refined_dirs = seeded_dirs;
+                record(
+                    &mut logs,
+                    format!("Seeding directory triage with {count} spec location(s)."),
+                );
+                checkpoint.triaged_dirs = Some(
+                    refined_dirs
+                        .iter()
+                        .map(|dir| dir.to_string_lossy().to_string())
+                        .collect(),
+                );
+                plan_tracker.mark_complete(SecurityReviewPlanStep::DirTriage);
+                checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+                persist_checkpoint(&mut checkpoint, &mut logs);
+            }
+        }
 
         if refined_dirs.is_empty() {
             if !matches!(
@@ -4722,15 +4776,18 @@ pub async fn run_security_review(
                         for line in &err.logs {
                             record(&mut logs, line.clone());
                         }
+                        let total = dir_candidates.len();
+                        let kept = total.min(SPEC_DIR_FILTER_TARGET.max(1));
                         record(
                             &mut logs,
                             format!(
-                                "Directory triage failed; using all directories. {}",
+                                "Directory triage failed; using top {kept}/{total} directories by size. {}",
                                 err.message
                             ),
                         );
                         refined_dirs = dir_candidates
                             .iter()
+                            .take(kept)
                             .map(|(path, _)| path.clone())
                             .collect();
                     }
@@ -4870,6 +4927,15 @@ pub async fn run_security_review(
         }
 
         selected_snippets = Some(triage.included);
+        if let Some(snippets) = selected_snippets.as_mut() {
+            let removed = dedupe_file_snippets(snippets);
+            if removed > 0 {
+                record(
+                    &mut logs,
+                    format!("Removed {removed} duplicate file(s) from triaged selection."),
+                );
+            }
+        }
         checkpoint.selected_snippets = selected_snippets.clone();
         persist_checkpoint(&mut checkpoint, &mut logs);
 
@@ -4880,6 +4946,18 @@ pub async fn run_security_review(
         checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
         persist_checkpoint(&mut checkpoint, &mut logs);
     } else {
+        let removed = selected_snippets
+            .as_mut()
+            .map(dedupe_file_snippets)
+            .unwrap_or(0);
+        if removed > 0 {
+            record(
+                &mut logs,
+                format!("Removed {removed} duplicate file(s) from checkpoint selection."),
+            );
+            checkpoint.selected_snippets = selected_snippets.clone();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        }
         let count = selected_snippets
             .as_ref()
             .map(std::vec::Vec::len)
@@ -6561,22 +6639,14 @@ pub async fn run_security_review(
     })
 }
 
-fn render_checklist_markdown(statuses: &HashMap<String, StepStatus>) -> String {
+fn render_checklist_markdown(
+    mode: SecurityReviewMode,
+    statuses: &HashMap<String, StepStatus>,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
-    let order = [
-        ("generate_specs", "Generate system specifications"),
-        ("threat_model", "Draft threat model"),
-        ("analyze_bugs", "Analyze code for bugs"),
-        ("polish_findings", "Polish, dedupe, and rerank findings"),
-        (
-            "prepare_validation_targets",
-            "Prepare runnable validation targets",
-        ),
-        ("validate_findings", "Validate findings"),
-        ("post_validation_refine", "Post-validation PoC refinement"),
-        ("assemble_report", "Assemble report and artifacts"),
-    ];
-    for (slug, title) in order {
+    for step in plan_steps_for_mode(mode) {
+        let slug = plan_step_slug(step.kind);
+        let title = step.title;
         let status = statuses.get(slug);
         let line = match status {
             Some(StepStatus::Completed) => format!("- [x] ~~{title}~~"),
@@ -6740,7 +6810,7 @@ fn build_linear_init_prompt(
     } else {
         scope_display_paths.join(", ")
     };
-    let checklist = render_checklist_markdown(statuses);
+    let checklist = render_checklist_markdown(mode, statuses);
     let scope_file_text = scope_file_path
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "(not generated)".to_string());
@@ -6778,7 +6848,7 @@ fn build_linear_progress_prompt(
     checkpoint: &SecurityReviewCheckpoint,
     output_root: &Path,
 ) -> String {
-    let checklist = render_checklist_markdown(statuses);
+    let checklist = render_checklist_markdown(checkpoint.mode, statuses);
     let mut artifacts: Vec<String> = Vec::new();
     if let Some(path) = checkpoint.classification_table_path.as_ref() {
         artifacts.push(format!("classification_table: {}", path.display()));
@@ -6840,7 +6910,7 @@ fn build_linear_finalize_prompt(
     revision_summary: &str,
     trufflehog_path: Option<&Path>,
 ) -> String {
-    let checklist = render_checklist_markdown(statuses);
+    let checklist = render_checklist_markdown(checkpoint.mode, statuses);
     let scope_paths_text = if checkpoint.scope_display_paths.is_empty() {
         "entire repository".to_string()
     } else {
@@ -7961,7 +8031,6 @@ async fn generate_specs(
             logs.push(message);
             heuristically_filtered
         } else {
-            used_llm_filter = true;
             match filter_spec_directories(
                 client,
                 provider,
@@ -7974,7 +8043,10 @@ async fn generate_specs(
             )
             .await
             {
-                Ok(result) => result,
+                Ok(result) => {
+                    used_llm_filter = true;
+                    result
+                }
                 Err(err) => {
                     if let Some(tx) = progress_sender.as_ref() {
                         for line in &err.logs {
@@ -7982,15 +8054,17 @@ async fn generate_specs(
                         }
                     }
                     logs.extend(err.logs);
+                    let kept = heuristically_filtered.len();
+                    let total = directory_candidates.len();
                     let message = format!(
-                        "Directory filter failed; using all directories. {}",
+                        "Directory filter failed; using {kept}/{total} heuristic-filtered directories. {}",
                         err.message
                     );
                     if let Some(tx) = progress_sender.as_ref() {
                         tx.send(AppEvent::SecurityReviewLog(message.clone()));
                     }
                     logs.push(message);
-                    directory_candidates.clone()
+                    heuristically_filtered
                 }
             }
         }
@@ -16424,6 +16498,7 @@ struct CollectionState {
     repo_path: PathBuf,
     snippets: Vec<FileSnippet>,
     seen_dirs: HashSet<PathBuf>,
+    seen_files: HashSet<PathBuf>,
     max_files: usize,
     max_bytes_per_file: usize,
     max_total_bytes: usize,
@@ -16447,6 +16522,7 @@ impl CollectionState {
             repo_path,
             snippets: Vec::new(),
             seen_dirs: HashSet::new(),
+            seen_files: HashSet::new(),
             max_files,
             max_bytes_per_file,
             max_total_bytes,
@@ -16542,6 +16618,14 @@ impl CollectionState {
             return Ok(());
         }
 
+        let relative_path = path
+            .strip_prefix(&self.repo_path)
+            .unwrap_or(path)
+            .to_path_buf();
+        if !self.seen_files.insert(relative_path.clone()) {
+            return Ok(());
+        }
+
         let mut file =
             fs::File::open(path).map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
         let mut buffer = Vec::new();
@@ -16568,11 +16652,6 @@ impl CollectionState {
             ));
             return Ok(());
         }
-
-        let relative_path = path
-            .strip_prefix(&self.repo_path)
-            .unwrap_or(path)
-            .to_path_buf();
 
         self.snippets.push(FileSnippet {
             relative_path,
@@ -16721,9 +16800,10 @@ fn model_id_for_context_window(model: &str) -> &str {
 fn bug_file_context_max_chars_for_model(model: &str, config: &Config) -> usize {
     let model = model_id_for_context_window(model);
 
-    let context_window = config
-        .model_context_window
-        .or_else(|| infer_default_context_window_tokens(model));
+    // Prefer per-model inference over config-wide overrides, since security review runs multiple
+    // models (triage/spec/bug/validation). `Config::model_context_window` may reflect a different
+    // model than the one used for bug analysis.
+    let context_window = infer_default_context_window_tokens(model).or(config.model_context_window);
 
     let Some(context_window) = context_window else {
         return BUG_FILE_CONTEXT_FALLBACK_MAX_CHARS;
@@ -19353,11 +19433,6 @@ async fn run_validation_plan_agent(
     validation_config.developer_instructions = None;
     validation_config.compact_prompt = None;
     validation_config.cwd = repo_root.to_path_buf();
-    validation_config
-        .features
-        .disable(Feature::ApplyPatchFreeform)
-        .disable(Feature::ViewImageTool);
-    validation_config.mcp_servers.clear();
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -19530,11 +19605,6 @@ async fn run_validation_refine_agent(
     refine_config.developer_instructions = None;
     refine_config.compact_prompt = None;
     refine_config.cwd = repo_root.to_path_buf();
-    refine_config
-        .features
-        .disable(Feature::ApplyPatchFreeform)
-        .disable(Feature::ViewImageTool);
-    refine_config.mcp_servers.clear();
 
     let manager = ConversationManager::new(
         auth_manager,
