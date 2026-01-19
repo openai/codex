@@ -276,17 +276,31 @@ impl ChatComposer {
     }
 
     fn handle_vi_insert_popup_esc(&mut self, key_event: KeyEvent) -> bool {
-        if self.vi_mode_enabled
+        if !(self.vi_mode_enabled
             && !self.allow_codex_esc_behavior()
-            && key_event.code == KeyCode::Esc
+            && key_event.code == KeyCode::Esc)
         {
-            // In vi insert mode, `Esc` must always reach the textarea so it can switch to normal
-            // mode, even when a popup is visible.
-            self.textarea.input(key_event);
-            return true;
+            return false;
         }
 
-        false
+        // Preserve popup dismissal semantics (avoid immediate reopen) while still ensuring `Esc`
+        // reaches the textarea to switch to vi normal mode.
+        match &self.active_popup {
+            ActivePopup::File(_) => {
+                if let Some(tok) = Self::current_at_token(&self.textarea) {
+                    self.dismissed_file_popup_token = Some(tok);
+                }
+            }
+            ActivePopup::Skill(_) => {
+                if let Some(tok) = self.current_skill_token() {
+                    self.dismissed_skill_popup_token = Some(tok);
+                }
+            }
+            ActivePopup::Command(_) | ActivePopup::None => {}
+        }
+
+        self.textarea.input(key_event);
+        true
     }
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -4113,6 +4127,106 @@ mod tests {
             Some(ViModeIndicator::Normal)
         );
         assert!(!composer.popup_active());
+    }
+
+    #[test]
+    fn vi_esc_from_file_popup_exits_insert_and_dismisses_until_text_changes() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_vi_mode_enabled(true);
+        composer.set_text_content("@foo".to_string());
+
+        assert!(composer.popup_active());
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Insert)
+        );
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        let dismissed = composer
+            .dismissed_file_popup_token
+            .clone()
+            .expect("dismissed token");
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Normal)
+        );
+        assert!(!composer.popup_active());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Insert)
+        );
+        assert!(!composer.popup_active());
+        assert_eq!(
+            composer.dismissed_file_popup_token.as_ref(),
+            Some(&dismissed)
+        );
+    }
+
+    #[test]
+    fn vi_esc_from_skill_popup_exits_insert_and_dismisses_until_text_changes() {
+        use codex_protocol::protocol::SkillScope;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "foo".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            path: PathBuf::from("/tmp/skill_foo"),
+            scope: SkillScope::User,
+        }]));
+        composer.set_vi_mode_enabled(true);
+        composer.set_text_content("$foo".to_string());
+
+        assert!(composer.popup_active());
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Insert)
+        );
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        let dismissed = composer
+            .dismissed_skill_popup_token
+            .clone()
+            .expect("dismissed token");
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Normal)
+        );
+        assert!(!composer.popup_active());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Insert)
+        );
+        assert!(!composer.popup_active());
+        assert_eq!(
+            composer.dismissed_skill_popup_token.as_ref(),
+            Some(&dismissed)
+        );
     }
 
     #[test]
