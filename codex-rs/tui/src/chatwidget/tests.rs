@@ -457,7 +457,6 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
     loop {
         match op_rx.try_recv() {
             Ok(op @ Op::UserTurn { .. }) => return op,
-            Ok(op @ Op::UserInput { .. }) => return op,
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),

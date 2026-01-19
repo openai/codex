@@ -2343,20 +2343,25 @@ impl ChatWidget {
             }
         }
 
-        // TODO(aibrahim): migrate the TUI to submit `Op::UserTurn` by default (and rely less on
-        // `Op::UserInput`) so session-level settings like collaboration mode are consistently
-        // applied.
-        let op = if self.collaboration_modes_enabled() {
-            let model = self
-                .current_model()
-                .unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
-                .to_string();
-            let collaboration_mode = collaboration_modes::resolve_mode_or_fallback(
-                self.models_manager.as_ref(),
-                self.collaboration_mode,
-                model.as_str(),
-                self.config.model_reasoning_effort,
-            );
+        // Prefer `Op::UserTurn` so the UI is the source of truth for turn context
+        // (cwd/approval/sandbox/model/etc.), rather than depending on session-level
+        // state tracking for `Op::UserInput`.
+        //
+        // If we don't yet know the model, fall back to `Op::UserInput` to avoid
+        // sending a placeholder model string.
+        let model = self
+            .current_model()
+            .or(self.config.model.as_deref())
+            .map(str::to_string);
+        let op = if let Some(model) = model {
+            let collaboration_mode = self.collaboration_modes_enabled().then(|| {
+                collaboration_modes::resolve_mode_or_fallback(
+                    self.models_manager.as_ref(),
+                    self.collaboration_mode,
+                    model.as_str(),
+                    self.config.model_reasoning_effort,
+                )
+            });
             Op::UserTurn {
                 items,
                 cwd: self.config.cwd.clone(),
@@ -2366,13 +2371,10 @@ impl ChatWidget {
                 effort: self.config.model_reasoning_effort,
                 summary: self.config.model_reasoning_summary,
                 final_output_json_schema: None,
-                collaboration_mode: Some(collaboration_mode),
+                collaboration_mode,
             }
         } else {
-            Op::UserInput {
-                items,
-                final_output_json_schema: None,
-            }
+            Self::legacy_user_input_op(items)
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
@@ -4034,6 +4036,14 @@ impl ChatWidget {
 
     fn current_model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    #[allow(deprecated)]
+    fn legacy_user_input_op(items: Vec<UserInput>) -> Op {
+        Op::UserInput {
+            items,
+            final_output_json_schema: None,
+        }
     }
 
     fn collaboration_modes_enabled(&self) -> bool {

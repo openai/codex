@@ -99,6 +99,7 @@ pub(crate) async fn run_codex_thread_interactive(
 ///
 /// Internally calls the interactive variant, then immediately submits the provided input.
 #[allow(clippy::too_many_arguments)]
+#[allow(deprecated)]
 pub(crate) async fn run_codex_thread_one_shot(
     config: Config,
     auth_manager: Arc<AuthManager>,

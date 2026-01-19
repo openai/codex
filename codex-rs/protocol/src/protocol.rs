@@ -84,6 +84,9 @@ pub enum Op {
     Interrupt,
 
     /// Input from the user
+    #[deprecated(
+        note = "Deprecated: prefer Op::UserTurn so the caller provides full turn context (cwd/approval/sandbox/model/etc.) for each turn"
+    )]
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -2314,6 +2317,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
         let op = Op::UserInput {
             items: Vec::new(),
@@ -2327,6 +2331,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn user_input_deserializes_without_final_output_json_schema_field() -> Result<()> {
         let op: Op = serde_json::from_value(json!({ "type": "user_input", "items": [] }))?;
 
@@ -2342,6 +2347,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn user_input_serialization_includes_final_output_json_schema_when_some() -> Result<()> {
         let schema = json!({
             "type": "object",
