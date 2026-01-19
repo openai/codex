@@ -414,7 +414,8 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     let rmcp_test_server_bin = stdio_server_bin()?;
 
     let mut builder = test_codex().with_config(move |config| {
-        config.mcp_servers.insert(
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
             server_name.to_string(),
             codex_core::config::types::McpServerConfig {
                 transport: codex_core::config::types::McpServerTransportConfig::Stdio {
@@ -425,12 +426,17 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
             },
         );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
         config.tool_output_token_limit = Some(500);
     });
     let fixture = builder.build(&server).await?;
@@ -497,7 +503,8 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     let openai_png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ee9bQAAAABJRU5ErkJggg==";
 
     let mut builder = test_codex().with_config(move |config| {
-        config.mcp_servers.insert(
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
             server_name.to_string(),
             McpServerConfig {
                 transport: McpServerTransportConfig::Stdio {
@@ -511,12 +518,17 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
             },
         );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
     });
     let fixture = builder.build(&server).await?;
     let session_model = fixture.session_configured.model.clone();
@@ -526,6 +538,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "call the rmcp image tool".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
@@ -534,6 +547,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -754,7 +768,8 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
 
     let mut builder = test_codex().with_config(move |config| {
         config.tool_output_token_limit = Some(50_000);
-        config.mcp_servers.insert(
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
             server_name.to_string(),
             codex_core::config::types::McpServerConfig {
                 transport: codex_core::config::types::McpServerTransportConfig::Stdio {
@@ -765,12 +780,17 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
             },
         );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
     });
     let fixture = builder.build(&server).await?;
 

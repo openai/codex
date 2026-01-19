@@ -25,7 +25,6 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
-use crate::shimmer::shimmer_spans;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
@@ -470,98 +469,6 @@ pub(crate) fn new_unified_exec_interaction(
 }
 
 #[derive(Debug)]
-// Live-only wait cell that shimmers while we poll; flushes into a static entry later.
-pub(crate) struct UnifiedExecWaitCell {
-    command_display: Option<String>,
-    animations_enabled: bool,
-    start_time: Instant,
-}
-
-impl UnifiedExecWaitCell {
-    pub(crate) fn new(command_display: Option<String>, animations_enabled: bool) -> Self {
-        Self {
-            command_display: command_display.filter(|display| !display.is_empty()),
-            animations_enabled,
-            start_time: Instant::now(),
-        }
-    }
-
-    pub(crate) fn matches(&self, command_display: Option<&str>) -> bool {
-        let command_display = command_display.filter(|display| !display.is_empty());
-        match (self.command_display.as_deref(), command_display) {
-            (Some(current), Some(incoming)) => current == incoming,
-            _ => true,
-        }
-    }
-
-    /// Update the command display once.
-    ///
-    /// Unified exec can start without a stable command string, and later correlate a process id to
-    /// a user-facing `command_display`. This method records that first non-empty command display and
-    /// returns whether it changed the cell; callers use the `true` case to invalidate any cached
-    /// transcript rendering (for example, the transcript overlay live tail).
-    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) -> bool {
-        let command_display = command_display.filter(|display| !display.is_empty());
-        if self.command_display.is_some() || command_display.is_none() {
-            return false;
-        }
-        self.command_display = command_display;
-        true
-    }
-
-    pub(crate) fn command_display(&self) -> Option<String> {
-        self.command_display.clone()
-    }
-}
-
-impl HistoryCell for UnifiedExecWaitCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if width == 0 {
-            return Vec::new();
-        }
-        let wrap_width = width as usize;
-
-        let mut header_spans = vec!["• ".dim()];
-        if self.animations_enabled {
-            header_spans.extend(shimmer_spans("Waiting for background terminal"));
-        } else {
-            header_spans.push("Waiting for background terminal".bold());
-        }
-        if let Some(command) = &self.command_display
-            && !command.is_empty()
-        {
-            header_spans.push(" · ".dim());
-            header_spans.push(command.clone().dim());
-        }
-        let header = Line::from(header_spans);
-
-        let mut out: Vec<Line<'static>> = Vec::new();
-        let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
-        push_owned_lines(&header_wrapped, &mut out);
-        out
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.display_lines(width).len() as u16
-    }
-
-    fn transcript_animation_tick(&self) -> Option<u64> {
-        if !self.animations_enabled {
-            return None;
-        }
-        // Match `App`'s frame scheduling cadence for transcript overlay live-tail animation.
-        Some((self.start_time.elapsed().as_millis() / 50) as u64)
-    }
-}
-
-pub(crate) fn new_unified_exec_wait_live(
-    command_display: Option<String>,
-    animations_enabled: bool,
-) -> UnifiedExecWaitCell {
-    UnifiedExecWaitCell::new(command_display, animations_enabled)
-}
-
-#[derive(Debug)]
 struct UnifiedExecProcessesCell {
     processes: Vec<String>,
 }
@@ -984,16 +891,33 @@ pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
 }
 
 #[derive(Debug)]
-struct SessionHeaderHistoryCell {
+pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
     model: String,
+    model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
 }
 
 impl SessionHeaderHistoryCell {
-    fn new(
+    pub(crate) fn new(
         model: String,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+        directory: PathBuf,
+        version: &'static str,
+    ) -> Self {
+        Self::new_with_style(
+            model,
+            Style::default(),
+            reasoning_effort,
+            directory,
+            version,
+        )
+    }
+
+    pub(crate) fn new_with_style(
+        model: String,
+        model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
@@ -1001,6 +925,7 @@ impl SessionHeaderHistoryCell {
         Self {
             version,
             model,
+            model_style,
             reasoning_effort,
             directory,
         }
@@ -1073,7 +998,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let reasoning_label = self.reasoning_label();
         let mut model_spans: Vec<Span<'static>> = vec![
             Span::from(format!("{model_label} ")).dim(),
-            Span::from(self.model.clone()),
+            Span::styled(self.model.clone(), self.model_style),
         ];
         if let Some(reasoning) = reasoning_label {
             model_spans.push(Span::from(" "));
@@ -1406,7 +1331,8 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
+            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
+                .underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
@@ -1433,7 +1359,6 @@ pub(crate) fn new_mcp_tools_output(
     if tools.is_empty() {
         lines.push("  • No MCP tools available.".italic().into());
         lines.push("".into());
-        return PlainHistoryCell { lines };
     }
 
     let mut servers: Vec<_> = config.mcp_servers.iter().collect();
@@ -1457,6 +1382,9 @@ pub(crate) fn new_mcp_tools_output(
             header.push(" ".into());
             header.push("(disabled)".red());
             lines.push(header.into());
+            if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
+                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
+            }
             lines.push(Line::from(""));
             continue;
         }
@@ -1739,10 +1667,16 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 }
 
 #[derive(Debug)]
+/// A visual divider between turns, optionally showing how long the assistant "worked for".
+///
+/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
+/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
+/// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
 }
 impl FinalMessageSeparator {
+    /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
     pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
         Self { elapsed_seconds }
     }
@@ -1863,13 +1797,6 @@ mod tests {
     }
 
     #[test]
-    fn unified_exec_wait_cell_renders_wait() {
-        let cell = new_unified_exec_wait_live(None, false);
-        let lines = render_transcript(&cell);
-        assert_eq!(lines, vec!["• Waiting for background terminal"],);
-    }
-
-    #[test]
     fn ps_output_empty_snapshot() {
         let cell = new_unified_exec_processes_output(Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
@@ -1918,12 +1845,14 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("docs".to_string(), stdio_config);
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert("docs".to_string(), stdio_config);
 
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer secret".to_string());
@@ -1937,12 +1866,17 @@ mod tests {
                 env_http_headers: Some(env_headers),
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("http".to_string(), http_config);
+        servers.insert("http".to_string(), http_config);
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
 
         let mut tools: HashMap<String, Tool> = HashMap::new();
         tools.insert(

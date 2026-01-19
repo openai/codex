@@ -2,6 +2,7 @@ use crate::metrics::MetricsClient;
 use crate::metrics::error::Result;
 use std::time::Instant;
 
+#[derive(Debug)]
 pub struct Timer {
     name: String,
     tags: Vec<(String, String)>,

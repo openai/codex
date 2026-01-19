@@ -37,7 +37,6 @@ pub(crate) enum TaskKind {
     Compact,
 }
 
-#[derive(Clone)]
 pub(crate) struct RunningTask {
     pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
@@ -45,6 +44,8 @@ pub(crate) struct RunningTask {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) handle: Arc<AbortOnDropHandle<()>>,
     pub(crate) turn_context: Arc<TurnContext>,
+    // Timer recorded when the task drops to capture the full turn duration.
+    pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
 impl ActiveTurn {
@@ -103,6 +104,10 @@ impl TurnState {
             std::mem::swap(&mut ret, &mut self.pending_input);
             ret
         }
+    }
+
+    pub(crate) fn has_pending_input(&self) -> bool {
+        !self.pending_input.is_empty()
     }
 }
 

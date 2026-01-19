@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -85,14 +86,16 @@ async fn start_review_conversation(
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
-    sub_agent_config
-        .features
-        .disable(crate::features::Feature::WebSearchRequest);
+    sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
 
-    sub_agent_config.model = Some(config.review_model.clone());
+    let model = config
+        .review_model
+        .clone()
+        .unwrap_or_else(|| ctx.client.get_model());
+    sub_agent_config.model = Some(model);
     (run_codex_thread_one_shot(
         sub_agent_config,
         session.auth_manager(),
@@ -187,8 +190,8 @@ pub(crate) async fn exit_review_mode(
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
 ) {
-    const REVIEW_USER_MESSAGE_ID: &str = "review:rollout:user";
-    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review:rollout:assistant";
+    const REVIEW_USER_MESSAGE_ID: &str = "review_rollout_user";
+    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review_rollout_assistant";
     let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
         let mut findings_str = String::new();
         let text = out.overall_explanation.trim();

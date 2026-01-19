@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
@@ -11,16 +12,18 @@ use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Prompt as ApiPrompt;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
+use codex_api::ResponseAppendWsRequest;
+use codex_api::ResponseCreateWsRequest;
 use codex_api::ResponseStream as ApiResponseStream;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
-use codex_api::ResponsesRequest;
-use codex_api::ResponsesRequestBuilder;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
+use codex_api::build_conversation_headers;
 use codex_api::common::Reasoning;
+use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
@@ -29,6 +32,7 @@ use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -62,6 +66,9 @@ use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
+pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
+pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+
 #[derive(Debug)]
 struct ModelClientState {
     config: Arc<Config>,
@@ -83,6 +90,18 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     state: Arc<ModelClientState>,
     connection: Option<ApiWebSocketConnection>,
+    websocket_last_items: Vec<ResponseItem>,
+    /// Turn state for sticky routing.
+    ///
+    /// This is an `OnceLock` that stores the turn state value received from the server
+    /// on turn start via the `x-codex-turn-state` response header. Once set, this value
+    /// should be sent back to the server in the `x-codex-turn-state` request header for
+    /// all subsequent requests within the same turn to maintain sticky routing.
+    ///
+    /// This is a contract between the client and server: we receive it at turn start,
+    /// keep sending it unchanged between turn requests (e.g., for retries, incremental
+    /// appends, or continuation requests), and must not send it between different turns.
+    turn_state: Arc<OnceLock<String>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -117,6 +136,8 @@ impl ModelClient {
         ModelClientSession {
             state: Arc::clone(&self.state),
             connection: None,
+            websocket_last_items: Vec::new(),
+            turn_state: Arc::new(OnceLock::new()),
         }
     }
 }
@@ -219,7 +240,6 @@ impl ModelClient {
                 extra_headers.insert("x-openai-subagent", val);
             }
         }
-
         client
             .compact_input(&payload, extra_headers)
             .await
@@ -315,54 +335,71 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: beta_feature_headers(&self.state.config),
+            extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
             compression,
+            turn_state: Some(Arc::clone(&self.turn_state)),
         }
     }
 
-    fn build_responses_websocket_request(
+    fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
+        // Checks whether the current request input is an incremental append to the previous request.
+        // If items in the new request contain all the items from the previous request we build
+        // a response.append request otherwise we start with a fresh response.create request.
+        let previous_len = self.websocket_last_items.len();
+        let can_append = previous_len > 0
+            && input_items.starts_with(&self.websocket_last_items)
+            && previous_len < input_items.len();
+        if can_append {
+            Some(input_items[previous_len..].to_vec())
+        } else {
+            None
+        }
+    }
+
+    fn prepare_websocket_request(
         &self,
-        api_provider: &codex_api::Provider,
         api_prompt: &ApiPrompt,
-        options: ApiResponsesOptions,
-    ) -> Result<ResponsesRequest> {
+        options: &ApiResponsesOptions,
+    ) -> ResponsesWsRequest {
+        if let Some(append_items) = self.get_incremental_items(&api_prompt.input) {
+            return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
+                input: append_items,
+            });
+        }
+
         let ApiResponsesOptions {
             reasoning,
             include,
             prompt_cache_key,
             text,
             store_override,
-            conversation_id,
-            session_source,
-            extra_headers,
-            compression,
+            ..
         } = options;
 
-        ResponsesRequestBuilder::new(
-            &self.state.model_info.slug,
-            &api_prompt.instructions,
-            &api_prompt.input,
-        )
-        .tools(&api_prompt.tools)
-        .parallel_tool_calls(api_prompt.parallel_tool_calls)
-        .reasoning(reasoning)
-        .include(include)
-        .prompt_cache_key(prompt_cache_key)
-        .text(text)
-        .conversation(conversation_id)
-        .session_source(session_source)
-        .store_override(store_override)
-        .extra_headers(extra_headers)
-        .compression(compression)
-        .build(api_provider)
-        .map_err(map_api_error)
+        let store = store_override.unwrap_or(false);
+        let payload = ResponseCreateWsRequest {
+            model: self.state.model_info.slug.clone(),
+            instructions: api_prompt.instructions.clone(),
+            input: api_prompt.input.clone(),
+            tools: api_prompt.tools.clone(),
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: api_prompt.parallel_tool_calls,
+            reasoning: reasoning.clone(),
+            store,
+            stream: true,
+            include: include.clone(),
+            prompt_cache_key: prompt_cache_key.clone(),
+            text: text.clone(),
+        };
+
+        ResponsesWsRequest::ResponseCreate(payload)
     }
 
     async fn websocket_connection(
         &mut self,
         api_provider: codex_api::Provider,
         api_auth: CoreAuthProvider,
-        headers: ApiHeaderMap,
+        options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         let needs_new = match self.connection.as_ref() {
             Some(conn) => conn.is_closed().await,
@@ -370,9 +407,12 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            let new_conn = ApiWebSocketResponsesClient::new(api_provider, api_auth)
-                .connect(headers)
-                .await?;
+            let mut headers = options.extra_headers.clone();
+            headers.extend(build_conversation_headers(options.conversation_id.clone()));
+            let new_conn: ApiWebSocketConnection =
+                ApiWebSocketResponsesClient::new(api_provider, api_auth)
+                    .connect(headers, options.turn_state.clone())
+                    .await?;
             self.connection = Some(new_conn);
         }
 
@@ -533,15 +573,10 @@ impl ModelClientSession {
             let compression = self.responses_request_compression(auth.as_ref());
 
             let options = self.build_responses_options(prompt, compression);
-            let request =
-                self.build_responses_websocket_request(&api_provider, &api_prompt, options)?;
+            let request = self.prepare_websocket_request(&api_prompt, &options);
 
             let connection = match self
-                .websocket_connection(
-                    api_provider.clone(),
-                    api_auth.clone(),
-                    request.headers.clone(),
-                )
+                .websocket_connection(api_provider.clone(), api_auth.clone(), &options)
                 .await
             {
                 Ok(connection) => connection,
@@ -558,6 +593,7 @@ impl ModelClientSession {
                 .stream_request(request)
                 .await
                 .map_err(map_api_error)?;
+            self.websocket_last_items = api_prompt.input.clone();
 
             return Ok(map_response_stream(
                 stream_result,
@@ -612,6 +648,30 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
         && let Ok(header_value) = HeaderValue::from_str(value.as_str())
     {
         headers.insert("x-codex-beta-features", header_value);
+    }
+    headers
+}
+
+fn build_responses_headers(
+    config: &Config,
+    turn_state: Option<&Arc<OnceLock<String>>>,
+) -> ApiHeaderMap {
+    let mut headers = beta_feature_headers(config);
+    headers.insert(
+        WEB_SEARCH_ELIGIBLE_HEADER,
+        HeaderValue::from_static(
+            if matches!(config.web_search_mode, Some(WebSearchMode::Disabled)) {
+                "false"
+            } else {
+                "true"
+            },
+        ),
+    );
+    if let Some(turn_state) = turn_state
+        && let Some(state) = turn_state.get()
+        && let Ok(header_value) = HeaderValue::from_str(state)
+    {
+        headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
     }
     headers
 }
