@@ -286,6 +286,10 @@ async fn oversized_user_message_is_written_to_user_message_dir() -> Result<()> {
     let saved = fs::read_to_string(path).context("read saved user message")?;
     assert_eq!(saved, large_message);
     fs::remove_file(path).context("cleanup saved user message")?;
+    assert!(
+        !user_texts.iter().any(|text| text == &large_message),
+        "expected large user message to be removed from request"
+    );
 
     Ok(())
 }

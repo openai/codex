@@ -1572,7 +1572,12 @@ impl Session {
     }
 
     pub(crate) async fn codex_home(&self) -> PathBuf {
-        self.state.lock().await.session_configuration.codex_home().clone()
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .codex_home()
+            .clone()
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {

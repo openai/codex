@@ -122,16 +122,16 @@ fn stores_oversized_user_message_in_user_message_dir() {
     let path = placeholder
         .split("saved to ")
         .nth(1)
-        .and_then(|tail| tail.strip_suffix('.'))
+        .and_then(|tail| tail.split(" (").next())
         .expect("capture temp path");
     let path = PathBuf::from(path);
 
     assert!(
-        content.iter().any(|item| matches!(
+        !content.iter().any(|item| matches!(
             item,
             ContentItem::InputText { text } if text == &original
         )),
-        "original user text should remain in the message content"
+        "original user text should not remain in the message content"
     );
 
     assert!(
@@ -142,6 +142,78 @@ fn stores_oversized_user_message_in_user_message_dir() {
 
     let file_contents = fs::read_to_string(&path).expect("read temp file");
     assert_eq!(file_contents, original);
+
+    fs::remove_file(path).expect("cleanup temp file");
+}
+
+#[test]
+fn offloads_each_user_input_item_independently() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let codex_home = temp_dir.path().to_path_buf();
+    let mut history = ContextManager::new(&codex_home);
+    history.set_token_info(Some(TokenUsageInfo {
+        total_token_usage: TokenUsage::default(),
+        last_token_usage: TokenUsage::default(),
+        model_context_window: Some(10),
+    }));
+
+    let small = "hi";
+    let large = "x".repeat(80);
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: small.to_string(),
+            },
+            ContentItem::InputText {
+                text: large.clone(),
+            },
+        ],
+    };
+    history.record_items([&item], TruncationPolicy::Tokens(10_000));
+
+    let [ResponseItem::Message { content, .. }] = history.raw_items() else {
+        panic!("expected single message item");
+    };
+
+    assert!(
+        content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == small
+        )),
+        "expected small user input to remain in message content"
+    );
+
+    assert!(
+        !content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == &large
+        )),
+        "expected large user input to be removed from message content"
+    );
+
+    let placeholder = content
+        .iter()
+        .find_map(|item| match item {
+            ContentItem::InputText { text }
+                if text.contains("User input was too large for the remaining context window") =>
+            {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected placeholder text, got {content:?}"));
+
+    let path = placeholder
+        .split("saved to ")
+        .nth(1)
+        .and_then(|tail| tail.strip_suffix('.'))
+        .expect("capture temp path");
+    let path = PathBuf::from(path);
+
+    let file_contents = fs::read_to_string(&path).expect("read temp file");
+    assert_eq!(file_contents, large);
 
     fs::remove_file(path).expect("cleanup temp file");
 }

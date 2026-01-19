@@ -18,9 +18,7 @@ pub(crate) struct SessionState {
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
-    pub(crate) fn new(
-        session_configuration: SessionConfiguration,
-    ) -> Self {
+    pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
         let history = ContextManager::new(session_configuration.codex_home());
         Self {
             session_configuration,

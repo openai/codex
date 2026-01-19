@@ -1,5 +1,6 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::context_manager::offload::ContextOffloader;
 use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
 use crate::truncate::TruncationPolicy;
@@ -15,10 +16,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
-use std::path::Path;
 use std::path::PathBuf;
-use tracing::warn;
-use uuid::Uuid;
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
@@ -288,7 +286,7 @@ impl ContextManager {
                     output: truncated,
                 }
             }
-            ResponseItem::Message { .. } => self.process_message_item(item),
+            ResponseItem::Message { .. } => self.process_message_item(item, policy),
             ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
@@ -299,8 +297,7 @@ impl ContextManager {
             | ResponseItem::Other => item.clone(),
         }
     }
-
-    fn process_message_item(&self, item: &ResponseItem) -> ResponseItem {
+    fn process_message_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         let ResponseItem::Message { role, content, id } = item else {
             return item.clone();
         };
@@ -316,41 +313,19 @@ impl ContextManager {
             return item.clone();
         };
 
-        let text = message_text(content);
-        if text.is_empty() {
-            return item.clone();
-        }
-
         let remaining = context_window.saturating_sub(self.get_total_token_usage());
-        let text_tokens = i64::try_from(approx_token_count(&text)).unwrap_or(i64::MAX);
-        if text_tokens <= remaining {
-            return item.clone();
-        }
-
-        let user_message_dir = self.codex_home.join("context").join("usermsgs");
-        let Some(path) = write_message_to_user_dir(&text, &user_message_dir) else {
-            return item.clone();
-        };
-
+        let offloader = ContextOffloader::new(&self.codex_home);
         let mut new_content = Vec::with_capacity(content.len().saturating_add(1));
-        new_content.push(ContentItem::InputText {
-            text: format!(
-                "User input was too large for the remaining context window and was saved to {}.",
-                path.display()
-            ),
-        });
-
         for item in content {
             match item {
-                ContentItem::InputImage { image_url } => {
-                    new_content.push(ContentItem::InputImage {
-                        image_url: image_url.clone(),
-                    });
+                ContentItem::InputText { text } if item.is_user_message_text() => {
+                    new_content.extend(process_user_text_item(text, remaining, policy, &offloader));
                 }
-                ContentItem::InputText { .. } if item.is_user_message_text() => {
+                ContentItem::InputText { .. }
+                | ContentItem::OutputText { .. }
+                | ContentItem::InputImage { .. } => {
                     new_content.push(item.clone());
                 }
-                ContentItem::InputText { .. } | ContentItem::OutputText { .. } => {}
             }
         }
 
@@ -362,36 +337,42 @@ impl ContextManager {
     }
 }
 
-fn message_text(content: &[ContentItem]) -> String {
-    let mut pieces = Vec::new();
-    for item in content {
-        match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                if !text.is_empty() {
-                    pieces.push(text.as_str());
-                }
-            }
-            ContentItem::InputImage { .. } => {}
-        }
+fn process_user_text_item(
+    text: &str,
+    remaining: i64,
+    policy: TruncationPolicy,
+    offloader: &ContextOffloader,
+) -> Vec<ContentItem> {
+    if text.is_empty() {
+        return Vec::new();
     }
 
-    pieces.join("\n")
+    let text_tokens = i64::try_from(approx_token_count(text)).unwrap_or(i64::MAX);
+    if text_tokens <= remaining {
+        return vec![ContentItem::InputText {
+            text: text.to_string(),
+        }];
+    }
+
+    if let Some(offloaded) = offloader.write_user_message(text) {
+        vec![ContentItem::InputText {
+            text: format!(
+                "User input was too large for the remaining context window and was saved to {}.",
+                offloaded.display()
+            ),
+        }]
+    } else {
+        let truncated = truncate_text(text, policy);
+        build_truncated_text_item(truncated)
+    }
 }
 
-fn write_message_to_user_dir(text: &str, user_message_dir: &Path) -> Option<PathBuf> {
-    if let Err(err) = std::fs::create_dir_all(user_message_dir) {
-        warn!(error = %err, "failed to create user message directory");
-        return None;
+fn build_truncated_text_item(truncated: String) -> Vec<ContentItem> {
+    if truncated.is_empty() {
+        Vec::new()
+    } else {
+        vec![ContentItem::InputText { text: truncated }]
     }
-
-    let id = Uuid::now_v7();
-    let path = user_message_dir.join(format!("user-message-{id}.txt"));
-    if let Err(err) = std::fs::write(&path, text.as_bytes()) {
-        warn!(error = %err, "failed to write user message to file");
-        return None;
-    }
-
-    Some(path)
 }
 
 /// API messages include every non-system item (user/assistant messages, reasoning,
