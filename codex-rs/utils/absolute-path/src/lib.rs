@@ -22,24 +22,19 @@ use ts_rs::TS;
 pub struct AbsolutePathBuf(PathBuf);
 
 impl AbsolutePathBuf {
-    fn expand_tilde(path: &Path) -> PathBuf {
+    fn maybe_expand_home_directory(path: &Path) -> PathBuf {
         let Some(path_str) = path.to_str() else {
             return path.to_path_buf();
         };
-        if path_str == "~"
+        if cfg!(not(target_os = "windows"))
             && let Some(home) = home_dir()
         {
-            return home;
-        }
-        if let Some(rest) = path_str.strip_prefix("~/")
-            && let Some(home) = home_dir()
-        {
-            return home.join(rest);
-        }
-        if let Some(rest) = path_str.strip_prefix("~\\")
-            && let Some(home) = home_dir()
-        {
-            return home.join(rest);
+            if path_str == "~" {
+                return home;
+            }
+            if let Some(rest) = path_str.strip_prefix("~/") {
+                return home.join(rest);
+            }
         }
         path.to_path_buf()
     }
@@ -48,13 +43,13 @@ impl AbsolutePathBuf {
         path: P,
         base_path: B,
     ) -> std::io::Result<Self> {
-        let expanded = Self::expand_tilde(path.as_ref());
+        let expanded = Self::maybe_expand_home_directory(path.as_ref());
         let absolute_path = expanded.absolutize_from(base_path.as_ref())?;
         Ok(Self(absolute_path.into_owned()))
     }
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        let expanded = Self::expand_tilde(path.as_ref());
+        let expanded = Self::maybe_expand_home_directory(path.as_ref());
         let absolute_path = expanded.absolutize()?;
         Ok(Self(absolute_path.into_owned()))
     }
@@ -230,8 +225,9 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn tilde_expands_to_home_root() {
+    fn home_directory_root_on_non_windows_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
         };
@@ -243,8 +239,9 @@ mod tests {
         assert_eq!(abs_path_buf.as_path(), home.as_path());
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn tilde_expands_during_deserialization() {
+    fn home_directory_subpath_on_non_windows_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
         };
@@ -256,16 +253,18 @@ mod tests {
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
-    fn tilde_backslash_expands_during_deserialization() {
-        let Some(home) = home_dir() else {
-            return;
-        };
+    fn home_directory_on_windows_is_not_expanded_in_deserialization() {
         let temp_dir = tempdir().expect("base dir");
+        let base_dir = temp_dir.path();
         let abs_path_buf = {
-            let _guard = AbsolutePathBufGuard::new(temp_dir.path());
-            serde_json::from_str::<AbsolutePathBuf>("\"~\\\\code\"").expect("failed to deserialize")
+            let _guard = AbsolutePathBufGuard::new(base_dir);
+            serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize")
         };
-        assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
+        assert_eq!(
+            abs_path_buf.as_path(),
+            base_dir.join("~").join("code").as_path()
+        );
     }
 }
