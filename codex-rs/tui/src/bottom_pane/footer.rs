@@ -170,12 +170,10 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 props.context_window_percent,
                 props.context_window_used_tokens,
             );
-            if props.is_task_running {
-                if props.steer_enabled {
-                    line.push_span(" · ".dim());
-                    line.push_span(key_hint::plain(KeyCode::Tab));
-                    line.push_span(" to queue message".dim());
-                }
+            if props.is_task_running && props.steer_enabled {
+                line.push_span(" · ".dim());
+                line.push_span(key_hint::plain(KeyCode::Tab));
+                line.push_span(" to queue message".dim());
             }
             vec![line]
         }

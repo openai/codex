@@ -1910,7 +1910,6 @@ impl ChatWidget {
                 && self.bottom_pane.no_modal_or_popup_active() =>
             {
                 self.cycle_collaboration_mode();
-                return;
             }
             KeyEvent {
                 code: KeyCode::Up,

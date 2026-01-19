@@ -169,7 +169,7 @@ impl StatusHistoryCell {
             approval,
             sandbox,
             agents_summary,
-            collaboration_mode: collaboration_mode.map(|s| s.to_string()),
+            collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
             account,
             session_id,

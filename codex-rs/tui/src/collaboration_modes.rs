@@ -23,17 +23,12 @@ use ratatui::text::Line;
 ///
 /// This is distinct from `CollaborationMode`: it represents a stable UI selection and the cycling
 /// order, while `CollaborationMode` can carry nested settings/prompt configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Selection {
     Plan,
+    #[default]
     PairProgramming,
     Execute,
-}
-
-impl Default for Selection {
-    fn default() -> Self {
-        Self::PairProgramming
-    }
 }
 
 impl Selection {
@@ -65,7 +60,7 @@ pub(crate) fn parse_selection(input: &str) -> Option<Selection> {
     let normalized: String = input
         .chars()
         .filter(|c| !c.is_ascii_whitespace() && *c != '-' && *c != '_')
-        .flat_map(|c| c.to_lowercase())
+        .flat_map(char::to_lowercase)
         .collect();
 
     match normalized.as_str() {
