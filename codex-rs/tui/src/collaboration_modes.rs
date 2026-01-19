@@ -1,3 +1,15 @@
+//! Collaboration mode selection + rendering helpers for the TUI.
+//!
+//! This module is intentionally UI-focused:
+//! - It owns the user-facing set of selectable collaboration modes and how they cycle.
+//! - It parses `/collab <mode>` arguments into a selection.
+//! - It resolves a `Selection` to a concrete `codex_protocol::config_types::CollaborationMode` by
+//!   picking from the `ModelsManager` builtin collaboration presets.
+//! - It builds the small footer "flash" line shown after changing modes.
+//!
+//! The `ChatWidget` owns the session state and decides *when* selection/mode changes are allowed
+//! (feature flag, task running, modals open, etc.). This module just provides the building blocks.
+
 use crate::key_hint;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_protocol::config_types::CollaborationMode;
@@ -5,6 +17,10 @@ use crossterm::event::KeyCode;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
+/// The user-facing collaboration mode choices supported by the TUI.
+///
+/// This is distinct from `CollaborationMode`: it represents a stable UI selection and the cycling
+/// order, while `CollaborationMode` can carry nested settings/prompt configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Selection {
     Plan,
@@ -19,6 +35,9 @@ impl Default for Selection {
 }
 
 impl Selection {
+    /// Cycle to the next selection.
+    ///
+    /// The TUI cycles through a small, fixed set of presets.
     pub(crate) fn next(self) -> Self {
         match self {
             Self::Plan => Self::PairProgramming,
@@ -27,6 +46,7 @@ impl Selection {
         }
     }
 
+    /// User-facing label used in UI surfaces like `/status` and the footer flash.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Plan => "Plan",
@@ -36,6 +56,9 @@ impl Selection {
     }
 }
 
+/// Parse a user argument (e.g. `/collab plan`, `/collab pair_programming`) into a selection.
+///
+/// The parser is forgiving: it strips whitespace, `-`, and `_`, and matches case-insensitively.
 pub(crate) fn parse_selection(input: &str) -> Option<Selection> {
     let normalized: String = input
         .chars()
@@ -51,6 +74,10 @@ pub(crate) fn parse_selection(input: &str) -> Option<Selection> {
     }
 }
 
+/// Resolve a selection to a concrete collaboration mode preset.
+///
+/// `ModelsManager::list_collaboration_modes()` is expected to return a builtin set of presets; this
+/// function selects the first preset of the desired variant.
 pub(crate) fn resolve_mode(
     models_manager: &ModelsManager,
     selection: Selection,
@@ -71,6 +98,9 @@ pub(crate) fn resolve_mode(
     }
 }
 
+/// Build a 1-line footer "flash" that is shown after switching modes.
+///
+/// The `ChatWidget` controls when to show this and how long it should remain visible.
 pub(crate) fn flash_line(selection: Selection) -> Line<'static> {
     Line::from(vec![
         selection.label().bold(),

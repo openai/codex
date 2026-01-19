@@ -403,7 +403,15 @@ pub(crate) struct ChatWidget {
     active_cell_revision: u64,
     config: Config,
     model: Option<String>,
+    /// Current UI selection for collaboration modes.
+    ///
+    /// This selection is only meaningful when `Feature::CollaborationModes` is enabled; when the
+    /// feature is disabled, the value is effectively inert.
     collaboration_mode: CollaborationModeSelection,
+    /// A mode change that should be applied to the next outgoing user turn.
+    ///
+    /// The TUI updates this when the user changes collaboration mode (via `Shift+Tab` or `/collab`),
+    /// and then consumes it when constructing the next `Op` sent to the agent.
     pending_collaboration_mode: Option<CollaborationModeSelection>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -2348,6 +2356,7 @@ impl ChatWidget {
             && let Some(collaboration_mode) =
                 collaboration_modes::resolve_mode(self.models_manager.as_ref(), selection)
         {
+            // Consume the pending selection so it applies only to a single outgoing user turn.
             self.pending_collaboration_mode = None;
             Op::UserTurn {
                 items,
@@ -4017,6 +4026,11 @@ impl ChatWidget {
         self.set_collaboration_mode(next);
     }
 
+    /// Update the selected collaboration mode and arm it for the next user turn.
+    ///
+    /// When collaboration modes are enabled, the selection is attached to the next submission as
+    /// `Op::UserTurn { collaboration_mode: Some(...) }`. Subsequent submissions revert to the
+    /// default `Op::UserInput` until the user changes modes again.
     fn set_collaboration_mode(&mut self, selection: CollaborationModeSelection) {
         if !self.collaboration_modes_enabled() {
             return;

@@ -1586,6 +1586,8 @@ async fn collab_slash_command_sets_mode_and_next_submit_sends_user_turn() {
         Some(CollaborationModeSelection::Plan)
     );
 
+    // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this
+    // helper filters until we see a submission op.
     fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         loop {
             match op_rx.try_recv() {
