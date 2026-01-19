@@ -2296,9 +2296,6 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        // Prefer `Op::UserTurn` so the UI is the source of truth for turn context
-        // (cwd/approval/sandbox/model/etc.), rather than depending on session-level
-        // state tracking.
         let Some(model) = self.current_model().or(self.config.model.as_deref()) else {
             tracing::warn!("cannot submit user message before model is known; queueing");
             self.queued_user_messages.push_front(user_message);
