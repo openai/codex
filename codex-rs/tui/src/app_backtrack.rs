@@ -204,6 +204,8 @@ impl App {
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
         if !prefill.is_empty() {
+            // TODO: Rehydrate text_elements/local_image_paths from the selected user cell so
+            // backtrack preserves image placeholders and attachments.
             self.chat_widget
                 .set_composer_text(prefill, Vec::new(), Vec::new());
         }
