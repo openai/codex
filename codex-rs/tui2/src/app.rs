@@ -1446,7 +1446,7 @@ impl App {
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
                 );
-                self.shutdown_current_thread().await;
+                self.shutdown_current_conversation().await;
                 if let Err(err) = self.server.remove_and_close_all_threads().await {
                     tracing::warn!(error = %err, "failed to close all threads");
                 }
