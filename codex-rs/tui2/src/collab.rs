@@ -59,12 +59,12 @@ pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
     let CollabWaitingBeginEvent {
         call_id,
         sender_thread_id,
-        receiver_thread_id,
+        receiver_thread_ids,
     } = ev;
     let details = vec![
         detail_line("call", call_id),
         detail_line("sender", sender_thread_id),
-        detail_line("receiver", receiver_thread_id),
+        detail_line("receiver", format!("{receiver_thread_ids:?}")),
     ];
     collab_event("Collab wait begin", details)
 }
@@ -73,14 +73,12 @@ pub(crate) fn waiting_end(ev: CollabWaitingEndEvent) -> PlainHistoryCell {
     let CollabWaitingEndEvent {
         call_id,
         sender_thread_id,
-        receiver_thread_id,
-        status,
+        statuses,
     } = ev;
     let details = vec![
         detail_line("call", call_id),
         detail_line("sender", sender_thread_id),
-        detail_line("receiver", receiver_thread_id),
-        status_line(&status),
+        detail_line("statuses", format!("{statuses:#?}")),
     ];
     collab_event("Collab wait end", details)
 }

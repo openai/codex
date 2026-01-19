@@ -100,6 +100,8 @@ pub enum Feature {
     Collab,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
+    /// Enable collaboration modes (Plan, Pair Programming, Execute).
+    CollaborationModes,
 }
 
 impl Feature {
@@ -442,6 +444,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
             announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CollaborationModes,
+        key: "collaboration_modes",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
 ];

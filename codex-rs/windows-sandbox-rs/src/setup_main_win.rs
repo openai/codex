@@ -76,17 +76,12 @@ struct Payload {
     refresh_only: bool,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 enum SetupMode {
+    #[default]
     Full,
     ReadAclsOnly,
-}
-
-impl Default for SetupMode {
-    fn default() -> Self {
-        Self::Full
-    }
 }
 
 fn log_line(log: &mut File, msg: &str) -> Result<()> {

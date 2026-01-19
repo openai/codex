@@ -88,6 +88,7 @@ async fn chat_mode_stream_cli() {
         home.path(),
         10,
         None,
+        codex_core::ThreadSortKey::UpdatedAt,
         &[],
         Some(provider_filter.as_slice()),
         "mock",
