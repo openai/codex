@@ -222,11 +222,15 @@ impl ChatComposer {
         if ctx.cursor <= 1 && ctx.first_line().starts_with("/ ") {
             return None;
         }
-        if ctx.popup_prefix() == "/"
-            || Self::parse_slash_command_prefix(ctx.popup_prefix())
-                .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest))
+        let prefix = ctx.popup_prefix();
+        if prefix == "/" {
+            return Some(prefix);
+        }
+        if let Some((name, rest)) = Self::parse_slash_command_prefix(prefix)
+            && rest.is_empty()
+            && self.looks_like_slash_prefix(name, rest)
         {
-            return Some(ctx.popup_prefix());
+            return Some(prefix);
         }
 
         None
@@ -4438,7 +4442,7 @@ mod tests {
     }
 
     #[test]
-    fn slash_popup_activated_for_prefix_with_args() {
+    fn slash_popup_hidden_for_prefix_with_args() {
         use tokio::sync::mpsc::unbounded_channel;
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4456,8 +4460,32 @@ mod tests {
         composer.sync_popups();
 
         assert!(
-            matches!(composer.active_popup, ActivePopup::Command(_)),
-            "slash popup should stay open when args follow the command name"
+            matches!(composer.active_popup, ActivePopup::None),
+            "slash popup should hide after a command is selected and args are being typed"
+        );
+    }
+
+    #[test]
+    fn slash_popup_hidden_for_completed_command_with_trailing_space() {
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("/review ".to_string());
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.sync_popups();
+
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "slash popup should hide after a command is completed with a trailing space"
         );
     }
 
