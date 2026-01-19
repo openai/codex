@@ -1446,7 +1446,11 @@ impl App {
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
                 );
-                self.shutdown_current_conversation().await;
+                self.backtrack.pending_rollback = None;
+                self.suppress_shutdown_complete = true;
+                if let Err(err) = self.server.remove_and_close_all_threads().await {
+                    tracing::warn!(error = %err, "failed to close all threads for /new");
+                }
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
