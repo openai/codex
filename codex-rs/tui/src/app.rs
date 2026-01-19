@@ -1,5 +1,6 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::CollaborationModePreset;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -48,6 +49,7 @@ use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -979,6 +981,55 @@ impl App {
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
                 self.current_model = model;
+            }
+            AppEvent::OpenCollaborationModePopup => {
+                self.chat_widget.open_collaboration_mode_popup();
+            }
+            AppEvent::ApplyCollaborationModePreset(preset) => {
+                let collaboration_mode =
+                    self.server
+                        .list_collaboration_modes()
+                        .into_iter()
+                        .find(|mode| {
+                            matches!(
+                                (preset, mode),
+                                (CollaborationModePreset::Plan, CollaborationMode::Plan(_))
+                                    | (
+                                        CollaborationModePreset::PairProgramming,
+                                        CollaborationMode::PairProgramming(_),
+                                    )
+                                    | (
+                                        CollaborationModePreset::Execute,
+                                        CollaborationMode::Execute(_)
+                                    )
+                            )
+                        });
+
+                let Some(collaboration_mode) = collaboration_mode else {
+                    self.chat_widget.add_error_message(
+                        "No collaboration modes are available right now.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+
+                self.chat_widget
+                    .set_collaboration_mode(collaboration_mode.clone());
+
+                let model = collaboration_mode.model().to_string();
+                let effort = collaboration_mode.reasoning_effort();
+                self.chat_widget.set_model(&model);
+                self.current_model = model;
+                self.on_update_reasoning_effort(effort);
+
+                self.chat_widget.submit_op(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    collaboration_mode: Some(collaboration_mode),
+                });
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);

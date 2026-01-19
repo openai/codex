@@ -92,6 +92,7 @@ use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -115,6 +116,7 @@ use tracing::debug;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 
 use crate::app_event::AppEvent;
+use crate::app_event::CollaborationModePreset;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -400,6 +402,7 @@ pub(crate) struct ChatWidget {
     active_cell_revision: u64,
     config: Config,
     model: Option<String>,
+    collaboration_mode: Option<CollaborationMode>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -605,8 +608,11 @@ impl ChatWidget {
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
+        let reasoning_effort = event.reasoning_effort;
         self.model = Some(model_for_header.clone());
         self.session_header.set_model(&model_for_header);
+        self.collaboration_mode = None;
+        self.set_reasoning_effort(reasoning_effort);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1673,6 +1679,7 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model,
+            collaboration_mode: None,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(model_for_header),
@@ -1772,6 +1779,7 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model: Some(header_model.clone()),
+            collaboration_mode: None,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(header_model),
@@ -2888,10 +2896,8 @@ impl ChatWidget {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
-                let actions = Self::model_selection_actions(
-                    model.clone(),
-                    Some(preset.default_reasoning_effort),
-                );
+                let actions = self
+                    .model_selection_actions(model.clone(), Some(preset.default_reasoning_effort));
                 SelectionItem {
                     name: preset.display_name.clone(),
                     description,
@@ -2903,6 +2909,28 @@ impl ChatWidget {
                 }
             })
             .collect();
+
+        if self.config.features.enabled(Feature::CollaborationModes) {
+            let current_mode = self
+                .collaboration_mode
+                .as_ref()
+                .map(Self::collaboration_mode_label)
+                .unwrap_or("default");
+            items.insert(
+                0,
+                SelectionItem {
+                    name: "Collaboration mode".to_string(),
+                    description: Some(format!(
+                        "Choose how Codex collaborates (current: {current_mode})"
+                    )),
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::OpenCollaborationModePopup);
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            );
+        }
 
         if !other_presets.is_empty() {
             let all_models = other_presets;
@@ -2939,6 +2967,80 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_collaboration_mode_popup(&mut self) {
+        if !self.config.features.enabled(Feature::CollaborationModes) {
+            self.add_error_message("Collaboration modes are not enabled.".to_string());
+            return;
+        }
+
+        let current = self.collaboration_mode.as_ref();
+        let items = [
+            (
+                "Plan",
+                CollaborationModePreset::Plan,
+                "Plan first, then execute with user confirmation.",
+            ),
+            (
+                "Pair programming",
+                CollaborationModePreset::PairProgramming,
+                "Collaborate like a coding partner; iterate quickly.",
+            ),
+            (
+                "Execute",
+                CollaborationModePreset::Execute,
+                "Make changes directly; prioritize doing over discussion.",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, preset, description)| {
+            let is_current = current.is_some_and(|mode| {
+                matches!(
+                    (preset, mode),
+                    (CollaborationModePreset::Plan, CollaborationMode::Plan(_))
+                        | (
+                            CollaborationModePreset::PairProgramming,
+                            CollaborationMode::PairProgramming(_),
+                        )
+                        | (
+                            CollaborationModePreset::Execute,
+                            CollaborationMode::Execute(_)
+                        )
+                )
+            });
+            SelectionItem {
+                name: name.to_string(),
+                description: Some(description.to_string()),
+                is_current,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ApplyCollaborationModePreset(preset));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        })
+        .collect();
+
+        let header = self.model_menu_header(
+            "Select Collaboration Mode",
+            "Choose how Codex should collaborate for upcoming turns.",
+        );
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header,
+            ..Default::default()
+        });
+    }
+
+    fn collaboration_mode_label(mode: &CollaborationMode) -> &'static str {
+        match mode {
+            CollaborationMode::Plan(_) => "plan",
+            CollaborationMode::PairProgramming(_) => "pair programming",
+            CollaborationMode::Execute(_) => "execute",
+            CollaborationMode::Custom(_) => "custom",
+        }
+    }
+
     fn is_auto_model(model: &str) -> bool {
         model.starts_with("codex-auto-")
     }
@@ -2962,6 +3064,24 @@ impl ChatWidget {
         }
 
         let mut items: Vec<SelectionItem> = Vec::new();
+        if self.config.features.enabled(Feature::CollaborationModes) {
+            let current_mode = self
+                .collaboration_mode
+                .as_ref()
+                .map(Self::collaboration_mode_label)
+                .unwrap_or("default");
+            items.push(SelectionItem {
+                name: "Collaboration mode".to_string(),
+                description: Some(format!(
+                    "Choose how Codex collaborates (current: {current_mode})"
+                )),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenCollaborationModePopup);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
@@ -2998,9 +3118,17 @@ impl ChatWidget {
     }
 
     fn model_selection_actions(
+        &self,
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
     ) -> Vec<SelectionAction> {
+        let collaboration_mode_for_op = self.collaboration_mode.as_ref().map(|mode| {
+            mode.with_updates(
+                Some(model_for_action.clone()),
+                Some(effort_for_action),
+                None,
+            )
+        });
         vec![Box::new(move |tx| {
             let effort_label = effort_for_action
                 .map(|effort| effort.to_string())
@@ -3012,7 +3140,7 @@ impl ChatWidget {
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
-                collaboration_mode: None,
+                collaboration_mode: collaboration_mode_for_op.clone(),
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -3137,7 +3265,7 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let actions = Self::model_selection_actions(model_for_action, choice.stored);
+            let actions = self.model_selection_actions(model_for_action, choice.stored);
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -3176,6 +3304,10 @@ impl ChatWidget {
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        let collaboration_mode = self
+            .collaboration_mode
+            .as_ref()
+            .map(|mode| mode.with_updates(Some(model.clone()), Some(effort), None));
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
@@ -3184,7 +3316,7 @@ impl ChatWidget {
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
-                collaboration_mode: None,
+                collaboration_mode,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -3922,12 +4054,22 @@ impl ChatWidget {
     /// Set the reasoning effort in the widget's config copy.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.model_reasoning_effort = effort;
+        if let Some(mode) = self.collaboration_mode.as_ref() {
+            self.collaboration_mode = Some(mode.with_updates(None, Some(effort), None));
+        }
     }
 
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
         self.model = Some(model.to_string());
+        if let Some(mode) = self.collaboration_mode.as_ref() {
+            self.collaboration_mode = Some(mode.with_updates(Some(model.to_string()), None, None));
+        }
+    }
+
+    pub(crate) fn set_collaboration_mode(&mut self, collaboration_mode: CollaborationMode) {
+        self.collaboration_mode = Some(collaboration_mode);
     }
 
     fn current_model(&self) -> Option<&str> {

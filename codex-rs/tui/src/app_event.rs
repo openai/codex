@@ -26,6 +26,13 @@ use codex_core::protocol::SandboxPolicy;
 use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CollaborationModePreset {
+    Plan,
+    PairProgramming,
+    Execute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
@@ -117,6 +124,12 @@ pub(crate) enum AppEvent {
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
     },
+
+    /// Open the collaboration mode picker.
+    OpenCollaborationModePopup,
+
+    /// Apply a collaboration mode preset for the current session.
+    ApplyCollaborationModePreset(CollaborationModePreset),
 
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
