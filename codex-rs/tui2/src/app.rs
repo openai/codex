@@ -506,10 +506,10 @@ impl App {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    // CLI prompt args are plain strings, so they don't provide element ranges.
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
                     enhanced_keys_supported,
@@ -533,10 +533,10 @@ impl App {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    // CLI prompt args are plain strings, so they don't provide element ranges.
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
                     enhanced_keys_supported,
@@ -560,10 +560,10 @@ impl App {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    // CLI prompt args are plain strings, so they don't provide element ranges.
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
                     enhanced_keys_supported,
