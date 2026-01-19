@@ -6,9 +6,6 @@ use pretty_assertions::assert_eq;
 use crate::spawn_pipe_process;
 use crate::spawn_pty_process;
 
-#[cfg(unix)]
-use libc;
-
 fn find_python() -> Option<String> {
     for candidate in ["python3", "python"] {
         if let Ok(output) = std::process::Command::new(candidate)
