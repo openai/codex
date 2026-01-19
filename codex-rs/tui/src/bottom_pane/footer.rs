@@ -568,6 +568,21 @@ mod tests {
         );
 
         snapshot_footer(
+            "footer_shortcuts_collaboration_modes_enabled",
+            FooterProps {
+                mode: FooterMode::ShortcutOverlay,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                steer_enabled: false,
+                collaboration_modes_enabled: true,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                context_window_percent: None,
+                context_window_used_tokens: None,
+            },
+        );
+
+        snapshot_footer(
             "footer_ctrl_c_quit_idle",
             FooterProps {
                 mode: FooterMode::QuitShortcutReminder,
@@ -681,21 +696,6 @@ mod tests {
                 is_task_running: true,
                 steer_enabled: true,
                 collaboration_modes_enabled: false,
-                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
-            },
-        );
-
-        snapshot_footer(
-            "footer_context_only_collab_hint",
-            FooterProps {
-                mode: FooterMode::ContextOnly,
-                esc_backtrack_hint: false,
-                use_shift_enter_hint: false,
-                is_task_running: false,
-                steer_enabled: false,
-                collaboration_modes_enabled: true,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,

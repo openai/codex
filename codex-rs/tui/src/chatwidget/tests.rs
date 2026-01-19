@@ -1508,6 +1508,114 @@ async fn slash_init_skips_when_project_doc_exists() {
     );
 }
 
+#[test]
+fn parse_collaboration_mode_selection_accepts_common_aliases() {
+    assert_eq!(
+        parse_collaboration_mode_selection("plan"),
+        Some(CollaborationModeSelection::Plan)
+    );
+    assert_eq!(
+        parse_collaboration_mode_selection("PAIR"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        parse_collaboration_mode_selection("pair_programming"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        parse_collaboration_mode_selection("pp"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        parse_collaboration_mode_selection(" exec "),
+        Some(CollaborationModeSelection::Execute)
+    );
+    assert_eq!(
+        parse_collaboration_mode_selection("execute"),
+        Some(CollaborationModeSelection::Execute)
+    );
+    assert_eq!(parse_collaboration_mode_selection("unknown"), None);
+}
+
+#[tokio::test]
+async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, false);
+
+    let initial = chat.collaboration_mode;
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, initial);
+    assert_eq!(chat.pending_collaboration_mode, None);
+
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Execute);
+    assert_eq!(
+        chat.pending_collaboration_mode,
+        Some(CollaborationModeSelection::Execute)
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+    assert_eq!(
+        chat.pending_collaboration_mode,
+        Some(CollaborationModeSelection::Plan)
+    );
+
+    chat.on_task_started();
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+    assert_eq!(
+        chat.pending_collaboration_mode,
+        Some(CollaborationModeSelection::Plan)
+    );
+}
+
+#[tokio::test]
+async fn collab_slash_command_sets_mode_and_next_submit_sends_user_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.dispatch_command_with_args(SlashCommand::Collab, "plan".to_string());
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+    assert_eq!(
+        chat.pending_collaboration_mode,
+        Some(CollaborationModeSelection::Plan)
+    );
+
+    fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+        loop {
+            match op_rx.try_recv() {
+                Ok(op @ Op::UserTurn { .. }) => return op,
+                Ok(op @ Op::UserInput { .. }) => return op,
+                Ok(_) => continue,
+                Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
+                Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
+            }
+        }
+    }
+
+    chat.bottom_pane.set_composer_text("hello".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode::Plan(_)),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with plan collab mode, got {other:?}"),
+    }
+    assert_eq!(chat.pending_collaboration_mode, None);
+
+    chat.bottom_pane.set_composer_text("follow up".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserInput { .. } => {}
+        other => panic!("expected Op::UserInput after pending mode cleared, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn slash_quit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;

@@ -421,4 +421,40 @@ mod tests {
             "expected fuzzy search for '/ac' to include compact and feedback, got {cmds:?}"
         );
     }
+
+    #[test]
+    fn collab_command_hidden_when_collaboration_modes_disabled() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/coll".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"collab"),
+            "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn collab_command_visible_when_collaboration_modes_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                skills_enabled: false,
+                collaboration_modes_enabled: true,
+            },
+        );
+        popup.on_composer_text_change("/collab".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
+            other => panic!("expected collab to be selected for exact match, got {other:?}"),
+        }
+    }
 }

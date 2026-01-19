@@ -2385,6 +2385,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn footer_flash_overrides_footer_hint_override() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_footer_hint_override(Some(vec![("K".to_string(), "label".to_string())]));
+        composer.show_footer_flash(Line::from("FLASH"), Duration::from_secs(10));
+
+        let area = Rect::new(0, 0, 60, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let mut bottom_row = String::new();
+        for x in 0..area.width {
+            bottom_row.push(
+                buf[(x, area.height - 1)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' '),
+            );
+        }
+        assert!(
+            bottom_row.contains("FLASH"),
+            "expected flash content to render in footer row, saw: {bottom_row:?}",
+        );
+        assert!(
+            !bottom_row.contains("K label"),
+            "expected flash to override hint override, saw: {bottom_row:?}",
+        );
+    }
+
+    #[test]
+    fn footer_flash_expires_and_falls_back_to_hint_override() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_footer_hint_override(Some(vec![("K".to_string(), "label".to_string())]));
+        composer.show_footer_flash(Line::from("FLASH"), Duration::from_secs(10));
+        composer.footer_flash.as_mut().unwrap().expires_at =
+            Instant::now() - Duration::from_secs(1);
+
+        let area = Rect::new(0, 0, 60, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let mut bottom_row = String::new();
+        for x in 0..area.width {
+            bottom_row.push(
+                buf[(x, area.height - 1)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' '),
+            );
+        }
+        assert!(
+            bottom_row.contains("K label"),
+            "expected hint override to render after flash expired, saw: {bottom_row:?}",
+        );
+        assert!(
+            !bottom_row.contains("FLASH"),
+            "expected expired flash to be hidden, saw: {bottom_row:?}",
+        );
+    }
+
     fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
     where
         F: FnOnce(&mut ChatComposer),
