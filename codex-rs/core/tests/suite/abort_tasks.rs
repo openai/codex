@@ -276,6 +276,7 @@ async fn interrupt_shell_records_partial_output() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "start shell".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -292,6 +293,7 @@ async fn interrupt_shell_records_partial_output() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "follow up".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -335,6 +337,7 @@ async fn interrupt_local_shell_records_partial_output() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "start local shell".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -351,6 +354,7 @@ async fn interrupt_local_shell_records_partial_output() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "follow up".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -410,6 +414,7 @@ async fn interrupt_unified_exec_records_partial_output() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "start unified exec".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -426,6 +431,7 @@ async fn interrupt_unified_exec_records_partial_output() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "follow up".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })

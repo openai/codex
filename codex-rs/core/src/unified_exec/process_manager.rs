@@ -10,9 +10,6 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::bash::extract_bash_command;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::exec::append_abort_message;
 use crate::exec_env::create_env;
 use crate::protocol::ExecCommandSource;
