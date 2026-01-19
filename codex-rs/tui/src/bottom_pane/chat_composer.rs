@@ -1960,12 +1960,15 @@ impl ChatComposer {
             // Still clear dismissal tokens as the underlying buffer changes in normal mode.
             // Otherwise a briefly-removed token (delete/undo/paste) can leave popups permanently
             // suppressed when returning to insert mode.
-            let file_token = Self::current_at_token(&self.textarea);
-            if self.dismissed_file_popup_token.as_ref() != file_token.as_ref() {
+            let text = self.textarea.text();
+            if let Some(dismissed) = self.dismissed_file_popup_token.as_deref()
+                && !text.contains(&format!("@{dismissed}"))
+            {
                 self.dismissed_file_popup_token = None;
             }
-            let skill_token = self.current_skill_token();
-            if self.dismissed_skill_popup_token.as_ref() != skill_token.as_ref() {
+            if let Some(dismissed) = self.dismissed_skill_popup_token.as_deref()
+                && !text.contains(&format!("${dismissed}"))
+            {
                 self.dismissed_skill_popup_token = None;
             }
             return;
