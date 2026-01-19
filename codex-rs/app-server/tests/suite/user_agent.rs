@@ -26,7 +26,7 @@ async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     .await??;
 
     let os_info = os_info::get();
-    let originator = DEFAULT_CLIENT_NAME;
+    let originator = codex_core::default_client::originator().value.clone();
     let os_type = os_info.os_type();
     let os_version = os_info.version();
     let architecture = os_info.architecture().unwrap_or("unknown");
