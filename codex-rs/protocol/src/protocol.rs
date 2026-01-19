@@ -893,6 +893,9 @@ pub struct AskUserQuestionRequestEvent {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
+    RateLimited {
+        http_status_code: Option<u16>,
+    },
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },

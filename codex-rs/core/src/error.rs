@@ -127,6 +127,10 @@ pub enum CodexErr {
     #[error("We're currently experiencing high demand, which may cause temporary errors.")]
     InternalServerError,
 
+    /// Rate limit reached (HTTP 429).
+    #[error("{0}")]
+    RateLimited(RateLimitedError),
+
     /// Retry limit exceeded.
     #[error("{0}")]
     RetryLimit(RetryLimitReachedError),
@@ -196,6 +200,7 @@ impl CodexErr {
             | CodexErr::UnsupportedOperation(_)
             | CodexErr::Sandbox(_)
             | CodexErr::LandlockSandboxExecutableNotProvided
+            | CodexErr::RateLimited(_)
             | CodexErr::RetryLimit(_)
             | CodexErr::ContextWindowExceeded
             | CodexErr::ThreadNotFound(_)
@@ -347,6 +352,28 @@ impl std::fmt::Display for RetryLimitReachedError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RateLimitedError {
+    pub status: StatusCode,
+    pub request_id: Option<String>,
+    pub retry_after: Option<Duration>,
+    pub rate_limits: Option<RateLimitSnapshot>,
+}
+
+impl std::fmt::Display for RateLimitedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let status = self.status;
+        write!(f, "rate limited (status {status})")?;
+        if let Some(retry_after) = self.retry_after {
+            write!(f, ", retry after {}s", retry_after.as_secs())?;
+        }
+        if let Some(id) = &self.request_id {
+            write!(f, ", request id: {id}")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct UsageLimitReachedError {
     pub(crate) plan_type: Option<PlanType>,
@@ -484,6 +511,9 @@ impl CodexErr {
             CodexErr::UsageLimitReached(_)
             | CodexErr::QuotaExceeded
             | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
+            CodexErr::RateLimited(_) => CodexErrorInfo::RateLimited {
+                http_status_code: self.http_status_code_value(),
+            },
             CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },
@@ -520,6 +550,7 @@ impl CodexErr {
     pub fn http_status_code_value(&self) -> Option<u16> {
         let http_status_code = match self {
             CodexErr::RetryLimit(err) => Some(err.status),
+            CodexErr::RateLimited(err) => Some(err.status),
             CodexErr::UnexpectedStatus(err) => Some(err.status),
             CodexErr::ConnectionFailed(err) => err.source.status(),
             CodexErr::ResponseStreamFailed(err) => err.source.status(),
@@ -699,6 +730,27 @@ mod tests {
             Some(CodexErrorInfo::ResponseStreamConnectionFailed {
                 http_status_code: Some(429)
             })
+        );
+    }
+
+    #[test]
+    fn rate_limited_error_formats_with_retry_after_and_request_id() {
+        let err = CodexErr::RateLimited(RateLimitedError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            request_id: Some("req-123".to_string()),
+            retry_after: Some(Duration::from_secs(42)),
+            rate_limits: None,
+        });
+
+        assert_eq!(
+            err.to_string(),
+            "rate limited (status 429 Too Many Requests), retry after 42s, request id: req-123"
+        );
+        assert_eq!(
+            err.to_codex_protocol_error(),
+            CodexErrorInfo::RateLimited {
+                http_status_code: Some(429)
+            }
         );
     }
 

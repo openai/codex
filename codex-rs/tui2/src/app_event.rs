@@ -45,6 +45,12 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
+    /// Switch the active account (and optionally create it).
+    SwitchAccount {
+        name: String,
+        create_if_missing: bool,
+    },
+
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 

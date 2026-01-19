@@ -754,6 +754,83 @@ export function activate(context: vscode.ExtensionContext): void {
         getSessionModelState(),
       );
     },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.listAccounts(session);
+    },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.readAccount(session);
+    },
+    async (session, params) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.switchAccount(session, params);
+    },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.logoutAccount(session);
+    },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      const res = await backendManager.loginAccount(session, { type: "chatgpt" });
+      if (res.type !== "chatgpt") {
+        throw new Error(`Unexpected login response: ${JSON.stringify(res)}`);
+      }
+      return { authUrl: res.authUrl, loginId: res.loginId };
+    },
+    async (session, apiKey) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      const res = await backendManager.loginAccount(session, {
+        type: "apiKey",
+        apiKey,
+      });
+      if (res.type !== "apiKey") {
+        throw new Error(`Unexpected login response: ${JSON.stringify(res)}`);
+      }
+      return res;
+    },
+    async ({ variant, restartMode }) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!outputChannel) throw new Error("outputChannel is not initialized");
+
+      const cfg = vscode.workspace.getConfiguration("codexMine");
+      const mineCmd =
+        cfg.get<string>("cli.commands.codexMine") ??
+        cfg.get<string>("cli.commands.mine") ??
+        "codex-mine";
+
+      const next = normalizeCliVariant(variant);
+      if (next === "codex-mine") {
+        const mineProbe = await probeCliVersion(mineCmd);
+        const mineDetected = mineProbe.ok && mineProbe.version.includes("-mine.");
+        if (!mineDetected) {
+          throw new Error(
+            mineProbe.ok
+              ? `codex-mine not detected (found: ${mineProbe.version})`
+              : `codex-mine not detected (${mineProbe.error})`,
+          );
+        }
+      }
+
+      await cfg.update("cli.variant", next, vscode.ConfigurationTarget.Global);
+
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      if (restartMode === "restartAll") {
+        for (const f of folders) {
+          await ensureBackendMatchesConfiguredCli(f, "newSession", false);
+        }
+      } else if (restartMode === "forceRestartAll") {
+        for (const f of folders) {
+          await backendManager.restartForWorkspaceFolder(f);
+          if (next !== "auto") {
+            cliVariantByBackendKey.set(
+              f.uri.toString(),
+              next === "codex-mine" ? "codex-mine" : "codex",
+            );
+          }
+        }
+      }
+    },
     async (sessionId, query, cancellationToken) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
@@ -1535,6 +1612,96 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       chatView?.refresh();
       schedulePersistRuntime(session.id);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.switchAccount", async () => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+      const bm = backendManager;
+
+      const session = activeSessionId ? sessions.getById(activeSessionId) : null;
+      if (!session) {
+        void vscode.window.showErrorMessage("No session selected.");
+        return;
+      }
+
+      const list = await bm.listAccounts(session);
+      const active = list.activeAccount ?? null;
+
+      type PickItem =
+        | (vscode.QuickPickItem & { itemKind: "account"; name: string })
+        | (vscode.QuickPickItem & { itemKind: "create" });
+
+      const items: PickItem[] = list.accounts.map((a) => {
+        const description =
+          a.kind === "chatgpt"
+            ? a.email
+              ? `chatgpt (${a.email})`
+              : "chatgpt"
+            : a.kind === "apiKey"
+              ? "apiKey"
+              : undefined;
+
+        return {
+          itemKind: "account",
+          name: a.name,
+          label: a.name,
+          description,
+          detail: active === a.name ? "active" : undefined,
+        };
+      });
+      items.push({
+        itemKind: "create",
+        label: "+ Create new account…",
+        description: "Use [A-Za-z0-9_-], 1..64 chars",
+      });
+
+      const picked = await vscode.window.showQuickPick(items, {
+        title: "Switch account",
+        placeHolder: "Select an account",
+      });
+      if (!picked) return;
+
+      const validateName = (name: string): string | null => {
+        const trimmed = name.trim();
+        if (trimmed.length === 0) return "Account name cannot be empty.";
+        if (trimmed.length > 64) return "Account name is too long (max 64 chars).";
+        if (!/^[A-Za-z0-9_-]+$/.test(trimmed))
+          return "Invalid account name. Use only [A-Za-z0-9_-].";
+        return null;
+      };
+
+      const doSwitch = async (
+        name: string,
+        createIfMissing: boolean,
+      ): Promise<void> => {
+        await bm.switchAccount(session, { name, createIfMissing });
+        void vscode.window.showInformationMessage(
+          `Switched active account to ${name}.`,
+        );
+      };
+
+      if (picked.itemKind === "create") {
+        const name = await vscode.window.showInputBox({
+          title: "Create account",
+          prompt: "Account name",
+          placeHolder: "e.g. work, personal, team_a",
+          validateInput: (value) => validateName(value) ?? undefined,
+        });
+        if (!name) return;
+        const trimmed = name.trim();
+        const err = validateName(trimmed);
+        if (err) {
+          void vscode.window.showErrorMessage(err);
+          return;
+        }
+        await doSwitch(trimmed, true);
+        return;
+      }
+
+      await doSwitch(picked.name, false);
     }),
   );
 
@@ -2853,6 +3020,165 @@ async function handleSlashCommand(
     });
     return true;
   }
+  if (cmd === "account") {
+    const validateAccountName = (name: string): string | null => {
+      const trimmedName = name.trim();
+      if (!trimmedName) return "Missing account name.";
+      if (trimmedName.length > 64) return "Account name is too long (max 64 chars).";
+      if (!/^[A-Za-z0-9_-]+$/.test(trimmedName))
+        return "Invalid account name. Use only [A-Za-z0-9_-].";
+      return null;
+    };
+
+    if (!backendManager) throw new Error("backendManager is not initialized");
+
+    const args = arg.split(/\s+/).filter(Boolean);
+    const sub = args[0] ?? "";
+    const nameArg = args[1] ?? "";
+    const hasExtra = args.length > 2;
+
+    const usage = "Usage: /account [<name>] | /account create <name> | /account logout";
+
+    if (!arg) {
+      const accounts = await backendManager.listAccounts(session);
+      const active = accounts.activeAccount ?? "(none) (legacy auth)";
+      const lines = [
+        `Active: ${active}`,
+        "",
+        "Accounts:",
+        ...(accounts.accounts ?? []).map((a) => {
+          const meta =
+            a.kind === "chatgpt"
+              ? a.email
+                ? `chatgpt (${a.email})`
+                : "chatgpt"
+              : a.kind === "apiKey"
+                ? "apiKey"
+                : "";
+          return meta ? `- ${a.name} — ${meta}` : `- ${a.name}`;
+        }),
+        "",
+        usage,
+      ].filter(Boolean);
+      upsertBlock(session.id, {
+        id: newLocalId("account"),
+        type: "system",
+        title: "Account",
+        text: lines.join("\n"),
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (sub === "create") {
+      if (hasExtra) {
+        upsertBlock(session.id, {
+          id: newLocalId("accountError"),
+          type: "error",
+          title: "Slash command error",
+          text: usage,
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+      const err = validateAccountName(nameArg);
+      if (err) {
+        upsertBlock(session.id, {
+          id: newLocalId("accountError"),
+          type: "error",
+          title: "Slash command error",
+          text: `${err}\n${usage}`,
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+
+      const res = await backendManager.switchAccount(session, {
+        name: nameArg.trim(),
+        createIfMissing: true,
+      });
+      const migrated = Boolean((res as any).migratedLegacy);
+      upsertBlock(session.id, {
+        id: newLocalId("accountCreate"),
+        type: "info",
+        title: "Account",
+        text: migrated
+          ? `Created and switched to ${res.activeAccount} (migrated legacy auth).`
+          : `Created and switched to ${res.activeAccount}.`,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (sub === "logout") {
+      if (hasExtra) {
+        upsertBlock(session.id, {
+          id: newLocalId("accountError"),
+          type: "error",
+          title: "Slash command error",
+          text: usage,
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+      await backendManager.logoutAccount(session);
+      upsertBlock(session.id, {
+        id: newLocalId("accountLogout"),
+        type: "info",
+        title: "Account",
+        text: "Logged out (active account).",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (hasExtra) {
+      upsertBlock(session.id, {
+        id: newLocalId("accountError"),
+        type: "error",
+        title: "Slash command error",
+        text: usage,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const err = validateAccountName(sub);
+    if (err) {
+      upsertBlock(session.id, {
+        id: newLocalId("accountError"),
+        type: "error",
+        title: "Slash command error",
+        text: `${err}\n${usage}`,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+    const res = await backendManager.switchAccount(session, {
+      name: sub.trim(),
+      createIfMissing: false,
+    });
+    const migrated = Boolean((res as any).migratedLegacy);
+    upsertBlock(session.id, {
+      id: newLocalId("accountSwitch"),
+      type: "info",
+      title: "Account",
+      text: migrated
+        ? `Switched to ${res.activeAccount} (migrated legacy auth).`
+        : `Switched to ${res.activeAccount}.`,
+    });
+    chatView?.refresh();
+    schedulePersistRuntime(session.id);
+    return true;
+  }
   if (cmd === "help") {
     const rt = ensureRuntime(session.id);
     const customList = customPrompts
@@ -2881,6 +3207,7 @@ async function handleSlashCommand(
         mineSelected
           ? "- /agents: Browse agents"
           : "- /agents: Browse agents (codex-mine 選択時のみ対応)",
+        "- /account: Account management",
         "- /help: Show help",
         customList ? "\nCustom prompts:" : null,
         customList || null,
@@ -3418,6 +3745,7 @@ function desiredCliCommandFromConfig(cfg: vscode.WorkspaceConfiguration): {
 async function ensureBackendMatchesConfiguredCli(
   folder: vscode.WorkspaceFolder,
   reason: "newSession" | "agents" | "mineFeature",
+  notifyUser = true,
 ): Promise<void> {
   if (!backendManager) throw new Error("backendManager is not initialized");
   if (!outputChannel) throw new Error("outputChannel is not initialized");
@@ -3444,9 +3772,11 @@ async function ensureBackendMatchesConfiguredCli(
     folder.uri.toString(),
     desired.variant === "codex-mine" ? "codex-mine" : "codex",
   );
-  void vscode.window.showInformationMessage(
-    `Backend restarted to use ${desired.variant}.`,
-  );
+  if (notifyUser) {
+    void vscode.window.showInformationMessage(
+      `Backend restarted to use ${desired.variant}.`,
+    );
+  }
 }
 
 async function probeCliVersion(
@@ -4059,11 +4389,67 @@ function applyServerNotification(
       return;
     }
     case "error": {
+      const p = (n as any).params as {
+        error?: {
+          message?: unknown;
+          codexErrorInfo?: unknown;
+          additionalDetails?: unknown;
+        };
+        willRetry?: unknown;
+      };
+      const err = p?.error ?? {};
+      const rawMessage =
+        typeof err?.message === "string" ? err.message : String(err?.message ?? "");
+      const message = rawMessage.trim();
+
+      const additionalDetails =
+        typeof err?.additionalDetails === "string"
+          ? err.additionalDetails.trim()
+          : "";
+
+      const rawInfo = err?.codexErrorInfo ?? null;
+      const infoKey =
+        typeof rawInfo === "string"
+          ? rawInfo
+          : rawInfo && typeof rawInfo === "object"
+            ? Object.keys(rawInfo as Record<string, unknown>)[0] ?? null
+            : null;
+      const infoValue =
+        infoKey && rawInfo && typeof rawInfo === "object"
+          ? (rawInfo as Record<string, unknown>)[infoKey]
+          : null;
+      const httpStatusCode =
+        infoValue && typeof infoValue === "object"
+          ? (infoValue as any).httpStatusCode ?? (infoValue as any).http_status_code
+          : null;
+
+      const willRetry = !!p?.willRetry;
+
+      let title = "Error";
+      if (infoKey === "rateLimited" || infoKey === "rate_limited") {
+        title =
+          typeof httpStatusCode === "number" ? `Rate limited (HTTP ${httpStatusCode})` : "Rate limited";
+      } else if (infoKey === "usageLimitExceeded" || infoKey === "usage_limit_exceeded") {
+        title = "Usage limit exceeded";
+      } else if (infoKey === "contextWindowExceeded" || infoKey === "context_window_exceeded") {
+        title = "Context window exceeded";
+      }
+
+      const lines: string[] = [];
+      if (message) lines.push(message);
+      if (additionalDetails) {
+        if (lines.length > 0) lines.push("");
+        lines.push(additionalDetails);
+      }
+      if (willRetry) {
+        if (lines.length > 0) lines.push("");
+        lines.push("Will retry automatically.");
+      }
       upsertBlock(sessionId, {
         id: newLocalId("error"),
         type: "error",
-        title: "Error",
-        text: String((n as any).params?.error?.message ?? ""),
+        title,
+        text: lines.join("\n").trim(),
       });
       chatView?.refresh();
       return;
@@ -4900,7 +5286,13 @@ function applyGlobalNotification(
       return;
     }
     case "account/updated": {
-      globalStatusText = `authMode=${String((n as any).params.authMode ?? "null")}`;
+      const p = (n as any).params as { authMode?: unknown; activeAccount?: unknown };
+      const authMode = String(p?.authMode ?? "null");
+      const activeAccount =
+        typeof p?.activeAccount === "string" ? p.activeAccount : null;
+      globalStatusText = activeAccount
+        ? `authMode=${authMode} active=${activeAccount}`
+        : `authMode=${authMode}`;
       chatView?.refresh();
       return;
     }
@@ -4949,12 +5341,26 @@ function applyGlobalNotification(
       return;
     }
     case "account/login/completed": {
-      const p = (n as any).params as { success?: boolean; provider?: string };
+      const p = (n as any).params as {
+        loginId: string | null;
+        success: boolean;
+        error: string | null;
+      };
       upsertGlobal({
         id: newLocalId("auth"),
         type: p?.success ? "info" : "error",
         title: p?.success ? "Login succeeded" : "Login failed",
-        text: `provider=${String(p?.provider ?? "unknown")}`,
+        text: [
+          `loginId=${String(p?.loginId ?? "null")}`,
+          p?.error ? `error=${p.error}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      });
+      chatView?.notifyAccountLoginCompleted({
+        loginId: p?.loginId ?? null,
+        success: Boolean(p?.success),
+        error: typeof p?.error === "string" ? p.error : null,
       });
       chatView?.refresh();
       return;
