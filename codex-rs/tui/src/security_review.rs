@@ -117,8 +117,9 @@ const DEFAULT_MAX_BYTES_PER_FILE: usize = 500_000; // ~488 KiB
 const DEFAULT_MAX_TOTAL_BYTES: usize = 500 * 1024 * 1024; // ~500 MiB
 const MAX_PROMPT_BYTES: usize = 9_000_000; // ~8.6 MiB safety margin under API cap
 const MAX_CONCURRENT_FILE_ANALYSIS: usize = 32;
-const FILE_TRIAGE_CHUNK_SIZE: usize = 50;
-const FILE_TRIAGE_CONCURRENCY: usize = 8;
+const FILE_TRIAGE_PREVIEW_CHARS: usize = 200;
+const FILE_TRIAGE_CHUNK_SIZE: usize = 10;
+const FILE_TRIAGE_CONCURRENCY: usize = 32;
 const DIR_TRIAGE_LOG_LIMIT: usize = 30;
 const MAX_SEARCH_REQUESTS_PER_FILE: usize = 3;
 const MAX_SEARCH_OUTPUT_CHARS: usize = 4_000;
@@ -4751,12 +4752,11 @@ pub async fn run_security_review(
                 logs,
             });
         }
+        let file_count = pruned_snippets.len();
         record(
             &mut logs,
             format!(
-                "Skipping LLM file triage (avoid enumerating file lists); analyzing {} files across {} directories.",
-                pruned_snippets.len(),
-                refined_dir_count,
+                "Running LLM file triage (path + first {FILE_TRIAGE_PREVIEW_CHARS} chars); analyzing {file_count} files across {refined_dir_count} directories.",
             ),
         );
         let triage = match triage_files_for_bug_analysis(
@@ -7205,16 +7205,16 @@ fn collect_snippets_blocking(
 
 #[allow(clippy::needless_collect, clippy::too_many_arguments)]
 async fn triage_files_for_bug_analysis(
-    _client: &CodexHttpClient,
-    _provider: &ModelProviderInfo,
-    _auth: &Option<CodexAuth>,
-    _triage_model: &str,
-    _reasoning_effort: Option<ReasoningEffort>,
-    _scope_prompt: Option<String>,
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    triage_model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    scope_prompt: Option<String>,
     snippets: Vec<FileSnippet>,
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
-    _metrics: Arc<ReviewMetrics>,
+    metrics: Arc<ReviewMetrics>,
 ) -> Result<FileTriageResult, SecurityReviewFailure> {
     let total = snippets.len();
     let mut logs: Vec<String> = Vec::new();
@@ -7226,15 +7226,149 @@ async fn triage_files_for_bug_analysis(
         });
     }
 
-    let start_message = format!(
-        "Skipping LLM file triage (avoid enumerating full file lists); analyzing {total} file(s)."
-    );
-    push_progress_log(&progress_sender, &log_sink, &mut logs, start_message);
+    let scope_prompt = scope_prompt
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty())
+        .map(Arc::from);
 
-    Ok(FileTriageResult {
-        included: snippets,
-        logs,
-    })
+    let mut descriptors: Vec<FileTriageDescriptor> = Vec::with_capacity(total);
+    for (idx, snippet) in snippets.iter().enumerate() {
+        let id = idx.saturating_add(1);
+        let path = snippet.relative_path.to_string_lossy().to_string();
+        let preview: String = snippet
+            .content
+            .chars()
+            .take(FILE_TRIAGE_PREVIEW_CHARS)
+            .collect();
+        let listing_json = json!({
+            "id": id,
+            "path": path.as_str(),
+            "preview": preview,
+        })
+        .to_string();
+        descriptors.push(FileTriageDescriptor {
+            id,
+            path,
+            listing_json,
+        });
+    }
+
+    let chunk_size = FILE_TRIAGE_CHUNK_SIZE.max(1);
+    let mut chunk_requests: Vec<FileTriageChunkRequest> = Vec::new();
+    for (chunk_idx, chunk) in descriptors.chunks(chunk_size).enumerate() {
+        let start_idx = chunk_idx.saturating_mul(chunk_size);
+        let end_idx = start_idx.saturating_add(chunk.len().saturating_sub(1));
+        chunk_requests.push(FileTriageChunkRequest {
+            start_idx,
+            end_idx,
+            descriptors: chunk.to_vec(),
+        });
+    }
+
+    let total_chunks = chunk_requests.len();
+    let max_concurrency = FILE_TRIAGE_CONCURRENCY.max(1).min(total_chunks.max(1));
+
+    let chunk_results = futures::stream::iter(chunk_requests.into_iter().map(|request| {
+        let provider = provider.clone();
+        let auth = auth.clone();
+        let triage_model = triage_model.to_string();
+        let scope_prompt = scope_prompt.clone();
+        let progress_sender = progress_sender.clone();
+        let log_sink = log_sink.clone();
+        let metrics = metrics.clone();
+        let fallback_ids: Vec<usize> = request.descriptors.iter().map(|d| d.id).collect();
+        let range_start = request.start_idx.saturating_add(1);
+        let range_end = request.end_idx.saturating_add(1);
+
+        async move {
+            (
+                fallback_ids,
+                range_start,
+                range_end,
+                triage_chunk(
+                    client,
+                    provider,
+                    auth,
+                    triage_model,
+                    reasoning_effort,
+                    scope_prompt,
+                    request,
+                    progress_sender,
+                    log_sink,
+                    total,
+                    metrics,
+                )
+                .await,
+            )
+        }
+    }))
+    .buffer_unordered(max_concurrency);
+    futures::pin_mut!(chunk_results);
+
+    let mut include_ids: HashSet<usize> = HashSet::new();
+    let mut processed_files = 0usize;
+
+    while let Some((fallback_ids, range_start, range_end, result)) = chunk_results.next().await {
+        match result {
+            Ok(mut chunk) => {
+                logs.append(&mut chunk.logs);
+                processed_files = processed_files.saturating_add(chunk.processed);
+                include_ids.extend(chunk.include_ids);
+            }
+            Err(mut failure) => {
+                logs.append(&mut failure.logs);
+                let fallback_count = fallback_ids.len();
+                let fallback_message = format!(
+                    "File triage failed for files {range_start}-{range_end} ({fallback_count} file(s)); including all by default."
+                );
+                push_progress_log(&progress_sender, &log_sink, &mut logs, fallback_message);
+                processed_files = processed_files.saturating_add(fallback_count);
+                include_ids.extend(fallback_ids);
+            }
+        }
+
+        if let Some(tx) = progress_sender.as_ref() {
+            let percent = if total == 0 {
+                0
+            } else {
+                (processed_files.min(total) * 100) / total
+            };
+            tx.send(AppEvent::SecurityReviewLog(format!(
+                "File triage progress: {}/{} - {percent}%.",
+                processed_files.min(total),
+                total
+            )));
+        }
+    }
+
+    if include_ids.is_empty() {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            "File triage excluded every file; including all by default.".to_string(),
+        );
+        include_ids.extend(1..=total);
+    }
+
+    let included: Vec<FileSnippet> = snippets
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, snippet)| {
+            let id = idx.saturating_add(1);
+            include_ids.contains(&id).then_some(snippet)
+        })
+        .collect();
+
+    let kept = included.len();
+    push_progress_log(
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+        format!("File triage kept {kept}/{total} file(s)."),
+    );
+
+    Ok(FileTriageResult { included, logs })
 }
 
 fn build_file_triage_prompt(listing: &str, scope_prompt: Option<&str>) -> String {
