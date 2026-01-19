@@ -13,6 +13,8 @@
 use crate::key_hint;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::Settings;
+use codex_protocol::openai_models::ReasoningEffort;
 use crossterm::event::KeyCode;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -96,6 +98,33 @@ pub(crate) fn resolve_mode(
             .into_iter()
             .find(|mode| matches!(mode, CollaborationMode::Execute(_))),
     }
+}
+
+/// Resolve a selection to a concrete collaboration mode preset, falling back to a synthesized mode
+/// when the desired preset is unavailable.
+///
+/// This keeps the TUI behavior stable when collaboration presets are missing (for example, when
+/// running in offline/unit-test contexts): if the feature flag is enabled, every submission carries
+/// an explicit collaboration mode so core doesn't fall back to `Custom`.
+pub(crate) fn resolve_mode_or_fallback(
+    models_manager: &ModelsManager,
+    selection: Selection,
+    fallback_model: &str,
+    fallback_effort: Option<ReasoningEffort>,
+) -> CollaborationMode {
+    resolve_mode(models_manager, selection).unwrap_or_else(|| {
+        let settings = Settings {
+            model: fallback_model.to_string(),
+            reasoning_effort: fallback_effort,
+            developer_instructions: None,
+        };
+
+        match selection {
+            Selection::Plan => CollaborationMode::Plan(settings),
+            Selection::PairProgramming => CollaborationMode::PairProgramming(settings),
+            Selection::Execute => CollaborationMode::Execute(settings),
+        }
+    })
 }
 
 /// Build a 1-line footer "flash" that is shown after switching modes.

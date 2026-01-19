@@ -408,11 +408,6 @@ pub(crate) struct ChatWidget {
     /// This selection is only meaningful when `Feature::CollaborationModes` is enabled; when the
     /// feature is disabled, the value is effectively inert.
     collaboration_mode: CollaborationModeSelection,
-    /// A mode change that should be applied to the next outgoing user turn.
-    ///
-    /// The TUI updates this when the user changes collaboration mode (via `Shift+Tab` or `/collab`),
-    /// and then consumes it when constructing the next `Op` sent to the agent.
-    pending_collaboration_mode: Option<CollaborationModeSelection>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -1687,7 +1682,6 @@ impl ChatWidget {
             config,
             model,
             collaboration_mode: CollaborationModeSelection::default(),
-            pending_collaboration_mode: None,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(model_for_header),
@@ -1791,7 +1785,6 @@ impl ChatWidget {
             config,
             model: Some(header_model.clone()),
             collaboration_mode: CollaborationModeSelection::default(),
-            pending_collaboration_mode: None,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(header_model),
@@ -2351,22 +2344,26 @@ impl ChatWidget {
             }
         }
 
-        let op = if self.collaboration_modes_enabled()
-            && let Some(selection) = self.pending_collaboration_mode
-            && let Some(collaboration_mode) =
-                collaboration_modes::resolve_mode(self.models_manager.as_ref(), selection)
-        {
-            // Consume the pending selection so it applies only to a single outgoing user turn.
-            self.pending_collaboration_mode = None;
+        // TODO(aibrahim): migrate the TUI to submit `Op::UserTurn` by default (and rely less on
+        // `Op::UserInput`) so session-level settings like collaboration mode are consistently
+        // applied.
+        let op = if self.collaboration_modes_enabled() {
+            let model = self
+                .current_model()
+                .unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
+                .to_string();
+            let collaboration_mode = collaboration_modes::resolve_mode_or_fallback(
+                self.models_manager.as_ref(),
+                self.collaboration_mode,
+                model.as_str(),
+                self.config.model_reasoning_effort,
+            );
             Op::UserTurn {
                 items,
                 cwd: self.config.cwd.clone(),
                 approval_policy: self.config.approval_policy.value(),
                 sandbox_policy: self.config.sandbox_policy.get().clone(),
-                model: self
-                    .current_model()
-                    .unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
-                    .to_string(),
+                model,
                 effort: self.config.model_reasoning_effort,
                 summary: self.config.model_reasoning_summary,
                 final_output_json_schema: None,
@@ -3978,9 +3975,6 @@ impl ChatWidget {
             self.bottom_pane.set_steer_enabled(enabled);
         } else if feature == Feature::CollaborationModes {
             self.bottom_pane.set_collaboration_modes_enabled(enabled);
-            if !enabled {
-                self.pending_collaboration_mode = None;
-            }
         }
     }
 
@@ -4026,11 +4020,10 @@ impl ChatWidget {
         self.set_collaboration_mode(next);
     }
 
-    /// Update the selected collaboration mode and arm it for the next user turn.
+    /// Update the selected collaboration mode.
     ///
-    /// When collaboration modes are enabled, the selection is attached to the next submission as
-    /// `Op::UserTurn { collaboration_mode: Some(...) }`. Subsequent submissions revert to the
-    /// default `Op::UserInput` until the user changes modes again.
+    /// When collaboration modes are enabled, the current selection is attached to *every*
+    /// submission as `Op::UserTurn { collaboration_mode: Some(...) }`.
     fn set_collaboration_mode(&mut self, selection: CollaborationModeSelection) {
         if !self.collaboration_modes_enabled() {
             return;
@@ -4038,7 +4031,6 @@ impl ChatWidget {
         const FLASH_DURATION: Duration = Duration::from_secs(1);
 
         self.collaboration_mode = selection;
-        self.pending_collaboration_mode = Some(selection);
 
         let flash = collaboration_modes::flash_line(selection);
         self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
