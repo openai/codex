@@ -2066,6 +2066,17 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        // Prefer `Op::UserTurn` so the UI is the source of truth for turn context
+        // (cwd/approval/sandbox/model/etc.), rather than depending on session-level
+        // state tracking.
+        let Some(model) = self.current_model().or(self.config.model.as_deref()) else {
+            tracing::warn!("cannot submit user message before model is known; queueing");
+            self.queued_user_messages.push_front(user_message);
+            self.refresh_queued_user_messages();
+            return;
+        };
+        let model = model.to_string();
+
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
@@ -2113,38 +2124,24 @@ impl ChatWidget {
             }
         }
 
-        // Prefer `Op::UserTurn` so the UI is the source of truth for turn context
-        // (cwd/approval/sandbox/model/etc.), rather than depending on session-level
-        // state tracking for `Op::UserInput`.
-        //
-        // If we don't yet know the model, fall back to `Op::UserInput` to avoid
-        // sending a placeholder model string.
-        let model = self
-            .current_model()
-            .or(self.config.model.as_deref())
-            .map(str::to_string);
-        let op = if let Some(model) = model {
-            let collaboration_mode = self.collaboration_modes_enabled().then(|| {
-                collaboration_modes::resolve_mode_or_fallback(
-                    self.models_manager.as_ref(),
-                    self.collaboration_mode,
-                    model.as_str(),
-                    self.config.model_reasoning_effort,
-                )
-            });
-            Op::UserTurn {
-                items,
-                cwd: self.config.cwd.clone(),
-                approval_policy: self.config.approval_policy.value(),
-                sandbox_policy: self.config.sandbox_policy.get().clone(),
-                model,
-                effort: self.config.model_reasoning_effort,
-                summary: self.config.model_reasoning_summary,
-                final_output_json_schema: None,
-                collaboration_mode,
-            }
-        } else {
-            Self::legacy_user_input_op(items)
+        let collaboration_mode = self.collaboration_modes_enabled().then(|| {
+            collaboration_modes::resolve_mode_or_fallback(
+                self.models_manager.as_ref(),
+                self.collaboration_mode,
+                model.as_str(),
+                self.config.model_reasoning_effort,
+            )
+        });
+        let op = Op::UserTurn {
+            items,
+            cwd: self.config.cwd.clone(),
+            approval_policy: self.config.approval_policy.value(),
+            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            model,
+            effort: self.config.model_reasoning_effort,
+            summary: self.config.model_reasoning_summary,
+            final_output_json_schema: None,
+            collaboration_mode,
         };
 
         if !self.agent_turn_running {
@@ -3706,14 +3703,6 @@ impl ChatWidget {
 
     fn current_model(&self) -> Option<&str> {
         self.model.as_deref()
-    }
-
-    #[allow(deprecated)]
-    fn legacy_user_input_op(items: Vec<UserInput>) -> Op {
-        Op::UserInput {
-            items,
-            final_output_json_schema: None,
-        }
     }
 
     fn collaboration_modes_enabled(&self) -> bool {
