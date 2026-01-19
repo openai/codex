@@ -280,7 +280,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         }
     }
 
-    let ordered = vec![
+    let mut ordered = vec![
         commands,
         shell_commands,
         newline,
@@ -289,10 +289,12 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         paste_image,
         edit_previous,
         quit,
-        change_mode,
-        Line::from(""),
-        show_transcript,
     ];
+    if change_mode.width() > 0 {
+        ordered.push(change_mode);
+    }
+    ordered.push(Line::from(""));
+    ordered.push(show_transcript);
 
     build_columns(ordered)
 }
