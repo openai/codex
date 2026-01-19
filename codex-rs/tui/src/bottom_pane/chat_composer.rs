@@ -1957,6 +1957,17 @@ impl ChatComposer {
         // In vi normal mode, popups should not steal keys from the textarea.
         if self.vi_mode_enabled && self.allow_codex_esc_behavior() {
             self.active_popup = ActivePopup::None;
+            // Still clear dismissal tokens as the underlying buffer changes in normal mode.
+            // Otherwise a briefly-removed token (delete/undo/paste) can leave popups permanently
+            // suppressed when returning to insert mode.
+            let file_token = Self::current_at_token(&self.textarea);
+            if self.dismissed_file_popup_token.as_ref() != file_token.as_ref() {
+                self.dismissed_file_popup_token = None;
+            }
+            let skill_token = self.current_skill_token();
+            if self.dismissed_skill_popup_token.as_ref() != skill_token.as_ref() {
+                self.dismissed_skill_popup_token = None;
+            }
             return;
         }
         let file_token = Self::current_at_token(&self.textarea);
@@ -4227,6 +4238,90 @@ mod tests {
             composer.dismissed_skill_popup_token.as_ref(),
             Some(&dismissed)
         );
+    }
+
+    #[test]
+    fn vi_normal_mode_edits_clear_file_popup_dismissal_token() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_vi_mode_enabled(true);
+        composer.set_text_content("@foo".to_string());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Normal)
+        );
+        assert_eq!(composer.dismissed_file_popup_token.as_deref(), Some("foo"));
+
+        // Simulate normal-mode edits that remove and then restore the token.
+        composer.set_text_content(String::new());
+        assert_eq!(composer.dismissed_file_popup_token.as_deref(), None);
+        composer.set_text_content("@foo".to_string());
+
+        // Returning to insert mode should show the popup again.
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Insert)
+        );
+        assert!(composer.popup_active());
+    }
+
+    #[test]
+    fn vi_normal_mode_edits_clear_skill_popup_dismissal_token() {
+        use codex_protocol::protocol::SkillScope;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "foo".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            path: PathBuf::from("/tmp/skill_foo"),
+            scope: SkillScope::User,
+        }]));
+        composer.set_vi_mode_enabled(true);
+        composer.set_text_content("$foo".to_string());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Normal)
+        );
+        assert_eq!(composer.dismissed_skill_popup_token.as_deref(), Some("foo"));
+
+        // Simulate normal-mode edits that remove and then restore the token.
+        composer.set_text_content(String::new());
+        assert_eq!(composer.dismissed_skill_popup_token.as_deref(), None);
+        composer.set_text_content("$foo".to_string());
+
+        // Returning to insert mode should show the popup again.
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Insert)
+        );
+        assert!(composer.popup_active());
     }
 
     #[test]
