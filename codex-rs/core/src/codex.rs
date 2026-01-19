@@ -401,8 +401,6 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
-    // Timer that will get recorded once dropped.
-    _timer: Option<codex_otel::Timer>,
 }
 
 impl TurnContext {
@@ -525,10 +523,6 @@ impl Session {
             session_configuration.model.as_str(),
             model_info.slug.as_str(),
         );
-        let timer = otel_manager
-            .start_timer("codex.turn.e2e_duration_ms", &[])
-            .ok();
-
         let per_turn_config = Arc::new(per_turn_config);
         let client = ModelClient::new(
             per_turn_config.clone(),
@@ -565,7 +559,6 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
-            _timer: timer,
         }
     }
 
@@ -2481,8 +2474,6 @@ async fn spawn_review_thread(
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         truncation_policy: model_info.truncation_policy.into(),
-        // The timer will be recorded after the delegation layer.
-        _timer: None,
     };
 
     // Seed the child task with the review prompt as the initial user message.
