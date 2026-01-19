@@ -140,7 +140,7 @@ const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
 const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
 const BUG_REPOSITORY_SUMMARY_MAX_CHARS: usize = 20_000;
 const BUG_SPEC_CONTEXT_MAX_CHARS: usize = 40_000;
-const BUG_FILE_CONTEXT_MAX_CHARS: usize = 60_000;
+const BUG_FILE_CONTEXT_FALLBACK_MAX_CHARS: usize = 60_000;
 const BUG_FILE_CONTEXT_RETRY_MAX_CHARS: usize = 20_000;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
@@ -204,7 +204,7 @@ const AUTO_SCOPE_MARKER_FILES: [&str; 25] = [
 pub(crate) const SECURITY_REVIEW_FOLLOW_UP_MARKER: &str = "[codex-security-review-follow-up]";
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 
-static EXCLUDED_DIR_NAMES: [&str; 17] = [
+static EXCLUDED_DIR_NAMES: [&str; 20] = [
     ".git",
     ".svn",
     ".hg",
@@ -212,6 +212,9 @@ static EXCLUDED_DIR_NAMES: [&str; 17] = [
     "vendor",
     ".venv",
     "__pycache__",
+    "test",
+    "tests",
+    "__tests__",
     "dist",
     "build",
     "buck-out",
@@ -996,7 +999,7 @@ struct SecurityReviewPlanTracker {
     explanation: String,
     steps: Vec<SecurityReviewPlanItem>,
     step_models: HashMap<SecurityReviewPlanStep, PlanStepModelInfo>,
-    did_emit_plan_cell: bool,
+    snapshots_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -1024,10 +1027,14 @@ impl SecurityReviewPlanTracker {
             explanation,
             steps,
             step_models,
-            did_emit_plan_cell: false,
+            snapshots_enabled: false,
         };
         tracker.emit_update();
         tracker
+    }
+
+    fn enable_snapshots(&mut self) {
+        self.snapshots_enabled = true;
     }
 
     fn complete_and_start_next(
@@ -1041,18 +1048,27 @@ impl SecurityReviewPlanTracker {
         }
         if changed {
             self.emit_update();
+            if self.snapshots_enabled {
+                self.emit_plan_snapshot();
+            }
         }
     }
 
     fn start_step(&mut self, step: SecurityReviewPlanStep) {
         if self.set_status_if_present(step, StepStatus::InProgress) {
             self.emit_update();
+            if self.snapshots_enabled {
+                self.emit_plan_snapshot();
+            }
         }
     }
 
     fn mark_complete(&mut self, step: SecurityReviewPlanStep) {
         if self.set_status_if_present(step, StepStatus::Completed) {
             self.emit_update();
+            if self.snapshots_enabled {
+                self.emit_plan_snapshot();
+            }
         }
     }
 
@@ -1082,12 +1098,7 @@ impl SecurityReviewPlanTracker {
         write_log_sink(&self.log_sink, summary.as_str());
     }
 
-    fn emit_plan_cell(&mut self) {
-        if self.did_emit_plan_cell {
-            return;
-        }
-        self.did_emit_plan_cell = true;
-
+    fn emit_plan_snapshot(&self) {
         let Some(sender) = self.sender.as_ref() else {
             return;
         };
@@ -1154,14 +1165,17 @@ impl SecurityReviewPlanTracker {
     }
 }
 
-impl Drop for SecurityReviewPlanTracker {
-    fn drop(&mut self) {
-        self.emit_plan_cell();
-    }
-}
-
 fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> {
     let mut steps = Vec::new();
+
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::DirTriage,
+        "Triage directories",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::FileTriage,
+        "Triage files",
+    ));
 
     if matches!(mode, SecurityReviewMode::Full) {
         steps.push(SecurityReviewPlanItem::new(
@@ -1173,15 +1187,6 @@ fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> 
             "Draft threat model",
         ));
     }
-
-    steps.push(SecurityReviewPlanItem::new(
-        SecurityReviewPlanStep::DirTriage,
-        "Triage directories",
-    ));
-    steps.push(SecurityReviewPlanItem::new(
-        SecurityReviewPlanStep::FileTriage,
-        "Triage files",
-    ));
 
     steps.push(SecurityReviewPlanItem::new(
         SecurityReviewPlanStep::AnalyzeBugs,
@@ -4528,7 +4533,8 @@ pub async fn run_security_review(
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
-    plan_tracker.emit_plan_cell();
+    plan_tracker.emit_plan_snapshot();
+    plan_tracker.enable_snapshots();
 
     let mut validation_target_prep_task: Option<
         tokio::task::JoinHandle<ValidationTargetPrepOutcome>,
@@ -4660,7 +4666,74 @@ pub async fn run_security_review(
                 checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
                 persist_checkpoint(&mut checkpoint, &mut logs);
             }
-            refined_dirs = ranked_dirs.iter().map(|(dir, _, _)| dir.clone()).collect();
+            let dir_candidates: Vec<(PathBuf, String)> = ranked_dirs
+                .iter()
+                .map(|(dir, _, _)| {
+                    (
+                        dir.clone(),
+                        display_path_for(&repo_path.join(dir), &repo_path),
+                    )
+                })
+                .collect();
+
+            if dir_candidates.len() <= 1 {
+                refined_dirs = dir_candidates
+                    .iter()
+                    .map(|(path, _)| path.clone())
+                    .collect();
+            } else {
+                record(
+                    &mut logs,
+                    "Selecting high-signal directories for file triage...".to_string(),
+                );
+                match filter_spec_directories(
+                    &model_client,
+                    &request.provider,
+                    &request.auth,
+                    triage_model,
+                    triage_reasoning_effort,
+                    &repo_path,
+                    &dir_candidates,
+                    metrics.clone(),
+                )
+                .await
+                {
+                    Ok(selected) => {
+                        refined_dirs = selected.iter().map(|(path, _)| path.clone()).collect();
+                        if refined_dirs.len() < dir_candidates.len() {
+                            record(
+                                &mut logs,
+                                format!(
+                                    "Directory triage kept {}/{} directories for file triage.",
+                                    refined_dirs.len(),
+                                    dir_candidates.len()
+                                ),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        for line in &err.logs {
+                            record(&mut logs, line.clone());
+                        }
+                        record(
+                            &mut logs,
+                            format!(
+                                "Directory triage failed; using all directories. {}",
+                                err.message
+                            ),
+                        );
+                        refined_dirs = dir_candidates
+                            .iter()
+                            .map(|(path, _)| path.clone())
+                            .collect();
+                    }
+                }
+            }
+            if !refined_dirs.iter().any(|dir| dir == Path::new("."))
+                && dir_candidates.iter().any(|(dir, _)| dir == Path::new("."))
+            {
+                refined_dirs.push(PathBuf::from("."));
+            }
             checkpoint.triaged_dirs = Some(
                 refined_dirs
                     .iter()
@@ -7111,16 +7184,22 @@ fn collect_snippets_blocking(
     };
 
     let mut used_git_ls_files = false;
-    if let Ok(output) = StdCommand::new("git")
-        .args(["ls-files", "-z"])
+    if let Ok(git_root_output) = StdCommand::new("git")
+        .args(["rev-parse", "--show-toplevel"])
         .current_dir(&repo_path)
         .output()
+        && git_root_output.status.success()
+        && let Ok(git_root_stdout) = String::from_utf8(git_root_output.stdout)
+        && let Ok(output) = StdCommand::new("git")
+            .args(["ls-files", "-z"])
+            .current_dir(&repo_path)
+            .output()
         && output.status.success()
-        && !output.stdout.is_empty()
     {
+        let git_root = PathBuf::from(git_root_stdout.trim());
         used_git_ls_files = true;
         state.emit_progress_message(
-            "Collecting tracked files (git ls-files) to avoid local build/test artifacts..."
+            "Collecting tracked files (git ls-files) to skip untracked files and avoid local build/test artifacts..."
                 .to_string(),
         );
         let mut tracked_files: Vec<PathBuf> = output
@@ -7138,7 +7217,7 @@ fn collect_snippets_blocking(
             if state.limit_reached() {
                 break;
             }
-            let abs = repo_path.join(&rel);
+            let abs = git_root.join(&rel);
             if !in_scope(&abs) {
                 continue;
             }
@@ -7173,7 +7252,11 @@ fn collect_snippets_blocking(
     }
 
     if state.snippets.is_empty() {
-        logs.push("No eligible files found during collection.".to_string());
+        if used_git_ls_files {
+            logs.push("No eligible tracked files found during collection.".to_string());
+        } else {
+            logs.push("No eligible files found during collection.".to_string());
+        }
         return Err(SecurityReviewFailure {
             message: "No eligible files found during collection.".to_string(),
             logs,
@@ -7404,10 +7487,7 @@ async fn triage_chunk(
         .iter()
         .map(|desc| desc.listing_json.as_str())
         .collect::<Vec<_>>()
-        .join(
-            "
-",
-        );
+        .join("\n");
 
     // Show the file range being triaged; overall % is reported by the parent loop.
     let detail = format!(
@@ -13019,7 +13099,9 @@ async fn analyze_single_file(
     let start_message = format!("Analyzing file {prefix}: {path_display} ({file_size}).");
     push_progress_log(&progress_sender, &log_sink, &mut logs, start_message);
 
-    let (base_context, context_logs) = build_single_file_context_for_bug_prompt(&snippet);
+    let max_chars = bug_file_context_max_chars_for_model(model, config);
+    let (base_context, context_logs) =
+        build_single_file_context_for_bug_prompt(&snippet, max_chars);
     for line in context_logs {
         push_progress_log(&progress_sender, &log_sink, &mut logs, line);
     }
@@ -16587,14 +16669,71 @@ fn build_single_file_context(snippet: &FileSnippet) -> String {
     )
 }
 
-fn build_single_file_context_for_bug_prompt(snippet: &FileSnippet) -> (String, Vec<String>) {
-    if snippet.content.len() <= BUG_FILE_CONTEXT_MAX_CHARS {
+fn bug_file_context_max_chars_for_model(model: &str, config: &Config) -> usize {
+    let model = model.trim();
+    let model = model
+        .rsplit_once('/')
+        .map(|(_, model)| model)
+        .unwrap_or(model);
+
+    let context_window = config
+        .model_context_window
+        .or_else(|| infer_default_context_window_tokens(model));
+
+    let Some(context_window) = context_window else {
+        return BUG_FILE_CONTEXT_FALLBACK_MAX_CHARS;
+    };
+
+    // Reserve headroom for repo/spec context, tool output, and model output.
+    // Use a conservative char/token ratio to reduce context window errors.
+    const FILE_TOKEN_SHARE_NUM: i64 = 3;
+    const FILE_TOKEN_SHARE_DEN: i64 = 10; // 30%
+    const CHARS_PER_TOKEN_ESTIMATE: i64 = 3;
+
+    let budget_tokens = context_window
+        .saturating_mul(FILE_TOKEN_SHARE_NUM)
+        .saturating_div(FILE_TOKEN_SHARE_DEN)
+        .max(1);
+    let budget_chars = budget_tokens.saturating_mul(CHARS_PER_TOKEN_ESTIMATE);
+    let min_chars = BUG_FILE_CONTEXT_RETRY_MAX_CHARS as i64;
+    let max_chars = DEFAULT_MAX_BYTES_PER_FILE as i64;
+
+    budget_chars.clamp(min_chars, max_chars) as usize
+}
+
+fn infer_default_context_window_tokens(model: &str) -> Option<i64> {
+    if model.starts_with("codex-mini-latest")
+        || model.starts_with("o3")
+        || model.starts_with("o4-mini")
+    {
+        Some(200_000)
+    } else if model.starts_with("gpt-5") || model.starts_with("codex-") || model.starts_with("exp-")
+    {
+        Some(272_000)
+    } else if model.starts_with("gpt-4.1") {
+        Some(1_047_576)
+    } else if model.starts_with("gpt-oss") {
+        Some(96_000)
+    } else if model.starts_with("gpt-4o") {
+        Some(128_000)
+    } else if model.starts_with("gpt-3.5") {
+        Some(16_385)
+    } else {
+        None
+    }
+}
+
+fn build_single_file_context_for_bug_prompt(
+    snippet: &FileSnippet,
+    max_chars: usize,
+) -> (String, Vec<String>) {
+    if snippet.content.chars().nth(max_chars).is_none() {
         return (build_single_file_context(snippet), Vec::new());
     }
 
     let mut logs = Vec::new();
-    let head_chars = BUG_FILE_CONTEXT_MAX_CHARS / 2;
-    let tail_chars = BUG_FILE_CONTEXT_MAX_CHARS.saturating_sub(head_chars);
+    let head_chars = max_chars / 2;
+    let tail_chars = max_chars.saturating_sub(head_chars);
     let head: String = snippet.content.chars().take(head_chars).collect();
     let tail_rev: String = snippet.content.chars().rev().take(tail_chars).collect();
     let tail: String = tail_rev.chars().rev().collect();
@@ -16602,7 +16741,7 @@ fn build_single_file_context_for_bug_prompt(snippet: &FileSnippet) -> (String, V
     logs.push(format!(
         "Truncated {path} content to {limit} chars for bug analysis.",
         path = snippet.relative_path.display(),
-        limit = BUG_FILE_CONTEXT_MAX_CHARS
+        limit = max_chars
     ));
 
     (

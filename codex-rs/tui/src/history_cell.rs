@@ -1558,15 +1558,17 @@ pub(crate) struct PlanUpdateCell {
 
 impl HistoryCell for PlanUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let current_index = self
+        let has_in_progress = self
             .plan
             .iter()
-            .position(|item| matches!(item.status, StepStatus::InProgress))
-            .or_else(|| {
-                self.plan
-                    .iter()
-                    .position(|item| matches!(item.status, StepStatus::Pending))
-            });
+            .any(|item| matches!(item.status, StepStatus::InProgress));
+        let next_pending_index = if has_in_progress {
+            None
+        } else {
+            self.plan
+                .iter()
+                .position(|item| matches!(item.status, StepStatus::Pending))
+        };
 
         let render_note = |text: &str| -> Vec<Line<'static>> {
             let wrap_width = width.saturating_sub(4).max(1) as usize;
@@ -1583,8 +1585,8 @@ impl HistoryCell for PlanUpdateCell {
                 model,
                 reasoning_effort,
             } = item;
-            let is_current = current_index == Some(idx);
-            let status = if matches!(status, StepStatus::Pending) && is_current {
+            let is_next_pending = next_pending_index == Some(idx);
+            let status = if matches!(status, StepStatus::Pending) && is_next_pending {
                 StepStatus::InProgress
             } else {
                 status.clone()
@@ -1609,7 +1611,7 @@ impl HistoryCell for PlanUpdateCell {
             };
 
             let available_width = width.saturating_sub(4).max(1) as usize;
-            let step_text = if is_current {
+            let step_text = if matches!(status, StepStatus::InProgress) {
                 format!("▶ {text}")
             } else {
                 text.clone()
