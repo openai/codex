@@ -16,6 +16,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Transcript of thread history
@@ -28,11 +29,11 @@ pub(crate) struct ContextManager {
 }
 
 impl ContextManager {
-    pub(crate) fn new(codex_home: &PathBuf) -> Self {
+    pub(crate) fn new(codex_home: &Path) -> Self {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
-            codex_home: codex_home.clone(),
+            codex_home: codex_home.to_path_buf(),
         }
     }
 
