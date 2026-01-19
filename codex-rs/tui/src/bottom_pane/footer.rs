@@ -178,7 +178,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             } else if props.collaboration_modes_enabled {
                 line.push_span(" · ".dim());
                 line.push_span(key_hint::shift(KeyCode::Tab));
-                line.push_span(" to change collaboration mode".dim());
+                line.push_span(" to change mode".dim());
             }
             vec![line]
         }
