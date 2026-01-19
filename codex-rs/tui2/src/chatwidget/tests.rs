@@ -434,13 +434,17 @@ async fn remap_placeholders_uses_attachment_labels() {
             path: PathBuf::from("/tmp/two.png"),
         },
     ];
+    let message = UserMessage {
+        text,
+        text_elements: elements,
+        local_images: attachments,
+    };
     let mut next_label = 3usize;
-    let (remapped, remapped_elements, remapped_images) =
-        remap_placeholders_for_message(&text, elements, attachments, &mut next_label);
+    let remapped = remap_placeholders_for_message(message, &mut next_label);
 
-    assert_eq!(remapped, "[Image #4] before [Image #3]");
+    assert_eq!(remapped.text, "[Image #4] before [Image #3]");
     assert_eq!(
-        remapped_elements,
+        remapped.text_elements,
         vec![
             TextElement {
                 byte_range: (0.."[Image #4]".len()).into(),
@@ -454,7 +458,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         ]
     );
     assert_eq!(
-        remapped_images,
+        remapped.local_images,
         vec![
             LocalImageAttachment {
                 placeholder: "[Image #3]".to_string(),
@@ -637,9 +641,7 @@ async fn helpers_are_available_and_do_not_panic() {
         config: cfg.clone(),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
-        initial_prompt: None,
-        initial_images: Vec::new(),
-        initial_text_elements: Vec::new(),
+        initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
         models_manager: thread_manager.get_models_manager(),

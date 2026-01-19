@@ -73,8 +73,10 @@ impl TextArea {
     }
 
     fn set_text_inner(&mut self, text: &str, elements: Option<&[UserTextElement]>) {
+        // Stage 1: replace the raw text and keep the cursor in a safe byte range.
         self.text = text.to_string();
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
+        // Stage 2: rebuild element ranges from scratch against the new text.
         self.elements.clear();
         if let Some(elements) = elements {
             for elem in elements {
@@ -89,6 +91,7 @@ impl TextArea {
             }
             self.elements.sort_by_key(|e| e.range.start);
         }
+        // Stage 3: clamp the cursor and reset derived state tied to the prior content.
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
         self.wrap_cache.replace(None);
         self.preferred_col = None;

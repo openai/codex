@@ -1256,6 +1256,7 @@ impl ChatComposer {
             return (text.to_string(), elements);
         }
 
+        // Stage 1: index pending paste payloads by placeholder for deterministic replacements.
         let mut pending_by_placeholder: HashMap<&str, VecDeque<&str>> = HashMap::new();
         for (placeholder, actual) in pending_pastes {
             pending_by_placeholder
@@ -1264,6 +1265,7 @@ impl ChatComposer {
                 .push_back(actual.as_str());
         }
 
+        // Stage 2: walk elements in order and rebuild text/spans in a single pass.
         elements.sort_by_key(|elem| elem.byte_range.start);
 
         let mut rebuilt = String::with_capacity(text.len());
@@ -1286,8 +1288,10 @@ impl ChatComposer {
                 .and_then(|ph| pending_by_placeholder.get_mut(ph))
                 .and_then(VecDeque::pop_front);
             if let Some(actual) = replacement {
+                // Stage 3: inline actual paste payloads and drop their placeholder elements.
                 rebuilt.push_str(actual);
             } else {
+                // Stage 4: keep non-paste elements, updating their byte ranges for the new text.
                 let new_start = rebuilt.len();
                 rebuilt.push_str(elem_text);
                 let new_end = rebuilt.len();
@@ -1303,6 +1307,7 @@ impl ChatComposer {
             cursor = end;
         }
 
+        // Stage 5: append any trailing text that followed the last element.
         if cursor < text.len() {
             rebuilt.push_str(&text[cursor..]);
         }

@@ -349,9 +349,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
-    pub(crate) initial_prompt: Option<String>,
-    pub(crate) initial_images: Vec<PathBuf>,
-    pub(crate) initial_text_elements: Vec<TextElement>,
+    pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
@@ -519,7 +517,7 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
-struct UserMessage {
+pub(crate) struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
     text_elements: Vec<TextElement>,
@@ -547,11 +545,12 @@ impl From<&str> for UserMessage {
     }
 }
 
-fn create_initial_user_message(
-    text: String,
+pub(crate) fn create_initial_user_message(
+    text: Option<String>,
     local_image_paths: Vec<PathBuf>,
     text_elements: Vec<TextElement>,
 ) -> Option<UserMessage> {
+    let text = text.unwrap_or_default();
     if text.is_empty() && local_image_paths.is_empty() {
         None
     } else {
@@ -575,14 +574,18 @@ fn create_initial_user_message(
 // its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
 // the combined local_image_paths order matches the labels, even if placeholders were moved
 // in the text (e.g., [Image #2] appearing before [Image #1]).
-fn remap_placeholders_for_message(
-    text: &str,
-    text_elements: Vec<TextElement>,
-    local_images: Vec<LocalImageAttachment>,
-    next_label: &mut usize,
-) -> (String, Vec<TextElement>, Vec<LocalImageAttachment>) {
+fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
+    let UserMessage {
+        text,
+        text_elements,
+        local_images,
+    } = message;
     if local_images.is_empty() {
-        return (text.to_string(), text_elements, Vec::new());
+        return UserMessage {
+            text,
+            text_elements,
+            local_images,
+        };
     }
 
     let mut mapping: HashMap<String, String> = HashMap::new();
@@ -635,7 +638,11 @@ fn remap_placeholders_for_message(
         rebuilt.push_str(segment);
     }
 
-    (rebuilt, rebuilt_elements, remapped_images)
+    UserMessage {
+        text: rebuilt,
+        local_images: remapped_images,
+        text_elements: rebuilt_elements,
+    }
 }
 
 impl ChatWidget {
@@ -1094,72 +1101,74 @@ impl ChatWidget {
             ));
         }
 
-        // If any messages were queued during the task, restore them into the composer.
-        // Subtlety: each queued draft numbers its attachments from [Image #1], so when we
-        // concatenate multiple drafts we must reassign placeholders in a stable order so the
-        // merged attachment list matches the labels in the combined text.
-        if !self.queued_user_messages.is_empty() {
-            let existing_text = self.bottom_pane.composer_text();
-            let existing_text_elements = self.bottom_pane.composer_text_elements();
-            let existing_local_images = self.bottom_pane.composer_local_images();
-            let mut combined_text = String::new();
-            let mut combined_text_elements = Vec::new();
-            let mut combined_local_images = Vec::new();
-            let mut combined_offset = 0usize;
-            let mut next_image_label = 1usize;
-
-            let mut to_merge: Vec<(String, Vec<TextElement>, Vec<LocalImageAttachment>)> = self
-                .queued_user_messages
-                .iter()
-                .map(|message| {
-                    (
-                        message.text.clone(),
-                        message.text_elements.clone(),
-                        message.local_images.clone(),
-                    )
-                })
-                .collect();
-            if !existing_text.is_empty() || !existing_local_images.is_empty() {
-                to_merge.push((existing_text, existing_text_elements, existing_local_images));
-            }
-
-            for (idx, (text, elements, local_images)) in to_merge.into_iter().enumerate() {
-                if idx > 0 {
-                    combined_text.push('\n');
-                    combined_offset += 1;
-                }
-                let (text, elements, local_images) = remap_placeholders_for_message(
-                    &text,
-                    elements,
-                    local_images,
-                    &mut next_image_label,
-                );
-                let base = combined_offset;
-                combined_text.push_str(&text);
-                combined_offset += text.len();
-                combined_text_elements.extend(elements.into_iter().map(|mut elem| {
-                    elem.byte_range.start += base;
-                    elem.byte_range.end += base;
-                    elem
-                }));
-                combined_local_images.extend(local_images);
-            }
-
-            let combined_local_image_paths = combined_local_images
+        if let Some(combined) = self.drain_queued_messages_for_restore() {
+            let combined_local_image_paths = combined
+                .local_images
                 .iter()
                 .map(|img| img.path.clone())
                 .collect();
             self.bottom_pane.set_composer_text(
-                combined_text,
-                combined_text_elements,
+                combined.text,
+                combined.text_elements,
                 combined_local_image_paths,
             );
-            // Clear the queue and update the status indicator list.
-            self.queued_user_messages.clear();
             self.refresh_queued_user_messages();
         }
 
         self.request_redraw();
+    }
+
+    /// Merge queued drafts (plus the current composer state) into a single message for restore.
+    ///
+    /// Each queued draft numbers attachments from `[Image #1]`. When we concatenate drafts, we
+    /// must renumber placeholders in a stable order so the merged attachment list stays aligned
+    /// with the labels embedded in text. This helper drains the queue, remaps placeholders, and
+    /// fixes text element byte ranges as content is appended. Returns `None` when there is nothing
+    /// to restore.
+    fn drain_queued_messages_for_restore(&mut self) -> Option<UserMessage> {
+        if self.queued_user_messages.is_empty() {
+            return None;
+        }
+
+        let existing_message = UserMessage {
+            text: self.bottom_pane.composer_text(),
+            text_elements: self.bottom_pane.composer_text_elements(),
+            local_images: self.bottom_pane.composer_local_images(),
+        };
+
+        let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
+        if !existing_message.text.is_empty() || !existing_message.local_images.is_empty() {
+            to_merge.push(existing_message);
+        }
+
+        let mut combined = UserMessage {
+            text: String::new(),
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        };
+        let mut combined_offset = 0usize;
+        let mut next_image_label = 1usize;
+
+        for (idx, message) in to_merge.into_iter().enumerate() {
+            if idx > 0 {
+                combined.text.push('\n');
+                combined_offset += 1;
+            }
+            let message = remap_placeholders_for_message(message, &mut next_image_label);
+            let base = combined_offset;
+            combined.text.push_str(&message.text);
+            combined_offset += message.text.len();
+            combined
+                .text_elements
+                .extend(message.text_elements.into_iter().map(|mut elem| {
+                    elem.byte_range.start += base;
+                    elem.byte_range.end += base;
+                    elem
+                }));
+            combined.local_images.extend(message.local_images);
+        }
+
+        Some(combined)
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -1772,9 +1781,7 @@ impl ChatWidget {
             config,
             frame_requester,
             app_event_tx,
-            initial_prompt,
-            initial_images,
-            initial_text_elements,
+            initial_user_message,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -1821,11 +1828,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(model_for_header),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-                initial_text_elements,
-            ),
+            initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
             plan_type: None,
@@ -1885,9 +1888,7 @@ impl ChatWidget {
             config,
             frame_requester,
             app_event_tx,
-            initial_prompt,
-            initial_images,
-            initial_text_elements,
+            initial_user_message,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -1926,11 +1927,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(header_model),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-                initial_text_elements,
-            ),
+            initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
             plan_type: None,
