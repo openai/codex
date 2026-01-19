@@ -2413,6 +2413,11 @@ impl ChatWidget {
             }
         };
 
+        if !self.agent_turn_running {
+            self.agent_turn_running = true;
+            self.update_task_running_state();
+        }
+
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
             tracing::error!("failed to send message: {e}");
         });
@@ -4058,7 +4063,7 @@ impl ChatWidget {
         self.collaboration_mode = selection;
         self.pending_collaboration_mode = Some(selection);
 
-        let flash = Line::from(vec!["Collaboration mode: ".dim(), selection.label().bold()]);
+        let flash = Line::from(vec![selection.label().bold()]);
         self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
         self.request_redraw();
     }

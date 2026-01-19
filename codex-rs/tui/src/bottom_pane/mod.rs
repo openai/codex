@@ -516,7 +516,18 @@ impl BottomPane {
 
     pub(crate) fn flash_footer_hint(&mut self, line: Line<'static>, duration: Duration) {
         self.composer.show_footer_flash(line, duration);
-        self.frame_requester.schedule_frame_in(duration);
+        let frame_requester = self.frame_requester.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                tokio::time::sleep(duration).await;
+                frame_requester.schedule_frame();
+            });
+        } else {
+            std::thread::spawn(move || {
+                std::thread::sleep(duration);
+                frame_requester.schedule_frame();
+            });
+        }
         self.request_redraw();
     }
 
