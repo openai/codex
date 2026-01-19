@@ -303,7 +303,7 @@ pub fn render_decision_for_unmatched_command(
             // returned false, so we must prompt.
             Decision::Prompt
         }
-        AskForApproval::OnRequest => {
+        AskForApproval::OnRequest | AskForApproval::OnRequestRule => {
             match sandbox_policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     // The user has indicated we should "just run" commands

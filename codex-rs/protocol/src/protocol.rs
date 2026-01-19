@@ -337,6 +337,10 @@ pub enum AskForApproval {
     #[default]
     OnRequest,
 
+    /// The model can request approval and propose a rule to the user to skip
+    /// approval in the future.
+    OnRequestRule,
+
     /// Never ask the user to approve commands. Failures are immediately returned
     /// to the model, and never escalated to the user for approval.
     Never,

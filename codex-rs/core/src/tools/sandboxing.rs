@@ -159,7 +159,7 @@ pub(crate) fn default_exec_approval_requirement(
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest => !matches!(
+        AskForApproval::OnRequest | AskForApproval::OnRequestRule => !matches!(
             sandbox_policy,
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         ),

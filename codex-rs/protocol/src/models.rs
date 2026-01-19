@@ -205,6 +205,8 @@ const APPROVAL_POLICY_ON_FAILURE: &str =
     include_str!("prompts/permissions/approval_policy/on_failure.md");
 const APPROVAL_POLICY_ON_REQUEST: &str =
     include_str!("prompts/permissions/approval_policy/on_request.md");
+const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
+    include_str!("prompts/permissions/approval_policy/on_request_rule.md");
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
@@ -358,6 +360,7 @@ impl From<AskForApproval> for DeveloperInstructions {
             AskForApproval::Never => APPROVAL_POLICY_NEVER.trim_end(),
             AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.trim_end(),
             AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.trim_end(),
+            AskForApproval::OnRequestRule => APPROVAL_POLICY_ON_REQUEST_RULE.trim_end(),
             AskForApproval::OnRequest => APPROVAL_POLICY_ON_REQUEST.trim_end(),
         };
 
