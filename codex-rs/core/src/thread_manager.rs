@@ -331,6 +331,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
+        let max_threads = config.agent_max_threads;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -343,13 +344,15 @@ impl ThreadManagerState {
             agent_control,
         )
         .await?;
-        self.finalize_thread_spawn(codex, thread_id).await
+        self.finalize_thread_spawn(codex, thread_id, max_threads)
+            .await
     }
 
     async fn finalize_thread_spawn(
         &self,
         codex: Codex,
         thread_id: ThreadId,
+        max_threads: Option<usize>,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -366,7 +369,13 @@ impl ThreadManagerState {
             codex,
             session_configured.rollout_path.clone(),
         ));
-        self.threads.write().await.insert(thread_id, thread.clone());
+        let mut threads = self.threads.write().await;
+        if let Some(max_threads) = max_threads
+            && threads.len() >= max_threads
+        {
+            return Err(CodexErr::AgentLimitReached { max_threads });
+        }
+        threads.insert(thread_id, thread.clone());
 
         Ok(NewThread {
             thread_id,

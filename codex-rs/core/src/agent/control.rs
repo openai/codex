@@ -132,15 +132,23 @@ mod tests {
     use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+    use toml::Value as TomlValue;
 
-    async fn test_config() -> (TempDir, Config) {
+    async fn test_config_with_cli_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+    ) -> (TempDir, Config) {
         let home = TempDir::new().expect("create temp dir");
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
+            .cli_overrides(cli_overrides)
             .build()
             .await
             .expect("load default test config");
         (home, config)
+    }
+
+    async fn test_config() -> (TempDir, Config) {
+        test_config_with_cli_overrides(Vec::new()).await
     }
 
     struct AgentControlHarness {
@@ -372,5 +380,38 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_respects_max_threads_limit() {
+        let max_threads = 1usize;
+        let (_home, config) = test_config_with_cli_overrides(vec![(
+            "agents.max_threads".to_string(),
+            TomlValue::Integer(max_threads as i64),
+        )])
+        .await;
+        let manager = ThreadManager::with_models_provider_and_home(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let control = manager.agent_control();
+
+        let _ = manager
+            .start_thread(config.clone())
+            .await
+            .expect("start thread");
+
+        let err = control
+            .spawn_agent(config, "hello".to_string())
+            .await
+            .expect_err("spawn_agent should respect max threads");
+        let CodexErr::AgentLimitReached {
+            max_threads: seen_max_threads,
+        } = err
+        else {
+            panic!("expected CodexErr::AgentLimitReached");
+        };
+        assert_eq!(seen_max_threads, max_threads);
     }
 }
