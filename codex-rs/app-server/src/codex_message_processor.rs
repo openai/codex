@@ -3125,10 +3125,12 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
-                WireInputItem::Text { text } => CoreInputItem::Text {
+                WireInputItem::Text {
                     text,
-                    // TODO: Thread text element ranges into v1 input handling.
-                    text_elements: Vec::new(),
+                    text_elements,
+                } => CoreInputItem::Text {
+                    text,
+                    text_elements: text_elements.into_iter().map(Into::into).collect(),
                 },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
@@ -3175,10 +3177,12 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
-                WireInputItem::Text { text } => CoreInputItem::Text {
+                WireInputItem::Text {
                     text,
-                    // TODO: Thread text element ranges into v1 input handling.
-                    text_elements: Vec::new(),
+                    text_elements,
+                } => CoreInputItem::Text {
+                    text,
+                    text_elements: text_elements.into_iter().map(Into::into).collect(),
                 },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
@@ -3341,6 +3345,7 @@ impl CodexMessageProcessor {
                 id: turn_id.clone(),
                 content: vec![V2UserInput::Text {
                     text: display_text.to_string(),
+                    // Review prompt display text is synthesized; no UI element ranges to preserve.
                     text_elements: Vec::new(),
                 }],
             }]
