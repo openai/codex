@@ -1983,7 +1983,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 )
                 .await;
             }
-            #[allow(deprecated)]
             Op::UserInput { .. } | Op::UserTurn { .. } => {
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
@@ -2146,7 +2145,6 @@ mod handlers {
         }
     }
 
-    #[allow(deprecated)]
     pub async fn user_input_or_turn(
         sess: &Arc<Session>,
         sub_id: String,

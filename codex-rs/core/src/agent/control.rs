@@ -46,7 +46,6 @@ impl AgentControl {
     }
 
     /// Send a `user` prompt to an existing agent thread.
-    #[allow(deprecated)]
     pub(crate) async fn send_prompt(
         &self,
         agent_id: ThreadId,
@@ -116,7 +115,6 @@ impl AgentControl {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::CodexAuth;

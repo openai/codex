@@ -777,7 +777,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)]
     async fn send_input_interrupts_before_prompt() {
         let (mut session, turn) = make_session_and_context().await;
         let manager = thread_manager();
