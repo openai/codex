@@ -326,7 +326,7 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "app_test_support"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -956,7 +956,7 @@ checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
 name = "codex-ansi-escape"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "ansi-to-tui",
  "ratatui",
@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "codex-api"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "app_test_support",
@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-protocol"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1049,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-test-client"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1062,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "codex-apply-patch"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "codex-arg0"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "codex-async-utils"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "async-trait",
  "pretty_assertions",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-client"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-openapi-models"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "codex-chatgpt"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cli"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "codex-client"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1234,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks-client"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "codex-common"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "clap",
  "codex-core",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1359,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "codex-debug-client"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1371,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1404,7 +1404,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec-server"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy-legacy"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "allocative",
  "anyhow",
@@ -1467,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "codex-feedback"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "codex-protocol",
@@ -1479,7 +1479,7 @@ dependencies = [
 
 [[package]]
 name = "codex-file-search"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "codex-git"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "assert_matches",
  "once_cell",
@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "codex-keyring-store"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "keyring",
  "tracing",
@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "codex-linux-sandbox"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "clap",
  "codex-core",
@@ -1532,7 +1532,7 @@ dependencies = [
 
 [[package]]
 name = "codex-lmstudio"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "codex-core",
  "reqwest",
@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "codex-login"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1569,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-server"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "codex-arg0",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "codex-ollama"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "assert_matches",
  "async-stream",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "codex-otel"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "chrono",
  "codex-api",
@@ -1641,7 +1641,7 @@ dependencies = [
 
 [[package]]
 name = "codex-process-hardening"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "libc",
  "pretty_assertions",
@@ -1649,7 +1649,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "codex-git",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "codex-responses-api-proxy"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1692,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "codex-rmcp-client"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1723,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "codex-stdio-to-uds"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1735,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui2"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-absolute-path"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "path-absolutize",
  "schemars 0.8.22",
@@ -1895,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cache"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "lru 0.16.3",
  "sha1",
@@ -1904,7 +1904,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cargo-bin"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "assert_cmd",
  "path-absolutize",
@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-image"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "base64",
  "codex-utils-cache",
@@ -1925,7 +1925,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-json-to-toml"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "pretty_assertions",
  "serde_json",
@@ -1934,7 +1934,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-pty"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "filedescriptor",
@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-readiness"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -1961,11 +1961,11 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-string"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 
 [[package]]
 name = "codex-windows-sandbox"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -2134,7 +2134,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "core_test_support"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2872,7 +2872,7 @@ dependencies = [
 
 [[package]]
 name = "exec_server_test_support"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "codex-core",
@@ -4247,7 +4247,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-types"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -4257,7 +4257,7 @@ dependencies = [
 
 [[package]]
 name = "mcp_test_support"
-version = "0.0.0"
+version = "0.87.0-tryg.1"
 dependencies = [
  "anyhow",
  "codex-core",
