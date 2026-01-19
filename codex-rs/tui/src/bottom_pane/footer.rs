@@ -37,6 +37,7 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) steer_enabled: bool,
+    pub(crate) collaboration_modes_enabled: bool,
     /// Which key the user must press again to quit.
     ///
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
@@ -103,6 +104,31 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     .render(area, buf);
 }
 
+pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {
+    if area.width > 2 {
+        area.x += 2;
+        area.width = area.width.saturating_sub(2);
+    }
+    area
+}
+
+pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(String, String)]) {
+    if items.is_empty() {
+        return;
+    }
+
+    let mut spans = Vec::with_capacity(items.len() * 4);
+    for (idx, (key, label)) in items.iter().enumerate() {
+        spans.push(" ".into());
+        spans.push(key.clone().bold());
+        spans.push(format!(" {label}").into());
+        if idx + 1 != items.len() {
+            spans.push("   ".into());
+        }
+    }
+    Line::from(spans).render(inset_footer_hint_area(area), buf);
+}
+
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     // Show the context indicator on the left, appended after the primary hint
     // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
@@ -143,10 +169,16 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 props.context_window_percent,
                 props.context_window_used_tokens,
             );
-            if props.is_task_running && props.steer_enabled {
+            if props.is_task_running {
+                if props.steer_enabled {
+                    line.push_span(" · ".dim());
+                    line.push_span(key_hint::plain(KeyCode::Tab));
+                    line.push_span(" to queue message".dim());
+                }
+            } else if props.collaboration_modes_enabled {
                 line.push_span(" · ".dim());
-                line.push_span(key_hint::plain(KeyCode::Tab));
-                line.push_span(" to queue message".dim());
+                line.push_span(key_hint::shift(KeyCode::Tab));
+                line.push_span(" to change collaboration mode".dim());
             }
             vec![line]
         }
@@ -500,6 +532,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -514,6 +547,7 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -528,6 +562,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -542,6 +577,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -556,6 +592,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -570,6 +607,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -584,6 +622,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
@@ -598,6 +637,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
@@ -612,6 +652,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -626,6 +667,22 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: true,
+                collaboration_modes_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                context_window_percent: None,
+                context_window_used_tokens: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_context_only_collab_hint",
+            FooterProps {
+                mode: FooterMode::ContextOnly,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                steer_enabled: false,
+                collaboration_modes_enabled: true,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,

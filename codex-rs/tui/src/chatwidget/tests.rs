@@ -404,6 +404,8 @@ async fn make_chatwidget_manual(
         active_cell_revision: 0,
         config: cfg,
         model: Some(resolved_model.clone()),
+        collaboration_mode: CollaborationModeSelection::Default,
+        pending_collaboration_mode: None,
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
         session_header: SessionHeader::new(resolved_model),
