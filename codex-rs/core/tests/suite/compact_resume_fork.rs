@@ -1016,10 +1016,8 @@ async fn resume_conversation(
     config: &Config,
     path: std::path::PathBuf,
 ) -> Arc<CodexThread> {
-    let auth_manager =
-        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let NewThread { thread, .. } = manager
-        .resume_thread_from_rollout(config.clone(), path, auth_manager)
+        .resume_thread_from_rollout(config.clone(), path)
         .await
         .expect("resume conversation");
     thread

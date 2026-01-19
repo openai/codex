@@ -1,9 +1,12 @@
 use crate::agent::AgentStatus;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::protocol::Event;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -26,21 +29,30 @@ impl AgentControl {
         Self { manager }
     }
 
-    /// Spawn a new agent thread and submit the initial prompt.
+    /// Spawn a new agent thread and submit the initial prompt if defined.
     pub(crate) async fn spawn_agent(
         &self,
         config: crate::config::Config,
-        prompt: String,
+        prompt: Option<String>,
+        session_source_override: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
-        let new_thread = state.spawn_new_thread(config, self.clone()).await?;
+        let new_thread = state
+            .start_thread(
+                config,
+                InitialHistory::New,
+                self.clone(),
+                session_source_override,
+            )
+            .await?;
 
         // Notify a new thread has been created. This notification will be processed by clients
         // to subscribe or drain this newly created thread.
-        // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
 
-        self.send_prompt(new_thread.thread_id, prompt).await?;
+        if let Some(prompt) = prompt {
+            self.send_prompt(new_thread.thread_id, prompt).await?;
+        }
 
         Ok(new_thread.thread_id)
     }
@@ -51,16 +63,29 @@ impl AgentControl {
         agent_id: ThreadId,
         prompt: String,
     ) -> CodexResult<String> {
+        self.send_input(
+            agent_id,
+            vec![UserInput::Text {
+                text: prompt,
+                // Plain text conversion has no UI element ranges.
+                text_elements: Vec::new(),
+            }],
+        )
+        .await
+    }
+
+    /// Send a `UserInput` to an existing agent thread.
+    pub(crate) async fn send_input(
+        &self,
+        agent_id: ThreadId,
+        input: Vec<UserInput>,
+    ) -> CodexResult<String> {
         let state = self.upgrade()?;
         let result = state
             .send_op(
                 agent_id,
                 Op::UserInput {
-                    items: vec![UserInput::Text {
-                        text: prompt,
-                        // Plain text conversion has no UI element ranges.
-                        text_elements: Vec::new(),
-                    }],
+                    items: input,
                     final_output_json_schema: None,
                 },
             )
@@ -246,7 +271,7 @@ mod tests {
         let control = AgentControl::default();
         let (_home, config) = test_config().await;
         let err = control
-            .spawn_agent(config, "hello".to_string())
+            .spawn_agent(config, Some("hello".to_string()), None)
             .await
             .expect_err("spawn_agent should fail without a manager");
         assert_eq!(
@@ -348,7 +373,7 @@ mod tests {
         let harness = AgentControlHarness::new().await;
         let thread_id = harness
             .control
-            .spawn_agent(harness.config.clone(), "spawned".to_string())
+            .spawn_agent(harness.config.clone(), Some("spawned".to_string()), None)
             .await
             .expect("spawn_agent should succeed");
         let _thread = harness

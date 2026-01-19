@@ -1459,6 +1459,7 @@ pub enum SessionSource {
 pub enum SubAgentSource {
     Review,
     Compact,
+    Collab,
     Other(String),
 }
 
@@ -1480,6 +1481,7 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::Collab => f.write_str("collab"),
             SubAgentSource::Other(other) => f.write_str(other),
         }
     }

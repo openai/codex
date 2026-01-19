@@ -268,14 +268,12 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         config.model_provider.clone(),
         config.codex_home.clone(),
     );
-    let auth_manager =
-        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let NewThread {
         thread: codex,
         session_configured,
         ..
     } = thread_manager
-        .resume_thread_from_rollout(config, session_path.clone(), auth_manager)
+        .resume_thread_from_rollout(config, session_path.clone())
         .await
         .expect("resume conversation");
 

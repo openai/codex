@@ -921,10 +921,8 @@ where
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
     );
-    let auth_manager =
-        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     thread_manager
-        .resume_thread_from_rollout(config, resume_path, auth_manager)
+        .resume_thread_from_rollout(config, resume_path)
         .await
         .expect("resume conversation")
         .thread

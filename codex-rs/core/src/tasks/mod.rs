@@ -16,10 +16,9 @@ use tokio_util::task::AbortOnDropHandle;
 use tracing::trace;
 use tracing::warn;
 
-use crate::AuthManager;
+use crate::agent::AgentControl;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
@@ -53,12 +52,8 @@ impl SessionTaskContext {
         Arc::clone(&self.session)
     }
 
-    pub(crate) fn auth_manager(&self) -> Arc<AuthManager> {
-        Arc::clone(&self.session.services.auth_manager)
-    }
-
-    pub(crate) fn models_manager(&self) -> Arc<ModelsManager> {
-        Arc::clone(&self.session.services.models_manager)
+    pub(crate) fn agent_control(&self) -> AgentControl {
+        self.session.services.agent_control.clone()
     }
 }
 

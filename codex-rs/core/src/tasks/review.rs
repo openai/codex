@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
@@ -12,11 +10,12 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -84,7 +83,7 @@ async fn start_review_conversation(
 ) -> Option<async_channel::Receiver<Event>> {
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
-    // Carry over review-only feature restrictions so the delegate cannot
+    // Carry over review-only feature restrictions so the sub-agent cannot
     // re-enable blocked tools (web search, view image).
     sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
 
@@ -96,19 +95,21 @@ async fn start_review_conversation(
         .clone()
         .unwrap_or_else(|| ctx.client.get_model());
     sub_agent_config.model = Some(model);
-    (run_codex_thread_one_shot(
-        sub_agent_config,
-        session.auth_manager(),
-        session.models_manager(),
-        input,
-        session.clone_session(),
-        ctx.clone(),
-        cancellation_token,
-        None,
-    )
-    .await)
-        .ok()
-        .map(|io| io.rx_event)
+
+    let agent_control = session.agent_control();
+    let thread_id = agent_control
+        .spawn_agent(
+            sub_agent_config,
+            None,
+            Some(SessionSource::SubAgent(SubAgentSource::Review)),
+        )
+        .await
+        .ok()?;
+
+    agent_control.send_input(thread_id, input).await.ok()?;
+
+    // todo this part is not done yet and won't be easy
+    None
 }
 
 async fn process_review_events(

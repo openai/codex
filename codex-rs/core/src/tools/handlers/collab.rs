@@ -77,6 +77,8 @@ impl ToolHandler for CollabHandler {
 mod spawn {
     use super::*;
     use crate::agent::AgentRole;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
@@ -122,7 +124,11 @@ mod spawn {
         let result = session
             .services
             .agent_control
-            .spawn_agent(config, prompt.clone())
+            .spawn_agent(
+                config,
+                Some(prompt.clone()),
+                Some(SessionSource::SubAgent(SubAgentSource::Collab)),
+            )
             .await
             .map_err(collab_spawn_error);
         let (new_thread_id, status) = match &result {

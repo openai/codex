@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
@@ -60,14 +59,13 @@ async fn emits_warning_when_resumed_model_differs() {
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
     );
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
 
     // Act: resume the conversation.
     let NewThread {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, initial_history, auth_manager)
+        .resume_thread_with_history(config, initial_history)
         .await
         .expect("resume conversation");
 
